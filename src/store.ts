@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { ExportOptions, Project } from "./types";
+import type { ExportOptions, Project, SubtitleCue, SubtitleTrack } from "./types";
 
 interface AppStore {
   project: Project | null;
@@ -16,6 +16,7 @@ interface AppStore {
   selectCueIds: (cueIds: string[]) => void;
   setProxyPath: (path: string | null) => void;
   setExportOptions: (options: Partial<ExportOptions>) => void;
+  addExternalSubtitles: (tracks: SubtitleTrack[], cues: Record<string, SubtitleCue[]>) => void;
 }
 
 export const useAppStore = create<AppStore>((set) => ({
@@ -67,6 +68,26 @@ export const useAppStore = create<AppStore>((set) => ({
   clearSelection: () => set({ selectedCueIds: new Set<string>() }),
   selectCueIds: (cueIds) => set({ selectedCueIds: new Set(cueIds) }),
   setProxyPath: (path) => set({ proxyPath: path }),
+  addExternalSubtitles: (tracks, cues) =>
+    set((state) => {
+      if (!state.project) {
+        return state;
+      }
+      const nextTracks = [...state.project.tracks, ...tracks];
+      const nextCues = { ...state.project.cues, ...cues };
+      const firstUsableTrack = tracks.find((track) => track.cue_count > 0);
+      const currentTrack = state.project.tracks.find((track) => track.id === state.activeTrackId);
+      const currentTrackUsable = currentTrack ? currentTrack.cue_count > 0 : false;
+      const nextActiveTrackId = currentTrackUsable
+        ? state.activeTrackId
+        : firstUsableTrack?.id || state.activeTrackId || "";
+      return {
+        project: { ...state.project, tracks: nextTracks, cues: nextCues },
+        activeTrackId: nextActiveTrackId,
+        selectedCueIds: new Set<string>(),
+        query: "",
+      };
+    }),
   setExportOptions: (options) =>
     set((state) => ({
       exportOptions: {

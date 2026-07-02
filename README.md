@@ -18,7 +18,6 @@ LineCut 是一款基于 **Tauri v2 + React + TypeScript + Rust** 构建的跨平
 - **多格式视频支持**：`MKV`、`MP4`、`MOV`、`WebM`、`AVI`、`TS`、`M2TS` 等常见容器。
 - **灵活的字幕来源**：支持内嵌字幕流解析，也支持 `SRT`、`ASS`、`SSA`、`VTT` 等外挂字幕文件。
 - **高效的字幕检索**：按关键词实时过滤台词，快速定位目标片段。
-- **虚拟化长列表**：基于 `@tanstack/react-virtual` 渲染海量字幕轴，滚动流畅不卡顿。
 - **多种导出模式**：
   - **极速拷贝**（`fast_copy`）：直接流拷贝，不重新编码，速度快、画质无损。
   - **精确重编码**（`precise_encode`）：重新编码，兼容性与时间精度更高。
@@ -43,4 +42,4 @@ LineCut 是一款基于 **Tauri v2 + React + TypeScript + Rust** 构建的跨平
   
   Made with ❤️ by GCL MAD CLUB - [言ktdm](https://github.com/Inexplicable-YL)
   
-  </p>
+</p>

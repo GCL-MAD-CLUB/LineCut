@@ -12,9 +12,10 @@
   "app": {
     "windows": [
       {
-        "title": "LineCut",
+        "title": " LineCut",
         "width": 1320,
         "height": 860,
+        "maximized": true,
         "minWidth": 1080,
         "minHeight": 700
       }

@@ -1,0 +1,84 @@
+.topbar-progress {
+  --task-progress-height: 13px;
+
+  display: grid;
+  gap: 5px;
+  width: 20vw;
+  max-width: 20vw;
+  flex: 0 0 min(20vw, 280px);
+  min-width: 0;
+}
+
+.topbar-progress-multi {
+  gap: 6px;
+}
+
+.topbar-progress > span {
+  overflow: hidden;
+  color: var(--gray-400);
+  font-size: 12px;
+  line-height: 1;
+  text-overflow: ellipsis;
+  transform: translateX(1px);
+  white-space: nowrap;
+}
+
+.topbar-progress-track {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: var(--task-progress-height);
+  overflow: hidden;
+  background: var(--color-surface-hover);
+  border: 1px solid var(--color-border-control);
+}
+
+.topbar-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.topbar-progress-stack {
+  display: grid;
+  gap: 1px;
+  height: var(--task-progress-height);
+  min-width: 0;
+}
+
+.topbar-progress-stack .topbar-progress-track {
+  height: auto;
+}
+
+.topbar-progress-fill {
+  height: 100%;
+  background: var(--color-accent);
+  transition: width var(--duration-progress) linear;
+}
+
+.topbar-progress-cancel {
+  display: grid;
+  flex: 0 0 var(--task-progress-height);
+  width: var(--task-progress-height);
+  height: var(--task-progress-height);
+  min-height: var(--task-progress-height);
+  place-items: center;
+  padding: 0;
+  color: var(--color-text-icon);
+  background: transparent;
+  cursor: pointer;
+}
+
+.topbar-progress-cancel:hover {
+  color: var(--color-text-inverse);
+}
+
+.topbar-progress-cancel svg {
+  width: var(--task-progress-height);
+  height: var(--task-progress-height);
+}
+
+.topbar-progress-cancel:disabled {
+  cursor: default;
+  opacity: 0.5;
+}

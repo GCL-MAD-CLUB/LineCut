@@ -2,22 +2,38 @@ use encoding_rs::{BIG5, GBK, SHIFT_JIS, WINDOWS_1252};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+use std::process::Command as StdCommand;
 use std::{
     collections::{HashMap, HashSet},
     env, fs,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
-    sync::Mutex,
+    process::Stdio,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
     time::{SystemTime, UNIX_EPOCH},
 };
+use tauri::{Emitter, Manager};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command;
 use uuid::Uuid;
 
 const HEAD_TAIL_HASH_BYTES: u64 = 1024 * 1024;
+const FFMPEG_PROGRESS_EVENT: &str = "ffmpeg-progress";
+const PROXY_FILE_NAME: &str = "proxy_preview_i.mp4";
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 struct AppState {
     projects: Mutex<HashMap<String, Project>>,
     preferences: Mutex<Preferences>,
+    running_ffmpeg: Mutex<HashMap<String, RunningFfmpeg>>,
 }
 
 impl AppState {
@@ -25,8 +41,15 @@ impl AppState {
         Self {
             projects: Mutex::new(HashMap::new()),
             preferences: Mutex::new(load_preferences().unwrap_or_default()),
+            running_ffmpeg: Mutex::new(HashMap::new()),
         }
     }
+}
+
+struct RunningFfmpeg {
+    cancel: Arc<AtomicBool>,
+    pid: Option<u32>,
+    cleanup_paths: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,6 +105,10 @@ struct MediaStream {
     index: i32,
     codec_type: String,
     codec_name: String,
+    #[serde(default)]
+    avg_frame_rate: Option<String>,
+    #[serde(default)]
+    r_frame_rate: Option<String>,
     language: Option<String>,
     title: Option<String>,
     width: Option<i64>,
@@ -156,6 +183,39 @@ struct ProxyResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct AddExternalSubtitlesResult {
+    tracks: Vec<SubtitleTrack>,
+    cues: HashMap<String, Vec<SubtitleCue>>,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct FfmpegProgressPayload {
+    task_id: String,
+    operation: String,
+    label: String,
+    current: usize,
+    total: usize,
+    progress: f64,
+    done: bool,
+}
+
+struct FfmpegProgressContext<'a> {
+    app: &'a tauri::AppHandle,
+    state: &'a AppState,
+    task_id: &'a str,
+    operation: &'a str,
+    label: &'a str,
+    current: usize,
+    total: usize,
+    base_progress: f64,
+    progress_span: f64,
+    duration_us: i64,
+    complete_on_success: bool,
+    cleanup_paths: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ExportMode {
     FastCopy,
@@ -221,6 +281,8 @@ struct ProbeStream {
     index: i32,
     codec_name: Option<String>,
     codec_type: Option<String>,
+    avg_frame_rate: Option<String>,
+    r_frame_rate: Option<String>,
     width: Option<i64>,
     height: Option<i64>,
     channels: Option<i64>,
@@ -240,8 +302,16 @@ pub fn run() {
             update_preferences,
             import_media,
             generate_proxy,
+            add_external_subtitles,
+            cancel_current_task,
             export_clips
         ])
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                let state = window.state::<AppState>();
+                let _ = cancel_running_ffmpeg(state.inner());
+            }
+        })
         .run(tauri::generate_context!())
         .expect("failed to run LineCut");
 }
@@ -270,9 +340,15 @@ fn update_preferences(
 }
 
 #[tauri::command]
+fn cancel_current_task(state: tauri::State<'_, AppState>) -> Result<bool, String> {
+    cancel_running_ffmpeg(state.inner())
+}
+
+#[tauri::command]
 async fn import_media(
     path: String,
     external_subtitles: Vec<String>,
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<ImportResult, String> {
     let preferences = preferences_clone(&state)?;
@@ -288,6 +364,12 @@ async fn import_media(
     let cache_dir = configured_cache_root(&preferences).join(&fingerprint);
     fs::create_dir_all(cache_dir.join("subtitles"))
         .map_err(|e| format!("创建缓存目录失败: {e}"))?;
+    let proxy_path = cache_dir.join(PROXY_FILE_NAME);
+    let proxy_path_str = if proxy_path.exists() {
+        Some(proxy_path.to_string_lossy().into_owned())
+    } else {
+        None
+    };
 
     let duration_us = probe
         .format
@@ -336,6 +418,8 @@ async fn import_media(
             index: stream.index,
             codec_type: stream.codec_type.clone().unwrap_or_default(),
             codec_name: stream.codec_name.clone().unwrap_or_default(),
+            avg_frame_rate: stream.avg_frame_rate.clone(),
+            r_frame_rate: stream.r_frame_rate.clone(),
             language: tag_value(&stream.tags, &["language", "LANGUAGE"]),
             title: tag_value(&stream.tags, &["title", "TITLE"]),
             width: stream.width,
@@ -348,13 +432,30 @@ async fn import_media(
     let mut tracks = Vec::new();
     let mut cues: HashMap<String, Vec<SubtitleCue>> = HashMap::new();
     let mut warnings = Vec::new();
+    let import_task_id = format!("import:{path}");
+    let text_subtitle_total = probe
+        .streams
+        .iter()
+        .filter(|stream| {
+            stream.codec_type.as_deref() == Some("subtitle")
+                && stream
+                    .codec_name
+                    .as_deref()
+                    .is_some_and(is_text_subtitle_codec)
+        })
+        .count()
+        .max(1);
+    let mut text_subtitle_index = 0usize;
 
     for stream in probe
         .streams
         .iter()
         .filter(|s| s.codec_type.as_deref() == Some("subtitle"))
     {
-        let codec = stream.codec_name.clone().unwrap_or_else(|| "unknown".to_string());
+        let codec = stream
+            .codec_name
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
         let track_id = Uuid::new_v4().to_string();
         let kind = if is_text_subtitle_codec(&codec) {
             SubtitleKind::Text
@@ -377,12 +478,28 @@ async fn import_media(
         };
 
         if is_text_subtitle_codec(&codec) {
+            let current_subtitle = text_subtitle_index + 1;
+            text_subtitle_index += 1;
             match extract_embedded_subtitle(
                 &input_path,
                 stream.index,
                 &codec,
                 &cache_dir,
                 &preferences,
+                Some(FfmpegProgressContext {
+                    app: &app,
+                    state: state.inner(),
+                    task_id: &import_task_id,
+                    operation: "import",
+                    label: "抽取字幕",
+                    current: current_subtitle,
+                    total: text_subtitle_total,
+                    base_progress: (current_subtitle - 1) as f64 / text_subtitle_total as f64,
+                    progress_span: 1.0 / text_subtitle_total as f64,
+                    duration_us,
+                    complete_on_success: current_subtitle == text_subtitle_total,
+                    cleanup_paths: Vec::new(),
+                }),
             )
             .await
             {
@@ -398,6 +515,9 @@ async fn import_media(
                     }
                 },
                 Err(err) => {
+                    if err == "任务已取消" {
+                        return Err(err);
+                    }
                     let message = format!("字幕流 {} 抽取失败: {err}", stream.index);
                     track.warning = Some(message.clone());
                     warnings.push(message);
@@ -416,48 +536,18 @@ async fn import_media(
     }
 
     for external in external_subtitles {
-        let subtitle_path = PathBuf::from(&external);
-        if !subtitle_path.exists() {
-            warnings.push(format!("外挂字幕不存在: {external}"));
-            continue;
+        let (track, parsed_cues, warning) = load_external_subtitle(&external, &asset.id);
+        if let Some(message) = warning {
+            warnings.push(message);
         }
-
-        let codec = codec_from_path(&subtitle_path);
-        let track_id = Uuid::new_v4().to_string();
-        let mut track = SubtitleTrack {
-            id: track_id.clone(),
-            asset_id: asset.id.clone(),
-            source_type: SubtitleSourceType::External,
-            stream_index: None,
-            source_path: Some(external.clone()),
-            codec: codec.clone(),
-            language: None,
-            title: subtitle_path
-                .file_name()
-                .map(|value| value.to_string_lossy().into_owned()),
-            kind: SubtitleKind::Text,
-            offset_us: 0,
-            cue_count: 0,
-            warning: None,
-        };
-
-        match parse_subtitle_file(&subtitle_path, &codec, &track_id) {
-            Ok(parsed) => {
-                track.cue_count = parsed.len();
-                cues.insert(track_id.clone(), parsed);
-            }
-            Err(err) => {
-                let message = format!("外挂字幕解析失败 {}: {err}", external);
-                track.warning = Some(message.clone());
-                warnings.push(message);
-            }
+        if !parsed_cues.is_empty() {
+            cues.insert(track.id.clone(), parsed_cues);
         }
-
         tracks.push(track);
     }
 
     if tracks.is_empty() {
-        warnings.push("未检测到字幕流；可以重新导入并选择外挂字幕文件".to_string());
+        warnings.push("未检测到字幕流；可稍后通过“外挂字幕”按钮导入".to_string());
     }
 
     let project = Project {
@@ -466,7 +556,7 @@ async fn import_media(
         tracks,
         cues,
         cache_dir: cache_dir.to_string_lossy().into_owned(),
-        proxy_path: None,
+        proxy_path: proxy_path_str,
     };
 
     save_project(&project)?;
@@ -482,13 +572,15 @@ async fn import_media(
 #[tauri::command]
 async fn generate_proxy(
     asset_id: String,
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<ProxyResult, String> {
     let preferences = preferences_clone(&state)?;
     let project = project_clone(&asset_id, &state)?;
     let cache_dir = PathBuf::from(&project.cache_dir);
     fs::create_dir_all(&cache_dir).map_err(|e| format!("创建代理缓存目录失败: {e}"))?;
-    let proxy_path = cache_dir.join("proxy.mp4");
+    let proxy_path = cache_dir.join(PROXY_FILE_NAME);
+    let proxy_task_id = format!("proxy:{asset_id}");
 
     if !proxy_path.exists() {
         let args = vec![
@@ -509,8 +601,18 @@ async fn generate_proxy(
             "libx264".to_string(),
             "-preset".to_string(),
             "veryfast".to_string(),
+            "-tune".to_string(),
+            "fastdecode".to_string(),
             "-crf".to_string(),
             "23".to_string(),
+            "-g".to_string(),
+            "1".to_string(),
+            "-keyint_min".to_string(),
+            "1".to_string(),
+            "-sc_threshold".to_string(),
+            "0".to_string(),
+            "-bf".to_string(),
+            "0".to_string(),
             "-pix_fmt".to_string(),
             "yuv420p".to_string(),
             "-c:a".to_string(),
@@ -521,7 +623,25 @@ async fn generate_proxy(
             "+faststart".to_string(),
             proxy_path.to_string_lossy().into_owned(),
         ];
-        run_status(ffmpeg_program(&preferences), &args).await?;
+        run_status_with_ffmpeg_progress(
+            ffmpeg_program(&preferences),
+            &args,
+            FfmpegProgressContext {
+                app: &app,
+                state: state.inner(),
+                task_id: &proxy_task_id,
+                operation: "proxy",
+                label: "生成代理",
+                current: 1,
+                total: 1,
+                base_progress: 0.0,
+                progress_span: 1.0,
+                duration_us: project.asset.duration_us,
+                complete_on_success: true,
+                cleanup_paths: vec![proxy_path.clone()],
+            },
+        )
+        .await?;
     }
 
     let proxy_string = proxy_path.to_string_lossy().into_owned();
@@ -540,11 +660,50 @@ async fn generate_proxy(
 }
 
 #[tauri::command]
+async fn add_external_subtitles(
+    asset_id: String,
+    paths: Vec<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<AddExternalSubtitlesResult, String> {
+    let mut project = project_clone(&asset_id, &state)?;
+    let mut new_tracks = Vec::new();
+    let mut new_cues: HashMap<String, Vec<SubtitleCue>> = HashMap::new();
+    let mut warnings = Vec::new();
+
+    for path in paths {
+        let (track, cues, warning) = load_external_subtitle(&path, &asset_id);
+        if let Some(message) = warning {
+            warnings.push(message);
+        }
+        if !cues.is_empty() {
+            new_cues.insert(track.id.clone(), cues);
+        }
+        project.tracks.push(track.clone());
+        new_tracks.push(track);
+    }
+
+    project.cues.extend(new_cues.clone());
+    save_project(&project)?;
+    state
+        .projects
+        .lock()
+        .map_err(|_| "项目状态锁定失败".to_string())?
+        .insert(asset_id, project);
+
+    Ok(AddExternalSubtitlesResult {
+        tracks: new_tracks,
+        cues: new_cues,
+        warnings,
+    })
+}
+
+#[tauri::command]
 async fn export_clips(
     asset_id: String,
     track_id: String,
     cue_ids: Vec<String>,
     options: ExportOptions,
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<ExportResult, String> {
     let preferences = preferences_clone(&state)?;
@@ -609,6 +768,28 @@ async fn export_clips(
     let name_rule = effective_export_name_rule(options.export_name_rule, &options.layout);
     let mut used_names = HashSet::new();
     let mut part_files = Vec::new();
+    let export_task_id = format!("export:{asset_id}");
+    let export_label = match options.layout {
+        ExportLayout::Individual => format!("导出 {} 个文件", ranges.len()),
+        ExportLayout::Merged => "导出合并视频".to_string(),
+    };
+    let is_merged_layout = matches!(options.layout, ExportLayout::Merged);
+    let part_progress_total = if is_merged_layout { 0.92 } else { 1.0 };
+    let mut task_cleanup_paths = if is_merged_layout {
+        vec![part_dir.clone()]
+    } else {
+        Vec::new()
+    };
+    emit_ffmpeg_progress(
+        &app,
+        &export_task_id,
+        "export",
+        &export_label,
+        0,
+        ranges.len(),
+        0.0,
+        false,
+    );
     for range in &ranges {
         let file_stem = export_file_stem(
             name_rule,
@@ -618,12 +799,28 @@ async fn export_clips(
             &options.dialogue_line_indexes,
         );
         let output_path = unique_output_path(&part_dir, &file_stem, ext, &mut used_names);
+        task_cleanup_paths.push(output_path.clone());
         export_one_range(
             &project.asset.path,
             range,
             &options.mode,
             &output_path,
             &preferences,
+            Some(FfmpegProgressContext {
+                app: &app,
+                state: state.inner(),
+                task_id: &export_task_id,
+                operation: "export",
+                label: &export_label,
+                current: range.index + 1,
+                total: ranges.len(),
+                base_progress: range.index as f64 * part_progress_total
+                    / ranges.len().max(1) as f64,
+                progress_span: part_progress_total / ranges.len().max(1) as f64,
+                duration_us: range.end_us - range.start_us,
+                complete_on_success: false,
+                cleanup_paths: task_cleanup_paths.clone(),
+            }),
         )
         .await?;
         log.push(format!(
@@ -641,6 +838,16 @@ async fn export_clips(
             .map(|path| path.to_string_lossy().into_owned())
             .collect::<Vec<_>>(),
         ExportLayout::Merged => {
+            emit_ffmpeg_progress(
+                &app,
+                &export_task_id,
+                "export",
+                &export_label,
+                ranges.len(),
+                ranges.len(),
+                0.92,
+                false,
+            );
             let merged_stem = if ranges.len() == 1 {
                 export_file_stem(
                     name_rule,
@@ -661,11 +868,44 @@ async fn export_clips(
             };
             let mut used_merged_names = HashSet::new();
             let merged = unique_output_path(&output_dir, &merged_stem, ext, &mut used_merged_names);
-            concat_segments(&part_files, &merged, &preferences).await?;
+            task_cleanup_paths.push(merged.clone());
+            concat_segments(
+                &part_files,
+                &merged,
+                &preferences,
+                Some(FfmpegProgressContext {
+                    app: &app,
+                    state: state.inner(),
+                    task_id: &export_task_id,
+                    operation: "export",
+                    label: &export_label,
+                    current: ranges.len(),
+                    total: ranges.len(),
+                    base_progress: 0.92,
+                    progress_span: 0.08,
+                    duration_us: ranges
+                        .iter()
+                        .map(|range| range.end_us - range.start_us)
+                        .sum(),
+                    complete_on_success: false,
+                    cleanup_paths: task_cleanup_paths.clone(),
+                }),
+            )
+            .await?;
             log.push(format!("合并输出: {}", merged.to_string_lossy()));
             vec![merged.to_string_lossy().into_owned()]
         }
     };
+    emit_ffmpeg_progress(
+        &app,
+        &export_task_id,
+        "export",
+        &export_label,
+        ranges.len(),
+        ranges.len(),
+        1.0,
+        true,
+    );
 
     Ok(ExportResult {
         ranges,
@@ -714,11 +954,15 @@ async fn extract_embedded_subtitle(
     codec: &str,
     cache_dir: &Path,
     preferences: &Preferences,
+    progress: Option<FfmpegProgressContext<'_>>,
 ) -> Result<PathBuf, String> {
     let ext = subtitle_extension_for_codec(codec);
     let subtitle_dir = cache_dir.join("subtitles");
     fs::create_dir_all(&subtitle_dir).map_err(|e| format!("创建字幕缓存目录失败: {e}"))?;
     let output = subtitle_dir.join(format!("stream_{stream_index}.{ext}"));
+    if output.exists() {
+        return Ok(output);
+    }
     let args = vec![
         "-y".to_string(),
         "-hide_banner".to_string(),
@@ -730,8 +974,59 @@ async fn extract_embedded_subtitle(
         format!("0:{stream_index}"),
         output.to_string_lossy().into_owned(),
     ];
-    run_status(ffmpeg_program(preferences), &args).await?;
+    if let Some(mut progress) = progress {
+        progress.cleanup_paths.push(output.clone());
+        run_status_with_ffmpeg_progress(ffmpeg_program(preferences), &args, progress).await?;
+    } else {
+        run_status(ffmpeg_program(preferences), &args).await?;
+    }
     Ok(output)
+}
+
+fn load_external_subtitle(
+    path: &str,
+    asset_id: &str,
+) -> (SubtitleTrack, Vec<SubtitleCue>, Option<String>) {
+    let subtitle_path = PathBuf::from(path);
+    let track_id = Uuid::new_v4().to_string();
+    let mut track = SubtitleTrack {
+        id: track_id.clone(),
+        asset_id: asset_id.to_string(),
+        source_type: SubtitleSourceType::External,
+        stream_index: None,
+        source_path: Some(path.to_string()),
+        codec: "unknown".to_string(),
+        language: None,
+        title: Some(path.to_string()),
+        kind: SubtitleKind::Text,
+        offset_us: 0,
+        cue_count: 0,
+        warning: None,
+    };
+
+    if !subtitle_path.exists() {
+        let message = format!("外挂字幕不存在: {path}");
+        track.warning = Some(message.clone());
+        return (track, Vec::new(), Some(message));
+    }
+
+    let codec = codec_from_path(&subtitle_path);
+    track.codec = codec.clone();
+    track.title = subtitle_path
+        .file_name()
+        .map(|value| value.to_string_lossy().into_owned());
+
+    match parse_subtitle_file(&subtitle_path, &codec, &track_id) {
+        Ok(cues) => {
+            track.cue_count = cues.len();
+            (track, cues, None)
+        }
+        Err(err) => {
+            let message = format!("外挂字幕解析失败 {}: {err}", path);
+            track.warning = Some(message.clone());
+            (track, Vec::new(), Some(message))
+        }
+    }
 }
 
 async fn export_one_range(
@@ -740,6 +1035,7 @@ async fn export_one_range(
     mode: &ExportMode,
     output_path: &Path,
     preferences: &Preferences,
+    progress: Option<FfmpegProgressContext<'_>>,
 ) -> Result<(), String> {
     let duration_us = range.end_us.saturating_sub(range.start_us).max(1);
     let mut args = vec![
@@ -790,18 +1086,26 @@ async fn export_one_range(
     }
 
     args.push(output_path.to_string_lossy().into_owned());
-    run_status(ffmpeg_program(preferences), &args).await
+    if let Some(progress) = progress {
+        run_status_with_ffmpeg_progress(ffmpeg_program(preferences), &args, progress).await
+    } else {
+        run_status(ffmpeg_program(preferences), &args).await
+    }
 }
 
 async fn concat_segments(
     parts: &[PathBuf],
     output_path: &Path,
     preferences: &Preferences,
+    progress: Option<FfmpegProgressContext<'_>>,
 ) -> Result<(), String> {
     let list_path = output_path.with_extension("concat.txt");
     let mut body = String::new();
     for part in parts {
-        let normalized = part.to_string_lossy().replace('\\', "/").replace('\'', "'\\''");
+        let normalized = part
+            .to_string_lossy()
+            .replace('\\', "/")
+            .replace('\'', "'\\''");
         body.push_str(&format!("file '{normalized}'\n"));
     }
     fs::write(&list_path, body).map_err(|e| format!("写入合并列表失败: {e}"))?;
@@ -820,7 +1124,11 @@ async fn concat_segments(
         "copy".to_string(),
         output_path.to_string_lossy().into_owned(),
     ];
-    run_status(ffmpeg_program(preferences), &args).await
+    if let Some(progress) = progress {
+        run_status_with_ffmpeg_progress(ffmpeg_program(preferences), &args, progress).await
+    } else {
+        run_status(ffmpeg_program(preferences), &args).await
+    }
 }
 
 fn build_clip_plan(
@@ -881,8 +1189,7 @@ fn parse_subtitle_file(
         .map(|value| value.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
 
-    if lower_codec.contains("ass") || lower_codec.contains("ssa") || ext == "ass" || ext == "ssa"
-    {
+    if lower_codec.contains("ass") || lower_codec.contains("ssa") || ext == "ass" || ext == "ssa" {
         Ok(normalize_cues(parse_ass(&text, track_id), track_id))
     } else {
         Ok(normalize_cues(parse_srt_or_vtt(&text, track_id), track_id))
@@ -1063,7 +1370,9 @@ fn parse_ass(text: &str, track_id: &str) -> Vec<SubtitleCue> {
 
         let start = ass_value(&fields, &parts, "start").unwrap_or_default();
         let end = ass_value(&fields, &parts, "end").unwrap_or_default();
-        let raw_text = ass_value(&fields, &parts, "text").unwrap_or_default().to_string();
+        let raw_text = ass_value(&fields, &parts, "text")
+            .unwrap_or_default()
+            .to_string();
         let start_us = parse_ass_time(start);
         let end_us = parse_ass_time(end);
         let plain_text = clean_plain_text(&raw_text);
@@ -1136,8 +1445,7 @@ fn parse_ass_time(value: &str) -> i64 {
         return 0;
     };
     let (seconds_whole, fraction_us) = parse_seconds_fraction(seconds, 2);
-    ((parse_i64(hours) * 3600 + parse_i64(minutes) * 60 + seconds_whole) * 1_000_000)
-        + fraction_us
+    ((parse_i64(hours) * 3600 + parse_i64(minutes) * 60 + seconds_whole) * 1_000_000) + fraction_us
 }
 
 fn parse_seconds_fraction(value: &str, default_fraction_digits: usize) -> (i64, i64) {
@@ -1243,8 +1551,157 @@ fn tag_value(tags: &HashMap<String, String>, keys: &[&str]) -> Option<String> {
     None
 }
 
+fn hidden_command(program: &str) -> Command {
+    let mut command = Command::new(program);
+    #[cfg(windows)]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+}
+
+fn register_running_ffmpeg(
+    state: &AppState,
+    id: String,
+    cancel: Arc<AtomicBool>,
+    pid: Option<u32>,
+    cleanup_paths: Vec<PathBuf>,
+) -> Result<(), String> {
+    let mut running = state
+        .running_ffmpeg
+        .lock()
+        .map_err(|_| "任务状态锁定失败".to_string())?;
+    running.insert(
+        id,
+        RunningFfmpeg {
+            cancel,
+            pid,
+            cleanup_paths,
+        },
+    );
+    Ok(())
+}
+
+fn clear_running_ffmpeg(state: &AppState, id: &str) {
+    if let Ok(mut running) = state.running_ffmpeg.lock() {
+        running.remove(id);
+    }
+}
+
+fn cancel_running_ffmpeg(state: &AppState) -> Result<bool, String> {
+    let tasks = {
+        let mut running = state
+            .running_ffmpeg
+            .lock()
+            .map_err(|_| "任务状态锁定失败".to_string())?;
+        if running.is_empty() {
+            return Ok(false);
+        }
+        let tasks = running
+            .values()
+            .map(|task| {
+                task.cancel.store(true, Ordering::SeqCst);
+                (task.pid, task.cleanup_paths.clone())
+            })
+            .collect::<Vec<_>>();
+        running.clear();
+        tasks
+    };
+
+    for (pid, cleanup_paths) in tasks {
+        if let Some(pid) = pid {
+            kill_process_tree(pid);
+        }
+        remove_cleanup_paths(&cleanup_paths);
+    }
+    Ok(true)
+}
+
+fn remove_cleanup_paths(paths: &[PathBuf]) {
+    for path in paths.iter().rev() {
+        if path.is_dir() {
+            let _ = fs::remove_dir_all(path);
+        } else {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
+fn kill_process_tree(pid: u32) {
+    #[cfg(windows)]
+    {
+        let _ = StdCommand::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = StdCommand::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+fn ffmpeg_args_with_progress(args: &[String]) -> Vec<String> {
+    let mut next = Vec::with_capacity(args.len() + 3);
+    let mut inserted = false;
+
+    for arg in args {
+        next.push(arg.clone());
+        if !inserted && arg == "-hide_banner" {
+            next.push("-nostats".to_string());
+            next.push("-progress".to_string());
+            next.push("pipe:1".to_string());
+            inserted = true;
+        }
+    }
+
+    if !inserted {
+        next.splice(
+            0..0,
+            [
+                "-nostats".to_string(),
+                "-progress".to_string(),
+                "pipe:1".to_string(),
+            ],
+        );
+    }
+
+    next
+}
+
+fn emit_ffmpeg_progress(
+    app: &tauri::AppHandle,
+    task_id: &str,
+    operation: &str,
+    label: &str,
+    current: usize,
+    total: usize,
+    progress: f64,
+    done: bool,
+) {
+    let _ = app.emit(
+        FFMPEG_PROGRESS_EVENT,
+        FfmpegProgressPayload {
+            task_id: task_id.to_string(),
+            operation: operation.to_string(),
+            label: label.to_string(),
+            current,
+            total,
+            progress: progress.clamp(0.0, 1.0),
+            done,
+        },
+    );
+}
+
 async fn run_output(program: &str, args: &[String]) -> Result<String, String> {
-    let output = Command::new(program)
+    let output = hidden_command(program)
         .args(args)
         .output()
         .await
@@ -1258,7 +1715,7 @@ async fn run_output(program: &str, args: &[String]) -> Result<String, String> {
 }
 
 async fn run_status(program: &str, args: &[String]) -> Result<(), String> {
-    let output = Command::new(program)
+    let output = hidden_command(program)
         .args(args)
         .output()
         .await
@@ -1268,6 +1725,169 @@ async fn run_status(program: &str, args: &[String]) -> Result<(), String> {
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
         Err(format!("{program} 执行失败: {stderr}"))
+    }
+}
+
+async fn run_status_with_ffmpeg_progress(
+    program: &str,
+    args: &[String],
+    progress: FfmpegProgressContext<'_>,
+) -> Result<(), String> {
+    let progress_args = ffmpeg_args_with_progress(args);
+    let task_id = Uuid::new_v4().to_string();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let mut child = hidden_command(program)
+        .args(&progress_args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("启动 {program} 失败，请确认它在 PATH 中: {e}"))?;
+    let pid = child.id();
+    if let Err(err) = register_running_ffmpeg(
+        progress.state,
+        task_id.clone(),
+        cancel.clone(),
+        pid,
+        progress.cleanup_paths.clone(),
+    ) {
+        let _ = child.start_kill();
+        return Err(err);
+    }
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| format!("读取 {program} 进度失败"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| format!("读取 {program} 错误输出失败"))?;
+
+    let stderr_task = tokio::spawn(async move {
+        let mut body = String::new();
+        let _ = BufReader::new(stderr).read_to_string(&mut body).await;
+        body
+    });
+
+    emit_ffmpeg_progress(
+        progress.app,
+        progress.task_id,
+        progress.operation,
+        progress.label,
+        progress.current,
+        progress.total,
+        progress.base_progress,
+        false,
+    );
+
+    let mut lines = BufReader::new(stdout).lines();
+    let mut last_emitted = progress.base_progress;
+    let duration_us = progress.duration_us.max(1) as f64;
+    loop {
+        if cancel.load(Ordering::SeqCst) {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            let _ = stderr_task.await;
+            remove_cleanup_paths(&progress.cleanup_paths);
+            clear_running_ffmpeg(progress.state, &task_id);
+            emit_ffmpeg_progress(
+                progress.app,
+                progress.task_id,
+                progress.operation,
+                progress.label,
+                progress.current,
+                progress.total,
+                last_emitted,
+                true,
+            );
+            return Err("任务已取消".to_string());
+        }
+
+        let line = match tokio::time::timeout(Duration::from_millis(120), lines.next_line()).await {
+            Ok(Ok(Some(line))) => line,
+            Ok(Ok(None)) => break,
+            Ok(Err(err)) => {
+                clear_running_ffmpeg(progress.state, &task_id);
+                return Err(format!("读取 {program} 进度失败: {err}"));
+            }
+            Err(_) => continue,
+        };
+
+        if let Some(value) = line.strip_prefix("out_time_us=") {
+            if let Ok(out_time_us) = value.trim().parse::<i64>() {
+                let local_progress = (out_time_us.max(0) as f64 / duration_us).clamp(0.0, 1.0);
+                let overall_progress =
+                    progress.base_progress + local_progress * progress.progress_span;
+                if overall_progress - last_emitted >= 0.005 || overall_progress >= 1.0 {
+                    emit_ffmpeg_progress(
+                        progress.app,
+                        progress.task_id,
+                        progress.operation,
+                        progress.label,
+                        progress.current,
+                        progress.total,
+                        overall_progress,
+                        false,
+                    );
+                    last_emitted = overall_progress;
+                }
+            }
+        } else if line.trim() == "progress=end" {
+            emit_ffmpeg_progress(
+                progress.app,
+                progress.task_id,
+                progress.operation,
+                progress.label,
+                progress.current,
+                progress.total,
+                progress.base_progress + progress.progress_span,
+                progress.complete_on_success,
+            );
+        }
+    }
+
+    let status = match child.wait().await {
+        Ok(status) => status,
+        Err(err) => {
+            clear_running_ffmpeg(progress.state, &task_id);
+            return Err(format!("等待 {program} 结束失败: {err}"));
+        }
+    };
+    let stderr = stderr_task.await.unwrap_or_default();
+    let was_cancelled = cancel.load(Ordering::SeqCst);
+    clear_running_ffmpeg(progress.state, &task_id);
+
+    if status.success() && !was_cancelled {
+        if progress.complete_on_success {
+            emit_ffmpeg_progress(
+                progress.app,
+                progress.task_id,
+                progress.operation,
+                progress.label,
+                progress.current,
+                progress.total,
+                1.0,
+                true,
+            );
+        }
+        Ok(())
+    } else {
+        remove_cleanup_paths(&progress.cleanup_paths);
+        emit_ffmpeg_progress(
+            progress.app,
+            progress.task_id,
+            progress.operation,
+            progress.label,
+            progress.current,
+            progress.total,
+            last_emitted,
+            true,
+        );
+        if was_cancelled {
+            Err("任务已取消".to_string())
+        } else {
+            Err(format!("{program} 执行失败: {stderr}"))
+        }
     }
 }
 
@@ -1477,7 +2097,10 @@ fn quoted_dialogue_for_range(
     cue_lookup: &HashMap<&str, &SubtitleCue>,
     dialogue_line_indexes: &[usize],
 ) -> String {
-    let selected_lines = dialogue_line_indexes.iter().copied().collect::<HashSet<_>>();
+    let selected_lines = dialogue_line_indexes
+        .iter()
+        .copied()
+        .collect::<HashSet<_>>();
     let use_all_lines = selected_lines.is_empty();
     let text = range
         .cue_ids
@@ -1548,8 +2171,7 @@ fn safe_component(value: &str) -> String {
     let mut output = value
         .chars()
         .map(|ch| {
-            if ch.is_control()
-                || matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+            if ch.is_control() || matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
             {
                 '_'
             } else {
@@ -1718,22 +2340,22 @@ mod tests {
         tauri::async_runtime::block_on(run_status(ffmpeg_program(&preferences), &args))
             .expect("create mkv");
 
-        let probe =
-            tauri::async_runtime::block_on(probe_media(&mkv_path, &preferences)).expect("probe mkv");
+        let probe = tauri::async_runtime::block_on(probe_media(&mkv_path, &preferences))
+            .expect("probe mkv");
         let stream = probe
             .streams
             .iter()
             .find(|stream| stream.codec_type.as_deref() == Some("subtitle"))
             .expect("subtitle stream");
-        let extracted =
-            tauri::async_runtime::block_on(extract_embedded_subtitle(
-                &mkv_path,
-                stream.index,
-                "subrip",
-                &temp_dir,
-                &preferences,
-            ))
-            .expect("extract subtitle");
+        let extracted = tauri::async_runtime::block_on(extract_embedded_subtitle(
+            &mkv_path,
+            stream.index,
+            "subrip",
+            &temp_dir,
+            &preferences,
+            None,
+        ))
+        .expect("extract subtitle");
         let cues = parse_subtitle_file(&extracted, "subrip", "track").expect("parse extracted");
 
         assert_eq!(cues.len(), 2);

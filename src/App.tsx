@@ -1,29 +1,30 @@
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   Captions,
   ChevronDown,
-  CheckSquare,
   Download,
   FileVideo,
-  Film,
   Folder,
   FolderOpen,
   HardDrive,
   Loader2,
   Play,
-  RefreshCw,
   Save,
   Scissors,
   Search,
   Settings,
-  Square,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
+import { SourceMonitor } from "./components/SourceMonitor";
+import { TaskProgress, clearTaskProgress, removeTaskProgress, showTaskProgress } from "./components/TaskProgress";
 import { useAppStore } from "./store";
+import { formatDuration } from "./time";
 import type {
+  AddExternalSubtitlesResult,
   ExportLayout,
   ExportMode,
   ExportNameRule,
@@ -55,22 +56,10 @@ const executableFilters = [
   },
 ];
 
+const appIconUrl = new URL("../src-tauri/icons/icon.ico", import.meta.url).href;
+
 function isTauriRuntime() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
-
-function formatDuration(us: number) {
-  const totalMs = Math.max(0, Math.round(us / 1000));
-  const ms = totalMs % 1000;
-  const totalSeconds = Math.floor(totalMs / 1000);
-  const seconds = totalSeconds % 60;
-  const minutes = Math.floor(totalSeconds / 60) % 60;
-  const hours = Math.floor(totalSeconds / 3600);
-  return `${hours.toString().padStart(2, "0")}:${minutes
-    .toString()
-    .padStart(2, "0")}:${seconds.toString().padStart(2, "0")}.${ms
-    .toString()
-    .padStart(3, "0")}`;
 }
 
 function fileName(path: string) {
@@ -172,7 +161,6 @@ function clamp(value: number, min: number, max: number) {
 export default function App() {
   const workspaceRef = useRef<HTMLElement | null>(null);
   const leftPaneRef = useRef<HTMLElement | null>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const [externalSubtitlePaths, setExternalSubtitlePaths] = useState<string[]>([]);
   const [busyLabel, setBusyLabel] = useState("");
@@ -182,8 +170,11 @@ export default function App() {
   const [preferences, setPreferences] = useState<Preferences>(defaultPreferences);
   const [draftPreferences, setDraftPreferences] = useState<Preferences>(defaultPreferences);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
-  const [leftPaneWidth, setLeftPaneWidth] = useState(34);
-  const [previewPaneHeight, setPreviewPaneHeight] = useState(50);
+  const [leftPaneWidth, setLeftPaneWidth] = useState(100 / 2.8);
+  const [previewPaneHeight, setPreviewPaneHeight] = useState(48);
+  const [showOnlySelected, setShowOnlySelected] = useState(false);
+  const [useProxy, setUseProxy] = useState(false);
+  const [isGeneratingProxy, setIsGeneratingProxy] = useState(false);
 
   const {
     project,
@@ -200,7 +191,25 @@ export default function App() {
     selectCueIds,
     setProxyPath,
     setExportOptions,
+    addExternalSubtitles,
   } = useAppStore();
+
+  useEffect(() => {
+    const suppressBareAltKey = (event: KeyboardEvent) => {
+      if (event.key !== "Alt") {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    window.addEventListener("keydown", suppressBareAltKey, true);
+    window.addEventListener("keyup", suppressBareAltKey, true);
+    return () => {
+      window.removeEventListener("keydown", suppressBareAltKey, true);
+      window.removeEventListener("keyup", suppressBareAltKey, true);
+    };
+  }, []);
 
   useEffect(() => {
     if (!isTauriRuntime()) {
@@ -215,11 +224,22 @@ export default function App() {
       .catch((error) => setMessage(error instanceof Error ? error.message : String(error)));
   }, []);
 
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+
+    const baseTitle = " LineCut";
+    const title = project?.asset.file_name ? `${baseTitle} - ${project.asset.file_name}` : baseTitle;
+    void getCurrentWindow().setTitle(title);
+  }, [project]);
+
   const activeTrack = project?.tracks.find((track) => track.id === activeTrackId) ?? null;
   const cues = activeTrackId && project ? project.cues[activeTrackId] ?? [] : [];
   const filteredCues = useMemo(
-    () => cues.filter((cue) => cueMatches(cue, query)),
-    [cues, query],
+    () =>
+      cues.filter((cue) => cueMatches(cue, query) && (!showOnlySelected || selectedCueIds.has(cue.id))),
+    [cues, query, selectedCueIds, showOnlySelected],
   );
   const dialogueLineCount = useMemo(() => {
     return cues.reduce((max, cue) => {
@@ -244,8 +264,6 @@ export default function App() {
     }
     return exportOptions.dialogue_line_indexes.filter((index) => index < dialogueLineCount);
   }, [dialogueLineCount, exportOptions.dialogue_line_indexes]);
-  const videoSrc = proxyPath ? convertFileSrc(proxyPath) : "";
-
   useEffect(() => {
     if (exportOptions.layout === "merged" && isDialogueNameRule(exportOptions.export_name_rule)) {
       setExportOptions({
@@ -337,7 +355,30 @@ export default function App() {
       filters: subtitleFilters,
     });
     const paths = Array.isArray(picked) ? picked : picked ? [picked] : [];
-    setExternalSubtitlePaths((current) => Array.from(new Set([...current, ...paths])));
+    if (paths.length === 0) {
+      return;
+    }
+
+    if (project) {
+      setBusyLabel("正在导入外挂字幕");
+      try {
+        const result = await invoke<AddExternalSubtitlesResult>("add_external_subtitles", {
+          assetId: project.asset.id,
+          paths,
+        });
+        addExternalSubtitles(result.tracks, result.cues);
+        if (result.warnings.length > 0) {
+          setWarnings((current) => [...current, ...result.warnings]);
+        }
+        setMessage("外挂字幕已导入");
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : String(error));
+      } finally {
+        setBusyLabel("");
+      }
+    } else {
+      setExternalSubtitlePaths((current) => Array.from(new Set([...current, ...paths])));
+    }
   }
 
   async function importVideo() {
@@ -355,6 +396,16 @@ export default function App() {
     }
 
     setBusyLabel("正在探测媒体并抽取字幕");
+    const importTaskId = `import:${path}`;
+    showTaskProgress({
+      task_id: importTaskId,
+      operation: "import",
+      label: "导入媒体",
+      current: 0,
+      total: 1,
+      progress: 0,
+      done: false,
+    });
     setWarnings([]);
     setExportResult(null);
     try {
@@ -364,8 +415,11 @@ export default function App() {
       });
       setProject(result.project);
       setWarnings(result.warnings);
+      setExternalSubtitlePaths([]);
       setMessage(`已导入 ${result.project.asset.file_name}`);
+      removeTaskProgress(importTaskId);
     } catch (error) {
+      removeTaskProgress(importTaskId);
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
       setBusyLabel("");
@@ -376,17 +430,53 @@ export default function App() {
     if (!project) {
       return;
     }
+    setIsGeneratingProxy(true);
     setBusyLabel("正在生成 720p 预览代理");
+    showTaskProgress({
+      task_id: `proxy:${project.asset.id}`,
+      operation: "proxy",
+      label: "生成代理",
+      current: 1,
+      total: 1,
+      progress: 0,
+      done: false,
+    });
     try {
       const result = await invoke<ProxyResult>("generate_proxy", {
         assetId: project.asset.id,
       });
       setProxyPath(result.proxy_path);
+      setUseProxy(true);
       setMessage("预览代理已生成");
     } catch (error) {
+      removeTaskProgress(`proxy:${project.asset.id}`);
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
       setBusyLabel("");
+      setIsGeneratingProxy(false);
+    }
+  }
+
+  function handleVideoError() {
+    if (!useProxy && project) {
+      setUseProxy(true);
+      setMessage("原文件无法直接播放，已切换到代理模式，请生成预览代理。");
+    }
+  }
+
+  async function cancelCurrentTask() {
+    if (!isTauriRuntime()) {
+      clearTaskProgress();
+      return;
+    }
+    try {
+      const cancelled = await invoke<boolean>("cancel_current_task");
+      setMessage(cancelled ? "正在取消任务" : "当前没有可取消的 FFmpeg 任务");
+      if (!cancelled) {
+        clearTaskProgress();
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -461,6 +551,15 @@ export default function App() {
       return;
     }
     setBusyLabel("正在导出台词片段");
+    showTaskProgress({
+      task_id: `export:${project.asset.id}`,
+      operation: "export",
+      label: `导出 ${selectedCount} 条台词`,
+      current: 0,
+      total: 1,
+      progress: 0,
+      done: false,
+    });
     setExportResult(null);
     try {
       const result = await invoke<ExportResult>("export_clips", {
@@ -472,6 +571,7 @@ export default function App() {
       setExportResult(result);
       setMessage(`导出完成：${result.files.length} 个文件`);
     } catch (error) {
+      removeTaskProgress(`export:${project.asset.id}`);
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
       setBusyLabel("");
@@ -493,27 +593,33 @@ export default function App() {
   }
 
   function seekToCue(cue: SubtitleCue) {
-    if (!videoRef.current) {
-      return;
-    }
-    videoRef.current.currentTime = cue.start_us / 1_000_000;
-    void videoRef.current.play();
+    window.dispatchEvent(new CustomEvent("linecut-monitor-seek", { detail: { timeUs: cue.start_us } }));
   }
 
   const selectedCount = selectedCueIds.size;
+  useEffect(() => {
+    if (showOnlySelected && selectedCount === 0) {
+      setShowOnlySelected(false);
+    }
+  }, [showOnlySelected, selectedCount]);
+
+  useEffect(() => {
+    setUseProxy(false);
+  }, [project?.asset.id]);
   const canExport = Boolean(project && activeTrackId && selectedCount > 0 && !busyLabel);
-  const totalTracks = project?.tracks.length ?? 0;
-  const textTracks =
-    project?.tracks.filter((track) => track.kind === "text" && track.cue_count > 0).length ?? 0;
 
   return (
     <div className="app-shell">
       <header className="topbar">
-        <div className="brand">
-          <Film size={20} />
-          <div>
-            <strong>LineCut</strong>
-            <span>对白检索与片段导出</span>
+        <div className="topbar-left">
+          <div className="brand">
+            <img src={appIconUrl} alt="" className="app-icon" />
+            <TaskProgress onCancel={cancelCurrentTask}>
+              <div className="brand-copy">
+                <strong>LineCut</strong>
+                <span>对白检索与片段导出</span>
+              </div>
+            </TaskProgress>
           </div>
         </div>
         <div className="topbar-actions">
@@ -566,40 +672,15 @@ export default function App() {
           }}
         >
           <div className="panel preview-panel">
-            <div className="panel-header">
-              <div>
-                <span className="eyebrow">源监视器</span>
-                <h1 title={project?.asset.file_name}>{project?.asset.file_name ?? "等待导入 MKV"}</h1>
-              </div>
-              <button
-                className="tool-button"
-                onClick={generatePreview}
-                disabled={!project || Boolean(busyLabel)}
-                title="生成预览代理"
-              >
-                {busyLabel === "正在生成 720p 预览代理" ? (
-                  <Loader2 className="spin" size={16} />
-                ) : (
-                  <RefreshCw size={16} />
-                )}
-              </button>
-            </div>
-            <div className="video-frame">
-              {videoSrc ? (
-                <video ref={videoRef} controls src={videoSrc} />
-              ) : (
-                <div className="empty-preview">
-                  <FileVideo size={38} />
-                  <span>生成 MP4 代理后可在这里预览并定位台词</span>
-                </div>
-              )}
-            </div>
-            <div className="media-meta">
-              <span>时长 {project ? formatDuration(project.asset.duration_us) : "--"}</span>
-              <span>文本字幕 {textTracks}/{totalTracks}</span>
-              <span>视频流 {project?.asset.video_stream_index ?? "--"}</span>
-              <span>音频流 {project?.asset.audio_stream_index ?? "--"}</span>
-            </div>
+            <SourceMonitor
+              project={project}
+              proxyPath={proxyPath}
+              useProxy={useProxy}
+              isGeneratingProxy={isGeneratingProxy}
+              onUseProxyChange={setUseProxy}
+              onGenerateProxy={generatePreview}
+              onVideoError={handleVideoError}
+            />
           </div>
 
           <div
@@ -769,12 +850,17 @@ export default function App() {
               onClick={() => selectCueIds(filteredCues.map((cue) => cue.id))}
               disabled={filteredCues.length === 0}
             >
-              <CheckSquare size={15} />
-              全选结果
+              全选
             </button>
             <button className="toolbar-button" onClick={clearSelection} disabled={selectedCount === 0}>
-              <Square size={15} />
               清空
+            </button>
+            <button
+              className={`toolbar-button ${showOnlySelected ? "active" : ""}`}
+              onClick={() => setShowOnlySelected((value) => !value)}
+              disabled={selectedCount === 0}
+            >
+              仅展示选中
             </button>
             <span>{filteredCues.length} 条结果</span>
           </div>

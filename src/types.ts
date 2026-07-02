@@ -21,6 +21,8 @@ export interface MediaStream {
   index: number;
   codec_type: string;
   codec_name: string;
+  avg_frame_rate?: string | null;
+  r_frame_rate?: string | null;
   language: string | null;
   title: string | null;
   width: number | null;
@@ -73,6 +75,12 @@ export interface ImportResult {
 
 export interface ProxyResult {
   proxy_path: string;
+}
+
+export interface AddExternalSubtitlesResult {
+  tracks: SubtitleTrack[];
+  cues: Record<string, SubtitleCue[]>;
+  warnings: string[];
 }
 
 export interface ExportOptions {
