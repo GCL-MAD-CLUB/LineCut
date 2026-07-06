@@ -26,6 +26,8 @@ use uuid::Uuid;
 const HEAD_TAIL_HASH_BYTES: u64 = 1024 * 1024;
 const FFMPEG_PROGRESS_EVENT: &str = "ffmpeg-progress";
 const PROXY_FILE_NAME: &str = "proxy_preview_i.mp4";
+const DEFAULT_FFMPEG_PROGRAM: &str = "ffmpeg";
+const DEFAULT_FFPROBE_PROGRAM: &str = "ffprobe";
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -80,8 +82,8 @@ impl Default for Preferences {
         Self {
             cache_dir: default_cache_root().to_string_lossy().into_owned(),
             default_export_dir: default_export_root().to_string_lossy().into_owned(),
-            ffmpeg_path: "ffmpeg".to_string(),
-            ffprobe_path: "ffprobe".to_string(),
+            ffmpeg_path: DEFAULT_FFMPEG_PROGRAM.to_string(),
+            ffprobe_path: DEFAULT_FFPROBE_PROGRAM.to_string(),
         }
     }
 }
@@ -623,8 +625,9 @@ async fn generate_proxy(
             "+faststart".to_string(),
             proxy_path.to_string_lossy().into_owned(),
         ];
+        let program = ffmpeg_program(&preferences);
         run_status_with_ffmpeg_progress(
-            ffmpeg_program(&preferences),
+            &program,
             &args,
             FfmpegProgressContext {
                 app: &app,
@@ -944,7 +947,8 @@ async fn probe_media(path: &Path, preferences: &Preferences) -> Result<ProbeOutp
         "json".to_string(),
         path.to_string_lossy().into_owned(),
     ];
-    let stdout = run_output(ffprobe_program(preferences), &args).await?;
+    let program = ffprobe_program(preferences);
+    let stdout = run_output(&program, &args).await?;
     serde_json::from_str(&stdout).map_err(|e| format!("ffprobe JSON 解析失败: {e}"))
 }
 
@@ -974,11 +978,12 @@ async fn extract_embedded_subtitle(
         format!("0:{stream_index}"),
         output.to_string_lossy().into_owned(),
     ];
+    let program = ffmpeg_program(preferences);
     if let Some(mut progress) = progress {
         progress.cleanup_paths.push(output.clone());
-        run_status_with_ffmpeg_progress(ffmpeg_program(preferences), &args, progress).await?;
+        run_status_with_ffmpeg_progress(&program, &args, progress).await?;
     } else {
-        run_status(ffmpeg_program(preferences), &args).await?;
+        run_status(&program, &args).await?;
     }
     Ok(output)
 }
@@ -1086,10 +1091,11 @@ async fn export_one_range(
     }
 
     args.push(output_path.to_string_lossy().into_owned());
+    let program = ffmpeg_program(preferences);
     if let Some(progress) = progress {
-        run_status_with_ffmpeg_progress(ffmpeg_program(preferences), &args, progress).await
+        run_status_with_ffmpeg_progress(&program, &args, progress).await
     } else {
-        run_status(ffmpeg_program(preferences), &args).await
+        run_status(&program, &args).await
     }
 }
 
@@ -1124,10 +1130,11 @@ async fn concat_segments(
         "copy".to_string(),
         output_path.to_string_lossy().into_owned(),
     ];
+    let program = ffmpeg_program(preferences);
     if let Some(progress) = progress {
-        run_status_with_ffmpeg_progress(ffmpeg_program(preferences), &args, progress).await
+        run_status_with_ffmpeg_progress(&program, &args, progress).await
     } else {
-        run_status(ffmpeg_program(preferences), &args).await
+        run_status(&program, &args).await
     }
 }
 
@@ -2019,19 +2026,126 @@ fn save_preferences(preferences: &Preferences) -> Result<(), String> {
     fs::write(preferences_file(), body).map_err(|e| format!("保存首选项失败: {e}"))
 }
 
-fn ffmpeg_program(preferences: &Preferences) -> &str {
-    if preferences.ffmpeg_path.trim().is_empty() {
-        "ffmpeg"
-    } else {
-        preferences.ffmpeg_path.trim()
+fn ffmpeg_program(preferences: &Preferences) -> String {
+    configured_media_program(&preferences.ffmpeg_path, DEFAULT_FFMPEG_PROGRAM)
+}
+
+fn ffprobe_program(preferences: &Preferences) -> String {
+    configured_media_program(&preferences.ffprobe_path, DEFAULT_FFPROBE_PROGRAM)
+}
+
+fn configured_media_program(configured: &str, default_program: &str) -> String {
+    let trimmed = configured.trim();
+    if !is_default_media_program(trimmed, default_program) {
+        return trimmed.to_string();
+    }
+
+    bundled_media_program(default_program)
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| default_program.to_string())
+}
+
+fn is_default_media_program(value: &str, default_program: &str) -> bool {
+    if value.is_empty() {
+        return true;
+    }
+    let lower = value.to_ascii_lowercase();
+    lower == default_program || lower == format!("{default_program}.exe")
+}
+
+fn bundled_media_program(program: &str) -> Option<PathBuf> {
+    bundled_media_program_candidates(program)
+        .into_iter()
+        .find(|path| path.is_file())
+}
+
+fn bundled_media_program_candidates(program: &str) -> Vec<PathBuf> {
+    let executable = platform_executable_name(program);
+    let sidecar_executable = sidecar_executable_name(program);
+    let mut candidates = Vec::new();
+
+    if let Ok(current_exe) = env::current_exe() {
+        if let Some(dir) = current_exe.parent() {
+            candidates.push(dir.join(&executable));
+            candidates.push(dir.join(&sidecar_executable));
+            candidates.push(dir.join("bin").join(&executable));
+            candidates.push(dir.join("bin").join(&sidecar_executable));
+        }
+    }
+
+    if let Ok(current_dir) = env::current_dir() {
+        candidates.push(current_dir.join("bin").join(&sidecar_executable));
+        candidates.push(current_dir.join("bin").join(&executable));
+        candidates.push(
+            current_dir
+                .join("src-tauri")
+                .join("bin")
+                .join(&sidecar_executable),
+        );
+        candidates.push(current_dir.join("src-tauri").join("bin").join(&executable));
+    }
+
+    candidates
+}
+
+fn platform_executable_name(program: &str) -> String {
+    #[cfg(windows)]
+    {
+        format!("{program}.exe")
+    }
+    #[cfg(not(windows))]
+    {
+        program.to_string()
     }
 }
 
-fn ffprobe_program(preferences: &Preferences) -> &str {
-    if preferences.ffprobe_path.trim().is_empty() {
-        "ffprobe"
-    } else {
-        preferences.ffprobe_path.trim()
+fn sidecar_executable_name(program: &str) -> String {
+    let target = sidecar_target_triple();
+    #[cfg(windows)]
+    {
+        format!("{program}-{target}.exe")
+    }
+    #[cfg(not(windows))]
+    {
+        format!("{program}-{target}")
+    }
+}
+
+fn sidecar_target_triple() -> &'static str {
+    #[cfg(all(windows, target_arch = "x86_64", target_env = "msvc"))]
+    {
+        "x86_64-pc-windows-msvc"
+    }
+    #[cfg(all(windows, target_arch = "aarch64", target_env = "msvc"))]
+    {
+        "aarch64-pc-windows-msvc"
+    }
+    #[cfg(all(windows, target_arch = "x86", target_env = "msvc"))]
+    {
+        "i686-pc-windows-msvc"
+    }
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    {
+        "x86_64-apple-darwin"
+    }
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        "aarch64-apple-darwin"
+    }
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        "x86_64-unknown-linux-gnu"
+    }
+    #[cfg(not(any(
+        all(windows, target_arch = "x86_64", target_env = "msvc"),
+        all(windows, target_arch = "aarch64", target_env = "msvc"),
+        all(windows, target_arch = "x86", target_env = "msvc"),
+        all(target_os = "macos", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "linux", target_arch = "x86_64")
+    )))]
+    {
+        ""
     }
 }
 
@@ -2337,8 +2451,8 @@ mod tests {
             mkv_path.to_string_lossy().into_owned(),
         ];
         let preferences = Preferences::default();
-        tauri::async_runtime::block_on(run_status(ffmpeg_program(&preferences), &args))
-            .expect("create mkv");
+        let program = ffmpeg_program(&preferences);
+        tauri::async_runtime::block_on(run_status(&program, &args)).expect("create mkv");
 
         let probe = tauri::async_runtime::block_on(probe_media(&mkv_path, &preferences))
             .expect("probe mkv");
