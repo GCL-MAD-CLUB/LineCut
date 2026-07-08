@@ -1,5 +1,5 @@
-import { ChevronDown } from "lucide-react";
 import { useEffect, useRef } from "react";
+import { SelectDropdown, type SelectDropdownItem } from "../SelectDropdown";
 import type {
   KeyboardEvent,
   MouseEvent,
@@ -8,6 +8,7 @@ import type {
 } from "react";
 
 type ZoomLevel = "fit" | number;
+type PreviewMode = "source" | "proxy";
 
 interface VideoControlsProps {
   timeEditorRef: RefObject<HTMLSpanElement | null>;
@@ -20,9 +21,9 @@ interface VideoControlsProps {
   isCustomZoom: boolean;
   zoomOptions: ZoomLevel[];
   isPlaying: boolean;
-  resolutionLevel: string;
-  resolutionOptions: readonly string[];
-  resolutionLabels: Record<string, string>;
+  previewMode: PreviewMode;
+  previewModeOptions: readonly PreviewMode[];
+  previewModeLabels: Record<PreviewMode, string>;
   onCommitTimeEdit: () => void;
   onCancelTimeEdit: () => void;
   onSetTimeEditSelection: (selection: "all" | "cursor") => void;
@@ -36,7 +37,7 @@ interface VideoControlsProps {
   onZoomLevelChange: (value: string) => void;
   onStepFrame: (direction: -1 | 1) => void;
   onTogglePlayback: () => void;
-  onResolutionLevelChange: (value: string) => void;
+  onPreviewModeChange: (value: PreviewMode) => void;
   onWheel: (event: WheelEvent) => void;
 }
 
@@ -51,9 +52,9 @@ export function VideoControls({
   isCustomZoom,
   zoomOptions,
   isPlaying,
-  resolutionLevel,
-  resolutionOptions,
-  resolutionLabels,
+  previewMode,
+  previewModeOptions,
+  previewModeLabels,
   onCommitTimeEdit,
   onCancelTimeEdit,
   onSetTimeEditSelection,
@@ -67,7 +68,7 @@ export function VideoControls({
   onZoomLevelChange,
   onStepFrame,
   onTogglePlayback,
-  onResolutionLevelChange,
+  onPreviewModeChange,
   onWheel,
 }: VideoControlsProps) {
   const rowRef = useRef<HTMLDivElement | null>(null);
@@ -107,6 +108,33 @@ export function VideoControls({
     requestAnimationFrame(onSelectTimeEditorText);
   }
 
+  const zoomValue = zoomLevel === "fit" ? "fit" : String(zoomLevel);
+  const zoomItems: Array<SelectDropdownItem<string>> = [
+    ...(isCustomZoom
+      ? [
+          {
+            type: "option" as const,
+            value: String(zoomLevel),
+            label: `${zoomLevel}%`,
+          },
+        ]
+      : []),
+    ...zoomOptions.map((value) => ({
+      type: "option" as const,
+      value: String(value),
+      label: value === "fit" ? "适合" : `${value}%`,
+    })),
+  ];
+  const fitZoomItemIndex = zoomItems.findIndex((item) => item.type === "option" && item.value === "fit");
+  if (fitZoomItemIndex >= 0) {
+    zoomItems.splice(fitZoomItemIndex + 1, 0, { type: "separator" });
+  }
+  const previewModeItems: Array<SelectDropdownItem<PreviewMode>> = previewModeOptions.map((value) => ({
+    type: "option",
+    value,
+    label: previewModeLabels[value],
+  }));
+
   return (
     <div ref={rowRef} className={`source-control-row ${hasMedia ? "" : "empty-state"}`}>
       {editingTime && hasMedia ? (
@@ -140,24 +168,13 @@ export function VideoControls({
         </button>
       )}
       {hasMedia && (
-        <label className="monitor-select">
-          <select
-            value={zoomLevel === "fit" ? "fit" : String(zoomLevel)}
-            onChange={(event) => onZoomLevelChange(event.currentTarget.value)}
-          >
-            {isCustomZoom && (
-              <option value={zoomLevel} hidden>
-                {zoomLevel}%
-              </option>
-            )}
-            {zoomOptions.map((value) => (
-              <option key={value} value={value}>
-                {value === "fit" ? "适合" : `${value}%`}
-              </option>
-            ))}
-          </select>
-          <ChevronDown size={18} />
-        </label>
+        <SelectDropdown
+          className="monitor-select"
+          menuClassName="monitor-select-menu"
+          value={zoomValue}
+          items={zoomItems}
+          onChange={onZoomLevelChange}
+        />
       )}
       <div className="transport-controls">
         <button onClick={() => onStepFrame(-1)} title="上一帧" disabled={!hasMedia}>
@@ -171,16 +188,13 @@ export function VideoControls({
         </button>
       </div>
       {hasMedia && (
-        <label className="monitor-select">
-          <select value={resolutionLevel} onChange={(event) => onResolutionLevelChange(event.currentTarget.value)}>
-            {resolutionOptions.map((value) => (
-              <option key={value} value={value}>
-                {resolutionLabels[value]}
-              </option>
-            ))}
-          </select>
-          <ChevronDown size={18} />
-        </label>
+        <SelectDropdown
+          className="monitor-select"
+          menuClassName="monitor-select-menu"
+          value={previewMode}
+          items={previewModeItems}
+          onChange={onPreviewModeChange}
+        />
       )}
       <span className="monitor-duration">{monitorDurationText}</span>
     </div>

@@ -1,0 +1,100 @@
+.proxy-dialog-field {
+  position: relative;
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  transform: translateX(-2px);
+  color: var(--gray-400);
+  font-size: 11.5px;
+}
+
+.proxy-dialog-field:has(.proxy-dialog-select.open) {
+  z-index: 20;
+}
+
+.proxy-dialog-field > span:first-child {
+  justify-self: end;
+}
+
+.proxy-dialog-select {
+  min-height: 24px;
+  color: var(--color-text-primary);
+  background: black;
+}
+
+.proxy-dialog-select .select-dropdown-trigger {
+  grid-template-columns: minmax(0, 1fr) 28px;
+  min-height: 22px;
+}
+
+.proxy-dialog-select .select-dropdown-trigger > span {
+  padding: 0 10px;
+  color: var(--gray-400);
+  font-size: 11.5px;
+  line-height: 20px;
+}
+
+.proxy-dialog-select .select-dropdown-trigger svg {
+  width: 16px;
+  height: 16px;
+  color: var(--color-text-secondary);
+}
+
+.proxy-dialog-select-menu {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-default);
+}
+
+.proxy-dialog-select-menu .select-dropdown-option {
+  font-size: 11.5px;
+}
+
+.proxy-dialog-select-menu .select-dropdown-separator {
+  background: var(--color-border-default);
+}
+
+.proxy-dialog-frame-size-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 7fr) minmax(0, 8fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.proxy-dialog-size-inputs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.proxy-dialog-size-inputs label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  color: var(--gray-400);
+  font-size: 11.4px;
+}
+
+.proxy-dialog-size-inputs input {
+  min-height: 24px;
+  font-size: 11.4px;
+  color: var(--gray-400);
+  background: black;
+}
+
+.proxy-dialog-size-inputs input:hover {
+  border-color: var(--color-border-strong);
+}
+
+.proxy-dialog-size-inputs input:disabled {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.proxy-dialog-size-inputs label:has(input:disabled) {
+  opacity: 0;
+  pointer-events: none;
+}

@@ -185,6 +185,52 @@ struct ProxyResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProxyOptions {
+    frame_size: ProxyFrameSize,
+    custom_width: i64,
+    custom_height: i64,
+    preset: ProxyPreset,
+    watermark: ProxyWatermark,
+    location: ProxyLocation,
+    custom_location: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ProxyFrameSize {
+    Full,
+    Half,
+    Quarter,
+    Custom,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ProxyPreset {
+    ProresQuicktime,
+    H264Quicktime,
+    H264Mp4,
+    CineformQuicktime,
+    DnxhrVrMonoQuicktime,
+    DnxhrVrStereoQuicktime,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ProxyWatermark {
+    None,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ProxyLocation {
+    SourceProxyFolder,
+    Custom,
+    PreferencesCache,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct AddExternalSubtitlesResult {
     tracks: Vec<SubtitleTrack>,
     cues: HashMap<String, Vec<SubtitleCue>>,
@@ -574,18 +620,20 @@ async fn import_media(
 #[tauri::command]
 async fn generate_proxy(
     asset_id: String,
+    options: ProxyOptions,
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<ProxyResult, String> {
     let preferences = preferences_clone(&state)?;
     let project = project_clone(&asset_id, &state)?;
-    let cache_dir = PathBuf::from(&project.cache_dir);
-    fs::create_dir_all(&cache_dir).map_err(|e| format!("创建代理缓存目录失败: {e}"))?;
-    let proxy_path = cache_dir.join(PROXY_FILE_NAME);
+    let proxy_path = proxy_output_path(&project, &preferences, &options)?;
+    if let Some(parent) = proxy_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("创建代理输出目录失败: {e}"))?;
+    }
     let proxy_task_id = format!("proxy:{asset_id}");
 
     if !proxy_path.exists() {
-        let args = vec![
+        let mut args = vec![
             "-y".to_string(),
             "-hide_banner".to_string(),
             "-loglevel".to_string(),
@@ -597,34 +645,14 @@ async fn generate_proxy(
             "-map".to_string(),
             "0:a:0?".to_string(),
             "-sn".to_string(),
-            "-vf".to_string(),
-            "scale=-2:720".to_string(),
-            "-c:v".to_string(),
-            "libx264".to_string(),
-            "-preset".to_string(),
-            "veryfast".to_string(),
-            "-tune".to_string(),
-            "fastdecode".to_string(),
-            "-crf".to_string(),
-            "23".to_string(),
-            "-g".to_string(),
-            "1".to_string(),
-            "-keyint_min".to_string(),
-            "1".to_string(),
-            "-sc_threshold".to_string(),
-            "0".to_string(),
-            "-bf".to_string(),
-            "0".to_string(),
-            "-pix_fmt".to_string(),
-            "yuv420p".to_string(),
-            "-c:a".to_string(),
-            "aac".to_string(),
-            "-b:a".to_string(),
-            "128k".to_string(),
-            "-movflags".to_string(),
-            "+faststart".to_string(),
-            proxy_path.to_string_lossy().into_owned(),
         ];
+        if let Some(video_filter) = proxy_video_filter(&options)? {
+            args.push("-vf".to_string());
+            args.push(video_filter);
+        }
+        append_proxy_preset_args(&mut args, options.preset, options.watermark);
+        args.push(proxy_path.to_string_lossy().into_owned());
+
         let program = ffmpeg_program(&preferences);
         run_status_with_ffmpeg_progress(
             &program,
@@ -1547,6 +1575,281 @@ fn codec_from_path(path: &Path) -> String {
     }
 }
 
+fn proxy_output_path(
+    project: &Project,
+    preferences: &Preferences,
+    options: &ProxyOptions,
+) -> Result<PathBuf, String> {
+    let output_dir = match options.location {
+        ProxyLocation::SourceProxyFolder => {
+            let source_path = PathBuf::from(&project.asset.path);
+            source_path
+                .parent()
+                .map(|parent| parent.join("代理"))
+                .unwrap_or_else(|| PathBuf::from(&project.cache_dir).join("代理"))
+        }
+        ProxyLocation::Custom => {
+            let trimmed = options.custom_location.trim();
+            if trimmed.is_empty() {
+                return Err("请选择代理输出位置".to_string());
+            }
+            PathBuf::from(trimmed)
+        }
+        ProxyLocation::PreferencesCache => {
+            configured_cache_root(preferences).join(&project.asset.fingerprint)
+        }
+    };
+
+    let source_stem = Path::new(&project.asset.file_name)
+        .file_stem()
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "media".to_string());
+    let frame_slug = proxy_frame_slug(options);
+    let preset_slug = proxy_preset_slug(options.preset);
+    let stem = safe_component(&format!("{source_stem}_proxy_{frame_slug}_{preset_slug}"));
+    Ok(output_dir.join(format!("{stem}.{}", proxy_extension(options.preset))))
+}
+
+fn proxy_frame_slug(options: &ProxyOptions) -> String {
+    match options.frame_size {
+        ProxyFrameSize::Full => "full".to_string(),
+        ProxyFrameSize::Half => "half".to_string(),
+        ProxyFrameSize::Quarter => "quarter".to_string(),
+        ProxyFrameSize::Custom => format!(
+            "custom_{}x{}",
+            proxy_custom_width(options),
+            proxy_custom_height(options)
+        ),
+    }
+}
+
+fn proxy_preset_slug(preset: ProxyPreset) -> &'static str {
+    match preset {
+        ProxyPreset::ProresQuicktime => "prores_quicktime",
+        ProxyPreset::H264Quicktime => "h264_quicktime",
+        ProxyPreset::H264Mp4 => "h264_mp4",
+        ProxyPreset::CineformQuicktime => "cineform_quicktime",
+        ProxyPreset::DnxhrVrMonoQuicktime => "dnxhr_vr_mono_quicktime",
+        ProxyPreset::DnxhrVrStereoQuicktime => "dnxhr_vr_stereo_quicktime",
+    }
+}
+
+fn proxy_extension(preset: ProxyPreset) -> &'static str {
+    match preset {
+        ProxyPreset::H264Mp4 => "mp4",
+        _ => "mov",
+    }
+}
+
+fn proxy_video_filter(options: &ProxyOptions) -> Result<Option<String>, String> {
+    let is_dnxhr = is_dnxhr_proxy_preset(options.preset);
+    let filter = match options.frame_size {
+        ProxyFrameSize::Full if is_dnxhr => {
+            Some("scale=max(256\\,trunc(iw/2)*2):max(120\\,trunc(ih/2)*2)".to_string())
+        }
+        ProxyFrameSize::Full => Some("scale=trunc(iw/2)*2:trunc(ih/2)*2".to_string()),
+        ProxyFrameSize::Half if is_dnxhr => {
+            Some("scale=max(256\\,trunc(iw/4)*2):max(120\\,trunc(ih/4)*2)".to_string())
+        }
+        ProxyFrameSize::Half => Some("scale=trunc(iw/4)*2:-2".to_string()),
+        ProxyFrameSize::Quarter if is_dnxhr => {
+            Some("scale=max(256\\,trunc(iw/8)*2):max(120\\,trunc(ih/8)*2)".to_string())
+        }
+        ProxyFrameSize::Quarter => Some("scale=trunc(iw/8)*2:-2".to_string()),
+        ProxyFrameSize::Custom => {
+            let width = proxy_custom_width(options);
+            let height = proxy_custom_height(options);
+            if width < 2 || height < 2 {
+                return Err("自定义代理尺寸必须大于 2px".to_string());
+            }
+            Some(format!(
+                "scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2"
+            ))
+        }
+    };
+
+    match options.watermark {
+        ProxyWatermark::None => Ok(filter),
+    }
+}
+
+fn is_dnxhr_proxy_preset(preset: ProxyPreset) -> bool {
+    matches!(
+        preset,
+        ProxyPreset::DnxhrVrMonoQuicktime | ProxyPreset::DnxhrVrStereoQuicktime
+    )
+}
+
+fn proxy_custom_width(options: &ProxyOptions) -> i64 {
+    let width = even_proxy_dimension(options.custom_width);
+    if is_dnxhr_proxy_preset(options.preset) {
+        width.max(256)
+    } else {
+        width
+    }
+}
+
+fn proxy_custom_height(options: &ProxyOptions) -> i64 {
+    let height = even_proxy_dimension(options.custom_height);
+    if is_dnxhr_proxy_preset(options.preset) {
+        height.max(120)
+    } else {
+        height
+    }
+}
+
+fn even_proxy_dimension(value: i64) -> i64 {
+    let value = value.max(2);
+    if value % 2 == 0 {
+        value
+    } else {
+        (value - 1).max(2)
+    }
+}
+
+fn append_proxy_preset_args(
+    args: &mut Vec<String>,
+    preset: ProxyPreset,
+    watermark: ProxyWatermark,
+) {
+    match watermark {
+        ProxyWatermark::None => {}
+    }
+
+    match preset {
+        ProxyPreset::ProresQuicktime => push_args(
+            args,
+            &[
+                "-c:v",
+                "prores_ks",
+                "-profile:v",
+                "proxy",
+                "-pix_fmt",
+                "yuv422p10le",
+                "-c:a",
+                "pcm_s16le",
+                "-movflags",
+                "+faststart",
+            ],
+        ),
+        ProxyPreset::H264Quicktime => push_args(
+            args,
+            &[
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-tune",
+                "fastdecode",
+                "-crf",
+                "23",
+                "-g",
+                "1",
+                "-keyint_min",
+                "1",
+                "-sc_threshold",
+                "0",
+                "-bf",
+                "0",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+                "-movflags",
+                "+faststart",
+            ],
+        ),
+        ProxyPreset::H264Mp4 => push_args(
+            args,
+            &[
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-tune",
+                "fastdecode",
+                "-crf",
+                "23",
+                "-g",
+                "1",
+                "-keyint_min",
+                "1",
+                "-sc_threshold",
+                "0",
+                "-bf",
+                "0",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+                "-movflags",
+                "+faststart",
+            ],
+        ),
+        ProxyPreset::CineformQuicktime => push_args(
+            args,
+            &[
+                "-c:v",
+                "cfhd",
+                "-quality",
+                "low",
+                "-pix_fmt",
+                "yuv422p10le",
+                "-c:a",
+                "pcm_s16le",
+                "-movflags",
+                "+faststart",
+            ],
+        ),
+        ProxyPreset::DnxhrVrMonoQuicktime => push_args(
+            args,
+            &[
+                "-c:v",
+                "dnxhd",
+                "-profile:v",
+                "dnxhr_lb",
+                "-pix_fmt",
+                "yuv422p",
+                "-metadata:s:v:0",
+                "spherical_video=true",
+                "-metadata:s:v:0",
+                "stereo_mode=mono",
+                "-c:a",
+                "pcm_s16le",
+                "-movflags",
+                "+faststart",
+            ],
+        ),
+        ProxyPreset::DnxhrVrStereoQuicktime => push_args(
+            args,
+            &[
+                "-c:v",
+                "dnxhd",
+                "-profile:v",
+                "dnxhr_lb",
+                "-pix_fmt",
+                "yuv422p",
+                "-metadata:s:v:0",
+                "spherical_video=true",
+                "-metadata:s:v:0",
+                "stereo_mode=left_right",
+                "-c:a",
+                "pcm_s16le",
+                "-movflags",
+                "+faststart",
+            ],
+        ),
+    }
+}
+
+fn push_args(args: &mut Vec<String>, values: &[&str]) {
+    args.extend(values.iter().map(|value| value.to_string()));
+}
+
 fn tag_value(tags: &HashMap<String, String>, keys: &[&str]) -> Option<String> {
     for key in keys {
         if let Some(value) = tags.get(*key) {
@@ -2112,39 +2415,19 @@ fn sidecar_executable_name(program: &str) -> String {
 }
 
 fn sidecar_target_triple() -> &'static str {
-    #[cfg(all(windows, target_arch = "x86_64", target_env = "msvc"))]
-    {
+    if cfg!(all(windows, target_arch = "x86_64", target_env = "msvc")) {
         "x86_64-pc-windows-msvc"
-    }
-    #[cfg(all(windows, target_arch = "aarch64", target_env = "msvc"))]
-    {
+    } else if cfg!(all(windows, target_arch = "aarch64", target_env = "msvc")) {
         "aarch64-pc-windows-msvc"
-    }
-    #[cfg(all(windows, target_arch = "x86", target_env = "msvc"))]
-    {
+    } else if cfg!(all(windows, target_arch = "x86", target_env = "msvc")) {
         "i686-pc-windows-msvc"
-    }
-    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-    {
+    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
         "x86_64-apple-darwin"
-    }
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    {
+    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
         "aarch64-apple-darwin"
-    }
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    {
+    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
         "x86_64-unknown-linux-gnu"
-    }
-    #[cfg(not(any(
-        all(windows, target_arch = "x86_64", target_env = "msvc"),
-        all(windows, target_arch = "aarch64", target_env = "msvc"),
-        all(windows, target_arch = "x86", target_env = "msvc"),
-        all(target_os = "macos", target_arch = "x86_64"),
-        all(target_os = "macos", target_arch = "aarch64"),
-        all(target_os = "linux", target_arch = "x86_64")
-    )))]
-    {
+    } else {
         ""
     }
 }
@@ -2220,20 +2503,7 @@ fn quoted_dialogue_for_range(
         .cue_ids
         .iter()
         .filter_map(|id| cue_lookup.get(id.as_str()))
-        .flat_map(|cue| {
-            cue.plain_text
-                .lines()
-                .enumerate()
-                .filter_map(|(index, line)| {
-                    let line = line.trim();
-                    if line.is_empty() || (!use_all_lines && !selected_lines.contains(&index)) {
-                        None
-                    } else {
-                        Some(line)
-                    }
-                })
-                .collect::<Vec<_>>()
-        })
+        .flat_map(|cue| dialogue_lines_for_cue(cue, &selected_lines, use_all_lines))
         .collect::<Vec<_>>()
         .join(" ");
     let text = collapse_filename_text(&text);
@@ -2241,6 +2511,33 @@ fn quoted_dialogue_for_range(
         format!("“{}”", file_time_label(range.start_us))
     } else {
         format!("“{text}”")
+    }
+}
+
+fn dialogue_lines_for_cue<'a>(
+    cue: &'a SubtitleCue,
+    selected_lines: &HashSet<usize>,
+    use_all_lines: bool,
+) -> Vec<&'a str> {
+    let lines = cue
+        .plain_text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    if use_all_lines {
+        return lines;
+    }
+
+    let selected = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| selected_lines.contains(&index).then_some(*line))
+        .collect::<Vec<_>>();
+    if selected.is_empty() {
+        lines
+    } else {
+        selected
     }
 }
 
@@ -2389,6 +2686,35 @@ mod tests {
 
         let stem = export_file_stem(ExportNameRule::Dialogue, "source", &range, &lookup, &[1]);
         assert_eq!(stem, "“Hello”");
+    }
+
+    #[test]
+    fn filename_dialogue_rule_falls_back_when_selected_line_is_missing() {
+        let cue = SubtitleCue {
+            id: "track:0".to_string(),
+            track_id: "track".to_string(),
+            sequence: 0,
+            start_us: 1_000_000,
+            end_us: 2_000_000,
+            raw_text: "你好\nHello".to_string(),
+            plain_text: "你好\nHello".to_string(),
+            speaker: None,
+            style: None,
+            layer: None,
+        };
+        let mut lookup = HashMap::new();
+        lookup.insert(cue.id.as_str(), &cue);
+        let range = ClipRange {
+            index: 0,
+            start_us: cue.start_us,
+            end_us: cue.end_us,
+            cue_ids: vec![cue.id.clone()],
+            head_padding_us: 0,
+            tail_padding_us: 0,
+        };
+
+        let stem = export_file_stem(ExportNameRule::Dialogue, "source", &range, &lookup, &[90]);
+        assert_eq!(stem, "“你好 Hello”");
     }
 
     #[test]

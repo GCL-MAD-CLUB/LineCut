@@ -1,0 +1,295 @@
+.dock-workspace {
+  padding: 1px;
+}
+
+.dock-left-pane {
+  display: grid;
+  gap: 0;
+}
+
+.dock-window {
+  display: grid;
+  grid-template-rows: 28px minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-panel);
+}
+
+.dock-window.drop-target {
+  outline: 1px solid var(--color-text-control);
+  outline-offset: -2px;
+}
+
+.dock-tabbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  min-width: 0;
+  min-height: 0;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border-subtle);
+  user-select: none;
+}
+
+.dock-tabs-viewport {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.dock-tabs {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 12px;
+  width: max-content;
+  white-space: nowrap;
+}
+
+.dock-tab {
+  position: relative;
+  display: grid;
+  grid-template-columns: max-content 20px;
+  column-gap: 6px;
+  align-items: stretch;
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: none;
+  color: var(--color-text-secondary);
+}
+
+.dock-tab.active {
+  color: var(--color-text-primary);
+}
+
+.dock-window.has-multiple-tabs .dock-tab.active::after {
+  position: absolute;
+  right: 7px;
+  bottom: 0;
+  left: 7px;
+  height: 1.5px;
+  border-radius: 0.5px;
+  background: var(--color-text-secondary);
+  content: "";
+}
+
+.dock-tab-label,
+.dock-tab-grip {
+  min-width: 0;
+  height: 100%;
+  color: inherit;
+  background: transparent;
+  cursor: default;
+}
+
+.dock-tab-label {
+  display: block;
+  overflow: visible;
+  padding: 0 0 0 8px;
+  font-size: 12px;
+  line-height: 27px;
+  text-align: left;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.dock-tab-grip {
+  display: grid;
+  align-self: center;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  padding: 0;
+  visibility: hidden;
+}
+
+.dock-tab.active .dock-tab-grip {
+  visibility: visible;
+}
+
+.dock-tab-grip:hover {
+  background: var(--color-surface-hover);
+  border-radius: var(--radius-sm);
+}
+
+.dock-tab-grip span,
+.dock-tab-grip span::before,
+.dock-tab-grip span::after {
+  display: block;
+  width: 9px;
+  height: 1px;
+  background: currentColor;
+  border-radius: 0;
+  content: "";
+}
+
+.dock-tab-grip span {
+  position: relative;
+  opacity: 0.84;
+}
+
+.dock-tab-grip span::before,
+.dock-tab-grip span::after {
+  position: absolute;
+  left: 0;
+}
+
+.dock-tab-grip span::before {
+  top: -3px;
+}
+
+.dock-tab-grip span::after {
+  top: 3px;
+}
+
+.dock-tabbar-controls {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.dock-tab-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 3px 4px;
+}
+
+.dock-overflow-button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 100%;
+  padding: 0;
+  color: var(--color-text-secondary);
+  background: var(--color-surface);
+  border-left: 1px solid var(--color-border-default);
+  cursor: default;
+}
+
+.dock-overflow-button::before {
+  content: "»";
+  font-size: 23px;
+  font-weight: 800;
+  line-height: 1;
+  transform: translateY(-1px);
+}
+
+.dock-overflow-button:hover,
+.dock-overflow-button.active {
+  color: var(--color-text-primary);
+  background: var(--color-surface-hover);
+}
+
+.dock-empty-tab {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 9px;
+  color: var(--color-text-faint);
+  font-size: 12px;
+}
+
+.dock-panel-content {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.dock-panel-surface {
+  display: none;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.dock-panel-surface.active {
+  display: block;
+}
+
+.dock-empty-content {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  color: var(--color-text-faint);
+  font-size: 12px;
+  background: var(--color-surface-soft);
+}
+
+.dock-drag-preview {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: calc(var(--z-modal) + 1);
+  max-width: 260px;
+  padding: 5px 9px;
+  overflow: hidden;
+  color: var(--color-text-primary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+  background: var(--color-surface-hover);
+  border: 1px solid var(--color-border-strong);
+  box-shadow: var(--shadow-drawer);
+}
+
+.dock-overflow-menu {
+  position: fixed;
+  z-index: calc(var(--z-modal) + 2);
+  display: grid;
+  gap: 0;
+  max-height: min(420px, calc(100vh - 16px));
+  overflow: auto;
+  padding: 4px 0;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-default);
+  box-shadow: var(--shadow-drawer);
+}
+
+.dock-overflow-menu-item {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 8px 0 0;
+  color: var(--color-text-primary);
+  font-size: 12px;
+  text-align: left;
+  background: transparent;
+  cursor: default;
+}
+
+.dock-overflow-menu-item:hover {
+  background: var(--color-surface-hover);
+}
+
+.dock-overflow-check {
+  color: var(--color-accent-monitor);
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.dock-overflow-menu-item > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body.is-docking-panel {
+  cursor: grabbing;
+  user-select: none;
+}
+
+body.is-docking-panel .dock-tab-grip {
+  cursor: grabbing;
+}

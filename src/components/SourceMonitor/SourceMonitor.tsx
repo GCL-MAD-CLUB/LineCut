@@ -1,7 +1,8 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { Loader2, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent } from "react";
 import { flushSync } from "react-dom";
+import { useAppEvent } from "../../appEvents";
+import { useAppStore } from "../../store";
 import { formatMonitorTime, parseMonitorTime } from "../../time";
 import {
   buildTimelineRuler,
@@ -11,10 +12,10 @@ import {
   minTimelineSpanUs,
   normalizeFrameRate,
 } from "../../timeline";
-import type { Project } from "../../types";
 import { MonitorRange } from "./MonitorRange";
 import "./SourceMonitor.css";
 import { TimelineRuler } from "./TimelineRuler";
+import { useProxyController } from "./useProxyController";
 import { VideoControls } from "./VideoControls";
 import { VideoDisplay } from "./VideoDisplay";
 
@@ -25,13 +26,12 @@ const WHEEL_LINE_DELTA_PX = 16;
 const WHEEL_PAGE_DELTA_PX = 800;
 const MONITOR_RANGE_ZOOM_SENSITIVITY = 0.00035;
 const MONITOR_RANGE_SCROLL_SENSITIVITY = 1 / 5000;
-const resolutionOptions = ["full", "half", "quarter", "eighth"] as const;
-const resolutionLabels: Record<(typeof resolutionOptions)[number], string> = {
-  full: "完整",
-  half: "1/2",
-  quarter: "1/4",
-  eighth: "1/8",
+const previewModeOptions = ["source", "proxy"] as const;
+const previewModeLabels: Record<(typeof previewModeOptions)[number], string> = {
+  source: "完整",
+  proxy: "代理",
 };
+type PreviewMode = (typeof previewModeOptions)[number];
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -47,25 +47,13 @@ interface TimecodeScrubState {
   suppressClick: boolean;
 }
 
-interface SourceMonitorProps {
-  project: Project | null;
-  proxyPath: string | null;
-  useProxy: boolean;
-  isGeneratingProxy: boolean;
-  onUseProxyChange: (value: boolean | ((current: boolean) => boolean)) => void;
-  onGenerateProxy: () => void;
-  onVideoError: () => void;
-}
-
-export function SourceMonitor({
-  project,
-  proxyPath,
-  useProxy,
-  isGeneratingProxy,
-  onUseProxyChange,
-  onGenerateProxy,
-  onVideoError,
-}: SourceMonitorProps) {
+export function SourceMonitor() {
+  const project = useAppStore((state) => state.project);
+  const proxyPath = useAppStore((state) => state.proxyPath);
+  const useProxy = useAppStore((state) => state.useProxy);
+  const isGeneratingProxy = useAppStore((state) => state.isGeneratingProxy);
+  const setMessage = useAppStore((state) => state.setMessage);
+  const { openProxyDialog, closeProxyDialog, enableProxy, disableProxy } = useProxyController();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const videoStageRef = useRef<HTMLDivElement | null>(null);
   const timelineRef = useRef<HTMLDivElement | null>(null);
@@ -87,11 +75,9 @@ export function SourceMonitor({
   const [timeDraft, setTimeDraft] = useState("");
   const [zoomLevel, setZoomLevel] = useState<"fit" | number>("fit");
   const [zoomOrigin, setZoomOrigin] = useState({ x: 50, y: 50 });
-  const [resolutionLevel, setResolutionLevel] = useState<(typeof resolutionOptions)[number]>("full");
   const [timelineStartUs, setTimelineStartUs] = useState(0);
   const [timelineSpanUs, setTimelineSpanUs] = useState(60_000_000);
   const [timelineWidthPx, setTimelineWidthPx] = useState(0);
-  const [rangeMetrics, setRangeMetrics] = useState({ widthPx: 0, minBarWidthPx: 0 });
   const [activeRangeHandle, setActiveRangeHandle] = useState<"start" | "end" | "both" | null>(null);
 
   const hasMedia = Boolean(project);
@@ -113,10 +99,6 @@ export function SourceMonitor({
   const frameUs = frameDurationUs(frameRate);
   const trueMinTimelineSpanUs =
     durationUs > 0 ? minTimelineSpanUs(Math.max(1, timelineWidthPx), frameRate, durationUs) : 0;
-  const monitorRangeMinWidthRatio =
-    rangeMetrics.widthPx > 0 && rangeMetrics.minBarWidthPx > 0
-      ? clamp(rangeMetrics.minBarWidthPx / rangeMetrics.widthPx, 0, 1)
-      : 0;
   const videoSrc = useMemo(() => {
     if (!project) {
       return "";
@@ -261,33 +243,6 @@ export function SourceMonitor({
   }, []);
 
   useEffect(() => {
-    const element = rangeRef.current;
-    if (!element) {
-      return;
-    }
-
-    const updateMetrics = () => {
-      const rect = element.getBoundingClientRect();
-      const minBarWidthPx = Number.parseFloat(
-        window.getComputedStyle(element).getPropertyValue("--monitor-range-bar-min-width"),
-      );
-      const nextMetrics = {
-        widthPx: rect.width,
-        minBarWidthPx: Number.isFinite(minBarWidthPx) && minBarWidthPx > 0 ? minBarWidthPx : 0,
-      };
-      setRangeMetrics((current) =>
-        current.widthPx === nextMetrics.widthPx && current.minBarWidthPx === nextMetrics.minBarWidthPx
-          ? current
-          : nextMetrics,
-      );
-    };
-    updateMetrics();
-    const resizeObserver = new ResizeObserver(updateMetrics);
-    resizeObserver.observe(element);
-    return () => resizeObserver.disconnect();
-  }, []);
-
-  useEffect(() => {
     if (durationUs <= 0) {
       return;
     }
@@ -304,21 +259,13 @@ export function SourceMonitor({
     setCurrentTimeUs((current) => clamp(current, 0, durationUs));
   }, [durationUs, frameRate, timelineWidthPx]);
 
-  useEffect(() => {
-    const onSeek = (event: Event) => {
-      if (!hasMedia) {
-        return;
-      }
-      const detail = (event as CustomEvent<{ timeUs?: number }>).detail;
-      if (typeof detail?.timeUs !== "number") {
-        return;
-      }
-      seekToUs(detail.timeUs);
-      void videoRef.current?.play();
-    };
-    window.addEventListener("linecut-monitor-seek", onSeek);
-    return () => window.removeEventListener("linecut-monitor-seek", onSeek);
-  }, [hasMedia]);
+  useAppEvent("monitor:seek", (detail) => {
+    if (!hasMedia) {
+      return;
+    }
+    seekToUs(detail.timeUs);
+    void videoRef.current?.play();
+  });
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -345,6 +292,35 @@ export function SourceMonitor({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [durationUs, editingTime, frameUs, hasMedia]);
+
+  function changePreviewMode(value: PreviewMode) {
+    if (value === "source") {
+      closeProxyDialog();
+      disableProxy();
+      return;
+    }
+    if (!project || isGeneratingProxy) {
+      return;
+    }
+    if (proxyPath) {
+      enableProxy();
+      return;
+    }
+    disableProxy();
+    openProxyDialog();
+  }
+
+  function handleVideoError() {
+    if (!useProxy && project) {
+      if (proxyPath) {
+        enableProxy();
+        setMessage("原文件无法直接播放，已切换到代理模式。");
+      } else {
+        openProxyDialog();
+        setMessage("原文件无法直接播放，请创建代理后预览。");
+      }
+    }
+  }
 
   function snapUsToFrame(valueUs: number) {
     const frame = Math.max(0, Math.round(valueUs / frameUs));
@@ -651,16 +627,7 @@ export function SourceMonitor({
     if (durationUs <= 0) {
       return 1;
     }
-    const minSpanUs = clamp(trueMinTimelineSpanUs, 0, durationUs);
-    if (durationUs <= minSpanUs) {
-      return 1;
-    }
-    const normalizedSpan = (clamp(spanUs, minSpanUs, durationUs) - minSpanUs) / (durationUs - minSpanUs);
-    return clamp(
-      monitorRangeMinWidthRatio + normalizedSpan * (1 - monitorRangeMinWidthRatio),
-      monitorRangeMinWidthRatio,
-      1,
-    );
+    return clamp(spanUs / durationUs, 0, 1);
   }
 
   function rangeLeftRatioForStart(startUs: number, spanUs: number) {
@@ -795,27 +762,6 @@ export function SourceMonitor({
 
   return (
     <div className={`source-monitor ${hasMedia ? "" : "empty-state"}`}>
-      <div className="panel-header">
-        <div>
-          <span className="eyebrow">源监视器</span>
-          <h1 title={project?.asset.file_name}>{project?.asset.file_name ?? "等待导入 MKV"}</h1>
-        </div>
-        <div className="preview-mode-switch">
-          <button
-            className={`tool-button ${useProxy ? "active" : ""}`}
-            onClick={() => onUseProxyChange((value) => !value)}
-            disabled={!project || isGeneratingProxy}
-            title={useProxy ? "使用 720p 代理预览" : "直接播放原文件"}
-          >
-            {isGeneratingProxy ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
-          </button>
-          {useProxy && !proxyPath && (
-            <button className="toolbar-button" onClick={onGenerateProxy} disabled={isGeneratingProxy}>
-              {isGeneratingProxy ? "生成中" : "生成代理"}
-            </button>
-          )}
-        </div>
-      </div>
       <VideoDisplay
         project={project}
         stageRef={videoStageRef}
@@ -827,7 +773,7 @@ export function SourceMonitor({
           transform: `scale(${zoomScale})`,
           transformOrigin: `${zoomOrigin.x}% ${zoomOrigin.y}%`,
         }}
-        onVideoError={onVideoError}
+        onVideoError={handleVideoError}
         onLoadedMetadata={updateVideoNaturalSize}
         onSyncCurrentTime={syncCurrentTimeFromVideo}
         onPlay={(video) => {
@@ -854,9 +800,9 @@ export function SourceMonitor({
           isCustomZoom={isCustomZoom}
           zoomOptions={zoomOptions}
           isPlaying={isPlaying}
-          resolutionLevel={resolutionLevel}
-          resolutionOptions={resolutionOptions}
-          resolutionLabels={resolutionLabels}
+          previewMode={useProxy ? "proxy" : "source"}
+          previewModeOptions={previewModeOptions}
+          previewModeLabels={previewModeLabels}
           onCommitTimeEdit={commitTimeEdit}
           onCancelTimeEdit={cancelTimeEdit}
           onSetTimeEditSelection={setTimeEditSelection}
@@ -870,7 +816,7 @@ export function SourceMonitor({
           onZoomLevelChange={changeZoomLevel}
           onStepFrame={stepFrame}
           onTogglePlayback={togglePlayback}
-          onResolutionLevelChange={(value) => setResolutionLevel(value as (typeof resolutionOptions)[number])}
+          onPreviewModeChange={changePreviewMode}
           onWheel={handleIndicatorWheel}
         />
         <TimelineRuler

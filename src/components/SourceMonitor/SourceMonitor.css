@@ -1,59 +1,10 @@
-.preview-panel {
-  display: block;
-  min-height: 0;
-  overflow: hidden;
-  padding: 14px;
-}
-
 .source-monitor {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto;
   gap: 8px;
   height: 100%;
   min-height: 0;
-}
-
-.source-monitor > .panel-header {
-  gap: 10px;
-  margin-bottom: 0;
-}
-
-.source-monitor > .panel-header .eyebrow {
-  margin-bottom: 3px;
-  font-size: 10px;
-}
-
-.source-monitor > .panel-header h1 {
-  max-width: 280px;
-  font-size: 14px;
-  line-height: 1.18;
-}
-
-.preview-mode-switch {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.preview-mode-switch .tool-button,
-.preview-mode-switch .toolbar-button {
-  min-width: 0;
-  min-height: 24px;
-  height: 24px;
-  gap: 5px;
-  padding: 0 8px;
-  font-size: 12px;
-  border-radius: var(--radius-sm);
-}
-
-.preview-mode-switch .tool-button {
-  width: 24px;
-  padding: 0;
-}
-
-.preview-mode-switch svg {
-  width: 14px;
-  height: 14px;
+  padding: 12px;
 }
 
 .source-video-stage,
@@ -111,6 +62,7 @@
   --transport-column-min-width: calc(var(--transport-buttons-width) + var(--monitor-control-gap) * 2);
 
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0;
   min-width: 0;
   overflow-x: auto;
@@ -128,12 +80,12 @@
   display: grid;
   grid-template-columns:
     var(--monitor-time-width)
-    minmax(84px, 122px)
+    minmax(94px, 122px)
     minmax(var(--transport-column-min-width), 1fr)
-    minmax(84px, 122px)
+    minmax(94px, 122px)
     var(--monitor-time-width);
   align-items: center;
-  min-width: 470px;
+  min-width: 0;
 }
 
 .source-control-row.empty-state {
@@ -195,37 +147,31 @@
 }
 
 .monitor-select {
-  position: relative;
-  display: grid;
   width: 100%;
-}
-
-.monitor-select select {
-  width: 100%;
-  height: var(--control-height-sm);
-  min-height: var(--control-height-sm);
-  padding: 0 32px 0 10px;
   color: var(--color-text-control);
-  line-height: var(--control-height-sm);
   background: var(--color-surface-field-strong);
   border-color: var(--color-surface-hover);
   border-radius: var(--radius-md);
-  appearance: none;
-  font-size: 12px;
 }
 
-.monitor-select select option {
-  font-size: 12px;
+.monitor-select .select-dropdown-trigger {
+  min-height: var(--control-height-sm);
 }
 
-.monitor-select svg {
-  position: absolute;
-  top: 4px;
-  right: 9px;
+.monitor-select .select-dropdown-trigger > span {
+  padding: 0 32px 0 10px;
+  line-height: var(--control-height-sm);
+  font-size: 11.5px;
+}
+
+.monitor-select-menu .select-dropdown-option {
+  font-size: 11.5px;
+}
+
+.monitor-select .select-dropdown-trigger svg {
   width: 16px;
   height: 16px;
   color: var(--color-text-icon-muted);
-  pointer-events: none;
 }
 
 .transport-controls {
@@ -388,7 +334,7 @@
 .monitor-range {
   position: relative;
   --range-handle-size: var(--monitor-range-height);
-  --monitor-range-bar-min-width: 36px;
+  min-width: 0;
   height: var(--monitor-range-height);
 }
 
@@ -406,14 +352,8 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  width: max(var(--monitor-range-width, 100%), var(--monitor-range-bar-min-width));
-  left: max(
-    0px,
-    min(
-      var(--monitor-range-left, 0%),
-      calc(100% - max(var(--monitor-range-width, 100%), var(--monitor-range-bar-min-width)))
-    )
-  );
+  width: var(--monitor-range-width, 100%);
+  left: clamp(0px, var(--monitor-range-left, 0%), calc(100% - var(--monitor-range-width, 100%)));
   max-width: 100%;
   background: var(--color-surface-active);
   border-radius: var(--radius-pill);
