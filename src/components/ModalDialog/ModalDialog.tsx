@@ -106,7 +106,12 @@ export function ModalDialog({
       >
         <header className="modal-dialog-header">
           <h2 id={titleId}>{title}</h2>
-          <button type="button" className="modal-dialog-close" onClick={onCancel} title={closeTitle}>
+          <button
+            type="button"
+            className="modal-dialog-close"
+            onClick={onCancel}
+            title={closeTitle}
+          >
             <X size={24} />
           </button>
         </header>
@@ -122,7 +127,12 @@ export function ModalDialog({
           >
             {confirmLabel}
           </button>
-          <button type="button" className="modal-dialog-cancel" onClick={onCancel} disabled={cancelDisabled}>
+          <button
+            type="button"
+            className="modal-dialog-cancel"
+            onClick={onCancel}
+            disabled={cancelDisabled}
+          >
             {cancelLabel}
           </button>
         </footer>

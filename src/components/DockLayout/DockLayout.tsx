@@ -35,13 +35,18 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
-function normalizeArea<PanelId extends string>(area: DockLayoutState<PanelId>["areas"][DockAreaId]) {
+function normalizeArea<PanelId extends string>(
+  area: DockLayoutState<PanelId>["areas"][DockAreaId],
+) {
   if (area.tabs.length === 0) {
     return { tabs: area.tabs, activePanelId: null };
   }
   return {
     tabs: area.tabs,
-    activePanelId: area.activePanelId && area.tabs.includes(area.activePanelId) ? area.activePanelId : area.tabs[0],
+    activePanelId:
+      area.activePanelId && area.tabs.includes(area.activePanelId)
+        ? area.activePanelId
+        : area.tabs[0],
   };
 }
 
@@ -54,7 +59,10 @@ function dockAreaFromPoint(clientX: number, clientY: number): DockAreaId | null 
   return null;
 }
 
-export function DockLayout<PanelId extends string>({ panels, initialLayout }: DockLayoutProps<PanelId>) {
+export function DockLayout<PanelId extends string>({
+  panels,
+  initialLayout,
+}: DockLayoutProps<PanelId>) {
   const workspaceRef = useRef<HTMLElement | null>(null);
   const leftPaneRef = useRef<HTMLElement | null>(null);
   const dragRef = useRef<DockDragState<PanelId> | null>(null);
@@ -130,7 +138,8 @@ export function DockLayout<PanelId extends string>({ panels, initialLayout }: Do
             result[areaId] = false;
             return result;
           }
-          const overflowButton = viewport.parentElement?.querySelector<HTMLButtonElement>(".dock-overflow-button");
+          const overflowButton =
+            viewport.parentElement?.querySelector<HTMLButtonElement>(".dock-overflow-button");
           const overflowButtonWidth = overflowButton?.getBoundingClientRect().width ?? 0;
           const availableWidth = viewport.clientWidth + overflowButtonWidth;
           result[areaId] = viewport.scrollWidth > availableWidth + 1;
@@ -237,7 +246,7 @@ export function DockLayout<PanelId extends string>({ panels, initialLayout }: Do
         const tabs = area.tabs.filter((tabPanelId) => tabPanelId !== panelId);
         nextAreas[areaId] = normalizeArea({
           tabs,
-          activePanelId: area.activePanelId === panelId ? tabs[0] ?? null : area.activePanelId,
+          activePanelId: area.activePanelId === panelId ? (tabs[0] ?? null) : area.activePanelId,
         });
       }
 
@@ -350,7 +359,11 @@ export function DockLayout<PanelId extends string>({ panels, initialLayout }: Do
     setDropTargetAreaId(nextDropTarget);
   }
 
-  function startDockDrag(event: PointerEvent<HTMLButtonElement>, areaId: DockAreaId, panelId: PanelId) {
+  function startDockDrag(
+    event: PointerEvent<HTMLButtonElement>,
+    areaId: DockAreaId,
+    panelId: PanelId,
+  ) {
     if (event.button !== 0) {
       return;
     }
@@ -461,11 +474,7 @@ export function DockLayout<PanelId extends string>({ panels, initialLayout }: Do
                       className={`dock-tab ${isActive ? "active" : ""}`}
                       onClick={() => setActivePanel(areaId, panelId)}
                     >
-                      <button
-                        type="button"
-                        className="dock-tab-label"
-                        title={panel.title}
-                      >
+                      <button type="button" className="dock-tab-label" title={panel.title}>
                         {panel.title}
                       </button>
                       <button
@@ -506,7 +515,10 @@ export function DockLayout<PanelId extends string>({ panels, initialLayout }: Do
               return null;
             }
             return (
-              <div key={panelId} className={`dock-panel-surface ${panelId === area.activePanelId ? "active" : ""}`}>
+              <div
+                key={panelId}
+                className={`dock-panel-surface ${panelId === area.activePanelId ? "active" : ""}`}
+              >
                 {panel.render()}
               </div>
             );

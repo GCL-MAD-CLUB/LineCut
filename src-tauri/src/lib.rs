@@ -240,26 +240,16 @@ struct AddExternalSubtitlesResult {
 #[derive(Debug, Clone, Serialize)]
 struct FfmpegProgressPayload {
     task_id: String,
-    operation: String,
-    label: String,
-    current: usize,
-    total: usize,
     progress: f64,
-    done: bool,
 }
 
 struct FfmpegProgressContext<'a> {
     app: &'a tauri::AppHandle,
     state: &'a AppState,
     task_id: &'a str,
-    operation: &'a str,
-    label: &'a str,
-    current: usize,
-    total: usize,
     base_progress: f64,
     progress_span: f64,
     duration_us: i64,
-    complete_on_success: bool,
     cleanup_paths: Vec<PathBuf>,
 }
 
@@ -538,14 +528,9 @@ async fn import_media(
                     app: &app,
                     state: state.inner(),
                     task_id: &import_task_id,
-                    operation: "import",
-                    label: "抽取字幕",
-                    current: current_subtitle,
-                    total: text_subtitle_total,
                     base_progress: (current_subtitle - 1) as f64 / text_subtitle_total as f64,
                     progress_span: 1.0 / text_subtitle_total as f64,
                     duration_us,
-                    complete_on_success: current_subtitle == text_subtitle_total,
                     cleanup_paths: Vec::new(),
                 }),
             )
@@ -661,14 +646,9 @@ async fn generate_proxy(
                 app: &app,
                 state: state.inner(),
                 task_id: &proxy_task_id,
-                operation: "proxy",
-                label: "生成代理",
-                current: 1,
-                total: 1,
                 base_progress: 0.0,
                 progress_span: 1.0,
                 duration_us: project.asset.duration_us,
-                complete_on_success: true,
                 cleanup_paths: vec![proxy_path.clone()],
             },
         )
@@ -800,10 +780,6 @@ async fn export_clips(
     let mut used_names = HashSet::new();
     let mut part_files = Vec::new();
     let export_task_id = format!("export:{asset_id}");
-    let export_label = match options.layout {
-        ExportLayout::Individual => format!("导出 {} 个文件", ranges.len()),
-        ExportLayout::Merged => "导出合并视频".to_string(),
-    };
     let is_merged_layout = matches!(options.layout, ExportLayout::Merged);
     let part_progress_total = if is_merged_layout { 0.92 } else { 1.0 };
     let mut task_cleanup_paths = if is_merged_layout {
@@ -811,16 +787,7 @@ async fn export_clips(
     } else {
         Vec::new()
     };
-    emit_ffmpeg_progress(
-        &app,
-        &export_task_id,
-        "export",
-        &export_label,
-        0,
-        ranges.len(),
-        0.0,
-        false,
-    );
+    emit_ffmpeg_progress(&app, &export_task_id, 0.0);
     for range in &ranges {
         let file_stem = export_file_stem(
             name_rule,
@@ -841,15 +808,10 @@ async fn export_clips(
                 app: &app,
                 state: state.inner(),
                 task_id: &export_task_id,
-                operation: "export",
-                label: &export_label,
-                current: range.index + 1,
-                total: ranges.len(),
                 base_progress: range.index as f64 * part_progress_total
                     / ranges.len().max(1) as f64,
                 progress_span: part_progress_total / ranges.len().max(1) as f64,
                 duration_us: range.end_us - range.start_us,
-                complete_on_success: false,
                 cleanup_paths: task_cleanup_paths.clone(),
             }),
         )
@@ -869,16 +831,7 @@ async fn export_clips(
             .map(|path| path.to_string_lossy().into_owned())
             .collect::<Vec<_>>(),
         ExportLayout::Merged => {
-            emit_ffmpeg_progress(
-                &app,
-                &export_task_id,
-                "export",
-                &export_label,
-                ranges.len(),
-                ranges.len(),
-                0.92,
-                false,
-            );
+            emit_ffmpeg_progress(&app, &export_task_id, 0.92);
             let merged_stem = if ranges.len() == 1 {
                 export_file_stem(
                     name_rule,
@@ -908,17 +861,12 @@ async fn export_clips(
                     app: &app,
                     state: state.inner(),
                     task_id: &export_task_id,
-                    operation: "export",
-                    label: &export_label,
-                    current: ranges.len(),
-                    total: ranges.len(),
                     base_progress: 0.92,
                     progress_span: 0.08,
                     duration_us: ranges
                         .iter()
                         .map(|range| range.end_us - range.start_us)
                         .sum(),
-                    complete_on_success: false,
                     cleanup_paths: task_cleanup_paths.clone(),
                 }),
             )
@@ -927,16 +875,7 @@ async fn export_clips(
             vec![merged.to_string_lossy().into_owned()]
         }
     };
-    emit_ffmpeg_progress(
-        &app,
-        &export_task_id,
-        "export",
-        &export_label,
-        ranges.len(),
-        ranges.len(),
-        1.0,
-        true,
-    );
+    emit_ffmpeg_progress(&app, &export_task_id, 1.0);
 
     Ok(ExportResult {
         ranges,
@@ -1986,26 +1925,12 @@ fn ffmpeg_args_with_progress(args: &[String]) -> Vec<String> {
     next
 }
 
-fn emit_ffmpeg_progress(
-    app: &tauri::AppHandle,
-    task_id: &str,
-    operation: &str,
-    label: &str,
-    current: usize,
-    total: usize,
-    progress: f64,
-    done: bool,
-) {
+fn emit_ffmpeg_progress(app: &tauri::AppHandle, task_id: &str, progress: f64) {
     let _ = app.emit(
         FFMPEG_PROGRESS_EVENT,
         FfmpegProgressPayload {
             task_id: task_id.to_string(),
-            operation: operation.to_string(),
-            label: label.to_string(),
-            current,
-            total,
             progress: progress.clamp(0.0, 1.0),
-            done,
         },
     );
 }
@@ -2079,16 +2004,7 @@ async fn run_status_with_ffmpeg_progress(
         body
     });
 
-    emit_ffmpeg_progress(
-        progress.app,
-        progress.task_id,
-        progress.operation,
-        progress.label,
-        progress.current,
-        progress.total,
-        progress.base_progress,
-        false,
-    );
+    emit_ffmpeg_progress(progress.app, progress.task_id, progress.base_progress);
 
     let mut lines = BufReader::new(stdout).lines();
     let mut last_emitted = progress.base_progress;
@@ -2100,16 +2016,7 @@ async fn run_status_with_ffmpeg_progress(
             let _ = stderr_task.await;
             remove_cleanup_paths(&progress.cleanup_paths);
             clear_running_ffmpeg(progress.state, &task_id);
-            emit_ffmpeg_progress(
-                progress.app,
-                progress.task_id,
-                progress.operation,
-                progress.label,
-                progress.current,
-                progress.total,
-                last_emitted,
-                true,
-            );
+            emit_ffmpeg_progress(progress.app, progress.task_id, last_emitted);
             return Err("任务已取消".to_string());
         }
 
@@ -2129,30 +2036,13 @@ async fn run_status_with_ffmpeg_progress(
                 let overall_progress =
                     progress.base_progress + local_progress * progress.progress_span;
                 if overall_progress - last_emitted >= 0.005 || overall_progress >= 1.0 {
-                    emit_ffmpeg_progress(
-                        progress.app,
-                        progress.task_id,
-                        progress.operation,
-                        progress.label,
-                        progress.current,
-                        progress.total,
-                        overall_progress,
-                        false,
-                    );
+                    emit_ffmpeg_progress(progress.app, progress.task_id, overall_progress);
                     last_emitted = overall_progress;
                 }
             }
         } else if line.trim() == "progress=end" {
-            emit_ffmpeg_progress(
-                progress.app,
-                progress.task_id,
-                progress.operation,
-                progress.label,
-                progress.current,
-                progress.total,
-                progress.base_progress + progress.progress_span,
-                progress.complete_on_success,
-            );
+            last_emitted = progress.base_progress + progress.progress_span;
+            emit_ffmpeg_progress(progress.app, progress.task_id, last_emitted);
         }
     }
 
@@ -2168,31 +2058,15 @@ async fn run_status_with_ffmpeg_progress(
     clear_running_ffmpeg(progress.state, &task_id);
 
     if status.success() && !was_cancelled {
-        if progress.complete_on_success {
-            emit_ffmpeg_progress(
-                progress.app,
-                progress.task_id,
-                progress.operation,
-                progress.label,
-                progress.current,
-                progress.total,
-                1.0,
-                true,
-            );
-        }
-        Ok(())
-    } else {
-        remove_cleanup_paths(&progress.cleanup_paths);
         emit_ffmpeg_progress(
             progress.app,
             progress.task_id,
-            progress.operation,
-            progress.label,
-            progress.current,
-            progress.total,
-            last_emitted,
-            true,
+            progress.base_progress + progress.progress_span,
         );
+        Ok(())
+    } else {
+        remove_cleanup_paths(&progress.cleanup_paths);
+        emit_ffmpeg_progress(progress.app, progress.task_id, last_emitted);
         if was_cancelled {
             Err("任务已取消".to_string())
         } else {

@@ -85,7 +85,11 @@ export function VideoDisplay({
       ) : (
         <div className="empty-preview">
           <FileVideo size={38} />
-          <span>{project ? "生成 MP4 代理后可在这里预览并定位台词" : "导入视频后可选择原文件或代理模式预览"}</span>
+          <span>
+            {project
+              ? "生成 MP4 代理后可在这里预览并定位台词"
+              : "导入视频后可选择原文件或代理模式预览"}
+          </span>
         </div>
       )}
     </div>

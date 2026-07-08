@@ -127,7 +127,12 @@ export function SelectDropdown<T extends string>({
   }
 
   const menu = (
-    <div ref={menuRef} className={`select-dropdown-menu ${menuClassName ?? ""}`} role="listbox" style={menuStyle}>
+    <div
+      ref={menuRef}
+      className={`select-dropdown-menu ${menuClassName ?? ""}`}
+      role="listbox"
+      style={menuStyle}
+    >
       {items.map((item, index) =>
         item.type === "separator" ? (
           <div key={`separator-${index}`} className="select-dropdown-separator" />

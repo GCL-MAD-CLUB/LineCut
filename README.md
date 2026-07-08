@@ -39,7 +39,7 @@ LineCut 是一款基于 **Tauri v2 + React + TypeScript + Rust** 构建的跨平
 ---
 
 <p align="center">
-  
-  Made with ❤️ by GCL MAD CLUB - [言ktdm](https://github.com/Inexplicable-YL)
-  
+
+Made with ❤️ by GCL MAD CLUB - [言ktdm](https://github.com/Inexplicable-YL)
+
 </p>

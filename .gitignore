@@ -20,7 +20,9 @@ pnpm-debug.log*
 .env.*.local
 
 # Editor / IDE
-.vscode/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
 .idea/
 *.swp
 *.suo

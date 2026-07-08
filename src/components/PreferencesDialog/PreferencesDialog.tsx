@@ -5,6 +5,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { defaultPreferences, useAppStore } from "../../store";
 import { isTauriRuntime } from "../../tauriRuntime";
 import type { Preferences } from "../../types";
+import { createTaskProgress, getTaskProgressStatus } from "../TaskProgress";
 
 const executableFilters = [
   {
@@ -20,10 +21,9 @@ interface PreferencesDialogProps {
 
 export function PreferencesDialog({ open: isOpen, onClose }: PreferencesDialogProps) {
   const preferences = useAppStore((state) => state.preferences);
-  const busyLabel = useAppStore((state) => state.busyLabel);
   const setPreferences = useAppStore((state) => state.setPreferences);
-  const setBusyLabel = useAppStore((state) => state.setBusyLabel);
   const setMessage = useAppStore((state) => state.setMessage);
+  const { isRunning: isSavingPreferences } = getTaskProgressStatus("preferences");
   const [draftPreferences, setDraftPreferences] = useState<Preferences>(preferences);
 
   useEffect(() => {
@@ -67,7 +67,13 @@ export function PreferencesDialog({ open: isOpen, onClose }: PreferencesDialogPr
       setMessage("浏览器预览不能保存首选项。");
       return;
     }
-    setBusyLabel("正在保存首选项");
+    const preferencesTask = createTaskProgress({
+      operation: "preferences",
+      label: "保存首选项",
+      current: 0,
+      total: 1,
+      on_cancel: () => undefined,
+    });
     try {
       const saved = await invoke<Preferences>("update_preferences", {
         preferences: draftPreferences,
@@ -76,10 +82,12 @@ export function PreferencesDialog({ open: isOpen, onClose }: PreferencesDialogPr
       setDraftPreferences(saved);
       onClose();
       setMessage("首选项已保存");
+      preferencesTask.update({ current: 1 });
+      preferencesTask.remove();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusyLabel("");
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      preferencesTask.fail("保存首选项失败", errorMessage);
+      setMessage(errorMessage);
     }
   }
 
@@ -110,7 +118,9 @@ export function PreferencesDialog({ open: isOpen, onClose }: PreferencesDialogPr
             label="缓存路径"
             value={draftPreferences.cache_dir}
             icon={<HardDrive size={15} />}
-            onChange={(value) => setDraftPreferences((current) => ({ ...current, cache_dir: value }))}
+            onChange={(value) =>
+              setDraftPreferences((current) => ({ ...current, cache_dir: value }))
+            }
             onBrowse={() => choosePreferenceDir("cache_dir")}
           />
           <PathField
@@ -126,14 +136,18 @@ export function PreferencesDialog({ open: isOpen, onClose }: PreferencesDialogPr
             label="FFmpeg"
             value={draftPreferences.ffmpeg_path}
             icon={<FileVideo size={15} />}
-            onChange={(value) => setDraftPreferences((current) => ({ ...current, ffmpeg_path: value }))}
+            onChange={(value) =>
+              setDraftPreferences((current) => ({ ...current, ffmpeg_path: value }))
+            }
             onBrowse={() => chooseExecutable("ffmpeg_path")}
           />
           <PathField
             label="ffprobe"
             value={draftPreferences.ffprobe_path}
             icon={<FileVideo size={15} />}
-            onChange={(value) => setDraftPreferences((current) => ({ ...current, ffprobe_path: value }))}
+            onChange={(value) =>
+              setDraftPreferences((current) => ({ ...current, ffprobe_path: value }))
+            }
             onBrowse={() => chooseExecutable("ffprobe_path")}
           />
         </div>
@@ -152,8 +166,12 @@ export function PreferencesDialog({ open: isOpen, onClose }: PreferencesDialogPr
           >
             重置工具路径
           </button>
-          <button className="accent-button" onClick={savePreferences} disabled={Boolean(busyLabel)}>
-            {busyLabel === "正在保存首选项" ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
+          <button
+            className="accent-button"
+            onClick={savePreferences}
+            disabled={isSavingPreferences}
+          >
+            {isSavingPreferences ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
             保存
           </button>
         </div>

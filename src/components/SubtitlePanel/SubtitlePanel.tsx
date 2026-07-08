@@ -44,12 +44,14 @@ function useFilteredCues() {
   const selectedCueIds = useAppStore((state) => state.selectedCueIds);
   const showOnlySelected = useAppStore((state) => state.showOnlySelected);
   const cues = useMemo(
-    () => (activeTrackId && project ? project.cues[activeTrackId] ?? [] : []),
+    () => (activeTrackId && project ? (project.cues[activeTrackId] ?? []) : []),
     [activeTrackId, project],
   );
   return useMemo(
     () =>
-      cues.filter((cue) => cueMatches(cue, query) && (!showOnlySelected || selectedCueIds.has(cue.id))),
+      cues.filter(
+        (cue) => cueMatches(cue, query) && (!showOnlySelected || selectedCueIds.has(cue.id)),
+      ),
     [cues, query, selectedCueIds, showOnlySelected],
   );
 }

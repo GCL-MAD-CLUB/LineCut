@@ -1,11 +1,6 @@
 import { useEffect, useRef } from "react";
 import { SelectDropdown, type SelectDropdownItem } from "../SelectDropdown";
-import type {
-  KeyboardEvent,
-  MouseEvent,
-  PointerEventHandler,
-  RefObject,
-} from "react";
+import type { KeyboardEvent, MouseEvent, PointerEventHandler, RefObject } from "react";
 
 type ZoomLevel = "fit" | number;
 type PreviewMode = "source" | "proxy";
@@ -125,15 +120,19 @@ export function VideoControls({
       label: value === "fit" ? "适合" : `${value}%`,
     })),
   ];
-  const fitZoomItemIndex = zoomItems.findIndex((item) => item.type === "option" && item.value === "fit");
+  const fitZoomItemIndex = zoomItems.findIndex(
+    (item) => item.type === "option" && item.value === "fit",
+  );
   if (fitZoomItemIndex >= 0) {
     zoomItems.splice(fitZoomItemIndex + 1, 0, { type: "separator" });
   }
-  const previewModeItems: Array<SelectDropdownItem<PreviewMode>> = previewModeOptions.map((value) => ({
-    type: "option",
-    value,
-    label: previewModeLabels[value],
-  }));
+  const previewModeItems: Array<SelectDropdownItem<PreviewMode>> = previewModeOptions.map(
+    (value) => ({
+      type: "option",
+      value,
+      label: previewModeLabels[value],
+    }),
+  );
 
   return (
     <div ref={rowRef} className={`source-control-row ${hasMedia ? "" : "empty-state"}`}>

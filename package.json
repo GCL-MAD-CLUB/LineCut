@@ -6,6 +6,10 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
     "build": "tsc && vite build",
+    "format": "prettier --write . && npm run format:rust",
+    "format:check": "prettier --check . && npm run format:rust:check",
+    "format:rust": "cargo fmt --manifest-path src-tauri/Cargo.toml",
+    "format:rust:check": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
     "preview": "vite preview --host 127.0.0.1 --port 1421",
     "tauri": "tauri"
   },
@@ -23,6 +27,7 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
+    "prettier": "^3.9.4",
     "typescript": "^6.0.3",
     "vite": "^8.1.0"
   }

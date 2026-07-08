@@ -84,7 +84,9 @@ export function MonitorRange({
     window.addEventListener("pointercancel", handleUp, { once: true });
   };
 
-  function handleRangeHandlePointerDown(side: "start" | "end"): PointerEventHandler<HTMLButtonElement> {
+  function handleRangeHandlePointerDown(
+    side: "start" | "end",
+  ): PointerEventHandler<HTMLButtonElement> {
     return (event) => {
       if (!hasMedia) {
         return;

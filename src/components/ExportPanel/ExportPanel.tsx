@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Download, Folder, Loader2, Scissors } from "lucide-react";
 import { useEffect, useMemo } from "react";
+import { listenToFfmpegTaskProgress } from "../../ffmpegProgress";
 import { useAppStore } from "../../store";
 import { isTauriRuntime } from "../../tauriRuntime";
 import type {
@@ -12,7 +13,7 @@ import type {
   SubtitleCue,
 } from "../../types";
 import { SelectDropdown, selectDropdownItems } from "../SelectDropdown";
-import { removeTaskProgress, showTaskProgress } from "../TaskProgress";
+import { createTaskProgress, getTaskProgressStatus } from "../TaskProgress";
 import "./ExportPanel.css";
 
 const allExportNameRuleOptions: Array<[ExportNameRule, string]> = [
@@ -119,32 +120,28 @@ function useActiveCues() {
   const project = useAppStore((state) => state.project);
   const activeTrackId = useAppStore((state) => state.activeTrackId);
   return useMemo(
-    () => (activeTrackId && project ? project.cues[activeTrackId] ?? [] : []),
+    () => (activeTrackId && project ? (project.cues[activeTrackId] ?? []) : []),
     [activeTrackId, project],
   );
 }
 
-function useCanExport() {
+function useCanExport(isExporting: boolean) {
   const project = useAppStore((state) => state.project);
   const activeTrackId = useAppStore((state) => state.activeTrackId);
-  const busyLabel = useAppStore((state) => state.busyLabel);
   const selectedCount = useAppStore((state) => state.selectedCueIds.size);
-  return Boolean(project && activeTrackId && selectedCount > 0 && !busyLabel);
+  return Boolean(project && activeTrackId && selectedCount > 0 && !isExporting);
 }
 
 export function ExportPanel() {
   const exportOptions = useAppStore((state) => state.exportOptions);
   const setExportOptions = useAppStore((state) => state.setExportOptions);
   const defaultExportDir = useAppStore((state) => state.preferences.default_export_dir);
-  const busyLabel = useAppStore((state) => state.busyLabel);
-  const setBusyLabel = useAppStore((state) => state.setBusyLabel);
   const setMessage = useAppStore((state) => state.setMessage);
   const setExportResult = useAppStore((state) => state.setExportResult);
   const labelCues = useActiveCues();
   const selectedCount = useAppStore((state) => state.selectedCueIds.size);
-  const canExport = useCanExport();
-  const isBusy = Boolean(busyLabel);
-  const isExporting = busyLabel === "正在导出台词片段";
+  const { isRunning: isExporting } = getTaskProgressStatus("export");
+  const canExport = useCanExport(isExporting);
   const dialogueLineCount = useMemo(() => {
     return dominantDialogueLineCount(labelCues);
   }, [labelCues]);
@@ -208,7 +205,12 @@ export function ExportPanel() {
   }
 
   async function exportSelection() {
-    const { project, activeTrackId, selectedCueIds, exportOptions: currentExportOptions } = useAppStore.getState();
+    const {
+      project,
+      activeTrackId,
+      selectedCueIds,
+      exportOptions: currentExportOptions,
+    } = useAppStore.getState();
     if (!project || !activeTrackId) {
       return;
     }
@@ -216,17 +218,20 @@ export function ExportPanel() {
       setMessage("浏览器预览不能导出视频，请运行 Tauri 桌面应用。");
       return;
     }
-    setBusyLabel("正在导出台词片段");
-    showTaskProgress({
-      task_id: `export:${project.asset.id}`,
+    const exportTaskId = `export:${project.asset.id}`;
+    let exportCancelled = false;
+    const exportTask = createTaskProgress({
       operation: "export",
       label: `导出 ${selectedCueIds.size} 条台词`,
       current: 0,
       total: 1,
-      progress: 0,
-      done: false,
+      on_cancel: async () => {
+        exportCancelled = true;
+        await invoke<boolean>("cancel_current_task");
+      },
     });
     setExportResult(null);
+    const stopProgressListener = await listenToFfmpegTaskProgress(exportTaskId, exportTask);
     try {
       const result = await invoke<ExportResult>("export_clips", {
         assetId: project.asset.id,
@@ -236,11 +241,18 @@ export function ExportPanel() {
       });
       setExportResult(result);
       setMessage(`导出完成：${result.files.length} 个文件`);
+      exportTask.update({ current: 1 });
+      exportTask.remove();
     } catch (error) {
-      removeTaskProgress(`export:${project.asset.id}`);
-      setMessage(error instanceof Error ? error.message : String(error));
+      if (exportCancelled) {
+        setMessage("导出已取消");
+        return;
+      }
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      exportTask.fail("导出失败", errorMessage);
+      setMessage(errorMessage);
     } finally {
-      setBusyLabel("");
+      stopProgressListener();
     }
   }
 
@@ -311,33 +323,32 @@ export function ExportPanel() {
       <SelectMenu<ExportNameRule>
         label="重命名规则"
         value={exportOptions.export_name_rule}
-        options={exportOptions.layout === "merged" ? mergedExportNameRuleOptions : allExportNameRuleOptions}
+        options={
+          exportOptions.layout === "merged" ? mergedExportNameRuleOptions : allExportNameRuleOptions
+        }
         onChange={(export_name_rule) => setExportOptions({ export_name_rule })}
       />
-      {exportOptions.layout === "individual" && isDialogueNameRule(exportOptions.export_name_rule) && (
-        <div className="language-picker">
-          <span>字幕轨道</span>
-          <div className="language-options">
-            {Array.from({ length: dialogueLineCount }, (_, index) => (
-              <label key={index} className="language-option">
-                <input
-                  type="checkbox"
-                  checked={selectedDialogueLineIndexes.includes(index)}
-                  onChange={() => toggleDialogueLineIndex(index)}
-                />
-                {dialogueLineLabels[index]}
-              </label>
-            ))}
+      {exportOptions.layout === "individual" &&
+        isDialogueNameRule(exportOptions.export_name_rule) && (
+          <div className="language-picker">
+            <span>字幕轨道</span>
+            <div className="language-options">
+              {Array.from({ length: dialogueLineCount }, (_, index) => (
+                <label key={index} className="language-option">
+                  <input
+                    type="checkbox"
+                    checked={selectedDialogueLineIndexes.includes(index)}
+                    onChange={() => toggleDialogueLineIndex(index)}
+                  />
+                  {dialogueLineLabels[index]}
+                </label>
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
       <div className="output-row">
-        <button
-          className="toolbar-button"
-          onClick={chooseOutputDir}
-          disabled={isBusy}
-        >
+        <button className="toolbar-button" onClick={chooseOutputDir} disabled={isExporting}>
           <Folder size={15} />
           导出目录
         </button>
@@ -346,11 +357,7 @@ export function ExportPanel() {
         </span>
       </div>
 
-      <button
-        className="accent-button wide"
-        disabled={!canExport}
-        onClick={exportSelection}
-      >
+      <button className="accent-button wide" disabled={!canExport} onClick={exportSelection}>
         {isExporting ? <Loader2 className="spin" size={16} /> : <Download size={16} />}
         开始导出
       </button>

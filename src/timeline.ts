@@ -65,7 +65,12 @@ export function minTimelineSpanUs(widthPx: number, frameRate: number, durationUs
   return durationUs > 0 ? Math.min(durationUs, minSpan) : minSpan;
 }
 
-export function clampTimelineSpan(spanUs: number, widthPx: number, frameRate: number, durationUs: number) {
+export function clampTimelineSpan(
+  spanUs: number,
+  widthPx: number,
+  frameRate: number,
+  durationUs: number,
+) {
   const minSpan = minTimelineSpanUs(widthPx, frameRate, durationUs);
   const maxSpan = durationUs > 0 ? durationUs : Math.max(minSpan, spanUs);
   return clamp(spanUs, minSpan, maxSpan);

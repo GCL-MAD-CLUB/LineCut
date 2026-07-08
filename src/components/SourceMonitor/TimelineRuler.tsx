@@ -11,7 +11,14 @@ interface TimelineRulerProps {
   onSeekPointer: (clientX: number, element: HTMLDivElement) => void;
 }
 
-export function TimelineRuler({ timelineRef, hasMedia, ruler, cursorPercent, onWheel, onSeekPointer }: TimelineRulerProps) {
+export function TimelineRuler({
+  timelineRef,
+  hasMedia,
+  ruler,
+  cursorPercent,
+  onWheel,
+  onSeekPointer,
+}: TimelineRulerProps) {
   useEffect(() => {
     const timeline = timelineRef.current;
     if (!timeline) {
@@ -65,7 +72,9 @@ export function TimelineRuler({ timelineRef, hasMedia, ruler, cursorPercent, onW
               style={{ left: `${tick.leftPx}px` }}
             />
           ))}
-        {hasMedia && cursorPercent !== null && <span className="timeline-cursor" style={{ left: `${cursorPercent}%` }} />}
+        {hasMedia && cursorPercent !== null && (
+          <span className="timeline-cursor" style={{ left: `${cursorPercent}%` }} />
+        )}
       </div>
     </div>
   );

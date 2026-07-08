@@ -1,5 +1,12 @@
 import { create } from "zustand";
-import type { ExportOptions, ExportResult, Preferences, Project, SubtitleCue, SubtitleTrack } from "./types";
+import type {
+  ExportOptions,
+  ExportResult,
+  Preferences,
+  Project,
+  SubtitleCue,
+  SubtitleTrack,
+} from "./types";
 
 interface AppStore {
   project: Project | null;
@@ -9,11 +16,9 @@ interface AppStore {
   showOnlySelected: boolean;
   proxyPath: string | null;
   useProxy: boolean;
-  isGeneratingProxy: boolean;
   proxyDialogOpen: boolean;
   exportOptions: ExportOptions;
   preferences: Preferences;
-  busyLabel: string;
   message: string;
   warnings: string[];
   exportResult: ExportResult | null;
@@ -26,11 +31,9 @@ interface AppStore {
   selectCueIds: (cueIds: string[]) => void;
   setProxyPath: (path: string | null) => void;
   setUseProxy: (value: boolean) => void;
-  setIsGeneratingProxy: (value: boolean) => void;
   setProxyDialogOpen: (value: boolean) => void;
   setExportOptions: (options: Partial<ExportOptions>) => void;
   setPreferences: (preferences: Preferences) => void;
-  setBusyLabel: (label: string) => void;
   setMessage: (message: string) => void;
   setWarnings: (warnings: string[] | ((current: string[]) => string[])) => void;
   setExportResult: (result: ExportResult | null) => void;
@@ -54,7 +57,6 @@ export const useAppStore = create<AppStore>((set) => ({
   showOnlySelected: false,
   proxyPath: null,
   useProxy: false,
-  isGeneratingProxy: false,
   proxyDialogOpen: false,
   exportOptions: {
     head_padding_ms: 300,
@@ -68,7 +70,6 @@ export const useAppStore = create<AppStore>((set) => ({
     dialogue_line_indexes: [],
   },
   preferences: defaultPreferences(),
-  busyLabel: "",
   message: "就绪",
   warnings: [],
   exportResult: null,
@@ -107,7 +108,6 @@ export const useAppStore = create<AppStore>((set) => ({
   selectCueIds: (cueIds) => set({ selectedCueIds: new Set(cueIds) }),
   setProxyPath: (path) => set({ proxyPath: path }),
   setUseProxy: (useProxy) => set({ useProxy }),
-  setIsGeneratingProxy: (isGeneratingProxy) => set({ isGeneratingProxy }),
   setProxyDialogOpen: (proxyDialogOpen) => set({ proxyDialogOpen }),
   addExternalSubtitles: (tracks, cues) =>
     set((state) => {
@@ -137,7 +137,6 @@ export const useAppStore = create<AppStore>((set) => ({
       },
     })),
   setPreferences: (preferences) => set({ preferences }),
-  setBusyLabel: (busyLabel) => set({ busyLabel }),
   setMessage: (message) => set({ message }),
   setWarnings: (warnings) =>
     set((state) => ({

@@ -1,198 +1,313 @@
-import { listen } from "@tauri-apps/api/event";
 import { X } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useMemo, useSyncExternalStore, type ReactNode } from "react";
 import "./TaskProgress.css";
 
-export interface TaskProgressItem {
-  task_id: string;
+export interface CreateTaskProgressOptions {
   operation: string;
   label: string;
   current: number;
   total: number;
-  progress: number;
-  done: boolean;
+  on_cancel: () => void | Promise<void>;
+}
+
+export interface TaskProgressUpdate {
+  label?: string;
+  current?: number;
+}
+
+export interface TaskProgressHandle {
+  update: (update: TaskProgressUpdate) => void;
+  remove: () => void;
+  fail: (errorName: string, errorMessage: string) => void;
+}
+
+export interface TaskProgressView {
+  operation: string;
+  label: string;
+  current: number;
+  total: number;
+  percent: number;
+}
+
+export interface TaskProgressStatus {
+  tasks: TaskProgressView[];
+  count: number;
+  isRunning: boolean;
+}
+
+interface TaskProgressRecord {
+  id: string;
+  operation: string;
+  label: string;
+  current: number;
+  total: number;
+  on_cancel: () => void | Promise<void>;
+}
+
+interface TaskProgressError {
+  id: string;
+  name: string;
+  message: string;
+}
+
+interface TaskProgressSnapshot {
+  tasks: TaskProgressRecord[];
+  errors: TaskProgressError[];
 }
 
 interface TaskProgressProps {
   children: ReactNode;
-  onCancel?: () => void;
-  clearDelayMs?: number;
 }
 
-const updateEventName = "linecut-task-progress:update";
-const removeEventName = "linecut-task-progress:remove";
-const clearEventName = "linecut-task-progress:clear";
-
-function isTauriRuntime() {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
+const listeners = new Set<() => void>();
+let nextTaskId = 1;
+let nextErrorId = 1;
+let snapshot: TaskProgressSnapshot = {
+  tasks: [],
+  errors: [],
+};
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
-export function taskProgressKey(progress: Pick<TaskProgressItem, "task_id" | "operation" | "label">) {
-  return progress.task_id || `${progress.operation}:${progress.label}`;
-}
-
-function upsertProgressItem(items: TaskProgressItem[], item: TaskProgressItem) {
-  const key = taskProgressKey(item);
-  const index = items.findIndex((current) => taskProgressKey(current) === key);
-  if (index === -1) {
-    return [...items, item];
+function taskPercent(task: Pick<TaskProgressRecord, "current" | "total">) {
+  if (task.total <= 0) {
+    return 0;
   }
-  const next = [...items];
-  next[index] = item;
-  return next;
+  return clamp(task.current / task.total, 0, 1) * 100;
 }
 
-export function showTaskProgress(item: TaskProgressItem) {
-  if (typeof window === "undefined") {
+function toViewTask(task: TaskProgressRecord): TaskProgressView {
+  return {
+    operation: task.operation,
+    label: task.label,
+    current: task.current,
+    total: task.total,
+    percent: taskPercent(task),
+  };
+}
+
+function subscribe(listener: () => void) {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+function getSnapshot() {
+  return snapshot;
+}
+
+function setSnapshot(nextSnapshot: TaskProgressSnapshot) {
+  snapshot = nextSnapshot;
+  for (const listener of listeners) {
+    listener();
+  }
+}
+
+function getTaskProgressSnapshot() {
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+function removeTask(id: string) {
+  if (!snapshot.tasks.some((task) => task.id === id)) {
     return;
   }
-  window.dispatchEvent(new CustomEvent<TaskProgressItem>(updateEventName, { detail: item }));
+  setSnapshot({
+    ...snapshot,
+    tasks: snapshot.tasks.filter((task) => task.id !== id),
+  });
 }
 
-export function removeTaskProgress(task: string | Pick<TaskProgressItem, "task_id" | "operation" | "label">) {
-  if (typeof window === "undefined") {
+function addError(name: string, message: string) {
+  const id = `task-progress-error:${nextErrorId++}`;
+  setSnapshot({
+    ...snapshot,
+    errors: [...snapshot.errors, { id, name, message }],
+  });
+
+  window.setTimeout(() => {
+    removeError(id);
+  }, 6000);
+}
+
+function removeError(id: string) {
+  if (!snapshot.errors.some((error) => error.id === id)) {
     return;
   }
-  const key = typeof task === "string" ? task : taskProgressKey(task);
-  window.dispatchEvent(new CustomEvent<string>(removeEventName, { detail: key }));
+  setSnapshot({
+    ...snapshot,
+    errors: snapshot.errors.filter((error) => error.id !== id),
+  });
 }
 
-export function clearTaskProgress() {
-  if (typeof window === "undefined") {
+async function runTaskCancel(task: TaskProgressRecord) {
+  try {
+    await task.on_cancel();
+  } catch (error) {
+    addError("取消任务失败", error instanceof Error ? error.message : String(error));
+  }
+}
+
+export function createTaskProgress({
+  operation,
+  label,
+  current,
+  total,
+  on_cancel,
+}: CreateTaskProgressOptions): TaskProgressHandle {
+  const normalizedTotal = Number.isFinite(total) ? Math.max(0, total) : 0;
+  const id = `task-progress:${nextTaskId++}`;
+  const task: TaskProgressRecord = {
+    id,
+    operation,
+    label,
+    current: clamp(Number.isFinite(current) ? current : 0, 0, normalizedTotal),
+    total: normalizedTotal,
+    on_cancel,
+  };
+
+  setSnapshot({
+    ...snapshot,
+    tasks: [...snapshot.tasks, task],
+  });
+
+  return {
+    update: ({ current: nextCurrent, label: nextLabel }) => {
+      if (!snapshot.tasks.some((currentTask) => currentTask.id === id)) {
+        return;
+      }
+      setSnapshot({
+        ...snapshot,
+        tasks: snapshot.tasks.map((currentTask) =>
+          currentTask.id === id
+            ? {
+                ...currentTask,
+                label: nextLabel ?? currentTask.label,
+                current:
+                  nextCurrent === undefined
+                    ? currentTask.current
+                    : clamp(Number.isFinite(nextCurrent) ? nextCurrent : 0, 0, currentTask.total),
+              }
+            : currentTask,
+        ),
+      });
+    },
+    remove: () => removeTask(id),
+    fail: (errorName, errorMessage) => {
+      removeTask(id);
+      addError(errorName, errorMessage);
+    },
+  };
+}
+
+export async function cancelAllTaskProgress() {
+  const tasks = snapshot.tasks;
+  if (tasks.length === 0) {
     return;
   }
-  window.dispatchEvent(new CustomEvent(clearEventName));
+
+  setSnapshot({
+    ...snapshot,
+    tasks: [],
+  });
+
+  await Promise.all(tasks.map((task) => runTaskCancel(task)));
 }
 
-export function TaskProgress({ children, onCancel, clearDelayMs = 700 }: TaskProgressProps) {
-  const clearTimersRef = useRef<Map<string, number>>(new Map());
-  const [items, setItems] = useState<TaskProgressItem[]>([]);
+export function getTaskProgressStatus(operation?: string): TaskProgressStatus {
+  const { tasks } = getTaskProgressSnapshot();
 
-  useEffect(() => {
-    function clearTimer(key: string) {
-      const existingTimer = clearTimersRef.current.get(key);
-      if (existingTimer) {
-        window.clearTimeout(existingTimer);
-        clearTimersRef.current.delete(key);
-      }
-    }
-
-    function updateItem(rawItem: TaskProgressItem) {
-      const item = {
-        ...rawItem,
-        progress: clamp(rawItem.progress, 0, 1),
-      };
-      const key = taskProgressKey(item);
-      clearTimer(key);
-
-      setItems((current) => upsertProgressItem(current, item));
-
-      if (item.done) {
-        const timer = window.setTimeout(() => {
-          setItems((current) => current.filter((currentItem) => taskProgressKey(currentItem) !== key));
-          clearTimersRef.current.delete(key);
-        }, clearDelayMs);
-        clearTimersRef.current.set(key, timer);
-      }
-    }
-
-    function removeItem(key: string) {
-      clearTimer(key);
-      setItems((current) => current.filter((item) => taskProgressKey(item) !== key));
-    }
-
-    function clearTimers() {
-      for (const timer of clearTimersRef.current.values()) {
-        window.clearTimeout(timer);
-      }
-      clearTimersRef.current.clear();
-    }
-
-    function clearItems() {
-      clearTimers();
-      setItems([]);
-    }
-
-    const handleUpdate = (event: Event) => {
-      updateItem((event as CustomEvent<TaskProgressItem>).detail);
+  return useMemo(() => {
+    const visibleTasks = operation ? tasks.filter((task) => task.operation === operation) : tasks;
+    const viewTasks = visibleTasks.map(toViewTask);
+    return {
+      tasks: viewTasks,
+      count: viewTasks.length,
+      isRunning: viewTasks.length > 0,
     };
-    const handleRemove = (event: Event) => {
-      removeItem((event as CustomEvent<string>).detail);
-    };
+  }, [operation, tasks]);
+}
 
-    window.addEventListener(updateEventName, handleUpdate);
-    window.addEventListener(removeEventName, handleRemove);
-    window.addEventListener(clearEventName, clearItems);
+export function TaskProgress({ children }: TaskProgressProps) {
+  const { errors, tasks } = getTaskProgressSnapshot();
 
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-    if (isTauriRuntime()) {
-      void listen<TaskProgressItem>("ffmpeg-progress", (event) => updateItem(event.payload))
-        .then((dispose) => {
-          if (disposed) {
-            dispose();
-            return;
-          }
-          unlisten = dispose;
-        })
-        .catch(() => undefined);
-    }
-
-    return () => {
-      disposed = true;
-      unlisten?.();
-      window.removeEventListener(updateEventName, handleUpdate);
-      window.removeEventListener(removeEventName, handleRemove);
-      window.removeEventListener(clearEventName, clearItems);
-      clearTimers();
-    };
-  }, [clearDelayMs]);
-
-  if (items.length === 0) {
-    return <>{children}</>;
-  }
-
-  if (items.length === 1) {
-    const item = items[0];
-    return (
-      <div className="topbar-progress" title={`${item.label} ${Math.round(item.progress * 100)}%`}>
-        <span>{item.label}</span>
-        <div className="topbar-progress-row">
-          <div className="topbar-progress-track">
-            <div className="topbar-progress-fill" style={{ width: `${Math.round(item.progress * 100)}%` }} />
+  const errorStack = (
+    <div className="task-progress-errors" aria-live="polite">
+      {errors.map((error) => (
+        <div key={error.id} className="task-progress-error">
+          <div>
+            <strong>{error.name}</strong>
+            <span>{error.message}</span>
           </div>
-          <button
-            className="topbar-progress-cancel"
-            onClick={onCancel}
-            title="取消任务"
-            aria-label="取消任务"
-            disabled={!onCancel}
-          >
+          <button type="button" onClick={() => removeError(error.id)} title="关闭">
             <X aria-hidden="true" />
           </button>
         </div>
-      </div>
+      ))}
+    </div>
+  );
+
+  if (tasks.length === 0) {
+    return (
+      <>
+        {children}
+        {errorStack}
+      </>
+    );
+  }
+
+  if (tasks.length === 1) {
+    const task = tasks[0];
+    const percent = Math.round(taskPercent(task));
+    return (
+      <>
+        <div className="topbar-progress" title={`${task.label} ${percent}%`}>
+          <span>{task.label}</span>
+          <div className="topbar-progress-row">
+            <div className="topbar-progress-track">
+              <div className="topbar-progress-fill" style={{ width: `${percent}%` }} />
+            </div>
+            <button
+              className="topbar-progress-cancel"
+              onClick={() => {
+                removeTask(task.id);
+                void runTaskCancel(task);
+              }}
+              title="取消任务"
+              aria-label="取消任务"
+            >
+              <X aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+        {errorStack}
+      </>
     );
   }
 
   return (
-    <div className="topbar-progress topbar-progress-multi">
-      <span>{`正在执行 ${items.length} 项操作...`}</span>
-      <div className="topbar-progress-stack" style={{ gridTemplateRows: `repeat(${items.length}, minmax(0, 1fr))` }}>
-        {items.map((item) => (
-          <div
-            key={taskProgressKey(item)}
-            className="topbar-progress-track"
-            title={`${item.label} ${Math.round(item.progress * 100)}%`}
-          >
-            <div className="topbar-progress-fill" style={{ width: `${Math.round(item.progress * 100)}%` }} />
-          </div>
-        ))}
+    <>
+      <div className="topbar-progress topbar-progress-multi">
+        <span>{`正在执行 ${tasks.length} 项操作...`}</span>
+        <div
+          className="topbar-progress-stack"
+          style={{ gridTemplateRows: `repeat(${tasks.length}, minmax(0, 1fr))` }}
+        >
+          {tasks.map((task) => {
+            const percent = Math.round(taskPercent(task));
+            return (
+              <div
+                key={task.id}
+                className="topbar-progress-track"
+                title={`${task.label} ${percent}%`}
+              >
+                <div className="topbar-progress-fill" style={{ width: `${percent}%` }} />
+              </div>
+            );
+          })}
+        </div>
       </div>
-    </div>
+      {errorStack}
+    </>
   );
 }

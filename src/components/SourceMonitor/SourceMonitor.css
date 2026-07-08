@@ -58,8 +58,12 @@
   --monitor-control-gap: 14px;
   --transport-button-size: 24px;
   --transport-button-gap: 10px;
-  --transport-buttons-width: calc(var(--transport-button-size) * 3 + var(--transport-button-gap) * 2);
-  --transport-column-min-width: calc(var(--transport-buttons-width) + var(--monitor-control-gap) * 2);
+  --transport-buttons-width: calc(
+    var(--transport-button-size) * 3 + var(--transport-button-gap) * 2
+  );
+  --transport-column-min-width: calc(
+    var(--transport-buttons-width) + var(--monitor-control-gap) * 2
+  );
 
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -89,7 +93,9 @@
 }
 
 .source-control-row.empty-state {
-  grid-template-columns: var(--monitor-time-width) minmax(var(--transport-column-min-width), 1fr) var(--monitor-time-width);
+  grid-template-columns:
+    var(--monitor-time-width) minmax(var(--transport-column-min-width), 1fr)
+    var(--monitor-time-width);
 }
 
 .monitor-time,

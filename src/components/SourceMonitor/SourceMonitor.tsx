@@ -1,5 +1,13 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MouseEvent,
+  type PointerEvent,
+} from "react";
 import { flushSync } from "react-dom";
 import { useAppEvent } from "../../appEvents";
 import { useAppStore } from "../../store";
@@ -15,7 +23,7 @@ import {
 import { MonitorRange } from "./MonitorRange";
 import "./SourceMonitor.css";
 import { TimelineRuler } from "./TimelineRuler";
-import { useProxyController } from "./useProxyController";
+import { getTaskProgressStatus } from "../TaskProgress";
 import { VideoControls } from "./VideoControls";
 import { VideoDisplay } from "./VideoDisplay";
 
@@ -51,9 +59,10 @@ export function SourceMonitor() {
   const project = useAppStore((state) => state.project);
   const proxyPath = useAppStore((state) => state.proxyPath);
   const useProxy = useAppStore((state) => state.useProxy);
-  const isGeneratingProxy = useAppStore((state) => state.isGeneratingProxy);
   const setMessage = useAppStore((state) => state.setMessage);
-  const { openProxyDialog, closeProxyDialog, enableProxy, disableProxy } = useProxyController();
+  const setUseProxy = useAppStore((state) => state.setUseProxy);
+  const setProxyDialogOpen = useAppStore((state) => state.setProxyDialogOpen);
+  const { isRunning: isGeneratingProxy } = getTaskProgressStatus("proxy");
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const videoStageRef = useRef<HTMLDivElement | null>(null);
   const timelineRef = useRef<HTMLDivElement | null>(null);
@@ -137,9 +146,18 @@ export function SourceMonitor() {
       width: Math.max(1, Math.floor(videoNaturalSize.width * scale)),
       height: Math.max(1, Math.floor(videoNaturalSize.height * scale)),
     };
-  }, [videoNaturalSize.height, videoNaturalSize.width, videoStageSize.height, videoStageSize.width]);
-  const zoomOptions = useMemo(() => ["fit", ...baseZoomPercentOptions] as Array<"fit" | number>, []);
-  const isCustomZoom = typeof zoomLevel === "number" && !baseZoomPercentOptions.includes(zoomLevel as never);
+  }, [
+    videoNaturalSize.height,
+    videoNaturalSize.width,
+    videoStageSize.height,
+    videoStageSize.width,
+  ]);
+  const zoomOptions = useMemo(
+    () => ["fit", ...baseZoomPercentOptions] as Array<"fit" | number>,
+    [],
+  );
+  const isCustomZoom =
+    typeof zoomLevel === "number" && !baseZoomPercentOptions.includes(zoomLevel as never);
   const timelineRuler = useMemo(
     () =>
       buildTimelineRuler({
@@ -247,12 +265,7 @@ export function SourceMonitor() {
       return;
     }
     setTimelineSpanUs((current) => {
-      const next = clampTimelineSpan(
-        current,
-        Math.max(1, timelineWidthPx),
-        frameRate,
-        durationUs,
-      );
+      const next = clampTimelineSpan(current, Math.max(1, timelineWidthPx), frameRate, durationUs);
       setTimelineStartUs((start) => clampTimelineStart(start, next, durationUs));
       return next;
     });
@@ -295,28 +308,28 @@ export function SourceMonitor() {
 
   function changePreviewMode(value: PreviewMode) {
     if (value === "source") {
-      closeProxyDialog();
-      disableProxy();
+      setProxyDialogOpen(false);
+      setUseProxy(false);
       return;
     }
     if (!project || isGeneratingProxy) {
       return;
     }
     if (proxyPath) {
-      enableProxy();
+      setUseProxy(true);
       return;
     }
-    disableProxy();
-    openProxyDialog();
+    setUseProxy(false);
+    setProxyDialogOpen(true);
   }
 
   function handleVideoError() {
     if (!useProxy && project) {
       if (proxyPath) {
-        enableProxy();
+        setUseProxy(true);
         setMessage("原文件无法直接播放，已切换到代理模式。");
       } else {
-        openProxyDialog();
+        setProxyDialogOpen(true);
         setMessage("原文件无法直接播放，请创建代理后预览。");
       }
     }
@@ -353,7 +366,8 @@ export function SourceMonitor() {
     const nextUs = snapUsToFrame(element.currentTime * 1_000_000);
     const targetUs = seekTargetUsRef.current;
     const seekAgeMs = performance.now() - lastSeekCommandAtRef.current;
-    const isStaleSeekEvent = (element.seeking || seekAgeMs < 500) && Math.abs(nextUs - targetUs) > frameUs / 2;
+    const isStaleSeekEvent =
+      (element.seeking || seekAgeMs < 500) && Math.abs(nextUs - targetUs) > frameUs / 2;
     if (isStaleSeekEvent) {
       return;
     }
@@ -417,7 +431,8 @@ export function SourceMonitor() {
     }
     pausePlaybackForPreciseSeek();
     const originUs =
-      baseUs ?? (Number.isFinite(seekTargetUsRef.current) ? seekTargetUsRef.current : playbackTimeUs());
+      baseUs ??
+      (Number.isFinite(seekTargetUsRef.current) ? seekTargetUsRef.current : playbackTimeUs());
     const currentFrame = Math.round(originUs / frameUs);
     seekToUs((currentFrame + frameDelta) * frameUs);
   }
@@ -534,7 +549,10 @@ export function SourceMonitor() {
 
     const documentWithCaret = document as Document & {
       caretRangeFromPoint?: (x: number, y: number) => Range | null;
-      caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+      caretPositionFromPoint?: (
+        x: number,
+        y: number,
+      ) => { offsetNode: Node; offset: number } | null;
     };
     const selection = window.getSelection();
     let range = documentWithCaret.caretRangeFromPoint?.(clientX, clientY) ?? null;
@@ -750,7 +768,11 @@ export function SourceMonitor() {
           durationUs,
         );
         timelineSpanUsRef.current = nextSpanUs;
-        timelineStartUsRef.current = clampTimelineStart(centerUs - nextSpanUs / 2, nextSpanUs, durationUs);
+        timelineStartUsRef.current = clampTimelineStart(
+          centerUs - nextSpanUs / 2,
+          nextSpanUs,
+          durationUs,
+        );
         setTimelineSpanUs(nextSpanUs);
         setTimelineStartUs(timelineStartUsRef.current);
       },
@@ -769,7 +791,8 @@ export function SourceMonitor() {
         videoSrc={videoSrc}
         videoStyle={{
           width: zoomLevel === "fit" && fittedVideoSize ? `${fittedVideoSize.width}px` : undefined,
-          height: zoomLevel === "fit" && fittedVideoSize ? `${fittedVideoSize.height}px` : undefined,
+          height:
+            zoomLevel === "fit" && fittedVideoSize ? `${fittedVideoSize.height}px` : undefined,
           transform: `scale(${zoomScale})`,
           transformOrigin: `${zoomOrigin.x}% ${zoomOrigin.y}%`,
         }}

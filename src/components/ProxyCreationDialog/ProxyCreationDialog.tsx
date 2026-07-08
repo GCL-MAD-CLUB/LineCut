@@ -1,9 +1,13 @@
+import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useState } from "react";
+import { listenToFfmpegTaskProgress } from "../../ffmpegProgress";
 import { useAppStore } from "../../store";
+import { isTauriRuntime } from "../../tauriRuntime";
+import type { ProxyResult } from "../../types";
 import { ModalDialog } from "../ModalDialog";
 import { SelectDropdown, selectDropdownItems, type SelectDropdownItem } from "../SelectDropdown";
-import { useProxyController } from "../SourceMonitor/useProxyController";
+import { createTaskProgress, getTaskProgressStatus } from "../TaskProgress";
 import "./ProxyCreationDialog.css";
 
 export type ProxyFrameSize = "full" | "half" | "quarter" | "custom";
@@ -55,7 +59,13 @@ function labelForLocation(location: ProxyLocation, customLocation: string, cache
 
 export function ProxyCreationDialog() {
   const cacheDir = useAppStore((state) => state.preferences.cache_dir);
-  const { isProxyDialogOpen, closeProxyDialog, generatePreview } = useProxyController();
+  const project = useAppStore((state) => state.project);
+  const isProxyDialogOpen = useAppStore((state) => state.proxyDialogOpen);
+  const setProxyDialogOpen = useAppStore((state) => state.setProxyDialogOpen);
+  const setProxyPath = useAppStore((state) => state.setProxyPath);
+  const setUseProxy = useAppStore((state) => state.setUseProxy);
+  const setMessage = useAppStore((state) => state.setMessage);
+  const { isRunning: isGeneratingProxy } = getTaskProgressStatus("proxy");
   const [frameSize, setFrameSize] = useState<ProxyFrameSize>("full");
   const [customWidth, setCustomWidth] = useState(1280);
   const [customHeight, setCustomHeight] = useState(720);
@@ -120,6 +130,55 @@ export function ProxyCreationDialog() {
     },
   ];
 
+  async function generatePreview(options: ProxyCreationOptions) {
+    if (!project) {
+      return;
+    }
+    if (!isTauriRuntime()) {
+      setMessage("浏览器预览不能生成代理，请运行 Tauri 桌面应用。");
+      return;
+    }
+
+    const proxyTaskId = `proxy:${project.asset.id}`;
+    let proxyCancelled = false;
+    const proxyTask = createTaskProgress({
+      operation: "proxy",
+      label: "生成代理",
+      current: 0,
+      total: 1,
+      on_cancel: async () => {
+        proxyCancelled = true;
+        await invoke<boolean>("cancel_current_task");
+      },
+    });
+    const stopProgressListener = await listenToFfmpegTaskProgress(proxyTaskId, proxyTask);
+    try {
+      const result = await invoke<ProxyResult>("generate_proxy", {
+        assetId: project.asset.id,
+        options,
+      });
+      setProxyPath(result.proxy_path);
+      setUseProxy(true);
+      setMessage("预览代理已生成");
+      proxyTask.update({ current: 1 });
+      proxyTask.remove();
+    } catch (error) {
+      if (proxyCancelled) {
+        setMessage("代理生成已取消");
+        return;
+      }
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      proxyTask.fail("生成代理失败", errorMessage);
+      setMessage(errorMessage);
+    } finally {
+      stopProgressListener();
+    }
+  }
+
+  function closeProxyDialog() {
+    setProxyDialogOpen(false);
+  }
+
   function confirm() {
     closeProxyDialog();
     void generatePreview({
@@ -141,6 +200,7 @@ export function ProxyCreationDialog() {
     <ModalDialog
       title="创建代理"
       bodyClassName="proxy-dialog-body"
+      confirmDisabled={isGeneratingProxy}
       onCancel={closeProxyDialog}
       onConfirm={confirm}
     >
@@ -214,11 +274,7 @@ function ProxySelect({ label, value, options, onChange }: ProxySelectProps) {
   return (
     <div className="proxy-dialog-field">
       <span>{label}：</span>
-      <ProxySelectControl
-        value={value}
-        items={selectDropdownItems(options)}
-        onChange={onChange}
-      />
+      <ProxySelectControl value={value} items={selectDropdownItems(options)} onChange={onChange} />
     </div>
   );
 }
