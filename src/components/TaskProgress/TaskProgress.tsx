@@ -48,6 +48,7 @@ interface TaskProgressRecord {
   label: string;
   current: number;
   total: number;
+  is_cancelling: boolean;
   listener_cleanup?: TaskProgressListenerCleanup;
   on_cancel?: () => void | Promise<void>;
 }
@@ -164,9 +165,29 @@ function removeError(id: string) {
 }
 
 async function runTaskCancel(task: TaskProgressRecord) {
+  if (!task.on_cancel || task.is_cancelling) {
+    return;
+  }
+  setSnapshot({
+    ...snapshot,
+    tasks: snapshot.tasks.map((currentTask) =>
+      currentTask.id === task.id
+        ? { ...currentTask, is_cancelling: true, label: "正在取消任务" }
+        : currentTask,
+    ),
+  });
   try {
-    await task.on_cancel?.();
+    await task.on_cancel();
+    removeTask(task.id);
   } catch (error) {
+    setSnapshot({
+      ...snapshot,
+      tasks: snapshot.tasks.map((currentTask) =>
+        currentTask.id === task.id
+          ? { ...currentTask, is_cancelling: false, label: task.label }
+          : currentTask,
+      ),
+    });
     addError("取消任务失败", error instanceof Error ? error.message : String(error));
   }
 }
@@ -187,6 +208,7 @@ export async function createTaskProgress({
     label,
     current: clamp(Number.isFinite(current) ? current : 0, 0, normalizedTotal),
     total: normalizedTotal,
+    is_cancelling: false,
     on_cancel,
   };
 
@@ -307,17 +329,17 @@ export function TaskProgress({ children }: TaskProgressProps) {
             <div className="topbar-progress-track">
               <div className="topbar-progress-fill" style={{ width: `${percent}%` }} />
             </div>
-            <button
-              className="topbar-progress-cancel"
-              onClick={() => {
-                removeTask(task.id);
-                void runTaskCancel(task);
-              }}
-              title="取消任务"
-              aria-label="取消任务"
-            >
-              <X aria-hidden="true" />
-            </button>
+            {task.on_cancel && (
+              <button
+                className="topbar-progress-cancel"
+                onClick={() => void runTaskCancel(task)}
+                title="取消任务"
+                aria-label="取消任务"
+                disabled={task.is_cancelling}
+              >
+                <X aria-hidden="true" />
+              </button>
+            )}
           </div>
         </div>
         {errorStack}

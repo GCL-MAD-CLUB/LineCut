@@ -16,12 +16,7 @@ import "./ProxyCreationDialog.css";
 
 export type ProxyFrameSize = "full" | "half" | "quarter" | "custom";
 export type ProxyPreset =
-  | "prores_quicktime"
-  | "h264_quicktime"
-  | "h264_mp4"
-  | "cineform_quicktime"
-  | "dnxhr_vr_mono_quicktime"
-  | "dnxhr_vr_stereo_quicktime";
+  "h264_mp4" | "h264_mp4_all_intra" | "h264_quicktime" | "vp8_webm" | "vp9_webm";
 export type ProxyWatermark = "none";
 export type ProxyLocation = "source_proxy_folder" | "custom" | "preferences_cache";
 
@@ -43,12 +38,11 @@ const frameSizeOptions: Array<[ProxyFrameSize, string]> = [
 ];
 
 const presetOptions: Array<[ProxyPreset, string]> = [
-  ["prores_quicktime", "ProRes QuickTime 代理"],
-  ["h264_quicktime", "H.264 QuickTime 代理"],
   ["h264_mp4", "H.264 MP4 代理"],
-  ["cineform_quicktime", "CineForm QuickTime 代理"],
-  ["dnxhr_vr_mono_quicktime", "DNxHR VR Monoscopic QuickTime 代理"],
-  ["dnxhr_vr_stereo_quicktime", "DNxHR VR Stereoscopic QuickTime 代理"],
+  ["h264_mp4_all_intra", "H.264 MP4 All-Intra 代理"],
+  ["h264_quicktime", "H.264 QuickTime 代理"],
+  ["vp8_webm", "VP8 WebM 代理"],
+  ["vp9_webm", "VP9 WebM 代理"],
 ];
 
 function labelForLocation(location: ProxyLocation, customLocation: string, cacheDir: string) {
@@ -72,7 +66,7 @@ export function ProxyCreationDialog() {
   const [frameSize, setFrameSize] = useState<ProxyFrameSize>("full");
   const [customWidth, setCustomWidth] = useState(1280);
   const [customHeight, setCustomHeight] = useState(720);
-  const [preset, setPreset] = useState<ProxyPreset>("prores_quicktime");
+  const [preset, setPreset] = useState<ProxyPreset>("h264_mp4");
   const [watermark, setWatermark] = useState<ProxyWatermark>("none");
   const [location, setLocation] = useState<ProxyLocation>("source_proxy_folder");
   const [customLocation, setCustomLocation] = useState("");

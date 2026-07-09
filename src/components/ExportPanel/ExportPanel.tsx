@@ -229,8 +229,8 @@ export function ExportPanel() {
       total: 1,
       listener: listenToFfmpegTaskProgress(exportTaskId),
       on_cancel: async () => {
-        exportCancelled = true;
         await cancelFfmpegTask(exportTaskId);
+        exportCancelled = true;
       },
     });
     setExportResult(null);

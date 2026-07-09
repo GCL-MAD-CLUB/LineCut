@@ -1,70 +1,120 @@
-import { useEffect, useRef } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type MouseEvent,
+  type PointerEvent,
+} from "react";
+import { formatMonitorTime, parseMonitorTime } from "../../time";
+import { clampTimelineStart, frameDurationUs } from "../../timeline";
 import { SelectDropdown, type SelectDropdownItem } from "../SelectDropdown";
-import type { KeyboardEvent, MouseEvent, PointerEventHandler, RefObject } from "react";
+import { useSourceMonitorState, type MonitorZoomLevel } from "./sourceMonitorState";
 
-type ZoomLevel = "fit" | number;
+const baseZoomPercentOptions = [10, 25, 50, 75, 100, 150, 200, 400, 800, 1600] as const;
+const TIMECODE_SCRUB_LONG_PRESS_MS = 220;
+const TIMECODE_SCRUB_PX_PER_FRAME = 6;
+const WHEEL_LINE_DELTA_PX = 16;
+const WHEEL_PAGE_DELTA_PX = 800;
+const MONITOR_RANGE_ZOOM_SENSITIVITY = 0.00035;
+const MONITOR_RANGE_SCROLL_SENSITIVITY = 1 / 5000;
+
 type PreviewMode = "source" | "proxy";
 
+interface TimecodeScrubState {
+  pointerId: number;
+  startX: number;
+  startTimeUs: number;
+  lastFrameOffset: number;
+  longPressTimer: number | null;
+  isScrubbing: boolean;
+  suppressClick: boolean;
+}
+
 interface VideoControlsProps {
-  timeEditorRef: RefObject<HTMLSpanElement | null>;
+  mediaKey: string;
   hasMedia: boolean;
-  editingTime: boolean;
-  timeDraft: string;
-  monitorTimeText: string;
-  monitorDurationText: string;
-  zoomLevel: ZoomLevel;
-  zoomOptions: ZoomLevel[];
+  currentTimeUs: number;
+  durationUs: number;
+  frameRate: number;
+  timelineStartUs: number;
+  timelineSpanUs: number;
+  minTimelineSpanUs: number;
   isPlaying: boolean;
   previewMode: PreviewMode;
   previewModeOptions: readonly PreviewMode[];
   previewModeLabels: Record<PreviewMode, string>;
-  onCommitTimeEdit: () => void;
-  onCancelTimeEdit: () => void;
-  onSetTimeEditSelection: (selection: "all" | "cursor") => void;
-  onPlaceTimeCaret: (clientX: number, clientY: number) => void;
-  onSelectTimeEditorText: () => void;
-  onTimecodeClick: (event: MouseEvent<HTMLButtonElement>) => void;
-  onTimecodePointerDown: PointerEventHandler<HTMLButtonElement>;
-  onTimecodePointerMove: PointerEventHandler<HTMLButtonElement>;
-  onTimecodePointerUp: PointerEventHandler<HTMLButtonElement>;
-  onTimecodePointerCancel: PointerEventHandler<HTMLButtonElement>;
-  onZoomLevelChange: (value: string) => void;
+  onSeekUs: (timeUs: number) => number;
+  onPlaybackTimeRequest: () => number;
+  onPauseForPreciseSeek: () => void;
+  onTimelineStartUsChange: (startUs: number) => void;
+  onTimelineSpanUsChange: (spanUs: number) => void;
   onStepFrame: (direction: -1 | 1) => void;
   onTogglePlayback: () => void;
   onPreviewModeChange: (value: PreviewMode) => void;
-  onWheel: (event: WheelEvent) => void;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function wheelDeltaPx(event: WheelEvent) {
+  const modeMultiplier =
+    event.deltaMode === 1 ? WHEEL_LINE_DELTA_PX : event.deltaMode === 2 ? WHEEL_PAGE_DELTA_PX : 1;
+  const deltaX = event.deltaX * modeMultiplier;
+  const deltaY = event.deltaY * modeMultiplier;
+  return Math.abs(deltaX) > Math.abs(deltaY) ? deltaX : deltaY;
 }
 
 export function VideoControls({
-  timeEditorRef,
+  mediaKey,
   hasMedia,
-  editingTime,
-  timeDraft,
-  monitorTimeText,
-  monitorDurationText,
-  zoomLevel,
-  zoomOptions,
+  currentTimeUs,
+  durationUs,
+  frameRate,
+  timelineStartUs,
+  timelineSpanUs,
+  minTimelineSpanUs,
   isPlaying,
   previewMode,
   previewModeOptions,
   previewModeLabels,
-  onCommitTimeEdit,
-  onCancelTimeEdit,
-  onSetTimeEditSelection,
-  onPlaceTimeCaret,
-  onSelectTimeEditorText,
-  onTimecodeClick,
-  onTimecodePointerDown,
-  onTimecodePointerMove,
-  onTimecodePointerUp,
-  onTimecodePointerCancel,
-  onZoomLevelChange,
+  onSeekUs,
+  onPlaybackTimeRequest,
+  onPauseForPreciseSeek,
+  onTimelineStartUsChange,
+  onTimelineSpanUsChange,
   onStepFrame,
   onTogglePlayback,
   onPreviewModeChange,
-  onWheel,
 }: VideoControlsProps) {
+  const zoomLevel = useSourceMonitorState((state) => state.zoomLevel);
+  const setZoomLevel = useSourceMonitorState((state) => state.setZoomLevel);
+  const setZoomOrigin = useSourceMonitorState((state) => state.setZoomOrigin);
   const rowRef = useRef<HTMLDivElement | null>(null);
+  const timeEditorRef = useRef<HTMLSpanElement | null>(null);
+  const timecodeScrubRef = useRef<TimecodeScrubState | null>(null);
+  const suppressTimeEditClickRef = useRef(false);
+  const timelineStartUsRef = useRef(timelineStartUs);
+  const timelineSpanUsRef = useRef(timelineSpanUs);
+  const [editingTime, setEditingTime] = useState(false);
+  const [timeEditSelection, setTimeEditSelection] = useState<"all" | "cursor">("cursor");
+  const [timeDraft, setTimeDraft] = useState("");
+
+  const frameUs = frameDurationUs(frameRate);
+  const monitorTimeText = hasMedia ? formatMonitorTime(currentTimeUs, frameRate) : "00:00:00:00";
+  const monitorDurationText = hasMedia ? formatMonitorTime(durationUs, frameRate) : "00:00:00:00";
+  const monitorTimeColumnCh = Math.max(11, monitorTimeText.length, monitorDurationText.length);
+  const monitorTimeStyle = { "--monitor-time-ch": monitorTimeColumnCh } as CSSProperties;
+
+  useEffect(() => {
+    timelineStartUsRef.current = timelineStartUs;
+  }, [timelineStartUs]);
+
+  useEffect(() => {
+    timelineSpanUsRef.current = timelineSpanUs;
+  }, [timelineSpanUs]);
 
   useEffect(() => {
     const row = rowRef.current;
@@ -73,34 +123,269 @@ export function VideoControls({
     }
 
     const handleWheel = (event: WheelEvent) => {
-      onWheel(event);
+      handleTimelineViewportWheel(event);
     };
 
     row.addEventListener("wheel", handleWheel, { passive: false });
     return () => row.removeEventListener("wheel", handleWheel);
-  }, [onWheel]);
+  }, [durationUs, hasMedia, minTimelineSpanUs]);
+
+  useEffect(() => {
+    if (!editingTime) {
+      return;
+    }
+    const editor = timeEditorRef.current;
+    if (!editor) {
+      return;
+    }
+    editor.focus();
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    if (timeEditSelection === "cursor") {
+      range.collapse(false);
+    }
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  }, [editingTime, timeEditSelection]);
+
+  useEffect(() => {
+    clearTimecodeScrubTimer();
+    timecodeScrubRef.current = null;
+    setEditingTime(false);
+  }, [mediaKey]);
+
+  useEffect(
+    () => () => {
+      clearTimecodeScrubTimer();
+    },
+    [],
+  );
+
+  function shiftTimeline(deltaUs: number) {
+    if (!hasMedia || durationUs <= 0) {
+      return;
+    }
+    const currentStart = timelineStartUsRef.current;
+    const currentSpan = timelineSpanUsRef.current;
+    const nextStart = clampTimelineStart(currentStart + deltaUs, currentSpan, durationUs);
+    timelineStartUsRef.current = nextStart;
+    onTimelineStartUsChange(nextStart);
+  }
+
+  function resizeTimeline(deltaPx: number, anchorRatio = 0.5) {
+    if (!hasMedia || durationUs <= 0) {
+      return;
+    }
+    const currentStart = timelineStartUsRef.current;
+    const currentSpan = timelineSpanUsRef.current;
+    const scale = Math.exp(clamp(deltaPx, -1200, 1200) * MONITOR_RANGE_ZOOM_SENSITIVITY);
+    const nextSpan = clamp(currentSpan * scale, minTimelineSpanUs, durationUs);
+    const anchorUs = currentStart + currentSpan * anchorRatio;
+    const nextStart = clampTimelineStart(anchorUs - nextSpan * anchorRatio, nextSpan, durationUs);
+
+    timelineSpanUsRef.current = nextSpan;
+    timelineStartUsRef.current = nextStart;
+    onTimelineSpanUsChange(nextSpan);
+    onTimelineStartUsChange(nextStart);
+  }
+
+  function handleTimelineViewportWheel(event: WheelEvent) {
+    if (!hasMedia) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const delta = wheelDeltaPx(event);
+    if (event.altKey) {
+      shiftTimeline(delta * timelineSpanUsRef.current * MONITOR_RANGE_SCROLL_SENSITIVITY);
+      return;
+    }
+    resizeTimeline(delta);
+  }
+
+  function clearTimecodeScrubTimer(state = timecodeScrubRef.current) {
+    if (!state || state.longPressTimer === null) {
+      return;
+    }
+    window.clearTimeout(state.longPressTimer);
+    state.longPressTimer = null;
+  }
+
+  function startTimecodeScrub(event: PointerEvent<HTMLButtonElement>) {
+    if (!hasMedia || event.button !== 0) {
+      return;
+    }
+    clearTimecodeScrubTimer();
+    const state: TimecodeScrubState = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startTimeUs: onPlaybackTimeRequest(),
+      lastFrameOffset: 0,
+      longPressTimer: null,
+      isScrubbing: false,
+      suppressClick: false,
+    };
+
+    state.longPressTimer = window.setTimeout(() => {
+      if (timecodeScrubRef.current !== state) {
+        return;
+      }
+      state.isScrubbing = true;
+      state.suppressClick = true;
+      onPauseForPreciseSeek();
+    }, TIMECODE_SCRUB_LONG_PRESS_MS);
+
+    timecodeScrubRef.current = state;
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture can fail if the element is detached before the press settles.
+    }
+  }
+
+  function updateTimecodeScrub(event: PointerEvent<HTMLButtonElement>) {
+    const state = timecodeScrubRef.current;
+    if (!state || state.pointerId !== event.pointerId || !state.isScrubbing) {
+      return;
+    }
+    event.preventDefault();
+    const frameOffset = Math.trunc((event.clientX - state.startX) / TIMECODE_SCRUB_PX_PER_FRAME);
+    if (frameOffset === state.lastFrameOffset) {
+      return;
+    }
+    state.lastFrameOffset = frameOffset;
+    onSeekUs(state.startTimeUs + frameOffset * frameUs);
+  }
+
+  function finishTimecodeScrub(event: PointerEvent<HTMLButtonElement>) {
+    const state = timecodeScrubRef.current;
+    if (!state || state.pointerId !== event.pointerId) {
+      return;
+    }
+    clearTimecodeScrubTimer(state);
+    if (state.isScrubbing || state.suppressClick) {
+      suppressTimeEditClickRef.current = true;
+      event.preventDefault();
+    }
+    try {
+      if (event.currentTarget.hasPointerCapture(state.pointerId)) {
+        event.currentTarget.releasePointerCapture(state.pointerId);
+      }
+    } catch {
+      // Ignore pointer capture cleanup after cancellation.
+    }
+    timecodeScrubRef.current = null;
+  }
+
+  function handleTimecodeClick(event: MouseEvent<HTMLButtonElement>) {
+    if (suppressTimeEditClickRef.current) {
+      suppressTimeEditClickRef.current = false;
+      event.preventDefault();
+      return;
+    }
+    beginTimeEdit("all");
+  }
+
+  function beginTimeEdit(selection: "all" | "cursor") {
+    if (!hasMedia) {
+      return;
+    }
+    setTimeDraft(formatMonitorTime(currentTimeUs, frameRate));
+    setTimeEditSelection(selection);
+    setEditingTime(true);
+  }
+
+  function placeTimeCaret(clientX: number, clientY: number) {
+    const editor = timeEditorRef.current;
+    if (!editor) {
+      return;
+    }
+
+    const documentWithCaret = document as Document & {
+      caretRangeFromPoint?: (x: number, y: number) => Range | null;
+      caretPositionFromPoint?: (
+        x: number,
+        y: number,
+      ) => { offsetNode: Node; offset: number } | null;
+    };
+    const selection = window.getSelection();
+    let range = documentWithCaret.caretRangeFromPoint?.(clientX, clientY) ?? null;
+    if (!range && documentWithCaret.caretPositionFromPoint) {
+      const position = documentWithCaret.caretPositionFromPoint(clientX, clientY);
+      if (position) {
+        range = document.createRange();
+        range.setStart(position.offsetNode, position.offset);
+      }
+    }
+    if (!range || !editor.contains(range.startContainer)) {
+      range = document.createRange();
+      range.selectNodeContents(editor);
+      range.collapse(false);
+    } else {
+      range.collapse(true);
+    }
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  }
+
+  function selectTimeEditorText() {
+    const editor = timeEditorRef.current;
+    const selection = window.getSelection();
+    if (!editor || !selection) {
+      return;
+    }
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
+  function commitTimeEdit() {
+    const value = timeEditorRef.current?.textContent ?? timeDraft;
+    const parsed = parseMonitorTime(value, frameRate);
+    if (parsed !== null && parsed >= 0 && (durationUs <= 0 || parsed <= durationUs)) {
+      onSeekUs(parsed);
+    }
+    setEditingTime(false);
+  }
+
+  function cancelTimeEdit() {
+    setTimeDraft(formatMonitorTime(currentTimeUs, frameRate));
+    setEditingTime(false);
+  }
 
   function handleTimeEditorKeyDown(event: KeyboardEvent<HTMLSpanElement>) {
     if (event.key === "Enter") {
       event.preventDefault();
-      onCommitTimeEdit();
+      commitTimeEdit();
     } else if (event.key === "Escape") {
       event.preventDefault();
-      onCancelTimeEdit();
+      cancelTimeEdit();
     }
   }
 
   function handleTimeEditorClick(event: MouseEvent<HTMLSpanElement>) {
-    onSetTimeEditSelection("cursor");
-    requestAnimationFrame(() => onPlaceTimeCaret(event.clientX, event.clientY));
+    setTimeEditSelection("cursor");
+    requestAnimationFrame(() => placeTimeCaret(event.clientX, event.clientY));
   }
 
   function handleTimeEditorDoubleClick(event: MouseEvent<HTMLSpanElement>) {
     event.preventDefault();
-    onSetTimeEditSelection("all");
-    requestAnimationFrame(onSelectTimeEditorText);
+    setTimeEditSelection("all");
+    requestAnimationFrame(selectTimeEditorText);
   }
 
+  function changeZoomLevel(value: string) {
+    if (value === "fit") {
+      setZoomLevel("fit");
+      setZoomOrigin({ x: 50, y: 50 });
+      return;
+    }
+    setZoomLevel(Number(value));
+  }
+
+  const zoomOptions = ["fit", ...baseZoomPercentOptions] as MonitorZoomLevel[];
   const zoomValue = zoomLevel === "fit" ? "fit" : String(zoomLevel);
   const zoomLabel = zoomLevel === "fit" ? "适合" : `${zoomLevel}%`;
   const zoomItems: Array<SelectDropdownItem<string>> = zoomOptions.map((value) => ({
@@ -123,7 +408,11 @@ export function VideoControls({
   );
 
   return (
-    <div ref={rowRef} className={`source-control-row ${hasMedia ? "" : "empty-state"}`}>
+    <div
+      ref={rowRef}
+      className={`source-control-row ${hasMedia ? "" : "empty-state"}`}
+      style={monitorTimeStyle}
+    >
       {editingTime && hasMedia ? (
         <span
           ref={timeEditorRef}
@@ -133,7 +422,7 @@ export function VideoControls({
           contentEditable
           suppressContentEditableWarning
           autoFocus
-          onBlur={onCommitTimeEdit}
+          onBlur={commitTimeEdit}
           onKeyDown={handleTimeEditorKeyDown}
           onClick={handleTimeEditorClick}
           onDoubleClick={handleTimeEditorDoubleClick}
@@ -144,12 +433,12 @@ export function VideoControls({
         <button
           className="monitor-time"
           disabled={!hasMedia}
-          onClick={onTimecodeClick}
-          onPointerDown={onTimecodePointerDown}
-          onPointerMove={onTimecodePointerMove}
-          onPointerUp={onTimecodePointerUp}
-          onPointerCancel={onTimecodePointerCancel}
-          onLostPointerCapture={onTimecodePointerCancel}
+          onClick={handleTimecodeClick}
+          onPointerDown={startTimecodeScrub}
+          onPointerMove={updateTimecodeScrub}
+          onPointerUp={finishTimecodeScrub}
+          onPointerCancel={finishTimecodeScrub}
+          onLostPointerCapture={finishTimecodeScrub}
         >
           {monitorTimeText}
         </button>
@@ -161,7 +450,7 @@ export function VideoControls({
           value={zoomValue}
           selectedLabel={zoomLabel}
           items={zoomItems}
-          onChange={onZoomLevelChange}
+          onChange={changeZoomLevel}
         />
       )}
       <div className="transport-controls">

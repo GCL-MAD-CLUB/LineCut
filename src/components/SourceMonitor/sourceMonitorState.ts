@@ -2,7 +2,7 @@ import { createPanelState } from "../../panelState";
 
 export type MonitorZoomLevel = "fit" | number;
 
-interface ZoomOrigin {
+export interface ZoomOrigin {
   x: number;
   y: number;
 }

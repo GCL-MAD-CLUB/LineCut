@@ -167,17 +167,24 @@ export default function App() {
     }
 
     if (project) {
+      const subtitleTaskId = createFfmpegTaskId("subtitle-import");
+      let subtitleImportCancelled = false;
       const subtitleImportTask = await createTaskProgress({
         operation: "subtitle_import",
         label: "导入外挂字幕",
         current: 0,
         total: 1,
-        on_cancel: () => undefined,
+        listener: listenToFfmpegTaskProgress(subtitleTaskId),
+        on_cancel: async () => {
+          await cancelFfmpegTask(subtitleTaskId);
+          subtitleImportCancelled = true;
+        },
       });
       try {
         const result = await invoke<AddExternalSubtitlesResult>("add_external_subtitles", {
           assetId: project.asset.id,
           paths,
+          taskId: subtitleTaskId,
         });
         subtitleTracksAdded(result.tracks, result.cues);
         if (result.warnings.length > 0) {
@@ -187,6 +194,10 @@ export default function App() {
         subtitleImportTask.update({ current: 1 });
         subtitleImportTask.remove();
       } catch (error) {
+        if (subtitleImportCancelled) {
+          messagePublished("外挂字幕导入已取消");
+          return;
+        }
         const errorMessage = error instanceof Error ? error.message : String(error);
         subtitleImportTask.fail("导入外挂字幕失败", errorMessage);
         messagePublished(errorMessage);
@@ -219,8 +230,8 @@ export default function App() {
       total: 1,
       listener: listenToFfmpegTaskProgress(importTaskId),
       on_cancel: async () => {
-        importCancelled = true;
         await cancelFfmpegTask(importTaskId);
+        importCancelled = true;
       },
     });
     warningsReplaced([]);

@@ -2,6 +2,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { FileVideo, Folder, FolderOpen, HardDrive, Loader2, Save, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
+import {
+  cancelFfmpegTask,
+  createFfmpegTaskId,
+  listenToFfmpegTaskProgress,
+} from "../../ffmpegProgress";
 import { defaultPreferences, useAppStore } from "../../store";
 import { isTauriRuntime } from "../../tauriRuntime";
 import type { Preferences } from "../../types";
@@ -67,16 +72,23 @@ export function PreferencesDialog({ open: isOpen, onClose }: PreferencesDialogPr
       setMessage("浏览器预览不能保存首选项。");
       return;
     }
+    const preferencesTaskId = createFfmpegTaskId("preferences");
+    let preferencesCancelled = false;
     const preferencesTask = await createTaskProgress({
       operation: "preferences",
       label: "保存首选项",
       current: 0,
       total: 1,
-      on_cancel: () => undefined,
+      listener: listenToFfmpegTaskProgress(preferencesTaskId),
+      on_cancel: async () => {
+        await cancelFfmpegTask(preferencesTaskId);
+        preferencesCancelled = true;
+      },
     });
     try {
       const saved = await invoke<Preferences>("update_preferences", {
         preferences: draftPreferences,
+        taskId: preferencesTaskId,
       });
       setPreferences(saved);
       setDraftPreferences(saved);
@@ -85,6 +97,10 @@ export function PreferencesDialog({ open: isOpen, onClose }: PreferencesDialogPr
       preferencesTask.update({ current: 1 });
       preferencesTask.remove();
     } catch (error) {
+      if (preferencesCancelled) {
+        setMessage("保存首选项已取消");
+        return;
+      }
       const errorMessage = error instanceof Error ? error.message : String(error);
       preferencesTask.fail("保存首选项失败", errorMessage);
       setMessage(errorMessage);

@@ -18,8 +18,11 @@ export function createFfmpegTaskId(operation: string) {
   return `${operation}:${crypto.randomUUID()}`;
 }
 
-export function cancelFfmpegTask(taskId: string) {
-  return invoke<boolean>("cancel_task", { taskId });
+export async function cancelFfmpegTask(taskId: string) {
+  const cancelled = await invoke<boolean>("cancel_task", { taskId });
+  if (!cancelled) {
+    throw new Error("任务尚未启动或已经结束");
+  }
 }
 
 export function listenToFfmpegTaskProgress(taskId: string): TaskProgressListener {
