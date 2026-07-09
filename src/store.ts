@@ -1,43 +1,38 @@
-import { create } from "zustand";
-import type {
-  ExportOptions,
-  ExportResult,
-  Preferences,
-  Project,
-  SubtitleCue,
-  SubtitleTrack,
-} from "./types";
+import { useStore } from "zustand";
+import { createStore } from "zustand/vanilla";
+import type { ExportResult, Preferences, Project, SubtitleCue, SubtitleTrack } from "./types";
+
+interface AppActions {
+  projectImported: (project: Project) => void;
+  subtitleTracksAdded: (tracks: SubtitleTrack[], cues: Record<string, SubtitleCue[]>) => void;
+  activeTrackChanged: (trackId: string) => void;
+  cueSelectionToggled: (cueId: string) => void;
+  cueSelectionCleared: () => void;
+  cueSelectionReplaced: (cueIds: string[]) => void;
+  proxyDialogOpened: () => void;
+  proxyDialogClosed: () => void;
+  sourcePreviewSelected: () => void;
+  proxyPreviewSelected: () => void;
+  proxyGenerated: (path: string) => void;
+  preferencesLoaded: (preferences: Preferences) => void;
+  messagePublished: (message: string) => void;
+  warningsReplaced: (warnings: string[]) => void;
+  warningsAppended: (warnings: string[]) => void;
+  exportResultChanged: (result: ExportResult | null) => void;
+}
 
 interface AppStore {
   project: Project | null;
   activeTrackId: string;
-  query: string;
   selectedCueIds: Set<string>;
-  showOnlySelected: boolean;
   proxyPath: string | null;
   useProxy: boolean;
   proxyDialogOpen: boolean;
-  exportOptions: ExportOptions;
   preferences: Preferences;
   message: string;
   warnings: string[];
   exportResult: ExportResult | null;
-  setProject: (project: Project) => void;
-  setActiveTrackId: (trackId: string) => void;
-  setQuery: (query: string) => void;
-  setShowOnlySelected: (value: boolean) => void;
-  toggleCue: (cueId: string) => void;
-  clearSelection: () => void;
-  selectCueIds: (cueIds: string[]) => void;
-  setProxyPath: (path: string | null) => void;
-  setUseProxy: (value: boolean) => void;
-  setProxyDialogOpen: (value: boolean) => void;
-  setExportOptions: (options: Partial<ExportOptions>) => void;
-  setPreferences: (preferences: Preferences) => void;
-  setMessage: (message: string) => void;
-  setWarnings: (warnings: string[] | ((current: string[]) => string[])) => void;
-  setExportResult: (result: ExportResult | null) => void;
-  addExternalSubtitles: (tracks: SubtitleTrack[], cues: Record<string, SubtitleCue[]>) => void;
+  actions: AppActions;
 }
 
 export function defaultPreferences(): Preferences {
@@ -49,98 +44,84 @@ export function defaultPreferences(): Preferences {
   };
 }
 
-export const useAppStore = create<AppStore>((set) => ({
+const appStore = createStore<AppStore>()((set) => ({
   project: null,
   activeTrackId: "",
-  query: "",
   selectedCueIds: new Set<string>(),
-  showOnlySelected: false,
   proxyPath: null,
   useProxy: false,
   proxyDialogOpen: false,
-  exportOptions: {
-    head_padding_ms: 300,
-    tail_padding_ms: 500,
-    merge_gap_ms: 800,
-    mode: "precise_encode",
-    layout: "individual",
-    output_dir: "",
-    output_dir_explicit: false,
-    export_name_rule: "source_time_range",
-    dialogue_line_indexes: [],
-  },
   preferences: defaultPreferences(),
   message: "就绪",
   warnings: [],
   exportResult: null,
-  setProject: (project) => {
-    const firstTextTrack =
-      project.tracks.find((track) => track.kind === "text" && track.cue_count > 0) ??
-      project.tracks[0];
-    set({
-      project,
-      activeTrackId: firstTextTrack?.id ?? "",
-      selectedCueIds: new Set<string>(),
-      proxyPath: project.proxy_path,
-      useProxy: false,
-      query: "",
-    });
-  },
-  setActiveTrackId: (trackId) =>
-    set({
-      activeTrackId: trackId,
-      selectedCueIds: new Set<string>(),
-      query: "",
-    }),
-  setQuery: (query) => set({ query }),
-  setShowOnlySelected: (showOnlySelected) => set({ showOnlySelected }),
-  toggleCue: (cueId) =>
-    set((state) => {
-      const next = new Set(state.selectedCueIds);
-      if (next.has(cueId)) {
-        next.delete(cueId);
-      } else {
-        next.add(cueId);
-      }
-      return { selectedCueIds: next };
-    }),
-  clearSelection: () => set({ selectedCueIds: new Set<string>() }),
-  selectCueIds: (cueIds) => set({ selectedCueIds: new Set(cueIds) }),
-  setProxyPath: (path) => set({ proxyPath: path }),
-  setUseProxy: (useProxy) => set({ useProxy }),
-  setProxyDialogOpen: (proxyDialogOpen) => set({ proxyDialogOpen }),
-  addExternalSubtitles: (tracks, cues) =>
-    set((state) => {
-      if (!state.project) {
-        return state;
-      }
-      const nextTracks = [...state.project.tracks, ...tracks];
-      const nextCues = { ...state.project.cues, ...cues };
-      const firstUsableTrack = tracks.find((track) => track.cue_count > 0);
-      const currentTrack = state.project.tracks.find((track) => track.id === state.activeTrackId);
-      const currentTrackUsable = currentTrack ? currentTrack.cue_count > 0 : false;
-      const nextActiveTrackId = currentTrackUsable
-        ? state.activeTrackId
-        : firstUsableTrack?.id || state.activeTrackId || "";
-      return {
-        project: { ...state.project, tracks: nextTracks, cues: nextCues },
-        activeTrackId: nextActiveTrackId,
+  actions: {
+    projectImported: (project) => {
+      const firstTextTrack =
+        project.tracks.find((track) => track.kind === "text" && track.cue_count > 0) ??
+        project.tracks[0];
+      set({
+        project,
+        activeTrackId: firstTextTrack?.id ?? "",
         selectedCueIds: new Set<string>(),
-        query: "",
-      };
-    }),
-  setExportOptions: (options) =>
-    set((state) => ({
-      exportOptions: {
-        ...state.exportOptions,
-        ...options,
-      },
-    })),
-  setPreferences: (preferences) => set({ preferences }),
-  setMessage: (message) => set({ message }),
-  setWarnings: (warnings) =>
-    set((state) => ({
-      warnings: typeof warnings === "function" ? warnings(state.warnings) : warnings,
-    })),
-  setExportResult: (exportResult) => set({ exportResult }),
+        proxyPath: project.proxy_path,
+        useProxy: false,
+      });
+    },
+    subtitleTracksAdded: (tracks, cues) =>
+      set((state) => {
+        if (!state.project) {
+          return state;
+        }
+        const nextTracks = [...state.project.tracks, ...tracks];
+        const nextCues = { ...state.project.cues, ...cues };
+        const firstUsableTrack = tracks.find((track) => track.cue_count > 0);
+        const currentTrack = state.project.tracks.find((track) => track.id === state.activeTrackId);
+        const nextActiveTrackId = currentTrack?.cue_count
+          ? state.activeTrackId
+          : firstUsableTrack?.id || state.activeTrackId || "";
+        return {
+          project: { ...state.project, tracks: nextTracks, cues: nextCues },
+          activeTrackId: nextActiveTrackId,
+          selectedCueIds: new Set<string>(),
+        };
+      }),
+    activeTrackChanged: (activeTrackId) =>
+      set({
+        activeTrackId,
+        selectedCueIds: new Set<string>(),
+      }),
+    cueSelectionToggled: (cueId) =>
+      set((state) => {
+        const selectedCueIds = new Set(state.selectedCueIds);
+        if (selectedCueIds.has(cueId)) {
+          selectedCueIds.delete(cueId);
+        } else {
+          selectedCueIds.add(cueId);
+        }
+        return { selectedCueIds };
+      }),
+    cueSelectionCleared: () => set({ selectedCueIds: new Set<string>() }),
+    cueSelectionReplaced: (cueIds) => set({ selectedCueIds: new Set(cueIds) }),
+    proxyDialogOpened: () => set({ proxyDialogOpen: true }),
+    proxyDialogClosed: () => set({ proxyDialogOpen: false }),
+    sourcePreviewSelected: () => set({ proxyDialogOpen: false, useProxy: false }),
+    proxyPreviewSelected: () => set((state) => (state.proxyPath ? { useProxy: true } : state)),
+    proxyGenerated: (proxyPath) =>
+      set({
+        proxyPath,
+        useProxy: true,
+        proxyDialogOpen: false,
+      }),
+    preferencesLoaded: (preferences) => set({ preferences }),
+    messagePublished: (message) => set({ message }),
+    warningsReplaced: (warnings) => set({ warnings }),
+    warningsAppended: (warnings) =>
+      set((state) => ({ warnings: [...state.warnings, ...warnings] })),
+    exportResultChanged: (exportResult) => set({ exportResult }),
+  },
 }));
+
+export function useAppStore<Selection>(selector: (state: AppStore) => Selection) {
+  return useStore(appStore, selector);
+}

@@ -10,13 +10,24 @@ export function formatDuration(us: number) {
     .padStart(2, "0")}:${seconds.toString().padStart(2, "0")}.${ms.toString().padStart(3, "0")}`;
 }
 
+function actualFrameRate(frameRate: number) {
+  return Number.isFinite(frameRate) ? Math.max(1, frameRate) : 24;
+}
+
 function nominalFrameRate(frameRate: number) {
-  return Math.max(1, Math.round(frameRate));
+  return Math.max(1, Math.round(actualFrameRate(frameRate)));
+}
+
+export function snapMonitorTime(us: number, frameRate = 24) {
+  const fps = actualFrameRate(frameRate);
+  const totalFrames = Math.max(0, Math.round((us / 1_000_000) * fps));
+  return Math.round((totalFrames / fps) * 1_000_000);
 }
 
 export function formatMonitorTime(us: number, frameRate = 24) {
+  const actualFps = actualFrameRate(frameRate);
   const fps = nominalFrameRate(frameRate);
-  const totalFrames = Math.max(0, Math.round((us / 1_000_000) * fps));
+  const totalFrames = Math.max(0, Math.round((us / 1_000_000) * actualFps));
   const frames = totalFrames % fps;
   const totalSeconds = Math.floor(totalFrames / fps);
   const seconds = totalSeconds % 60;
@@ -31,7 +42,7 @@ export function formatMonitorTime(us: number, frameRate = 24) {
 }
 
 export function parseMonitorTime(value: string, frameRate = 24) {
-  const match = value.trim().match(/^(\d{1,2}):(\d{2}):(\d{2}):(\d{2})$/);
+  const match = value.trim().match(/^(\d{1,2}):(\d{2}):(\d{2}):(\d{2,3})$/);
   if (!match) {
     return null;
   }
@@ -40,6 +51,7 @@ export function parseMonitorTime(value: string, frameRate = 24) {
   const minutes = Number(mm);
   const seconds = Number(ss);
   const frames = Number(ff);
+  const actualFps = actualFrameRate(frameRate);
   const fps = nominalFrameRate(frameRate);
   if (
     !Number.isInteger(hours) ||
@@ -53,5 +65,5 @@ export function parseMonitorTime(value: string, frameRate = 24) {
     return null;
   }
   const totalFrames = ((hours * 60 + minutes) * 60 + seconds) * fps + frames;
-  return Math.round((totalFrames / fps) * 1_000_000);
+  return Math.round((totalFrames / actualFps) * 1_000_000);
 }

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent, type WheelEvent } from "react";
 import "./DockLayout.css";
+import { PanelInstanceProvider } from "../../panelState";
 import type { DockAreaId, DockLayoutState, DockPanelDefinition } from "./types";
 
 const dockAreaOrder: DockAreaId[] = ["leftTop", "leftBottom", "right"];
@@ -360,7 +361,7 @@ export function DockLayout<PanelId extends string>({
   }
 
   function startDockDrag(
-    event: PointerEvent<HTMLButtonElement>,
+    event: PointerEvent<HTMLDivElement>,
     areaId: DockAreaId,
     panelId: PanelId,
   ) {
@@ -473,6 +474,7 @@ export function DockLayout<PanelId extends string>({
                       ref={(node) => setTabElementRef(areaId, panelId, node)}
                       className={`dock-tab ${isActive ? "active" : ""}`}
                       onClick={() => setActivePanel(areaId, panelId)}
+                      onPointerDown={(event) => startDockDrag(event, areaId, panelId)}
                     >
                       <button type="button" className="dock-tab-label" title={panel.title}>
                         {panel.title}
@@ -482,8 +484,6 @@ export function DockLayout<PanelId extends string>({
                         className="dock-tab-grip"
                         title="长按拖动面板"
                         aria-label={`拖动 ${panel.title}`}
-                        onClick={(event) => event.stopPropagation()}
-                        onPointerDown={(event) => startDockDrag(event, areaId, panelId)}
                       >
                         <span />
                       </button>
@@ -519,7 +519,7 @@ export function DockLayout<PanelId extends string>({
                 key={panelId}
                 className={`dock-panel-surface ${panelId === area.activePanelId ? "active" : ""}`}
               >
-                {panel.render()}
+                <PanelInstanceProvider instanceId={panelId}>{panel.render()}</PanelInstanceProvider>
               </div>
             );
           })}

@@ -1,12 +1,10 @@
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import type { TaskProgressListener } from "./components/TaskProgress";
 
 interface FfmpegProgressPayload {
   task_id: string;
   progress: number;
-}
-
-interface ProgressTarget {
-  update: (update: { current: number }) => void;
 }
 
 function clampProgress(value: number) {
@@ -16,15 +14,19 @@ function clampProgress(value: number) {
   return Math.min(Math.max(value, 0), 1);
 }
 
-export async function listenToFfmpegTaskProgress(taskId: string, target: ProgressTarget) {
-  try {
-    return await listen<FfmpegProgressPayload>("ffmpeg-progress", ({ payload }) => {
-      if (payload.task_id !== taskId) {
-        return;
+export function createFfmpegTaskId(operation: string) {
+  return `${operation}:${crypto.randomUUID()}`;
+}
+
+export function cancelFfmpegTask(taskId: string) {
+  return invoke<boolean>("cancel_task", { taskId });
+}
+
+export function listenToFfmpegTaskProgress(taskId: string): TaskProgressListener {
+  return async (publishUpdate) =>
+    listen<FfmpegProgressPayload>("ffmpeg-progress", ({ payload }) => {
+      if (payload.task_id === taskId) {
+        publishUpdate({ current: clampProgress(payload.progress) });
       }
-      target.update({ current: clampProgress(payload.progress) });
     });
-  } catch {
-    return () => undefined;
-  }
 }

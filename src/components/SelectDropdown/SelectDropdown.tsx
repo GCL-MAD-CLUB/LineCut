@@ -65,7 +65,7 @@ export function SelectDropdown<T extends string>({
       return;
     }
     const rect = root.getBoundingClientRect();
-    const gap = 8;
+    const gap = 4;
     const menuHeight = menuRef.current?.offsetHeight ?? 0;
     const shouldOpenUp =
       placement === "top" ||

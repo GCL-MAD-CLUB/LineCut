@@ -1,7 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useState } from "react";
-import { listenToFfmpegTaskProgress } from "../../ffmpegProgress";
+import {
+  cancelFfmpegTask,
+  createFfmpegTaskId,
+  listenToFfmpegTaskProgress,
+} from "../../ffmpegProgress";
 import { useAppStore } from "../../store";
 import { isTauriRuntime } from "../../tauriRuntime";
 import type { ProxyResult } from "../../types";
@@ -61,10 +65,9 @@ export function ProxyCreationDialog() {
   const cacheDir = useAppStore((state) => state.preferences.cache_dir);
   const project = useAppStore((state) => state.project);
   const isProxyDialogOpen = useAppStore((state) => state.proxyDialogOpen);
-  const setProxyDialogOpen = useAppStore((state) => state.setProxyDialogOpen);
-  const setProxyPath = useAppStore((state) => state.setProxyPath);
-  const setUseProxy = useAppStore((state) => state.setUseProxy);
-  const setMessage = useAppStore((state) => state.setMessage);
+  const proxyDialogClosed = useAppStore((state) => state.actions.proxyDialogClosed);
+  const proxyGenerated = useAppStore((state) => state.actions.proxyGenerated);
+  const setMessage = useAppStore((state) => state.actions.messagePublished);
   const { isRunning: isGeneratingProxy } = getTaskProgressStatus("proxy");
   const [frameSize, setFrameSize] = useState<ProxyFrameSize>("full");
   const [customWidth, setCustomWidth] = useState(1280);
@@ -139,26 +142,26 @@ export function ProxyCreationDialog() {
       return;
     }
 
-    const proxyTaskId = `proxy:${project.asset.id}`;
+    const proxyTaskId = createFfmpegTaskId("proxy");
     let proxyCancelled = false;
-    const proxyTask = createTaskProgress({
+    const proxyTask = await createTaskProgress({
       operation: "proxy",
       label: "生成代理",
       current: 0,
       total: 1,
+      listener: listenToFfmpegTaskProgress(proxyTaskId),
       on_cancel: async () => {
         proxyCancelled = true;
-        await invoke<boolean>("cancel_current_task");
+        await cancelFfmpegTask(proxyTaskId);
       },
     });
-    const stopProgressListener = await listenToFfmpegTaskProgress(proxyTaskId, proxyTask);
     try {
       const result = await invoke<ProxyResult>("generate_proxy", {
         assetId: project.asset.id,
         options,
+        taskId: proxyTaskId,
       });
-      setProxyPath(result.proxy_path);
-      setUseProxy(true);
+      proxyGenerated(result.proxy_path);
       setMessage("预览代理已生成");
       proxyTask.update({ current: 1 });
       proxyTask.remove();
@@ -170,13 +173,11 @@ export function ProxyCreationDialog() {
       const errorMessage = error instanceof Error ? error.message : String(error);
       proxyTask.fail("生成代理失败", errorMessage);
       setMessage(errorMessage);
-    } finally {
-      stopProgressListener();
     }
   }
 
   function closeProxyDialog() {
-    setProxyDialogOpen(false);
+    proxyDialogClosed();
   }
 
   function confirm() {

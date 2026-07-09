@@ -13,7 +13,6 @@ interface VideoControlsProps {
   monitorTimeText: string;
   monitorDurationText: string;
   zoomLevel: ZoomLevel;
-  isCustomZoom: boolean;
   zoomOptions: ZoomLevel[];
   isPlaying: boolean;
   previewMode: PreviewMode;
@@ -44,7 +43,6 @@ export function VideoControls({
   monitorTimeText,
   monitorDurationText,
   zoomLevel,
-  isCustomZoom,
   zoomOptions,
   isPlaying,
   previewMode,
@@ -104,22 +102,12 @@ export function VideoControls({
   }
 
   const zoomValue = zoomLevel === "fit" ? "fit" : String(zoomLevel);
-  const zoomItems: Array<SelectDropdownItem<string>> = [
-    ...(isCustomZoom
-      ? [
-          {
-            type: "option" as const,
-            value: String(zoomLevel),
-            label: `${zoomLevel}%`,
-          },
-        ]
-      : []),
-    ...zoomOptions.map((value) => ({
-      type: "option" as const,
-      value: String(value),
-      label: value === "fit" ? "适合" : `${value}%`,
-    })),
-  ];
+  const zoomLabel = zoomLevel === "fit" ? "适合" : `${zoomLevel}%`;
+  const zoomItems: Array<SelectDropdownItem<string>> = zoomOptions.map((value) => ({
+    type: "option",
+    value: String(value),
+    label: value === "fit" ? "适合" : `${value}%`,
+  }));
   const fitZoomItemIndex = zoomItems.findIndex(
     (item) => item.type === "option" && item.value === "fit",
   );
@@ -171,6 +159,7 @@ export function VideoControls({
           className="monitor-select"
           menuClassName="monitor-select-menu"
           value={zoomValue}
+          selectedLabel={zoomLabel}
           items={zoomItems}
           onChange={onZoomLevelChange}
         />

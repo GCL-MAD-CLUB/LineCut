@@ -67,7 +67,7 @@
 
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 0;
+  gap: 0px;
   min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
@@ -289,28 +289,63 @@
 
 .monitor-timeline {
   min-width: 0;
-  margin-top: 12px;
+  margin-top: 2px;
   margin-bottom: 14px;
   overflow: hidden;
 }
 
 .timeline-ruler {
   position: relative;
-  height: 14px;
+  height: 21px;
 }
 
-.timeline-ruler span:not(.timeline-cursor) {
+.timeline-tick {
   position: absolute;
   bottom: 0;
   width: 1px;
   height: 5px;
   background: var(--color-timeline-ruler);
   transform: translateX(-50%);
+  z-index: 1;
 }
 
-.timeline-ruler span.major:not(.timeline-cursor) {
+.timeline-tick.major {
   height: 12px;
   background: var(--color-timeline-ruler);
+}
+
+.timeline-cue-range {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.timeline-cue-fill {
+  position: absolute;
+  top: 0;
+  bottom: 1px;
+  background: color-mix(in srgb, var(--gray-700) 100%, transparent);
+}
+
+.timeline-cue-brace {
+  position: absolute;
+  bottom: 1px;
+  width: 2px;
+  height: 20px;
+  overflow: visible;
+  fill: none;
+  stroke: var(--color-accent-monitor);
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
+  z-index: 2;
+}
+
+.timeline-cue-brace.start {
+  transform: translateX(-100%);
+}
+
+.timeline-cue-brace.end {
+  transform: none;
 }
 
 .timeline-cursor {
@@ -320,6 +355,7 @@
   height: 14px;
   transform: translateX(-50%);
   pointer-events: none;
+  z-index: 3;
 }
 
 .timeline-cursor::before {
@@ -340,12 +376,21 @@
 .monitor-range {
   position: relative;
   --range-handle-size: var(--monitor-range-height);
+  --monitor-range-min-bar-width: 36px;
   min-width: 0;
   height: var(--monitor-range-height);
 }
 
 .monitor-range:focus {
   outline: none;
+}
+
+.monitor-range-min-width-probe {
+  position: absolute;
+  width: var(--monitor-range-min-bar-width);
+  height: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .monitor-range-track {

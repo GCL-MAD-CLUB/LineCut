@@ -2,7 +2,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Download, Folder, Loader2, Scissors } from "lucide-react";
 import { useEffect, useMemo } from "react";
-import { listenToFfmpegTaskProgress } from "../../ffmpegProgress";
+import {
+  cancelFfmpegTask,
+  createFfmpegTaskId,
+  listenToFfmpegTaskProgress,
+} from "../../ffmpegProgress";
 import { useAppStore } from "../../store";
 import { isTauriRuntime } from "../../tauriRuntime";
 import type {
@@ -15,6 +19,7 @@ import type {
 import { SelectDropdown, selectDropdownItems } from "../SelectDropdown";
 import { createTaskProgress, getTaskProgressStatus } from "../TaskProgress";
 import "./ExportPanel.css";
+import { useExportPanelState } from "./exportPanelState";
 
 const allExportNameRuleOptions: Array<[ExportNameRule, string]> = [
   ["source_time_range", "原视频名_时间范围"],
@@ -133,11 +138,14 @@ function useCanExport(isExporting: boolean) {
 }
 
 export function ExportPanel() {
-  const exportOptions = useAppStore((state) => state.exportOptions);
-  const setExportOptions = useAppStore((state) => state.setExportOptions);
+  const exportOptions = useExportPanelState((state) => state.exportOptions);
+  const setExportOptions = useExportPanelState((state) => state.updateExportOptions);
+  const project = useAppStore((state) => state.project);
+  const activeTrackId = useAppStore((state) => state.activeTrackId);
+  const selectedCueIds = useAppStore((state) => state.selectedCueIds);
   const defaultExportDir = useAppStore((state) => state.preferences.default_export_dir);
-  const setMessage = useAppStore((state) => state.setMessage);
-  const setExportResult = useAppStore((state) => state.setExportResult);
+  const setMessage = useAppStore((state) => state.actions.messagePublished);
+  const setExportResult = useAppStore((state) => state.actions.exportResultChanged);
   const labelCues = useActiveCues();
   const selectedCount = useAppStore((state) => state.selectedCueIds.size);
   const { isRunning: isExporting } = getTaskProgressStatus("export");
@@ -205,12 +213,6 @@ export function ExportPanel() {
   }
 
   async function exportSelection() {
-    const {
-      project,
-      activeTrackId,
-      selectedCueIds,
-      exportOptions: currentExportOptions,
-    } = useAppStore.getState();
     if (!project || !activeTrackId) {
       return;
     }
@@ -218,26 +220,27 @@ export function ExportPanel() {
       setMessage("浏览器预览不能导出视频，请运行 Tauri 桌面应用。");
       return;
     }
-    const exportTaskId = `export:${project.asset.id}`;
+    const exportTaskId = createFfmpegTaskId("export");
     let exportCancelled = false;
-    const exportTask = createTaskProgress({
+    const exportTask = await createTaskProgress({
       operation: "export",
       label: `导出 ${selectedCueIds.size} 条台词`,
       current: 0,
       total: 1,
+      listener: listenToFfmpegTaskProgress(exportTaskId),
       on_cancel: async () => {
         exportCancelled = true;
-        await invoke<boolean>("cancel_current_task");
+        await cancelFfmpegTask(exportTaskId);
       },
     });
     setExportResult(null);
-    const stopProgressListener = await listenToFfmpegTaskProgress(exportTaskId, exportTask);
     try {
       const result = await invoke<ExportResult>("export_clips", {
         assetId: project.asset.id,
         trackId: activeTrackId,
         cueIds: Array.from(selectedCueIds),
-        options: currentExportOptions,
+        options: exportOptions,
+        taskId: exportTaskId,
       });
       setExportResult(result);
       setMessage(`导出完成：${result.files.length} 个文件`);
@@ -251,8 +254,6 @@ export function ExportPanel() {
       const errorMessage = error instanceof Error ? error.message : String(error);
       exportTask.fail("导出失败", errorMessage);
       setMessage(errorMessage);
-    } finally {
-      stopProgressListener();
     }
   }
 
@@ -260,7 +261,7 @@ export function ExportPanel() {
     <div className="export-panel">
       <div className="export-summary">
         <strong>{selectedCount} 条台词已选择</strong>
-        <Scissors size={18} />
+        <Scissors size={12.5} />
       </div>
 
       <div className="control-grid">
@@ -349,7 +350,7 @@ export function ExportPanel() {
 
       <div className="output-row">
         <button className="toolbar-button" onClick={chooseOutputDir} disabled={isExporting}>
-          <Folder size={15} />
+          <Folder size={12} />
           导出目录
         </button>
         <span title={exportOptions.output_dir || defaultExportDir}>

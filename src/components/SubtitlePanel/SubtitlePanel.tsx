@@ -7,13 +7,17 @@ import { formatDuration } from "../../time";
 import type { SubtitleCue } from "../../types";
 import { SelectDropdown } from "../SelectDropdown";
 import "./SubtitlePanel.css";
+import { useSubtitlePanelState } from "./subtitlePanelState";
 
 function cueLabelValue(cue: SubtitleCue) {
   return cue.style?.trim() || cue.speaker?.trim() || "";
 }
 
-function seekToCue(cue: SubtitleCue) {
-  emitAppEvent("monitor:seek", { timeUs: cue.start_us });
+function seekToCue(cue: SubtitleCue, focusRange = false) {
+  emitAppEvent("monitor:seek", {
+    timeUs: cue.start_us,
+    focusEndUs: focusRange ? cue.end_us : undefined,
+  });
 }
 
 function cueMatches(cue: SubtitleCue, query: string) {
@@ -40,9 +44,9 @@ function useActiveTrack() {
 function useFilteredCues() {
   const project = useAppStore((state) => state.project);
   const activeTrackId = useAppStore((state) => state.activeTrackId);
-  const query = useAppStore((state) => state.query);
+  const query = useSubtitlePanelState((state) => state.query);
   const selectedCueIds = useAppStore((state) => state.selectedCueIds);
-  const showOnlySelected = useAppStore((state) => state.showOnlySelected);
+  const showOnlySelected = useSubtitlePanelState((state) => state.showOnlySelected);
   const cues = useMemo(
     () => (activeTrackId && project ? (project.cues[activeTrackId] ?? []) : []),
     [activeTrackId, project],
@@ -59,15 +63,16 @@ function useFilteredCues() {
 export function SubtitlePanel() {
   const project = useAppStore((state) => state.project);
   const activeTrackId = useAppStore((state) => state.activeTrackId);
-  const query = useAppStore((state) => state.query);
+  const query = useSubtitlePanelState((state) => state.query);
   const selectedCueIds = useAppStore((state) => state.selectedCueIds);
-  const showOnlySelected = useAppStore((state) => state.showOnlySelected);
-  const setActiveTrackId = useAppStore((state) => state.setActiveTrackId);
-  const setQuery = useAppStore((state) => state.setQuery);
-  const toggleCue = useAppStore((state) => state.toggleCue);
-  const clearSelection = useAppStore((state) => state.clearSelection);
-  const selectCueIds = useAppStore((state) => state.selectCueIds);
-  const setShowOnlySelected = useAppStore((state) => state.setShowOnlySelected);
+  const showOnlySelected = useSubtitlePanelState((state) => state.showOnlySelected);
+  const setQuery = useSubtitlePanelState((state) => state.setQuery);
+  const setShowOnlySelected = useSubtitlePanelState((state) => state.setShowOnlySelected);
+  const syncTrackContext = useSubtitlePanelState((state) => state.syncTrackContext);
+  const activeTrackChanged = useAppStore((state) => state.actions.activeTrackChanged);
+  const cueSelectionToggled = useAppStore((state) => state.actions.cueSelectionToggled);
+  const cueSelectionCleared = useAppStore((state) => state.actions.cueSelectionCleared);
+  const cueSelectionReplaced = useAppStore((state) => state.actions.cueSelectionReplaced);
   const activeTrack = useActiveTrack();
   const filteredCues = useFilteredCues();
   const selectedCount = useAppStore((state) => state.selectedCueIds.size);
@@ -88,6 +93,10 @@ export function SubtitlePanel() {
     })) ?? [];
 
   useEffect(() => {
+    syncTrackContext(`${project?.asset.id ?? ""}:${activeTrackId}`);
+  }, [activeTrackId, project?.asset.id, syncTrackContext]);
+
+  useEffect(() => {
     if (showOnlySelected && selectedCount === 0) {
       setShowOnlySelected(false);
     }
@@ -104,7 +113,7 @@ export function SubtitlePanel() {
             disabled={!project}
             value={activeTrackId}
             items={trackItems}
-            onChange={setActiveTrackId}
+            onChange={activeTrackChanged}
           />
         </div>
         <div className="search-box">
@@ -121,12 +130,16 @@ export function SubtitlePanel() {
       <div className="selection-toolbar">
         <button
           className="toolbar-button"
-          onClick={() => selectCueIds(filteredCues.map((cue) => cue.id))}
+          onClick={() => cueSelectionReplaced(filteredCues.map((cue) => cue.id))}
           disabled={filteredCues.length === 0}
         >
           全选
         </button>
-        <button className="toolbar-button" onClick={clearSelection} disabled={selectedCount === 0}>
+        <button
+          className="toolbar-button"
+          onClick={cueSelectionCleared}
+          disabled={selectedCount === 0}
+        >
           清空
         </button>
         <button
@@ -136,7 +149,11 @@ export function SubtitlePanel() {
         >
           仅展示选中
         </button>
-        <span>{filteredCues.length} 条结果</span>
+        <span>
+          {showOnlySelected
+            ? `${filteredCues.length} 条结果`
+            : `${selectedCount} / ${filteredCues.length} 条结果`}
+        </span>
       </div>
 
       {activeTrack?.warning && <div className="warning-line">{activeTrack.warning}</div>}
@@ -163,11 +180,15 @@ export function SubtitlePanel() {
                     <input
                       type="checkbox"
                       checked={checked}
-                      onChange={() => toggleCue(cue.id)}
+                      onChange={() => cueSelectionToggled(cue.id)}
                       aria-label="选择台词"
                     />
                   </label>
-                  <button className="cue-play" onClick={() => seekToCue(cue)} title="跳转预览">
+                  <button
+                    className="cue-play"
+                    onClick={() => seekToCue(cue, true)}
+                    title="跳转预览"
+                  >
                     <Play size={15} />
                   </button>
                   <button className="cue-content" onClick={() => seekToCue(cue)}>

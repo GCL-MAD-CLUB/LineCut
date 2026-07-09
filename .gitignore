@@ -39,3 +39,6 @@ Thumbs.db
 *.temp
 .cache/
 */bin/
+
+# Codex
+.playwright-mcp

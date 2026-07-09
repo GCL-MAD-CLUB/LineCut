@@ -71,9 +71,7 @@
 .modal-dialog-body {
   position: relative;
   z-index: 2;
-  display: grid;
-  gap: 10px;
-  padding: 22px 18px 12px 0;
+  padding: 22px 0 12px 0;
   background: var(--color-surface);
   background-clip: padding-box;
   border-right: 1px solid rgb(255 255 255 / 8%);

@@ -1,6 +1,7 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -11,10 +12,9 @@ import {
 import { flushSync } from "react-dom";
 import { useAppEvent } from "../../appEvents";
 import { useAppStore } from "../../store";
-import { formatMonitorTime, parseMonitorTime } from "../../time";
+import { formatMonitorTime, parseMonitorTime, snapMonitorTime } from "../../time";
 import {
   buildTimelineRuler,
-  clampTimelineSpan,
   clampTimelineStart,
   frameDurationUs,
   minTimelineSpanUs,
@@ -26,6 +26,7 @@ import { TimelineRuler } from "./TimelineRuler";
 import { getTaskProgressStatus } from "../TaskProgress";
 import { VideoControls } from "./VideoControls";
 import { VideoDisplay } from "./VideoDisplay";
+import { useSourceMonitorState } from "./sourceMonitorState";
 
 const baseZoomPercentOptions = [10, 25, 50, 75, 100, 150, 200, 400, 800, 1600] as const;
 const TIMECODE_SCRUB_LONG_PRESS_MS = 220;
@@ -34,6 +35,9 @@ const WHEEL_LINE_DELTA_PX = 16;
 const WHEEL_PAGE_DELTA_PX = 800;
 const MONITOR_RANGE_ZOOM_SENSITIVITY = 0.00035;
 const MONITOR_RANGE_SCROLL_SENSITIVITY = 1 / 5000;
+const TIMELINE_CURSOR_EDGE_INSET_PX = 6;
+const TIMELINE_EDGE_SCROLL_BASE_SPANS_PER_SECOND = 0.2;
+const TIMELINE_EDGE_SCROLL_MAX_SPANS_PER_SECOND = 1.2;
 const previewModeOptions = ["source", "proxy"] as const;
 const previewModeLabels: Record<(typeof previewModeOptions)[number], string> = {
   source: "完整",
@@ -43,6 +47,28 @@ type PreviewMode = (typeof previewModeOptions)[number];
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+function mapLogicalRangeRatio(
+  logicalRatio: number,
+  minLogicalRatio: number,
+  minVisualRatio: number,
+) {
+  if (minLogicalRatio <= 0 || minLogicalRatio >= 1 || minVisualRatio >= 1) {
+    return clamp(logicalRatio, 0, 1);
+  }
+  const normalized =
+    Math.log(clamp(logicalRatio, minLogicalRatio, 1) / minLogicalRatio) /
+    Math.log(1 / minLogicalRatio);
+  return minVisualRatio + normalized * (1 - minVisualRatio);
+}
+
+function mapVisualRangeRatio(visualRatio: number, minLogicalRatio: number, minVisualRatio: number) {
+  if (minLogicalRatio <= 0 || minLogicalRatio >= 1 || minVisualRatio >= 1) {
+    return clamp(visualRatio, 0, 1);
+  }
+  const normalized = clamp((visualRatio - minVisualRatio) / (1 - minVisualRatio), 0, 1);
+  return minLogicalRatio * Math.exp(normalized * Math.log(1 / minLogicalRatio));
 }
 
 interface TimecodeScrubState {
@@ -59,11 +85,13 @@ export function SourceMonitor() {
   const project = useAppStore((state) => state.project);
   const proxyPath = useAppStore((state) => state.proxyPath);
   const useProxy = useAppStore((state) => state.useProxy);
-  const setMessage = useAppStore((state) => state.setMessage);
-  const setUseProxy = useAppStore((state) => state.setUseProxy);
-  const setProxyDialogOpen = useAppStore((state) => state.setProxyDialogOpen);
+  const setMessage = useAppStore((state) => state.actions.messagePublished);
+  const sourcePreviewSelected = useAppStore((state) => state.actions.sourcePreviewSelected);
+  const proxyPreviewSelected = useAppStore((state) => state.actions.proxyPreviewSelected);
+  const proxyDialogOpened = useAppStore((state) => state.actions.proxyDialogOpened);
   const { isRunning: isGeneratingProxy } = getTaskProgressStatus("proxy");
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const sourceMonitorRef = useRef<HTMLDivElement | null>(null);
   const videoStageRef = useRef<HTMLDivElement | null>(null);
   const timelineRef = useRef<HTMLDivElement | null>(null);
   const rangeRef = useRef<HTMLDivElement | null>(null);
@@ -73,20 +101,33 @@ export function SourceMonitor() {
   const seekTargetUsRef = useRef(0);
   const lastSeekCommandAtRef = useRef(0);
   const playbackTickRef = useRef<number | null>(null);
-  const timelineStartUsRef = useRef(0);
-  const timelineSpanUsRef = useRef(60_000_000);
+  const cuePlaybackEndUsRef = useRef<number | null>(null);
+  const timelineDragScrollAtRef = useRef(0);
+  const currentTimeUs = useSourceMonitorState((state) => state.currentTimeUs);
+  const setCurrentTimeUs = useSourceMonitorState((state) => state.setCurrentTimeUs);
+  const zoomLevel = useSourceMonitorState((state) => state.zoomLevel);
+  const setZoomLevel = useSourceMonitorState((state) => state.setZoomLevel);
+  const zoomOrigin = useSourceMonitorState((state) => state.zoomOrigin);
+  const setZoomOrigin = useSourceMonitorState((state) => state.setZoomOrigin);
+  const timelineStartUs = useSourceMonitorState((state) => state.timelineStartUs);
+  const setTimelineStartUs = useSourceMonitorState((state) => state.setTimelineStartUs);
+  const timelineSpanUs = useSourceMonitorState((state) => state.timelineSpanUs);
+  const setTimelineSpanUs = useSourceMonitorState((state) => state.setTimelineSpanUs);
+  const cueRange = useSourceMonitorState((state) => state.cueRange);
+  const setCueRange = useSourceMonitorState((state) => state.setCueRange);
+  const storedMediaKey = useSourceMonitorState((state) => state.mediaKey);
+  const syncMedia = useSourceMonitorState((state) => state.syncMedia);
+  const timelineStartUsRef = useRef(timelineStartUs);
+  const timelineSpanUsRef = useRef(timelineSpanUs);
   const [videoStageSize, setVideoStageSize] = useState({ width: 0, height: 0 });
   const [videoNaturalSize, setVideoNaturalSize] = useState({ width: 0, height: 0 });
-  const [currentTimeUs, setCurrentTimeUs] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [editingTime, setEditingTime] = useState(false);
   const [timeEditSelection, setTimeEditSelection] = useState<"all" | "cursor">("cursor");
   const [timeDraft, setTimeDraft] = useState("");
-  const [zoomLevel, setZoomLevel] = useState<"fit" | number>("fit");
-  const [zoomOrigin, setZoomOrigin] = useState({ x: 50, y: 50 });
-  const [timelineStartUs, setTimelineStartUs] = useState(0);
-  const [timelineSpanUs, setTimelineSpanUs] = useState(60_000_000);
   const [timelineWidthPx, setTimelineWidthPx] = useState(0);
+  const [rangeWidthPx, setRangeWidthPx] = useState(0);
+  const [rangeMinBarWidthPx, setRangeMinBarWidthPx] = useState(0);
   const [activeRangeHandle, setActiveRangeHandle] = useState<"start" | "end" | "both" | null>(null);
 
   const hasMedia = Boolean(project);
@@ -122,6 +163,12 @@ export function SourceMonitor() {
     currentTimeClampedUs >= timelineStartUs && currentTimeClampedUs <= timelineEndUs
       ? ((currentTimeClampedUs - timelineStartUs) / timelineVisibleSpanUs) * 100
       : null;
+  const cueRangePercent = cueRange
+    ? {
+        start: ((cueRange.startUs - timelineStartUs) / timelineVisibleSpanUs) * 100,
+        end: ((cueRange.endUs - timelineStartUs) / timelineVisibleSpanUs) * 100,
+      }
+    : null;
   const indicatorWidthRatio = rangeWidthRatioForSpan(timelineVisibleSpanUs);
   const indicatorLeftRatio = rangeLeftRatioForStart(timelineStartUs, timelineVisibleSpanUs);
   const indicatorWidthPercent = indicatorWidthRatio * 100;
@@ -156,8 +203,6 @@ export function SourceMonitor() {
     () => ["fit", ...baseZoomPercentOptions] as Array<"fit" | number>,
     [],
   );
-  const isCustomZoom =
-    typeof zoomLevel === "number" && !baseZoomPercentOptions.includes(zoomLevel as never);
   const timelineRuler = useMemo(
     () =>
       buildTimelineRuler({
@@ -173,22 +218,23 @@ export function SourceMonitor() {
   const monitorDurationText = hasMedia ? formatMonitorTime(durationUs, frameRate) : "00:00:00:00";
   const monitorTimeColumnCh = Math.max(11, monitorTimeText.length, monitorDurationText.length);
   const monitorTimeStyle = { "--monitor-time-ch": monitorTimeColumnCh } as CSSProperties;
+  const mediaKey = project
+    ? `${project.asset.id}:${durationUs}:${frameRate}`
+    : `empty:${frameRate}`;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    const mediaChanged = storedMediaKey !== mediaKey;
     const nextSpan = durationUs > 0 ? durationUs : 60_000_000;
-    seekTargetUsRef.current = 0;
-    timelineStartUsRef.current = 0;
-    timelineSpanUsRef.current = nextSpan;
-    setCurrentTimeUs(0);
-    setTimelineStartUs(0);
-    setTimelineSpanUs(nextSpan);
+    syncMedia(mediaKey, durationUs);
+    seekTargetUsRef.current = mediaChanged ? 0 : currentTimeUs;
+    timelineStartUsRef.current = mediaChanged ? 0 : timelineStartUs;
+    timelineSpanUsRef.current = mediaChanged ? nextSpan : timelineSpanUs;
+    cuePlaybackEndUsRef.current = null;
     setIsPlaying(false);
     setEditingTime(false);
-    setZoomLevel("fit");
-    setZoomOrigin({ x: 50, y: 50 });
     setVideoNaturalSize({ width: 0, height: 0 });
     setActiveRangeHandle(null);
-  }, [project?.asset.id, durationUs, frameRate]);
+  }, [mediaKey]);
 
   useEffect(() => {
     timelineStartUsRef.current = timelineStartUs;
@@ -261,28 +307,86 @@ export function SourceMonitor() {
   }, []);
 
   useEffect(() => {
+    const element = rangeRef.current;
+    if (!element) {
+      return;
+    }
+    const minWidthProbe = element.querySelector<HTMLElement>(".monitor-range-min-width-probe");
+
+    const updateWidth = () => {
+      setRangeWidthPx(element.getBoundingClientRect().width);
+      setRangeMinBarWidthPx(minWidthProbe?.getBoundingClientRect().width ?? 0);
+    };
+    updateWidth();
+    const resizeObserver = new ResizeObserver(updateWidth);
+    resizeObserver.observe(element);
+    if (minWidthProbe) {
+      resizeObserver.observe(minWidthProbe);
+    }
+    return () => resizeObserver.disconnect();
+  }, []);
+
+  useEffect(() => {
     if (durationUs <= 0) {
       return;
     }
     setTimelineSpanUs((current) => {
-      const next = clampTimelineSpan(current, Math.max(1, timelineWidthPx), frameRate, durationUs);
+      const next = clamp(current, trueMinTimelineSpanUs, durationUs);
       setTimelineStartUs((start) => clampTimelineStart(start, next, durationUs));
       return next;
     });
     setCurrentTimeUs((current) => clamp(current, 0, durationUs));
-  }, [durationUs, frameRate, timelineWidthPx]);
+  }, [durationUs, trueMinTimelineSpanUs]);
 
   useAppEvent("monitor:seek", (detail) => {
     if (!hasMedia) {
       return;
     }
-    seekToUs(detail.timeUs);
+    if (detail.focusEndUs !== undefined) {
+      const rangeStartUs = snapUsToFrame(
+        clamp(Math.min(detail.timeUs, detail.focusEndUs), 0, durationUs),
+      );
+      const rangeEndUs = snapUsToFrame(
+        clamp(Math.max(detail.timeUs, detail.focusEndUs), rangeStartUs, durationUs),
+      );
+      setCueRange({ startUs: rangeStartUs, endUs: rangeEndUs });
+      centerTimelineOnTime(rangeStartUs);
+      cuePlaybackEndUsRef.current = snapUsToFrame(rangeEndUs);
+    }
+    seekToUs(detail.timeUs, detail.focusEndUs !== undefined);
     void videoRef.current?.play();
   });
 
   useEffect(() => {
+    const isSourceMonitorVisible = () => {
+      const element = sourceMonitorRef.current;
+      if (!element) {
+        return false;
+      }
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    };
+
+    const suppressSpaceEvent = (event: KeyboardEvent) => {
+      if ((event.code !== "Space" && event.key !== " ") || !isSourceMonitorVisible()) {
+        return false;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      return true;
+    };
+
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+      const isFrameStep = event.key === "ArrowLeft" || event.key === "ArrowRight";
+      const isPlaybackToggle = event.code === "Space" || event.key === " ";
+      if (isPlaybackToggle) {
+        if (suppressSpaceEvent(event) && !event.repeat && hasMedia) {
+          togglePlayback();
+        }
+        return;
+      }
+      if (!isFrameStep) {
         return;
       }
       if (!hasMedia) {
@@ -302,45 +406,55 @@ export function SourceMonitor() {
       stepFrame(event.key === "ArrowLeft" ? -1 : 1);
     };
 
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    const onKeyUp = (event: KeyboardEvent) => {
+      suppressSpaceEvent(event);
+    };
+
+    window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("keyup", onKeyUp, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("keyup", onKeyUp, true);
+    };
   }, [durationUs, editingTime, frameUs, hasMedia]);
 
   function changePreviewMode(value: PreviewMode) {
     if (value === "source") {
-      setProxyDialogOpen(false);
-      setUseProxy(false);
+      sourcePreviewSelected();
       return;
     }
     if (!project || isGeneratingProxy) {
       return;
     }
     if (proxyPath) {
-      setUseProxy(true);
+      proxyPreviewSelected();
       return;
     }
-    setUseProxy(false);
-    setProxyDialogOpen(true);
+    sourcePreviewSelected();
+    proxyDialogOpened();
   }
 
   function handleVideoError() {
     if (!useProxy && project) {
       if (proxyPath) {
-        setUseProxy(true);
+        proxyPreviewSelected();
         setMessage("原文件无法直接播放，已切换到代理模式。");
       } else {
-        setProxyDialogOpen(true);
+        proxyDialogOpened();
         setMessage("原文件无法直接播放，请创建代理后预览。");
       }
     }
   }
 
   function snapUsToFrame(valueUs: number) {
-    const frame = Math.max(0, Math.round(valueUs / frameUs));
-    return clamp(frame * frameUs, 0, durationUs || frame * frameUs);
+    const snappedUs = snapMonitorTime(valueUs, frameRate);
+    return clamp(snappedUs, 0, durationUs || snappedUs);
   }
 
-  function seekToUs(nextUs: number) {
+  function seekToUs(nextUs: number, preserveCuePlaybackEnd = false) {
+    if (!preserveCuePlaybackEnd) {
+      cuePlaybackEndUsRef.current = null;
+    }
     const targetUs = snapUsToFrame(nextUs);
     seekTargetUsRef.current = targetUs;
     lastSeekCommandAtRef.current = performance.now();
@@ -353,6 +467,24 @@ export function SourceMonitor() {
       }
     }
     return targetUs;
+  }
+
+  function centerTimelineOnTime(timeUs: number) {
+    if (durationUs <= 0) {
+      return;
+    }
+    const currentSpanUs = timelineSpanUsRef.current;
+    const nextStartUs = clampTimelineStart(timeUs - currentSpanUs / 2, currentSpanUs, durationUs);
+    timelineStartUsRef.current = nextStartUs;
+    setTimelineStartUs(nextStartUs);
+  }
+
+  function centerTimelineIfTimeHidden(timeUs: number) {
+    const currentStartUs = timelineStartUsRef.current;
+    const currentSpanUs = timelineSpanUsRef.current;
+    if (timeUs < currentStartUs || timeUs > currentStartUs + currentSpanUs) {
+      centerTimelineOnTime(timeUs);
+    }
   }
 
   function playbackTimeUs() {
@@ -371,6 +503,19 @@ export function SourceMonitor() {
     if (isStaleSeekEvent) {
       return;
     }
+
+    const cuePlaybackEndUs = cuePlaybackEndUsRef.current;
+    if (cuePlaybackEndUs !== null) {
+      const reachedCueEnd = element.currentTime * 1_000_000 >= cuePlaybackEndUs;
+      centerTimelineIfTimeHidden(reachedCueEnd ? cuePlaybackEndUs : nextUs);
+      if (reachedCueEnd) {
+        cuePlaybackEndUsRef.current = null;
+        seekToUs(cuePlaybackEndUs, true);
+        element.pause();
+        return;
+      }
+    }
+
     seekTargetUsRef.current = nextUs;
     setCurrentTimeUs(nextUs);
   }
@@ -408,14 +553,26 @@ export function SourceMonitor() {
     });
   }
 
+  function handleLoadedMetadata(element: HTMLVideoElement) {
+    updateVideoNaturalSize(element);
+    const restoredTimeUs = clamp(currentTimeUs, 0, durationUs || currentTimeUs);
+    seekTargetUsRef.current = restoredTimeUs;
+    if (Math.abs(element.currentTime * 1_000_000 - restoredTimeUs) > frameUs / 2) {
+      element.currentTime = restoredTimeUs / 1_000_000;
+    }
+  }
+
   function togglePlayback() {
     if (!hasMedia || !videoRef.current) {
       return;
     }
+    cuePlaybackEndUsRef.current = null;
     if (videoRef.current.paused) {
       void videoRef.current.play();
     } else {
+      const pausedAtUs = playbackTimeUs();
       videoRef.current.pause();
+      centerTimelineIfTimeHidden(pausedAtUs);
     }
   }
 
@@ -645,7 +802,31 @@ export function SourceMonitor() {
     if (durationUs <= 0) {
       return 1;
     }
-    return clamp(spanUs / durationUs, 0, 1);
+    const logicalWidthRatio = clamp(spanUs / durationUs, 0, 1);
+    if (rangeWidthPx <= 0) {
+      return logicalWidthRatio;
+    }
+    const minLogicalWidthRatio = clamp(trueMinTimelineSpanUs / durationUs, 0, 1);
+    const minVisualWidthRatio = clamp(rangeMinBarWidthPx / rangeWidthPx, 0, 1);
+    if (minLogicalWidthRatio >= 1 || minVisualWidthRatio >= 1) {
+      return 1;
+    }
+    return mapLogicalRangeRatio(logicalWidthRatio, minLogicalWidthRatio, minVisualWidthRatio);
+  }
+
+  function spanForRangeWidthRatio(widthRatio: number) {
+    if (durationUs <= 0) {
+      return 0;
+    }
+    if (rangeWidthPx <= 0) {
+      return clamp(widthRatio, 0, 1) * durationUs;
+    }
+    const minLogicalWidthRatio = clamp(trueMinTimelineSpanUs / durationUs, 0, 1);
+    const minVisualWidthRatio = clamp(rangeMinBarWidthPx / rangeWidthPx, 0, 1);
+    if (minLogicalWidthRatio >= 1 || minVisualWidthRatio >= 1) {
+      return durationUs;
+    }
+    return mapVisualRangeRatio(widthRatio, minLogicalWidthRatio, minVisualWidthRatio) * durationUs;
   }
 
   function rangeLeftRatioForStart(startUs: number, spanUs: number) {
@@ -679,12 +860,7 @@ export function SourceMonitor() {
     const currentStart = timelineStartUsRef.current;
     const currentSpan = timelineSpanUsRef.current;
     const scale = Math.exp(clamp(deltaPx, -1200, 1200) * MONITOR_RANGE_ZOOM_SENSITIVITY);
-    const nextSpan = clampTimelineSpan(
-      currentSpan * scale,
-      Math.max(1, timelineWidthPx),
-      frameRate,
-      durationUs,
-    );
+    const nextSpan = clamp(currentSpan * scale, trueMinTimelineSpanUs, durationUs);
     const anchorUs = currentStart + currentSpan * anchorRatio;
     const nextStart = clampTimelineStart(anchorUs - nextSpan * anchorRatio, nextSpan, durationUs);
 
@@ -730,8 +906,58 @@ export function SourceMonitor() {
 
   function seekFromTimeline(clientX: number, element: HTMLDivElement) {
     const rect = element.getBoundingClientRect();
-    const ratio = clamp((clientX - rect.left) / rect.width, 0, 1);
-    seekToUs(snapUsToFrame(timelineStartUs + ratio * timelineVisibleSpanUs));
+    if (rect.width <= 0) {
+      return;
+    }
+
+    const now = performance.now();
+    const elapsedMs = now - timelineDragScrollAtRef.current;
+    const elapsedSeconds =
+      timelineDragScrollAtRef.current > 0 && elapsedMs <= 100
+        ? clamp(elapsedMs / 1000, 0, 0.05)
+        : 0;
+    timelineDragScrollAtRef.current = now;
+
+    const currentStartUs = timelineStartUsRef.current;
+    const currentSpanUs = timelineSpanUsRef.current;
+    const edgeInsetRatio = Math.min(TIMELINE_CURSOR_EDGE_INSET_PX / rect.width, 0.25);
+    const leftEdgeX = rect.left + TIMELINE_CURSOR_EDGE_INSET_PX;
+    const rightEdgeX = rect.right - TIMELINE_CURSOR_EDGE_INSET_PX;
+    const atLeftEdge = clientX <= leftEdgeX;
+    const atRightEdge = clientX >= rightEdgeX;
+
+    if (!atLeftEdge && !atRightEdge) {
+      const ratio = clamp((clientX - rect.left) / rect.width, 0, 1);
+      seekToUs(currentStartUs + ratio * currentSpanUs);
+      return;
+    }
+
+    const direction = atLeftEdge ? -1 : 1;
+    const overflowPx =
+      direction < 0 ? Math.max(0, leftEdgeX - clientX) : Math.max(0, clientX - rightEdgeX);
+    const overflowRatio = clamp(overflowPx / rect.width, 0, 1);
+    const scrollSpeed =
+      TIMELINE_EDGE_SCROLL_BASE_SPANS_PER_SECOND +
+      overflowRatio *
+        (TIMELINE_EDGE_SCROLL_MAX_SPANS_PER_SECOND - TIMELINE_EDGE_SCROLL_BASE_SPANS_PER_SECOND);
+    const nextStartUs = clampTimelineStart(
+      currentStartUs + direction * currentSpanUs * scrollSpeed * elapsedSeconds,
+      currentSpanUs,
+      durationUs,
+    );
+    const maxStartUs = Math.max(0, durationUs - currentSpanUs);
+    const reachedVideoEdge =
+      (direction < 0 && nextStartUs <= 0) || (direction > 0 && nextStartUs >= maxStartUs);
+    const cursorRatio = direction < 0 ? edgeInsetRatio : 1 - edgeInsetRatio;
+    const targetUs = reachedVideoEdge
+      ? direction < 0
+        ? 0
+        : durationUs
+      : nextStartUs + cursorRatio * currentSpanUs;
+
+    timelineStartUsRef.current = nextStartUs;
+    setTimelineStartUs(nextStartUs);
+    seekToUs(targetUs);
   }
 
   function beginRangeDrag() {
@@ -756,15 +982,18 @@ export function SourceMonitor() {
     }
     setActiveRangeHandle("both");
     const startSpanUs = timelineSpanUs;
+    const startRangeWidthRatio = rangeWidthRatioForSpan(startSpanUs);
     const centerUs = timelineStartUs + timelineSpanUs / 2;
 
     return {
       update: (deltaRatio: number) => {
-        const deltaUs = deltaRatio * durationUs;
-        const nextSpanUs = clampTimelineSpan(
-          side === "start" ? startSpanUs - deltaUs * 2 : startSpanUs + deltaUs * 2,
-          Math.max(1, timelineWidthPx),
-          frameRate,
+        const nextRangeWidthRatio =
+          side === "start"
+            ? startRangeWidthRatio - deltaRatio * 2
+            : startRangeWidthRatio + deltaRatio * 2;
+        const nextSpanUs = clamp(
+          spanForRangeWidthRatio(nextRangeWidthRatio),
+          trueMinTimelineSpanUs,
           durationUs,
         );
         timelineSpanUsRef.current = nextSpanUs;
@@ -783,7 +1012,7 @@ export function SourceMonitor() {
   }
 
   return (
-    <div className={`source-monitor ${hasMedia ? "" : "empty-state"}`}>
+    <div ref={sourceMonitorRef} className={`source-monitor ${hasMedia ? "" : "empty-state"}`}>
       <VideoDisplay
         project={project}
         stageRef={videoStageRef}
@@ -797,7 +1026,7 @@ export function SourceMonitor() {
           transformOrigin: `${zoomOrigin.x}% ${zoomOrigin.y}%`,
         }}
         onVideoError={handleVideoError}
-        onLoadedMetadata={updateVideoNaturalSize}
+        onLoadedMetadata={handleLoadedMetadata}
         onSyncCurrentTime={syncCurrentTimeFromVideo}
         onPlay={(video) => {
           syncCurrentTimeFromVideo(video);
@@ -805,6 +1034,7 @@ export function SourceMonitor() {
           startPlaybackTicker();
         }}
         onPause={(video) => {
+          cuePlaybackEndUsRef.current = null;
           stopPlaybackTicker();
           syncCurrentTimeFromVideo(video);
           setIsPlaying(false);
@@ -820,7 +1050,6 @@ export function SourceMonitor() {
           monitorTimeText={monitorTimeText}
           monitorDurationText={monitorDurationText}
           zoomLevel={zoomLevel}
-          isCustomZoom={isCustomZoom}
           zoomOptions={zoomOptions}
           isPlaying={isPlaying}
           previewMode={useProxy ? "proxy" : "source"}
@@ -847,6 +1076,7 @@ export function SourceMonitor() {
           hasMedia={hasMedia}
           ruler={timelineRuler}
           cursorPercent={cursorPercent}
+          cueRangePercent={cueRangePercent}
           onWheel={handleTimelineWheel}
           onSeekPointer={seekFromTimeline}
         />

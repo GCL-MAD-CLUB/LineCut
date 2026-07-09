@@ -58,6 +58,7 @@
   --blue-500: #4096f3;
   --blue-600: #2d8cff;
   --blue-700: #1473e6;
+  --blue-800: #005cc8;
   --yellow-500: #f5bd5f;
   --yellow-700: #c99131;
   --yellow-950: #2b210d;
@@ -195,6 +196,11 @@ button {
   border: 0;
 }
 
+:focus,
+:focus-visible {
+  outline: none !important;
+}
+
 /* App shell and top navigation */
 
 .app-shell {
@@ -273,11 +279,12 @@ button {
 .accent-button,
 .toolbar-button,
 .tool-button {
+  font-size: 12px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 7px;
-  min-height: var(--control-height);
+  min-height: 28px;
   border-radius: var(--radius-sm);
   color: var(--color-text-primary);
   cursor: pointer;

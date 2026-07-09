@@ -7,13 +7,20 @@ export interface CreateTaskProgressOptions {
   label: string;
   current: number;
   total: number;
-  on_cancel: () => void | Promise<void>;
+  listener?: TaskProgressListener;
+  on_cancel?: () => void | Promise<void>;
 }
 
 export interface TaskProgressUpdate {
   label?: string;
   current?: number;
 }
+
+export type TaskProgressListenerCleanup = () => void | Promise<void>;
+
+export type TaskProgressListener = (
+  publishUpdate: (update: TaskProgressUpdate) => void,
+) => void | TaskProgressListenerCleanup | Promise<void | TaskProgressListenerCleanup>;
 
 export interface TaskProgressHandle {
   update: (update: TaskProgressUpdate) => void;
@@ -41,7 +48,8 @@ interface TaskProgressRecord {
   label: string;
   current: number;
   total: number;
-  on_cancel: () => void | Promise<void>;
+  listener_cleanup?: TaskProgressListenerCleanup;
+  on_cancel?: () => void | Promise<void>;
 }
 
 interface TaskProgressError {
@@ -109,13 +117,28 @@ function getTaskProgressSnapshot() {
 }
 
 function removeTask(id: string) {
-  if (!snapshot.tasks.some((task) => task.id === id)) {
+  const task = snapshot.tasks.find((currentTask) => currentTask.id === id);
+  if (!task) {
     return;
   }
+  void stopTaskListener(task);
   setSnapshot({
     ...snapshot,
     tasks: snapshot.tasks.filter((task) => task.id !== id),
   });
+}
+
+async function stopTaskListener(task: TaskProgressRecord) {
+  const cleanup = task.listener_cleanup;
+  task.listener_cleanup = undefined;
+  if (!cleanup) {
+    return;
+  }
+  try {
+    await cleanup();
+  } catch (error) {
+    addError("停止任务监听失败", error instanceof Error ? error.message : String(error));
+  }
 }
 
 function addError(name: string, message: string) {
@@ -142,19 +165,20 @@ function removeError(id: string) {
 
 async function runTaskCancel(task: TaskProgressRecord) {
   try {
-    await task.on_cancel();
+    await task.on_cancel?.();
   } catch (error) {
     addError("取消任务失败", error instanceof Error ? error.message : String(error));
   }
 }
 
-export function createTaskProgress({
+export async function createTaskProgress({
   operation,
   label,
   current,
   total,
+  listener,
   on_cancel,
-}: CreateTaskProgressOptions): TaskProgressHandle {
+}: CreateTaskProgressOptions): Promise<TaskProgressHandle> {
   const normalizedTotal = Number.isFinite(total) ? Math.max(0, total) : 0;
   const id = `task-progress:${nextTaskId++}`;
   const task: TaskProgressRecord = {
@@ -166,12 +190,7 @@ export function createTaskProgress({
     on_cancel,
   };
 
-  setSnapshot({
-    ...snapshot,
-    tasks: [...snapshot.tasks, task],
-  });
-
-  return {
+  const handle: TaskProgressHandle = {
     update: ({ current: nextCurrent, label: nextLabel }) => {
       if (!snapshot.tasks.some((currentTask) => currentTask.id === id)) {
         return;
@@ -198,6 +217,24 @@ export function createTaskProgress({
       addError(errorName, errorMessage);
     },
   };
+
+  if (listener) {
+    try {
+      const cleanup = await listener(handle.update);
+      if (cleanup) {
+        task.listener_cleanup = cleanup;
+      }
+    } catch (error) {
+      addError("启动任务监听失败", error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  setSnapshot({
+    ...snapshot,
+    tasks: [...snapshot.tasks, task],
+  });
+
+  return handle;
 }
 
 export async function cancelAllTaskProgress() {
@@ -211,7 +248,10 @@ export async function cancelAllTaskProgress() {
     tasks: [],
   });
 
-  await Promise.all(tasks.map((task) => runTaskCancel(task)));
+  await Promise.all([
+    ...tasks.map((task) => stopTaskListener(task)),
+    ...tasks.map((task) => runTaskCancel(task)),
+  ]);
 }
 
 export function getTaskProgressStatus(operation?: string): TaskProgressStatus {

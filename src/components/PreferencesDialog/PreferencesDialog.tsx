@@ -21,8 +21,8 @@ interface PreferencesDialogProps {
 
 export function PreferencesDialog({ open: isOpen, onClose }: PreferencesDialogProps) {
   const preferences = useAppStore((state) => state.preferences);
-  const setPreferences = useAppStore((state) => state.setPreferences);
-  const setMessage = useAppStore((state) => state.setMessage);
+  const setPreferences = useAppStore((state) => state.actions.preferencesLoaded);
+  const setMessage = useAppStore((state) => state.actions.messagePublished);
   const { isRunning: isSavingPreferences } = getTaskProgressStatus("preferences");
   const [draftPreferences, setDraftPreferences] = useState<Preferences>(preferences);
 
@@ -67,7 +67,7 @@ export function PreferencesDialog({ open: isOpen, onClose }: PreferencesDialogPr
       setMessage("浏览器预览不能保存首选项。");
       return;
     }
-    const preferencesTask = createTaskProgress({
+    const preferencesTask = await createTaskProgress({
       operation: "preferences",
       label: "保存首选项",
       current: 0,

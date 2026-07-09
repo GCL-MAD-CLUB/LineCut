@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 
 interface AppEventMap {
-  "monitor:seek": { timeUs: number };
+  "monitor:seek": { timeUs: number; focusEndUs?: number };
 }
 
 export function emitAppEvent<K extends keyof AppEventMap>(

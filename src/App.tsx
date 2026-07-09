@@ -19,7 +19,7 @@ import {
   createTaskProgress,
   getTaskProgressStatus,
 } from "./components/TaskProgress";
-import { listenToFfmpegTaskProgress } from "./ffmpegProgress";
+import { cancelFfmpegTask, createFfmpegTaskId, listenToFfmpegTaskProgress } from "./ffmpegProgress";
 import { useAppStore } from "./store";
 import { isTauriRuntime } from "./tauriRuntime";
 import type { AddExternalSubtitlesResult, ImportResult, Preferences } from "./types";
@@ -71,12 +71,13 @@ export default function App() {
   const message = useAppStore((state) => state.message);
   const warnings = useAppStore((state) => state.warnings);
   const exportResult = useAppStore((state) => state.exportResult);
-  const setProject = useAppStore((state) => state.setProject);
-  const addExternalSubtitles = useAppStore((state) => state.addExternalSubtitles);
-  const setPreferences = useAppStore((state) => state.setPreferences);
-  const setMessage = useAppStore((state) => state.setMessage);
-  const setWarnings = useAppStore((state) => state.setWarnings);
-  const setExportResult = useAppStore((state) => state.setExportResult);
+  const projectImported = useAppStore((state) => state.actions.projectImported);
+  const subtitleTracksAdded = useAppStore((state) => state.actions.subtitleTracksAdded);
+  const preferencesLoaded = useAppStore((state) => state.actions.preferencesLoaded);
+  const messagePublished = useAppStore((state) => state.actions.messagePublished);
+  const warningsReplaced = useAppStore((state) => state.actions.warningsReplaced);
+  const warningsAppended = useAppStore((state) => state.actions.warningsAppended);
+  const exportResultChanged = useAppStore((state) => state.actions.exportResultChanged);
   const { tasks: runningTasks } = getTaskProgressStatus();
   const isImportingMedia = runningTasks.some((task) => task.operation === "import");
   const isImportingSubtitles = runningTasks.some((task) => task.operation === "subtitle_import");
@@ -107,9 +108,9 @@ export default function App() {
 
     void invoke<Preferences>("get_preferences")
       .then((loaded) => {
-        setPreferences(loaded);
+        preferencesLoaded(loaded);
       })
-      .catch((error) => setMessage(error instanceof Error ? error.message : String(error)));
+      .catch((error) => messagePublished(error instanceof Error ? error.message : String(error)));
   }, []);
 
   useEffect(() => {
@@ -125,55 +126,35 @@ export default function App() {
   }, [project]);
 
   useEffect(() => {
-    let closeCancelPromise: Promise<void> | null = null;
+    if (!isTauriRuntime()) {
+      return;
+    }
+
+    let disposed = false;
     let unlistenCloseRequested: (() => void) | undefined;
 
-    function cancelBeforeClose() {
-      if (!closeCancelPromise) {
-        closeCancelPromise = (async () => {
-          await cancelAllTaskProgress();
-          await cancelCurrentTask();
-        })();
-      }
-      return closeCancelPromise;
-    }
-
-    function handleBeforeUnload() {
-      void cancelBeforeClose();
-    }
-
-    window.addEventListener("beforeunload", handleBeforeUnload);
-
-    if (isTauriRuntime()) {
-      let disposed = false;
-      void getCurrentWindow()
-        .onCloseRequested(async () => {
-          await cancelBeforeClose();
-        })
-        .then((unlisten) => {
-          if (disposed) {
-            unlisten();
-            return;
-          }
+    void getCurrentWindow()
+      .onCloseRequested(async () => {
+        await cancelAllTaskProgress();
+      })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+        } else {
           unlistenCloseRequested = unlisten;
-        })
-        .catch(() => undefined);
-
-      return () => {
-        disposed = true;
-        unlistenCloseRequested?.();
-        window.removeEventListener("beforeunload", handleBeforeUnload);
-      };
-    }
+        }
+      })
+      .catch(() => undefined);
 
     return () => {
-      window.removeEventListener("beforeunload", handleBeforeUnload);
+      disposed = true;
+      unlistenCloseRequested?.();
     };
   }, []);
 
   async function chooseExternalSubtitles() {
     if (!isTauriRuntime()) {
-      setMessage("请在 Tauri 桌面窗口中选择本地外挂字幕。");
+      messagePublished("请在 Tauri 桌面窗口中选择本地外挂字幕。");
       return;
     }
     const picked = await open({
@@ -186,7 +167,7 @@ export default function App() {
     }
 
     if (project) {
-      const subtitleImportTask = createTaskProgress({
+      const subtitleImportTask = await createTaskProgress({
         operation: "subtitle_import",
         label: "导入外挂字幕",
         current: 0,
@@ -198,17 +179,17 @@ export default function App() {
           assetId: project.asset.id,
           paths,
         });
-        addExternalSubtitles(result.tracks, result.cues);
+        subtitleTracksAdded(result.tracks, result.cues);
         if (result.warnings.length > 0) {
-          setWarnings((current) => [...current, ...result.warnings]);
+          warningsAppended(result.warnings);
         }
-        setMessage("外挂字幕已导入");
+        messagePublished("外挂字幕已导入");
         subtitleImportTask.update({ current: 1 });
         subtitleImportTask.remove();
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         subtitleImportTask.fail("导入外挂字幕失败", errorMessage);
-        setMessage(errorMessage);
+        messagePublished(errorMessage);
       }
     } else {
       setExternalSubtitlePaths((current) => Array.from(new Set([...current, ...paths])));
@@ -217,7 +198,7 @@ export default function App() {
 
   async function importVideo() {
     if (!isTauriRuntime()) {
-      setMessage("浏览器预览不能导入本地 MKV，请运行 Tauri 桌面应用。");
+      messagePublished("浏览器预览不能导入本地 MKV，请运行 Tauri 桌面应用。");
       return;
     }
     const picked = await open({
@@ -229,55 +210,41 @@ export default function App() {
       return;
     }
 
-    const importTaskId = `import:${path}`;
+    const importTaskId = createFfmpegTaskId("import");
     let importCancelled = false;
-    const importTask = createTaskProgress({
+    const importTask = await createTaskProgress({
       operation: "import",
       label: "正在探测媒体并抽取字幕",
       current: 0,
       total: 1,
-      on_cancel: () => {
+      listener: listenToFfmpegTaskProgress(importTaskId),
+      on_cancel: async () => {
         importCancelled = true;
-        return cancelCurrentTask();
+        await cancelFfmpegTask(importTaskId);
       },
     });
-    setWarnings([]);
-    setExportResult(null);
-    const stopProgressListener = await listenToFfmpegTaskProgress(importTaskId, importTask);
+    warningsReplaced([]);
+    exportResultChanged(null);
     try {
       const result = await invoke<ImportResult>("import_media", {
         path,
         externalSubtitles: externalSubtitlePaths,
+        taskId: importTaskId,
       });
-      setProject(result.project);
-      setWarnings(result.warnings);
+      projectImported(result.project);
+      warningsReplaced(result.warnings);
       setExternalSubtitlePaths([]);
-      setMessage(`已导入 ${result.project.asset.file_name}`);
+      messagePublished(`已导入 ${result.project.asset.file_name}`);
       importTask.update({ current: 1 });
       importTask.remove();
     } catch (error) {
       if (importCancelled) {
-        setMessage("导入已取消");
+        messagePublished("导入已取消");
         return;
       }
       const errorMessage = error instanceof Error ? error.message : String(error);
       importTask.fail("导入视频失败", errorMessage);
-      setMessage(errorMessage);
-    } finally {
-      stopProgressListener();
-    }
-  }
-
-  async function cancelCurrentTask() {
-    if (!isTauriRuntime()) {
-      setMessage("浏览器预览没有可取消的后台任务");
-      return;
-    }
-    try {
-      const cancelled = await invoke<boolean>("cancel_current_task");
-      setMessage(cancelled ? "正在取消任务" : "当前没有可取消的 FFmpeg 任务");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
+      messagePublished(errorMessage);
     }
   }
 

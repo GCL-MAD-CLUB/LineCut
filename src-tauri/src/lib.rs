@@ -49,6 +49,7 @@ impl AppState {
 }
 
 struct RunningFfmpeg {
+    task_id: String,
     cancel: Arc<AtomicBool>,
     pid: Option<u32>,
     cleanup_paths: Vec<PathBuf>,
@@ -341,7 +342,7 @@ pub fn run() {
             import_media,
             generate_proxy,
             add_external_subtitles,
-            cancel_current_task,
+            cancel_task,
             export_clips
         ])
         .on_window_event(|window, event| {
@@ -378,14 +379,15 @@ fn update_preferences(
 }
 
 #[tauri::command]
-fn cancel_current_task(state: tauri::State<'_, AppState>) -> Result<bool, String> {
-    cancel_running_ffmpeg(state.inner())
+fn cancel_task(task_id: String, state: tauri::State<'_, AppState>) -> Result<bool, String> {
+    cancel_ffmpeg_task(&task_id, state.inner())
 }
 
 #[tauri::command]
 async fn import_media(
     path: String,
     external_subtitles: Vec<String>,
+    task_id: String,
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<ImportResult, String> {
@@ -470,7 +472,6 @@ async fn import_media(
     let mut tracks = Vec::new();
     let mut cues: HashMap<String, Vec<SubtitleCue>> = HashMap::new();
     let mut warnings = Vec::new();
-    let import_task_id = format!("import:{path}");
     let text_subtitle_total = probe
         .streams
         .iter()
@@ -527,7 +528,7 @@ async fn import_media(
                 Some(FfmpegProgressContext {
                     app: &app,
                     state: state.inner(),
-                    task_id: &import_task_id,
+                    task_id: &task_id,
                     base_progress: (current_subtitle - 1) as f64 / text_subtitle_total as f64,
                     progress_span: 1.0 / text_subtitle_total as f64,
                     duration_us,
@@ -606,6 +607,7 @@ async fn import_media(
 async fn generate_proxy(
     asset_id: String,
     options: ProxyOptions,
+    task_id: String,
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<ProxyResult, String> {
@@ -615,8 +617,6 @@ async fn generate_proxy(
     if let Some(parent) = proxy_path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建代理输出目录失败: {e}"))?;
     }
-    let proxy_task_id = format!("proxy:{asset_id}");
-
     if !proxy_path.exists() {
         let mut args = vec![
             "-y".to_string(),
@@ -645,7 +645,7 @@ async fn generate_proxy(
             FfmpegProgressContext {
                 app: &app,
                 state: state.inner(),
-                task_id: &proxy_task_id,
+                task_id: &task_id,
                 base_progress: 0.0,
                 progress_span: 1.0,
                 duration_us: project.asset.duration_us,
@@ -714,6 +714,7 @@ async fn export_clips(
     track_id: String,
     cue_ids: Vec<String>,
     options: ExportOptions,
+    task_id: String,
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<ExportResult, String> {
@@ -779,7 +780,6 @@ async fn export_clips(
     let name_rule = effective_export_name_rule(options.export_name_rule, &options.layout);
     let mut used_names = HashSet::new();
     let mut part_files = Vec::new();
-    let export_task_id = format!("export:{asset_id}");
     let is_merged_layout = matches!(options.layout, ExportLayout::Merged);
     let part_progress_total = if is_merged_layout { 0.92 } else { 1.0 };
     let mut task_cleanup_paths = if is_merged_layout {
@@ -787,7 +787,7 @@ async fn export_clips(
     } else {
         Vec::new()
     };
-    emit_ffmpeg_progress(&app, &export_task_id, 0.0);
+    emit_ffmpeg_progress(&app, &task_id, 0.0);
     for range in &ranges {
         let file_stem = export_file_stem(
             name_rule,
@@ -807,7 +807,7 @@ async fn export_clips(
             Some(FfmpegProgressContext {
                 app: &app,
                 state: state.inner(),
-                task_id: &export_task_id,
+                task_id: &task_id,
                 base_progress: range.index as f64 * part_progress_total
                     / ranges.len().max(1) as f64,
                 progress_span: part_progress_total / ranges.len().max(1) as f64,
@@ -831,7 +831,7 @@ async fn export_clips(
             .map(|path| path.to_string_lossy().into_owned())
             .collect::<Vec<_>>(),
         ExportLayout::Merged => {
-            emit_ffmpeg_progress(&app, &export_task_id, 0.92);
+            emit_ffmpeg_progress(&app, &task_id, 0.92);
             let merged_stem = if ranges.len() == 1 {
                 export_file_stem(
                     name_rule,
@@ -860,7 +860,7 @@ async fn export_clips(
                 Some(FfmpegProgressContext {
                     app: &app,
                     state: state.inner(),
-                    task_id: &export_task_id,
+                    task_id: &task_id,
                     base_progress: 0.92,
                     progress_span: 0.08,
                     duration_us: ranges
@@ -875,7 +875,7 @@ async fn export_clips(
             vec![merged.to_string_lossy().into_owned()]
         }
     };
-    emit_ffmpeg_progress(&app, &export_task_id, 1.0);
+    emit_ffmpeg_progress(&app, &task_id, 1.0);
 
     Ok(ExportResult {
         ranges,
@@ -1812,6 +1812,7 @@ fn hidden_command(program: &str) -> Command {
 fn register_running_ffmpeg(
     state: &AppState,
     id: String,
+    task_id: String,
     cancel: Arc<AtomicBool>,
     pid: Option<u32>,
     cleanup_paths: Vec<PathBuf>,
@@ -1823,6 +1824,7 @@ fn register_running_ffmpeg(
     running.insert(
         id,
         RunningFfmpeg {
+            task_id,
             cancel,
             pid,
             cleanup_paths,
@@ -1837,33 +1839,56 @@ fn clear_running_ffmpeg(state: &AppState, id: &str) {
     }
 }
 
+fn cancel_ffmpeg_task(task_id: &str, state: &AppState) -> Result<bool, String> {
+    let tasks = {
+        let mut running = state
+            .running_ffmpeg
+            .lock()
+            .map_err(|_| "任务状态锁定失败".to_string())?;
+        let matching_ids = running
+            .iter()
+            .filter(|(_, task)| task.task_id == task_id)
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        matching_ids
+            .into_iter()
+            .filter_map(|id| running.remove(&id))
+            .collect::<Vec<_>>()
+    };
+
+    if tasks.is_empty() {
+        return Ok(false);
+    }
+
+    stop_running_ffmpeg(tasks);
+    Ok(true)
+}
+
 fn cancel_running_ffmpeg(state: &AppState) -> Result<bool, String> {
     let tasks = {
         let mut running = state
             .running_ffmpeg
             .lock()
             .map_err(|_| "任务状态锁定失败".to_string())?;
-        if running.is_empty() {
-            return Ok(false);
-        }
-        let tasks = running
-            .values()
-            .map(|task| {
-                task.cancel.store(true, Ordering::SeqCst);
-                (task.pid, task.cleanup_paths.clone())
-            })
-            .collect::<Vec<_>>();
-        running.clear();
-        tasks
+        running.drain().map(|(_, task)| task).collect::<Vec<_>>()
     };
 
-    for (pid, cleanup_paths) in tasks {
-        if let Some(pid) = pid {
+    if tasks.is_empty() {
+        return Ok(false);
+    }
+
+    stop_running_ffmpeg(tasks);
+    Ok(true)
+}
+
+fn stop_running_ffmpeg(tasks: Vec<RunningFfmpeg>) {
+    for task in tasks {
+        task.cancel.store(true, Ordering::SeqCst);
+        if let Some(pid) = task.pid {
             kill_process_tree(pid);
         }
-        remove_cleanup_paths(&cleanup_paths);
+        remove_cleanup_paths(&task.cleanup_paths);
     }
-    Ok(true)
 }
 
 fn remove_cleanup_paths(paths: &[PathBuf]) {
@@ -1981,6 +2006,7 @@ async fn run_status_with_ffmpeg_progress(
     if let Err(err) = register_running_ffmpeg(
         progress.state,
         task_id.clone(),
+        progress.task_id.to_string(),
         cancel.clone(),
         pid,
         progress.cleanup_paths.clone(),
@@ -2601,6 +2627,44 @@ mod tests {
             effective_export_name_rule(ExportNameRule::Dialogue, &ExportLayout::Merged),
             ExportNameRule::TimeRange
         ));
+    }
+
+    #[test]
+    fn cancelling_one_task_keeps_other_ffmpeg_tasks_running() {
+        let task_a_cancelled = Arc::new(AtomicBool::new(false));
+        let task_b_cancelled = Arc::new(AtomicBool::new(false));
+        let state = AppState {
+            projects: Mutex::new(HashMap::new()),
+            preferences: Mutex::new(Preferences::default()),
+            running_ffmpeg: Mutex::new(HashMap::from([
+                (
+                    "process-a".to_string(),
+                    RunningFfmpeg {
+                        task_id: "task-a".to_string(),
+                        cancel: task_a_cancelled.clone(),
+                        pid: None,
+                        cleanup_paths: Vec::new(),
+                    },
+                ),
+                (
+                    "process-b".to_string(),
+                    RunningFfmpeg {
+                        task_id: "task-b".to_string(),
+                        cancel: task_b_cancelled.clone(),
+                        pid: None,
+                        cleanup_paths: Vec::new(),
+                    },
+                ),
+            ])),
+        };
+
+        assert_eq!(cancel_ffmpeg_task("task-a", &state), Ok(true));
+        assert!(task_a_cancelled.load(Ordering::SeqCst));
+        assert!(!task_b_cancelled.load(Ordering::SeqCst));
+
+        let running = state.running_ffmpeg.lock().expect("running task state");
+        assert!(!running.contains_key("process-a"));
+        assert!(running.contains_key("process-b"));
     }
 
     #[test]

@@ -49,7 +49,7 @@ export function normalizeFrameRate(...candidates: Array<string | null | undefine
   for (const candidate of candidates) {
     const parsed = parseFrameRate(candidate);
     if (parsed) {
-      return Math.round(clamp(parsed, 1, 240));
+      return clamp(parsed, 1, 240);
     }
   }
   return DEFAULT_FRAME_RATE;

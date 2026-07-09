@@ -119,6 +119,7 @@ export function MonitorRange({
 
   return (
     <div ref={rangeRef} className={`monitor-range ${hasMedia ? "" : "empty-state"}`} tabIndex={-1}>
+      <span className="monitor-range-min-width-probe" aria-hidden="true" />
       <div className="monitor-range-track">
         <div
           className="monitor-range-bar"
