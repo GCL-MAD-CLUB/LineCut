@@ -1,7 +1,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Captions, Play, Search } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
-import { emitAppEvent } from "../../appEvents";
+import { emitAppEvent, useAppEvent } from "../../appEvents";
 import { useAppStore } from "../../store";
 import { formatDuration } from "../../time";
 import type { SubtitleCue } from "../../types";
@@ -101,6 +101,11 @@ export function SubtitlePanel() {
       setShowOnlySelected(false);
     }
   }, [selectedCount, setShowOnlySelected, showOnlySelected]);
+
+  useAppEvent("subtitle:select-all", () => {
+    cueSelectionReplaced(filteredCues.map((cue) => cue.id));
+  });
+  useAppEvent("subtitle:clear-selection", cueSelectionCleared);
 
   return (
     <section className="subtitle-panel">

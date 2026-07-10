@@ -4,6 +4,9 @@ import type { ExportResult, Preferences, Project, SubtitleCue, SubtitleTrack } f
 
 interface AppActions {
   projectImported: (project: Project) => void;
+  projectOpened: (project: Project | null, path: string) => void;
+  projectSaved: (path: string) => void;
+  projectClosed: () => void;
   subtitleTracksAdded: (tracks: SubtitleTrack[], cues: Record<string, SubtitleCue[]>) => void;
   activeTrackChanged: (trackId: string) => void;
   cueSelectionToggled: (cueId: string) => void;
@@ -23,6 +26,8 @@ interface AppActions {
 
 interface AppStore {
   project: Project | null;
+  projectFilePath: string | null;
+  projectDirty: boolean;
   activeTrackId: string;
   selectedCueIds: Set<string>;
   proxyPath: string | null;
@@ -46,6 +51,8 @@ export function defaultPreferences(): Preferences {
 
 const appStore = createStore<AppStore>()((set) => ({
   project: null,
+  projectFilePath: null,
+  projectDirty: false,
   activeTrackId: "",
   selectedCueIds: new Set<string>(),
   proxyPath: null,
@@ -62,12 +69,44 @@ const appStore = createStore<AppStore>()((set) => ({
         project.tracks[0];
       set({
         project,
+        projectDirty: true,
         activeTrackId: firstTextTrack?.id ?? "",
         selectedCueIds: new Set<string>(),
         proxyPath: project.proxy_path,
         useProxy: false,
       });
     },
+    projectOpened: (project, projectFilePath) => {
+      const firstTextTrack =
+        project?.tracks.find((track) => track.kind === "text" && track.cue_count > 0) ??
+        project?.tracks[0];
+      set({
+        project,
+        projectFilePath,
+        projectDirty: false,
+        activeTrackId: firstTextTrack?.id ?? "",
+        selectedCueIds: new Set<string>(),
+        proxyPath: project?.proxy_path ?? null,
+        useProxy: false,
+        proxyDialogOpen: false,
+        warnings: [],
+        exportResult: null,
+      });
+    },
+    projectSaved: (projectFilePath) => set({ projectFilePath, projectDirty: false }),
+    projectClosed: () =>
+      set({
+        project: null,
+        projectFilePath: null,
+        projectDirty: false,
+        activeTrackId: "",
+        selectedCueIds: new Set<string>(),
+        proxyPath: null,
+        useProxy: false,
+        proxyDialogOpen: false,
+        warnings: [],
+        exportResult: null,
+      }),
     subtitleTracksAdded: (tracks, cues) =>
       set((state) => {
         if (!state.project) {
@@ -82,6 +121,7 @@ const appStore = createStore<AppStore>()((set) => ({
           : firstUsableTrack?.id || state.activeTrackId || "";
         return {
           project: { ...state.project, tracks: nextTracks, cues: nextCues },
+          projectDirty: true,
           activeTrackId: nextActiveTrackId,
           selectedCueIds: new Set<string>(),
         };
@@ -108,11 +148,13 @@ const appStore = createStore<AppStore>()((set) => ({
     sourcePreviewSelected: () => set({ proxyDialogOpen: false, useProxy: false }),
     proxyPreviewSelected: () => set((state) => (state.proxyPath ? { useProxy: true } : state)),
     proxyGenerated: (proxyPath) =>
-      set({
+      set((state) => ({
+        project: state.project ? { ...state.project, proxy_path: proxyPath } : null,
+        projectDirty: Boolean(state.project),
         proxyPath,
         useProxy: true,
         proxyDialogOpen: false,
-      }),
+      })),
     preferencesLoaded: (preferences) => set({ preferences }),
     messagePublished: (message) => set({ message }),
     warningsReplaced: (warnings) => set({ warnings }),

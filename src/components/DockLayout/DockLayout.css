@@ -18,7 +18,7 @@
 }
 
 .dock-window.drop-target {
-  outline: 1px solid var(--color-text-control);
+  outline: 1px solid var(--color-text);
   outline-offset: -2px;
 }
 
@@ -55,11 +55,11 @@
   flex: 0 0 auto;
   min-width: 0;
   max-width: none;
-  color: var(--color-text-secondary);
+  color: #d0d0d0;
 }
 
 .dock-tab.active {
-  color: var(--color-text-primary);
+  color: #d0d0d0;
 }
 
 .dock-window.has-multiple-tabs .dock-tab.active::after {
@@ -69,7 +69,7 @@
   left: 7px;
   height: 1.5px;
   border-radius: 0.5px;
-  background: var(--color-text-secondary);
+  background: var(--color-text);
   content: "";
 }
 
@@ -116,10 +116,10 @@
 .dock-tab-grip span::before,
 .dock-tab-grip span::after {
   display: block;
-  width: 9px;
+  width: 8px;
   height: 1px;
   background: currentColor;
-  border-radius: 0;
+  border-radius: 0.5px;
   content: "";
 }
 
@@ -163,7 +163,7 @@
   width: 32px;
   height: 100%;
   padding: 0;
-  color: var(--color-text-secondary);
+  color: var(--color-text);
   background: var(--color-surface);
   border-left: 1px solid var(--color-border-default);
   cursor: default;
@@ -177,10 +177,18 @@
   transform: translateY(-1px);
 }
 
-.dock-overflow-button:hover,
-.dock-overflow-button.active {
-  color: var(--color-text-primary);
+.dock-overflow-button:hover {
+  color: #d0d0d0;
   background: var(--color-surface-hover);
+}
+
+.dock-overflow-button.active {
+  color: #d0d0d0;
+  background: var(--color-surface-active);
+}
+
+.dock-overflow-button.active:hover {
+  background: var(--color-surface-active-hover);
 }
 
 .dock-empty-tab {
@@ -188,7 +196,7 @@
   align-items: center;
   height: 100%;
   padding: 0 9px;
-  color: var(--color-text-faint);
+  color: var(--color-text);
   font-size: 12px;
 }
 
@@ -217,7 +225,7 @@
   width: 100%;
   height: 100%;
   place-items: center;
-  color: var(--color-text-faint);
+  color: var(--color-text);
   font-size: 12px;
   background: var(--color-surface-soft);
 }
@@ -230,7 +238,7 @@
   max-width: 260px;
   padding: 5px 9px;
   overflow: hidden;
-  color: var(--color-text-primary);
+  color: var(--color-text);
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -260,7 +268,7 @@
   width: 100%;
   min-height: 28px;
   padding: 0 8px 0 0;
-  color: var(--color-text-primary);
+  color: var(--color-text);
   font-size: 12px;
   text-align: left;
   background: transparent;

@@ -1,0 +1,446 @@
+.import-workspace {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  padding: 24px 28px 0;
+  background: var(--color-surface-field);
+}
+
+.import-workspace-heading {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 0 2px 18px;
+}
+
+.import-workspace-eyebrow {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--color-text);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.import-workspace-heading h1 {
+  max-width: none;
+  color: var(--color-text);
+  font-size: 24px;
+  font-weight: 500;
+}
+
+.import-workspace-heading p {
+  margin: 7px 0 0;
+  color: var(--color-text);
+  font-size: 12px;
+}
+
+.import-workspace-limit {
+  padding: 5px 8px;
+  color: var(--color-text);
+  font-size: 11px;
+  background: var(--color-surface-control);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+
+.import-browser {
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-default);
+}
+
+.import-browser-sidebar {
+  min-width: 0;
+  padding: 14px 10px;
+  background: var(--color-surface-raised);
+  border-right: 1px solid var(--color-border-default);
+}
+
+.import-browser-sidebar h2 {
+  padding: 0 10px 10px;
+  color: var(--color-text);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.import-location {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 34px;
+  padding: 0 10px;
+  color: var(--color-text);
+  font-size: 12px;
+  text-align: left;
+  background: transparent;
+  border-radius: var(--radius-sm);
+}
+
+.import-location.active {
+  color: var(--color-text-highlight);
+  background: var(--color-surface-active);
+}
+
+.import-location.active:hover {
+  background: var(--color-surface-active-hover);
+}
+
+.import-location svg {
+  width: 16px;
+  height: 16px;
+}
+
+.import-browser-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 18px 10px 9px;
+  padding-top: 14px;
+  color: var(--color-text);
+  font-size: 11px;
+  border-top: 1px solid var(--color-border-default);
+}
+
+.import-browser-summary strong {
+  color: var(--color-text);
+  font-size: 12px;
+}
+
+.import-browser-sidebar dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0 10px;
+  font-size: 11px;
+}
+
+.import-browser-sidebar dl div {
+  display: flex;
+  justify-content: space-between;
+}
+
+.import-browser-sidebar dt {
+  color: var(--color-text);
+}
+
+.import-browser-sidebar dd {
+  margin: 0;
+  color: var(--color-text);
+}
+
+.import-browser-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.import-browser-toolbar {
+  display: flex;
+  flex: 0 0 48px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 12px 0 16px;
+  background: var(--color-surface-soft);
+  border-bottom: 1px solid var(--color-border-default);
+}
+
+.import-breadcrumb {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  color: var(--color-text);
+  font-size: 12px;
+}
+
+.import-breadcrumb svg {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  margin-right: 7px;
+}
+
+.import-breadcrumb svg:nth-of-type(2) {
+  width: 13px;
+  height: 13px;
+  margin: 0 4px;
+}
+
+.import-breadcrumb strong {
+  overflow: hidden;
+  color: var(--color-text);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-picker-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.import-picker-actions button,
+.import-empty-state button,
+.import-clear-button,
+.import-confirm-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 0 11px;
+  color: var(--color-text);
+  font-size: 12px;
+  background: var(--color-surface-control);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.import-picker-actions button:hover:not(:disabled),
+.import-empty-state button:hover:not(:disabled),
+.import-clear-button:hover:not(:disabled) {
+  color: var(--color-text-highlight);
+  background: var(--color-surface-hover);
+}
+
+.import-picker-actions svg,
+.import-confirm-button svg {
+  width: 15px;
+  height: 15px;
+}
+
+.import-file-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  background: var(--color-surface-field);
+}
+
+.import-file-list-header,
+.import-file-row {
+  display: grid;
+  grid-template-columns: minmax(230px, 1.25fr) 130px minmax(180px, 1fr) 42px;
+  align-items: center;
+}
+
+.import-file-list-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  min-height: 30px;
+  color: var(--color-text);
+  font-size: 11px;
+  background: var(--color-surface-row);
+  border-bottom: 1px solid var(--color-border-default);
+}
+
+.import-file-list-header span,
+.import-file-row > span {
+  min-width: 0;
+  padding: 0 12px;
+}
+
+.import-file-list-header span + span,
+.import-file-row > span + span {
+  border-left: 1px solid var(--color-border-row);
+}
+
+.import-file-row {
+  min-height: 54px;
+  color: var(--color-text);
+  font-size: 12px;
+  border-bottom: 1px solid var(--color-border-row);
+}
+
+.import-file-row:hover {
+  background: var(--color-surface-hover);
+}
+
+.import-file-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow: hidden;
+}
+
+.import-file-name > span:last-child {
+  min-width: 0;
+}
+
+.import-file-name strong,
+.import-file-name small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-file-name strong {
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.import-file-name small {
+  margin-top: 3px;
+  color: var(--color-text);
+  font-size: 10px;
+}
+
+.import-file-icon {
+  display: grid;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  color: var(--color-text);
+  background: var(--color-surface-control);
+  border: 1px solid var(--color-border-strong);
+  place-items: center;
+}
+
+.import-file-icon.video {
+  color: #8fbfff;
+}
+
+.import-file-icon.subtitle {
+  color: var(--color-text);
+}
+
+.import-file-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.import-file-path {
+  overflow: hidden;
+  color: var(--color-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-remove-button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--color-text);
+  background: transparent;
+  border-radius: var(--radius-sm);
+  place-items: center;
+}
+
+.import-remove-button:hover:not(:disabled) {
+  color: var(--color-text-highlight);
+  background: var(--color-surface-hover);
+}
+
+.import-remove-button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.import-empty-state {
+  display: flex;
+  height: calc(100% - 30px);
+  min-height: 260px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  padding: 32px;
+  color: var(--color-text);
+  text-align: center;
+}
+
+.import-empty-state > svg {
+  width: 42px;
+  height: 42px;
+  margin-bottom: 14px;
+  color: var(--color-text);
+}
+
+.import-empty-state strong {
+  color: var(--color-text);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.import-empty-state span {
+  margin: 7px 0 16px;
+  font-size: 11px;
+}
+
+.import-workspace-footer {
+  display: flex;
+  flex: 0 0 64px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.import-workspace-footer > div:first-child {
+  min-width: 0;
+}
+
+.import-workspace-footer strong,
+.import-workspace-footer span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-workspace-footer strong {
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.import-workspace-footer span {
+  margin-top: 4px;
+  color: var(--color-text);
+  font-size: 11px;
+}
+
+.import-footer-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.import-confirm-button {
+  min-width: 90px;
+  color: var(--color-text-highlight);
+  background: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
+}
+
+.import-confirm-button:hover:not(:disabled) {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+@media (max-width: 1000px) {
+  .import-workspace {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .import-browser {
+    grid-template-columns: 170px minmax(0, 1fr);
+  }
+
+  .import-file-list-header,
+  .import-file-row {
+    grid-template-columns: minmax(210px, 1fr) 110px minmax(140px, 0.7fr) 42px;
+  }
+}

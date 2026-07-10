@@ -3,7 +3,7 @@ import { DEFAULT_FRAME_RATE } from "../../timeline";
 
 export type MonitorZoomLevel = "fit" | number;
 
-export interface ZoomOrigin {
+export interface ZoomPan {
   x: number;
   y: number;
 }
@@ -23,14 +23,14 @@ interface SourceMonitorState {
   mediaKey: string;
   currentFrame: number;
   zoomLevel: MonitorZoomLevel;
-  zoomOrigin: ZoomOrigin;
+  zoomPan: ZoomPan;
   timelineStartFrame: number;
   timelineSpanFrames: number;
   cueRange: MonitorCueRange | null;
   syncMedia: (mediaKey: string, durationFrames: number) => void;
   setCurrentFrame: (update: StateUpdate<number>) => void;
   setZoomLevel: (update: StateUpdate<MonitorZoomLevel>) => void;
-  setZoomOrigin: (update: StateUpdate<ZoomOrigin>) => void;
+  setZoomPan: (update: StateUpdate<ZoomPan>) => void;
   setTimelineStartFrame: (update: StateUpdate<number>) => void;
   setTimelineSpanFrames: (update: StateUpdate<number>) => void;
   setCueRange: (cueRange: MonitorCueRange | null) => void;
@@ -42,7 +42,7 @@ export const useSourceMonitorState = createPanelState<SourceMonitorState>(() => 
   mediaKey: "",
   currentFrame: 0,
   zoomLevel: "fit",
-  zoomOrigin: { x: 50, y: 50 },
+  zoomPan: { x: 0, y: 0 },
   timelineStartFrame: 0,
   timelineSpanFrames: DEFAULT_TIMELINE_SPAN_FRAMES,
   cueRange: null,
@@ -54,7 +54,7 @@ export const useSourceMonitorState = createPanelState<SourceMonitorState>(() => 
             mediaKey,
             currentFrame: 0,
             zoomLevel: "fit",
-            zoomOrigin: { x: 50, y: 50 },
+            zoomPan: { x: 0, y: 0 },
             timelineStartFrame: 0,
             timelineSpanFrames: durationFrames > 0 ? durationFrames : DEFAULT_TIMELINE_SPAN_FRAMES,
             cueRange: null,
@@ -63,8 +63,7 @@ export const useSourceMonitorState = createPanelState<SourceMonitorState>(() => 
   setCurrentFrame: (update) =>
     set((state) => ({ currentFrame: resolveUpdate(state.currentFrame, update) })),
   setZoomLevel: (update) => set((state) => ({ zoomLevel: resolveUpdate(state.zoomLevel, update) })),
-  setZoomOrigin: (update) =>
-    set((state) => ({ zoomOrigin: resolveUpdate(state.zoomOrigin, update) })),
+  setZoomPan: (update) => set((state) => ({ zoomPan: resolveUpdate(state.zoomPan, update) })),
   setTimelineStartFrame: (update) =>
     set((state) => ({ timelineStartFrame: resolveUpdate(state.timelineStartFrame, update) })),
   setTimelineSpanFrames: (update) =>

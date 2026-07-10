@@ -5,6 +5,16 @@ import type { DockAreaId, DockLayoutState, DockPanelDefinition } from "./types";
 
 const dockAreaOrder: DockAreaId[] = ["leftTop", "leftBottom", "right"];
 const DOCK_DRAG_LONG_PRESS_MS = 220;
+const RESIZER_SIZE_CSS_VAR = "--resizer-size";
+
+function readCssPixelVariable(name: string, fallback: number): number {
+  if (typeof document === "undefined") {
+    return fallback;
+  }
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name);
+  const parsed = parseInt(value.trim(), 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
 
 interface DockDragState<PanelId extends string> {
   panelId: PanelId;
@@ -81,6 +91,7 @@ export function DockLayout<PanelId extends string>({
   const [layout, setLayout] = useState(initialLayout);
   const [leftPaneWidth, setLeftPaneWidth] = useState(100 / 2.8);
   const [previewPaneHeight, setPreviewPaneHeight] = useState(48);
+  const [resizerSize] = useState(() => readCssPixelVariable(RESIZER_SIZE_CSS_VAR, 6));
   const [dragPreview, setDragPreview] = useState<DockDragPreview<PanelId> | null>(null);
   const [dropTargetAreaId, setDropTargetAreaId] = useState<DockAreaId | null>(null);
   const [tabsOverflow, setTabsOverflow] = useState<Record<DockAreaId, boolean>>({
@@ -271,9 +282,8 @@ export function DockLayout<PanelId extends string>({
     }
     event.preventDefault();
 
-    const splitterWidth = 6;
     const minLeft = 320;
-    const minRight = 420 + splitterWidth;
+    const minRight = 420 + resizerSize;
     const minPercent = (minLeft / rect.width) * 100;
     const maxPercent = 100 - (minRight / rect.width) * 100;
 
@@ -299,9 +309,8 @@ export function DockLayout<PanelId extends string>({
     }
     event.preventDefault();
 
-    const splitterHeight = 6;
     const minTop = 220;
-    const minBottom = 240 + splitterHeight;
+    const minBottom = 240 + resizerSize;
     const minPercent = (minTop / rect.height) * 100;
     const maxPercent = 100 - (minBottom / rect.height) * 100;
 
@@ -539,14 +548,14 @@ export function DockLayout<PanelId extends string>({
         ref={workspaceRef}
         className="workspace dock-workspace"
         style={{
-          gridTemplateColumns: `minmax(320px, ${leftPaneWidth}%) 6px minmax(420px, 1fr)`,
+          gridTemplateColumns: `minmax(320px, ${leftPaneWidth}%) ${resizerSize}px minmax(420px, 1fr)`,
         }}
       >
         <section
           ref={leftPaneRef}
           className="left-pane dock-left-pane"
           style={{
-            gridTemplateRows: `minmax(220px, ${previewPaneHeight}%) 6px minmax(240px, 1fr)`,
+            gridTemplateRows: `minmax(220px, ${previewPaneHeight}%) ${resizerSize}px minmax(240px, 1fr)`,
           }}
         >
           {renderDockWindow("leftTop")}

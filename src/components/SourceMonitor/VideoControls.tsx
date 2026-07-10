@@ -91,7 +91,7 @@ export function VideoControls({
 }: VideoControlsProps) {
   const zoomLevel = useSourceMonitorState((state) => state.zoomLevel);
   const setZoomLevel = useSourceMonitorState((state) => state.setZoomLevel);
-  const setZoomOrigin = useSourceMonitorState((state) => state.setZoomOrigin);
+  const setZoomPan = useSourceMonitorState((state) => state.setZoomPan);
   const rowRef = useRef<HTMLDivElement | null>(null);
   const timeEditorRef = useRef<HTMLSpanElement | null>(null);
   const timecodeScrubRef = useRef<TimecodeScrubState | null>(null);
@@ -386,9 +386,9 @@ export function VideoControls({
   }
 
   function changeZoomLevel(value: string) {
+    setZoomPan({ x: 0, y: 0 });
     if (value === "fit") {
       setZoomLevel("fit");
-      setZoomOrigin({ x: 50, y: 50 });
       return;
     }
     setZoomLevel(Number(value));

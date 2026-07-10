@@ -226,6 +226,20 @@ struct Project {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProjectDocument {
+    project: Option<Project>,
+    saved_at: u64,
+    app_version: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct OpenProjectResult {
+    path: String,
+    project: Option<Project>,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ImportResult {
     project: Project,
     warnings: Vec<String>,
@@ -387,12 +401,22 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new())
+        .setup(|app| {
+            #[cfg(windows)]
+            if let Some(window) = app.get_webview_window("main") {
+                window.set_theme(Some(tauri::Theme::Light))?;
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_preferences,
             update_preferences,
             import_media,
             generate_proxy,
             add_external_subtitles,
+            save_project_file,
+            open_project_file,
+            close_project,
             cancel_task,
             export_clips
         ])

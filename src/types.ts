@@ -73,6 +73,12 @@ export interface ImportResult {
   warnings: string[];
 }
 
+export interface OpenProjectResult {
+  path: string;
+  project: Project | null;
+  warnings: string[];
+}
+
 export interface ProxyResult {
   proxy_path: string;
 }

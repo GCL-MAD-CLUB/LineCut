@@ -1,0 +1,37 @@
+.workspace-switcher {
+  display: flex;
+  flex: 0 0 auto;
+  align-self: stretch;
+  align-items: center;
+  margin-left: auto;
+}
+
+.workspace-switcher button {
+  min-width: 54px;
+  align-self: stretch;
+  padding: 0 14px;
+  color: var(--color-text);
+  font-size: 16px;
+  font-weight: 400;
+  background: transparent;
+  cursor: pointer;
+}
+
+.workspace-switcher button:hover:not(:disabled) {
+  color: #d8d8d8;
+}
+
+.workspace-switcher button.active {
+  color: var(--color-text-highlight);
+}
+
+.workspace-switcher button:disabled {
+  opacity: 0.55;
+}
+
+.workspace-switcher-divider {
+  flex: 0 0 1px;
+  width: 1px;
+  height: 22px;
+  background: var(--color-border-default);
+}

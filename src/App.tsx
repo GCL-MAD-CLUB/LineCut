@@ -1,20 +1,23 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { open } from "@tauri-apps/plugin-dialog";
-import { Captions, FolderOpen, Loader2, Settings, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { confirm, open, save } from "@tauri-apps/plugin-dialog";
+import { Loader2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { emitAppEvent } from "./appEvents";
+import { ApplicationMenu } from "./components/ApplicationMenu";
 import {
   DockLayout,
   type DockLayoutState,
   type DockPanelDefinition,
 } from "./components/DockLayout";
 import { ExportPanel } from "./components/ExportPanel";
+import { ImportWorkspace } from "./components/ImportWorkspace";
 import { PreferencesDialog } from "./components/PreferencesDialog";
 import { ProxyCreationDialog } from "./components/ProxyCreationDialog";
+import { SecondaryTopbar } from "./components/SecondaryTopbar";
 import { SourceMonitor } from "./components/SourceMonitor";
 import { SubtitlePanel } from "./components/SubtitlePanel";
 import {
-  TaskProgress,
   cancelAllTaskProgress,
   createTaskProgress,
   getTaskProgressStatus,
@@ -22,12 +25,12 @@ import {
 import { cancelFfmpegTask, createFfmpegTaskId, listenToFfmpegTaskProgress } from "./ffmpegProgress";
 import { useAppStore } from "./store";
 import { isTauriRuntime } from "./tauriRuntime";
-import type { AddExternalSubtitlesResult, ImportResult, Preferences } from "./types";
+import type { AddExternalSubtitlesResult, OpenProjectResult, Preferences } from "./types";
 
-const videoFilters = [
+const projectFilters = [
   {
-    name: "Video",
-    extensions: ["mkv", "mp4", "mov", "webm", "avi", "ts", "m2ts"],
+    name: "LineCut Project",
+    extensions: ["lcp"],
   },
 ];
 
@@ -38,13 +41,18 @@ const subtitleFilters = [
   },
 ];
 
-const appIconUrl = new URL("../src-tauri/icons/icon.ico", import.meta.url).href;
-
 function fileName(path: string) {
   return path.split(/[\\/]/).pop() ?? path;
 }
 
 type AppDockPanelId = "source" | "export" | "subtitles";
+
+const appWorkspaces = [
+  { id: "import", label: "导入" },
+  { id: "edit", label: "编辑" },
+] as const;
+
+type AppWorkspace = (typeof appWorkspaces)[number]["id"];
 
 const initialDockLayout: DockLayoutState<AppDockPanelId> = {
   areas: {
@@ -64,23 +72,35 @@ const initialDockLayout: DockLayoutState<AppDockPanelId> = {
 };
 
 export default function App() {
-  const [externalSubtitlePaths, setExternalSubtitlePaths] = useState<string[]>([]);
+  const [activeWorkspace, setActiveWorkspace] = useState<AppWorkspace>("edit");
   const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const closingWindowRef = useRef(false);
 
   const project = useAppStore((state) => state.project);
+  const projectFilePath = useAppStore((state) => state.projectFilePath);
+  const projectDirty = useAppStore((state) => state.projectDirty);
+  const activeTrackId = useAppStore((state) => state.activeTrackId);
+  const selectedCueCount = useAppStore((state) => state.selectedCueIds.size);
   const message = useAppStore((state) => state.message);
   const warnings = useAppStore((state) => state.warnings);
   const exportResult = useAppStore((state) => state.exportResult);
-  const projectImported = useAppStore((state) => state.actions.projectImported);
+  const projectOpened = useAppStore((state) => state.actions.projectOpened);
+  const projectSaved = useAppStore((state) => state.actions.projectSaved);
+  const projectClosed = useAppStore((state) => state.actions.projectClosed);
   const subtitleTracksAdded = useAppStore((state) => state.actions.subtitleTracksAdded);
   const preferencesLoaded = useAppStore((state) => state.actions.preferencesLoaded);
   const messagePublished = useAppStore((state) => state.actions.messagePublished);
   const warningsReplaced = useAppStore((state) => state.actions.warningsReplaced);
   const warningsAppended = useAppStore((state) => state.actions.warningsAppended);
-  const exportResultChanged = useAppStore((state) => state.actions.exportResultChanged);
   const { tasks: runningTasks } = getTaskProgressStatus();
-  const isImportingMedia = runningTasks.some((task) => task.operation === "import");
-  const isImportingSubtitles = runningTasks.some((task) => task.operation === "subtitle_import");
+  const isBusy = runningTasks.length > 0;
+  const hasProject = Boolean(projectFilePath || project);
+  const activeTrackCues = useMemo(
+    () => (project && activeTrackId ? (project.cues[activeTrackId] ?? []) : []),
+    [activeTrackId, project],
+  );
+  const canSelectAllSubtitleCues = activeWorkspace === "edit" && activeTrackCues.length > 0;
+  const canClearSubtitleCueSelection = activeWorkspace === "edit" && selectedCueCount > 0;
   const activeStatusLabel =
     runningTasks.length === 1 ? runningTasks[0].label : `正在执行 ${runningTasks.length} 项操作...`;
 
@@ -118,12 +138,10 @@ export default function App() {
       return;
     }
 
-    const baseTitle = " LineCut";
-    const title = project?.asset.file_name
-      ? `${baseTitle} - ${project.asset.file_name}`
-      : baseTitle;
+    const projectTitle = projectFilePath ?? (project ? "未命名项目" : "");
+    const title = ` LineCut${projectTitle ? ` - ${projectTitle}${projectDirty ? " *" : ""}` : ""}`;
     void getCurrentWindow().setTitle(title);
-  }, [project]);
+  }, [project, projectDirty, projectFilePath]);
 
   useEffect(() => {
     if (!isTauriRuntime()) {
@@ -133,9 +151,27 @@ export default function App() {
     let disposed = false;
     let unlistenCloseRequested: (() => void) | undefined;
 
-    void getCurrentWindow()
-      .onCloseRequested(async () => {
+    const currentWindow = getCurrentWindow();
+    void currentWindow
+      .onCloseRequested(async (event) => {
+        if (!projectDirty || closingWindowRef.current) {
+          await cancelAllTaskProgress();
+          return;
+        }
+
+        event.preventDefault();
+        const shouldClose = await confirm("项目有尚未保存的更改，确定要退出吗？", {
+          title: "LineCut",
+          kind: "warning",
+          okLabel: "退出",
+          cancelLabel: "取消",
+        });
+        if (!shouldClose) {
+          return;
+        }
+        closingWindowRef.current = true;
         await cancelAllTaskProgress();
+        await currentWindow.destroy();
       })
       .then((unlisten) => {
         if (disposed) {
@@ -150,11 +186,178 @@ export default function App() {
       disposed = true;
       unlistenCloseRequested?.();
     };
-  }, []);
+  }, [projectDirty]);
+
+  function publishError(error: unknown) {
+    messagePublished(error instanceof Error ? error.message : String(error));
+  }
+
+  async function confirmDiscardChanges(message: string) {
+    if (!projectDirty) {
+      return true;
+    }
+    if (!isTauriRuntime()) {
+      return window.confirm(message);
+    }
+    return confirm(message, {
+      title: "LineCut",
+      kind: "warning",
+      okLabel: "不保存",
+      cancelLabel: "取消",
+    });
+  }
+
+  async function removeBackendProject(assetId = project?.asset.id) {
+    if (!assetId || !isTauriRuntime()) {
+      return;
+    }
+    await invoke("close_project", { assetId });
+  }
+
+  async function exitApplication() {
+    if (!isTauriRuntime()) {
+      window.close();
+      return;
+    }
+    await getCurrentWindow().close();
+  }
+
+  async function newProject() {
+    if (!isTauriRuntime()) {
+      messagePublished("请在 Tauri 桌面窗口中新建项目。");
+      return;
+    }
+    if (!(await confirmDiscardChanges("当前项目有尚未保存的更改，仍要新建项目吗？"))) {
+      return;
+    }
+
+    try {
+      await removeBackendProject();
+      projectClosed();
+      setActiveWorkspace("import");
+      messagePublished("已新建项目");
+    } catch (error) {
+      publishError(error);
+    }
+  }
+
+  async function openProject() {
+    if (!isTauriRuntime()) {
+      messagePublished("请在 Tauri 桌面窗口中打开项目。");
+      return;
+    }
+    if (!(await confirmDiscardChanges("当前项目有尚未保存的更改，仍要打开其他项目吗？"))) {
+      return;
+    }
+    const picked = await open({
+      multiple: false,
+      title: "打开 LineCut 项目",
+      filters: projectFilters,
+    });
+    const path = Array.isArray(picked) ? picked[0] : picked;
+    if (!path) {
+      return;
+    }
+
+    try {
+      const oldAssetId = project?.asset.id;
+      const result = await invoke<OpenProjectResult>("open_project_file", { path });
+      if (oldAssetId && oldAssetId !== result.project?.asset.id) {
+        await removeBackendProject(oldAssetId);
+      }
+      projectOpened(result.project, result.path);
+      warningsReplaced(result.warnings);
+      messagePublished(`已打开项目 ${fileName(result.path)}`);
+    } catch (error) {
+      publishError(error);
+    }
+  }
+
+  async function closeProject() {
+    if (!(await confirmDiscardChanges("当前项目有尚未保存的更改，仍要关闭吗？"))) {
+      return;
+    }
+    try {
+      await removeBackendProject();
+      projectClosed();
+      messagePublished("项目已关闭");
+    } catch (error) {
+      publishError(error);
+    }
+  }
+
+  async function writeProject(path: string, makeCurrent: boolean) {
+    const savedPath = await invoke<string>("save_project_file", {
+      path,
+      assetId: project?.asset.id ?? null,
+    });
+    if (makeCurrent) {
+      projectSaved(savedPath);
+      messagePublished(`项目已保存到 ${savedPath}`);
+    } else {
+      messagePublished(`项目副本已保存到 ${savedPath}`);
+    }
+  }
+
+  function suggestedProjectName() {
+    if (projectFilePath) {
+      return projectFilePath;
+    }
+    const mediaName = project?.asset.file_name.replace(/\.[^.]+$/, "") || "未命名项目";
+    return `${mediaName}.lcp`;
+  }
+
+  async function saveProjectAs(makeCurrent = true) {
+    if (!isTauriRuntime()) {
+      messagePublished("请在 Tauri 桌面窗口中保存项目。");
+      return;
+    }
+    const picked = await save({
+      title: makeCurrent ? "项目另存为" : "保存项目副本",
+      defaultPath: suggestedProjectName(),
+      filters: projectFilters,
+    });
+    if (!picked) {
+      return;
+    }
+    try {
+      await writeProject(picked, makeCurrent);
+    } catch (error) {
+      publishError(error);
+    }
+  }
+
+  async function saveProject() {
+    if (!projectFilePath) {
+      await saveProjectAs(true);
+      return;
+    }
+    try {
+      await writeProject(projectFilePath, true);
+    } catch (error) {
+      publishError(error);
+    }
+  }
+
+  function openImportWorkspace() {
+    setActiveWorkspace("import");
+  }
+
+  function selectAllSubtitleCues() {
+    emitAppEvent("subtitle:select-all");
+  }
+
+  function clearSubtitleCueSelection() {
+    emitAppEvent("subtitle:clear-selection");
+  }
 
   async function chooseExternalSubtitles() {
     if (!isTauriRuntime()) {
       messagePublished("请在 Tauri 桌面窗口中选择本地外挂字幕。");
+      return;
+    }
+    if (!project) {
+      messagePublished("请先在导入工作区选择视频和字幕。");
       return;
     }
     const picked = await open({
@@ -166,98 +369,87 @@ export default function App() {
       return;
     }
 
-    if (project) {
-      const subtitleTaskId = createFfmpegTaskId("subtitle-import");
-      let subtitleImportCancelled = false;
-      const subtitleImportTask = await createTaskProgress({
-        operation: "subtitle_import",
-        label: "导入外挂字幕",
-        current: 0,
-        total: 1,
-        listener: listenToFfmpegTaskProgress(subtitleTaskId),
-        on_cancel: async () => {
-          await cancelFfmpegTask(subtitleTaskId);
-          subtitleImportCancelled = true;
-        },
-      });
-      try {
-        const result = await invoke<AddExternalSubtitlesResult>("add_external_subtitles", {
-          assetId: project.asset.id,
-          paths,
-          taskId: subtitleTaskId,
-        });
-        subtitleTracksAdded(result.tracks, result.cues);
-        if (result.warnings.length > 0) {
-          warningsAppended(result.warnings);
-        }
-        messagePublished("外挂字幕已导入");
-        subtitleImportTask.update({ current: 1 });
-        subtitleImportTask.remove();
-      } catch (error) {
-        if (subtitleImportCancelled) {
-          messagePublished("外挂字幕导入已取消");
-          return;
-        }
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        subtitleImportTask.fail("导入外挂字幕失败", errorMessage);
-        messagePublished(errorMessage);
-      }
-    } else {
-      setExternalSubtitlePaths((current) => Array.from(new Set([...current, ...paths])));
-    }
-  }
-
-  async function importVideo() {
-    if (!isTauriRuntime()) {
-      messagePublished("浏览器预览不能导入本地 MKV，请运行 Tauri 桌面应用。");
-      return;
-    }
-    const picked = await open({
-      multiple: false,
-      filters: videoFilters,
-    });
-    const path = Array.isArray(picked) ? picked[0] : picked;
-    if (!path) {
-      return;
-    }
-
-    const importTaskId = createFfmpegTaskId("import");
-    let importCancelled = false;
-    const importTask = await createTaskProgress({
-      operation: "import",
-      label: "正在探测媒体并抽取字幕",
+    const subtitleTaskId = createFfmpegTaskId("subtitle-import");
+    let subtitleImportCancelled = false;
+    const subtitleImportTask = await createTaskProgress({
+      operation: "subtitle_import",
+      label: "导入外挂字幕",
       current: 0,
       total: 1,
-      listener: listenToFfmpegTaskProgress(importTaskId),
+      listener: listenToFfmpegTaskProgress(subtitleTaskId),
       on_cancel: async () => {
-        await cancelFfmpegTask(importTaskId);
-        importCancelled = true;
+        await cancelFfmpegTask(subtitleTaskId);
+        subtitleImportCancelled = true;
       },
     });
-    warningsReplaced([]);
-    exportResultChanged(null);
     try {
-      const result = await invoke<ImportResult>("import_media", {
-        path,
-        externalSubtitles: externalSubtitlePaths,
-        taskId: importTaskId,
+      const result = await invoke<AddExternalSubtitlesResult>("add_external_subtitles", {
+        assetId: project.asset.id,
+        paths,
+        taskId: subtitleTaskId,
       });
-      projectImported(result.project);
-      warningsReplaced(result.warnings);
-      setExternalSubtitlePaths([]);
-      messagePublished(`已导入 ${result.project.asset.file_name}`);
-      importTask.update({ current: 1 });
-      importTask.remove();
+      subtitleTracksAdded(result.tracks, result.cues);
+      if (result.warnings.length > 0) {
+        warningsAppended(result.warnings);
+      }
+      messagePublished("外挂字幕已导入");
+      subtitleImportTask.update({ current: 1 });
+      subtitleImportTask.remove();
     } catch (error) {
-      if (importCancelled) {
-        messagePublished("导入已取消");
+      if (subtitleImportCancelled) {
+        messagePublished("外挂字幕导入已取消");
         return;
       }
       const errorMessage = error instanceof Error ? error.message : String(error);
-      importTask.fail("导入视频失败", errorMessage);
+      subtitleImportTask.fail("导入外挂字幕失败", errorMessage);
       messagePublished(errorMessage);
     }
   }
+
+  useEffect(() => {
+    const handleShortcut = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || event.repeat) {
+        return;
+      }
+      const key = event.key.toLowerCase();
+      if (key === "q" && !event.shiftKey && !event.altKey) {
+        event.preventDefault();
+        void exitApplication();
+        return;
+      }
+      if (isBusy) {
+        return;
+      }
+      if (key === "a" && event.target instanceof HTMLInputElement) {
+        return;
+      }
+      let action: (() => void | Promise<void>) | undefined;
+      if (key === "n" && !event.shiftKey && !event.altKey) action = newProject;
+      if (key === "o" && !event.shiftKey && !event.altKey) action = openProject;
+      if (key === "i" && !event.shiftKey && !event.altKey) action = openImportWorkspace;
+      if (key === "a" && !event.shiftKey && !event.altKey && canSelectAllSubtitleCues) {
+        action = selectAllSubtitleCues;
+      }
+      if (key === "a" && event.shiftKey && !event.altKey && canClearSubtitleCueSelection) {
+        action = clearSubtitleCueSelection;
+      }
+      if (key === "w" && event.shiftKey && !event.altKey && hasProject) action = closeProject;
+      if (key === "s" && !event.shiftKey && !event.altKey && hasProject) action = saveProject;
+      if (key === "s" && event.shiftKey && !event.altKey && hasProject) {
+        action = () => saveProjectAs(true);
+      }
+      if (key === "s" && !event.shiftKey && event.altKey && hasProject) {
+        action = () => saveProjectAs(false);
+      }
+      if (!action) {
+        return;
+      }
+      event.preventDefault();
+      void action();
+    };
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  });
 
   const dockPanels = useMemo<Array<DockPanelDefinition<AppDockPanelId>>>(
     () => [
@@ -280,60 +472,47 @@ export default function App() {
     [project?.asset.file_name],
   );
 
+  const workspaceContent: Record<AppWorkspace, ReactNode> = {
+    import: <ImportWorkspace onImportCompleted={() => setActiveWorkspace("edit")} />,
+    edit: <DockLayout panels={dockPanels} initialLayout={initialDockLayout} />,
+  };
+
   return (
     <div className="app-shell">
-      <header className="topbar">
-        <div className="topbar-left">
-          <div className="brand">
-            <img src={appIconUrl} alt="" className="app-icon" />
-            <TaskProgress>
-              <div className="brand-copy">
-                <strong>LineCut</strong>
-                <span>对白检索与片段导出</span>
-              </div>
-            </TaskProgress>
-          </div>
-        </div>
-        <div className="topbar-actions">
-          <button className="toolbar-button" onClick={() => setPreferencesOpen(true)}>
-            <Settings size={16} />
-            首选项
-          </button>
-          <button
-            className="toolbar-button"
-            onClick={chooseExternalSubtitles}
-            disabled={isImportingSubtitles}
-          >
-            <Captions size={16} />
-            外挂字幕
-          </button>
-          <button className="accent-button" onClick={importVideo} disabled={isImportingMedia}>
-            {isImportingMedia ? <Loader2 className="spin" size={16} /> : <FolderOpen size={16} />}
-            导入视频
-          </button>
-        </div>
+      <header className="application-menubar">
+        <ApplicationMenu
+          hasProject={hasProject}
+          hasMedia={Boolean(project)}
+          isDirty={projectDirty}
+          isBusy={isBusy}
+          onNewProject={newProject}
+          onOpenProject={openProject}
+          onCloseProject={closeProject}
+          onSaveProject={saveProject}
+          onSaveProjectAs={() => saveProjectAs(true)}
+          onSaveProjectCopy={() => saveProjectAs(false)}
+          onImportMedia={openImportWorkspace}
+          onImportSubtitles={chooseExternalSubtitles}
+          canSelectAllSubtitleCues={canSelectAllSubtitleCues}
+          canClearSubtitleCueSelection={canClearSubtitleCueSelection}
+          onSelectAllSubtitleCues={selectAllSubtitleCues}
+          onClearSubtitleCueSelection={clearSubtitleCueSelection}
+          onOpenPreferences={() => setPreferencesOpen(true)}
+          onExit={exitApplication}
+        />
       </header>
 
-      {externalSubtitlePaths.length > 0 && (
-        <div className="subtitle-strip">
-          <span>外挂字幕</span>
-          {externalSubtitlePaths.map((path) => (
-            <button
-              key={path}
-              className="subtitle-chip"
-              onClick={() =>
-                setExternalSubtitlePaths((current) => current.filter((item) => item !== path))
-              }
-              title={path}
-            >
-              {fileName(path)}
-              <X size={13} />
-            </button>
-          ))}
-        </div>
-      )}
+      <SecondaryTopbar
+        projectFilePath={projectFilePath}
+        hasProjectMedia={Boolean(project)}
+        isProjectDirty={projectDirty}
+        workspaces={appWorkspaces}
+        activeWorkspace={activeWorkspace}
+        isWorkspaceSwitchingDisabled={isBusy}
+        onWorkspaceChange={setActiveWorkspace}
+      />
 
-      <DockLayout panels={dockPanels} initialLayout={initialDockLayout} />
+      {workspaceContent[activeWorkspace]}
 
       <footer className="statusbar">
         <span className={runningTasks.length > 0 ? "busy-status" : ""}>

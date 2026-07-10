@@ -15,7 +15,7 @@
 
 .topbar-progress > span {
   overflow: hidden;
-  color: var(--gray-400);
+  color: #a8a8a8;
   font-size: 12px;
   line-height: 1;
   text-overflow: ellipsis;
@@ -64,13 +64,13 @@
   min-height: var(--task-progress-height);
   place-items: center;
   padding: 0;
-  color: var(--color-text-icon);
+  color: #d6d6d6;
   background: transparent;
   cursor: pointer;
 }
 
 .topbar-progress-cancel:hover {
-  color: var(--color-text-inverse);
+  color: #fff;
 }
 
 .topbar-progress-cancel svg {
@@ -100,7 +100,7 @@
   gap: 10px;
   align-items: start;
   padding: 10px 10px 10px 12px;
-  color: var(--color-text-primary);
+  color: var(--color-text);
   background: var(--color-surface-raised);
   border: 1px solid var(--color-border-control);
   box-shadow: 0 14px 30px rgb(0 0 0 / 42%);
@@ -115,13 +115,13 @@
 
 .task-progress-error strong {
   margin-bottom: 4px;
-  color: var(--color-text-primary);
+  color: var(--color-text);
   font-size: 12px;
   line-height: 1.2;
 }
 
 .task-progress-error span {
-  color: var(--color-text-muted);
+  color: var(--color-text);
   font-size: 12px;
   line-height: 1.35;
   overflow-wrap: anywhere;
@@ -132,13 +132,13 @@
   width: 22px;
   height: 22px;
   padding: 0;
-  color: var(--color-text-icon);
+  color: var(--color-text);
   background: transparent;
   place-items: center;
 }
 
 .task-progress-error button:hover {
-  color: var(--color-text-inverse);
+  color: var(--color-text-highlight);
   background: var(--color-surface-hover);
 }
 

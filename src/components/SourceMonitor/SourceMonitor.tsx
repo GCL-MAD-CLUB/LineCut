@@ -60,7 +60,7 @@ export function SourceMonitor() {
   const setCurrentFrame = useSourceMonitorState((state) => state.setCurrentFrame);
   const currentFrameRef = useRef(currentFrame);
   const zoomLevel = useSourceMonitorState((state) => state.zoomLevel);
-  const zoomOrigin = useSourceMonitorState((state) => state.zoomOrigin);
+  const zoomPan = useSourceMonitorState((state) => state.zoomPan);
   const timelineStartFrame = useSourceMonitorState((state) => state.timelineStartFrame);
   const setTimelineStartFrame = useSourceMonitorState((state) => state.setTimelineStartFrame);
   const timelineSpanFrames = useSourceMonitorState((state) => state.timelineSpanFrames);
@@ -507,7 +507,7 @@ export function SourceMonitor() {
         videoRef={videoRef}
         videoSrc={videoSrc}
         zoomLevel={zoomLevel}
-        zoomOrigin={zoomOrigin}
+        zoomPan={zoomPan}
         onVideoError={handleVideoError}
         onLoadedMetadata={handleLoadedMetadata}
         onSyncCurrentTime={syncCurrentTimeFromVideo}

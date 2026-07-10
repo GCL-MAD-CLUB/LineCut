@@ -2,6 +2,8 @@ import { useEffect, useRef } from "react";
 
 interface AppEventMap {
   "monitor:seek": { timeUs: number; focusEndUs?: number };
+  "subtitle:select-all": undefined;
+  "subtitle:clear-selection": undefined;
 }
 
 export function emitAppEvent<K extends keyof AppEventMap>(

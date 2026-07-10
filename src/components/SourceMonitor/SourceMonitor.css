@@ -44,7 +44,7 @@
   height: 100%;
   min-height: 0;
   padding: 15% 0 15% 0;
-  color: var(--color-text-empty);
+  color: var(--color-text);
   text-align: center;
 }
 
@@ -57,7 +57,7 @@
   --monitor-time-width: calc(var(--monitor-time-ch, 11) * 1ch);
   --monitor-control-gap: 14px;
   --transport-button-size: 24px;
-  --transport-button-gap: 10px;
+  --transport-button-gap: 8px;
   --transport-buttons-width: calc(
     var(--transport-button-size) * 3 + var(--transport-button-gap) * 2
   );
@@ -126,12 +126,12 @@
 .monitor-time-editor {
   display: block;
   justify-self: start;
-  color: var(--color-text-control);
+  color: var(--color-text);
   line-height: inherit;
   background: transparent;
   border: 0;
   outline: none;
-  caret-color: var(--color-text-control);
+  caret-color: var(--color-text);
   cursor: text;
   user-select: text;
 }
@@ -140,21 +140,21 @@
   justify-self: end;
   width: var(--monitor-time-width);
   min-width: var(--monitor-time-width);
-  color: var(--color-text-tertiary);
+  color: var(--color-text);
   text-align: left;
 }
 
 .source-monitor.empty-state .monitor-time,
 .source-monitor.empty-state .monitor-duration,
 .source-monitor.empty-state .monitor-time:disabled {
-  color: var(--color-text-disabled);
+  color: var(--color-text);
   opacity: 1;
   cursor: default;
 }
 
 .monitor-select {
   width: 100%;
-  color: var(--color-text-control);
+  color: var(--color-text);
   background: var(--color-surface-field-strong);
   border-color: var(--color-surface-hover);
   border-radius: var(--radius-md);
@@ -177,7 +177,7 @@
 .monitor-select .select-dropdown-trigger svg {
   width: 16px;
   height: 16px;
-  color: var(--color-text-icon-muted);
+  color: var(--color-text);
 }
 
 .transport-controls {
@@ -194,30 +194,30 @@
   height: var(--transport-button-size);
   place-items: center;
   padding: 0;
-  color: var(--color-text-soft);
+  color: var(--color-text);
   background: transparent;
   border-radius: var(--radius-md);
   cursor: default;
 }
 
 .source-monitor.empty-state .transport-controls button:disabled {
-  color: var(--gray-625);
+  color: var(--color-text);
   opacity: 1;
   cursor: default;
 }
 
 .transport-controls button:hover {
-  color: var(--color-text-inverse);
+  color: var(--color-text-highlight);
   background: var(--color-surface-hover);
 }
 
 .source-monitor.empty-state .transport-controls button:hover {
-  color: var(--gray-625);
+  color: var(--color-text);
   background: transparent;
 }
 
 .source-monitor.empty-state .transport-icon {
-  color: var(--gray-625);
+  color: var(--color-text);
 }
 
 .transport-icon {
@@ -225,7 +225,7 @@
   display: block;
   width: 14px;
   height: 10px;
-  color: var(--color-text-chip);
+  color: var(--color-text);
 }
 
 .transport-icon::before,
@@ -324,7 +324,7 @@
   position: absolute;
   top: 0;
   bottom: 1px;
-  background: color-mix(in srgb, var(--gray-700) 100%, transparent);
+  background: #4b4b4b;
 }
 
 .timeline-cue-brace {
@@ -445,12 +445,12 @@
 }
 
 .monitor-range-handle:hover {
-  border: 2px solid var(--color-text-control);
+  border: 2px solid var(--color-text);
   cursor: pointer;
 }
 
 .monitor-range-handle.active {
-  border: 2px solid var(--color-text-control);
+  border: 2px solid var(--color-text);
   border-width: 3px;
   cursor: ew-resize;
 }

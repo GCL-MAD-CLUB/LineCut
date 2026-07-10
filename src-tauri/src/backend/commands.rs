@@ -56,6 +56,78 @@ pub(crate) async fn cancel_task(
 }
 
 #[tauri::command]
+pub(crate) async fn save_project_file(
+    path: String,
+    asset_id: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    let project = match asset_id {
+        Some(asset_id) => Some(project_clone(&asset_id, &state)?),
+        None => None,
+    };
+    let normalized_path = normalize_project_path(&path)?;
+    let output_path = normalized_path.clone();
+    tokio::task::spawn_blocking(move || write_project_file(&output_path, project))
+        .await
+        .map_err(|error| format!("保存项目任务失败: {error}"))??;
+    Ok(normalized_path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub(crate) async fn open_project_file(
+    path: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<OpenProjectResult, String> {
+    let input_path = PathBuf::from(path);
+    let read_path = input_path.clone();
+    let document = tokio::task::spawn_blocking(move || read_project_file(&read_path))
+        .await
+        .map_err(|error| format!("打开项目任务失败: {error}"))??;
+    let mut warnings = Vec::new();
+
+    if let Some(project) = &document.project {
+        let media_path = Path::new(&project.asset.path);
+        if !media_path.is_file() {
+            warnings.push(format!("项目引用的媒体文件不存在: {}", project.asset.path));
+        } else if let Ok(metadata) = fs::metadata(media_path) {
+            if metadata.len() as i64 != project.asset.file_size
+                || modified_secs(&metadata) != project.asset.modified_at
+            {
+                warnings.push("源媒体自项目保存后已发生变化，导出前请确认内容正确".to_string());
+            }
+        }
+
+        state
+            .projects
+            .lock()
+            .map_err(|_| "项目状态锁定失败".to_string())?
+            .insert(project.asset.id.clone(), project.clone());
+    }
+
+    Ok(OpenProjectResult {
+        path: input_path.to_string_lossy().into_owned(),
+        project: document.project,
+        warnings,
+    })
+}
+
+#[tauri::command]
+pub(crate) fn close_project(
+    asset_id: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<bool, String> {
+    let Some(asset_id) = asset_id else {
+        return Ok(false);
+    };
+    Ok(state
+        .projects
+        .lock()
+        .map_err(|_| "项目状态锁定失败".to_string())?
+        .remove(&asset_id)
+        .is_some())
+}
+
+#[tauri::command]
 pub(crate) async fn import_media(
     path: String,
     external_subtitles: Vec<String>,
@@ -306,7 +378,6 @@ pub(crate) async fn import_media(
         proxy_path: proxy_path_str,
     };
 
-    save_project_async(project.clone(), task.cancel_token()).await?;
     task.check_cancelled()?;
     state
         .projects
@@ -382,7 +453,6 @@ pub(crate) async fn generate_proxy(
     let proxy_string = proxy_path.to_string_lossy().into_owned();
     let mut updated_project = project;
     updated_project.proxy_path = Some(proxy_string.clone());
-    save_project_async(updated_project.clone(), task.cancel_token()).await?;
     task.check_cancelled()?;
     state
         .projects
@@ -427,7 +497,6 @@ pub(crate) async fn add_external_subtitles(
     }
 
     project.cues.extend(new_cues.clone());
-    save_project_async(project.clone(), task.cancel_token()).await?;
     task.check_cancelled()?;
     state
         .projects

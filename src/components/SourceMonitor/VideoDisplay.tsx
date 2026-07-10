@@ -2,17 +2,14 @@ import { FileVideo } from "lucide-react";
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type RefObject,
   type SyntheticEvent,
 } from "react";
 import type { Project } from "../../types";
-import {
-  useSourceMonitorState,
-  type MonitorZoomLevel,
-  type ZoomOrigin,
-} from "./sourceMonitorState";
+import { useSourceMonitorState, type MonitorZoomLevel, type ZoomPan } from "./sourceMonitorState";
 
 interface VideoDisplayProps {
   project: Project | null;
@@ -20,7 +17,7 @@ interface VideoDisplayProps {
   videoRef: RefObject<HTMLVideoElement | null>;
   videoSrc: string | null;
   zoomLevel: MonitorZoomLevel;
-  zoomOrigin: ZoomOrigin;
+  zoomPan: ZoomPan;
   onVideoError: () => void;
   onLoadedMetadata: (video: HTMLVideoElement) => void;
   onSyncCurrentTime: (video: HTMLVideoElement) => void;
@@ -36,13 +33,20 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
+function pointerOffsetFromStageCenter(event: WheelEvent, stageRect: DOMRect) {
+  return {
+    x: event.clientX - (stageRect.left + stageRect.width / 2),
+    y: event.clientY - (stageRect.top + stageRect.height / 2),
+  };
+}
+
 export function VideoDisplay({
   project,
   stageRef,
   videoRef,
   videoSrc,
   zoomLevel,
-  zoomOrigin,
+  zoomPan,
   onVideoError,
   onLoadedMetadata,
   onSyncCurrentTime,
@@ -50,9 +54,40 @@ export function VideoDisplay({
   onPause,
 }: VideoDisplayProps) {
   const setZoomLevel = useSourceMonitorState((state) => state.setZoomLevel);
-  const setZoomOrigin = useSourceMonitorState((state) => state.setZoomOrigin);
+  const setZoomPan = useSourceMonitorState((state) => state.setZoomPan);
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
   const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 });
+  const zoomLevelRef = useRef(zoomLevel);
+  const zoomPanRef = useRef(zoomPan);
+
+  useEffect(() => {
+    zoomLevelRef.current = zoomLevel;
+  }, [zoomLevel]);
+
+  useEffect(() => {
+    zoomPanRef.current = zoomPan;
+  }, [zoomPan]);
+
+  const fittedSize = useMemo(() => {
+    if (
+      stageSize.width <= 0 ||
+      stageSize.height <= 0 ||
+      naturalSize.width <= 0 ||
+      naturalSize.height <= 0
+    ) {
+      return null;
+    }
+
+    const scale = Math.min(
+      stageSize.width / naturalSize.width,
+      stageSize.height / naturalSize.height,
+    );
+
+    return {
+      width: Math.max(1, Math.floor(naturalSize.width * scale)),
+      height: Math.max(1, Math.floor(naturalSize.height * scale)),
+    };
+  }, [stageSize, naturalSize]);
 
   useEffect(() => {
     const stage = stageRef.current;
@@ -89,33 +124,13 @@ export function VideoDisplay({
     setNaturalSize({ width: 0, height: 0 });
   }, [videoSrc]);
 
-  const fittedSize = useMemo(() => {
-    if (
-      stageSize.width <= 0 ||
-      stageSize.height <= 0 ||
-      naturalSize.width <= 0 ||
-      naturalSize.height <= 0
-    ) {
-      return null;
-    }
-
-    const scale = Math.min(
-      stageSize.width / naturalSize.width,
-      stageSize.height / naturalSize.height,
-    );
-
-    return {
-      width: Math.max(1, Math.floor(naturalSize.width * scale)),
-      height: Math.max(1, Math.floor(naturalSize.height * scale)),
-    };
-  }, [stageSize, naturalSize]);
-
   const zoomScale = zoomLevel === "fit" ? 1 : zoomLevel / 100;
+  const currentZoomPan = zoomLevel === "fit" ? { x: 0, y: 0 } : zoomPan;
   const videoStyle: CSSProperties = {
-    width: zoomLevel === "fit" && fittedSize ? `${fittedSize.width}px` : undefined,
-    height: zoomLevel === "fit" && fittedSize ? `${fittedSize.height}px` : undefined,
-    transform: `scale(${zoomScale})`,
-    transformOrigin: `${zoomOrigin.x}% ${zoomOrigin.y}%`,
+    width: fittedSize ? `${fittedSize.width}px` : "100%",
+    height: fittedSize ? `${fittedSize.height}px` : "100%",
+    transform: `translate(${currentZoomPan.x}px, ${currentZoomPan.y}px) scale(${zoomScale})`,
+    transformOrigin: "50% 50%",
   };
 
   function focusStage(stage = stageRef.current) {
@@ -154,23 +169,27 @@ export function VideoDisplay({
     event.stopPropagation();
     const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
     if (usePointerOrigin) {
-      const rect = stage.getBoundingClientRect();
-      zoomVideo(delta, {
-        x: clamp(((event.clientX - rect.left) / rect.width) * 100, 0, 100),
-        y: clamp(((event.clientY - rect.top) / rect.height) * 100, 0, 100),
-      });
+      zoomVideo(delta, pointerOffsetFromStageCenter(event, stage.getBoundingClientRect()));
     } else if (useCenterOrigin) {
-      zoomVideo(delta, { x: 50, y: 50 });
+      zoomVideo(delta, { x: 0, y: 0 });
     }
   }
 
-  function zoomVideo(delta: number, origin: { x: number; y: number }) {
-    setZoomOrigin(origin);
-    setZoomLevel((current) => {
-      const numeric = current === "fit" ? 100 : current;
-      const next = delta < 0 ? numeric * 1.12 : numeric / 1.12;
-      return Math.round(clamp(next, 10, 1600));
-    });
+  function zoomVideo(delta: number, pointer: { x: number; y: number }) {
+    const currentLevel = zoomLevelRef.current;
+    const currentPan = zoomPanRef.current;
+    const numeric = currentLevel === "fit" ? 100 : currentLevel;
+    const k = delta < 0 ? 1.12 : 1 / 1.12;
+    const nextNumeric = Math.round(clamp(numeric * k, 10, 1600));
+    const actualK = nextNumeric / numeric;
+    const nextPan = {
+      x: actualK * currentPan.x + (1 - actualK) * pointer.x,
+      y: actualK * currentPan.y + (1 - actualK) * pointer.y,
+    };
+    zoomLevelRef.current = nextNumeric;
+    zoomPanRef.current = nextPan;
+    setZoomLevel(nextNumeric);
+    setZoomPan(nextPan);
   }
 
   return (

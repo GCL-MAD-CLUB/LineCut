@@ -1,5 +1,11 @@
 use super::*;
 
+const PROJECT_EXTENSION: &str = "lcp";
+const PROJECT_MAGIC: &[u8; 8] = b"LINECUT\0";
+const PROJECT_FORMAT_VERSION: u16 = 1;
+const PROJECT_HEADER_LEN: usize = 8 + 2 + 2 + 8 + 32;
+const MAX_PROJECT_PAYLOAD_LEN: usize = 512 * 1024 * 1024;
+
 pub(crate) fn config_root() -> PathBuf {
     if let Some(value) = env::var_os("LINECUT_DATA_DIR") {
         return PathBuf::from(value);
@@ -243,17 +249,138 @@ pub(crate) fn sidecar_target_triple() -> &'static str {
     }
 }
 
-pub(crate) fn save_project(project: &Project) -> Result<(), String> {
-    let dir = config_root().join("projects");
-    fs::create_dir_all(&dir).map_err(|e| format!("创建项目目录失败: {e}"))?;
-    let path = dir.join(format!("{}.json", project.asset.id));
-    let body = serde_json::to_vec_pretty(project).map_err(|e| format!("序列化项目失败: {e}"))?;
-    fs::write(path, body).map_err(|e| format!("保存项目失败: {e}"))
+pub(crate) fn normalize_project_path(path: &str) -> Result<PathBuf, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("项目路径不能为空".to_string());
+    }
+    let mut path = PathBuf::from(trimmed);
+    if !path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case(PROJECT_EXTENSION))
+    {
+        path.set_extension(PROJECT_EXTENSION);
+    }
+    Ok(path)
 }
 
-pub(crate) async fn save_project_async(
-    project: Project,
-    cancel: Arc<AtomicBool>,
-) -> Result<(), String> {
-    spawn_blocking_cancellable(cancel, "保存项目", move |_| save_project(&project)).await
+fn encode_project_document(document: &ProjectDocument) -> Result<Vec<u8>, String> {
+    let payload = bincode::serialize(document).map_err(|e| format!("序列化项目失败: {e}"))?;
+    if payload.len() > MAX_PROJECT_PAYLOAD_LEN {
+        return Err("项目数据过大，无法保存".to_string());
+    }
+    let checksum = Sha256::digest(&payload);
+    let mut bytes = Vec::with_capacity(PROJECT_HEADER_LEN + payload.len());
+    bytes.extend_from_slice(PROJECT_MAGIC);
+    bytes.extend_from_slice(&PROJECT_FORMAT_VERSION.to_le_bytes());
+    bytes.extend_from_slice(&0_u16.to_le_bytes());
+    bytes.extend_from_slice(&(payload.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(&checksum);
+    bytes.extend_from_slice(&payload);
+    Ok(bytes)
+}
+
+fn decode_project_document(bytes: &[u8]) -> Result<ProjectDocument, String> {
+    if bytes.len() < PROJECT_HEADER_LEN || &bytes[..8] != PROJECT_MAGIC {
+        return Err("不是有效的 LineCut 项目文件".to_string());
+    }
+    let version = u16::from_le_bytes([bytes[8], bytes[9]]);
+    if version != PROJECT_FORMAT_VERSION {
+        return Err(format!(
+            "不支持的项目文件版本 {version}，当前支持版本为 {PROJECT_FORMAT_VERSION}"
+        ));
+    }
+    let payload_len = u64::from_le_bytes(
+        bytes[12..20]
+            .try_into()
+            .map_err(|_| "项目文件头损坏".to_string())?,
+    );
+    if payload_len > MAX_PROJECT_PAYLOAD_LEN as u64
+        || payload_len as usize != bytes.len() - PROJECT_HEADER_LEN
+    {
+        return Err("项目文件长度校验失败".to_string());
+    }
+    let payload = &bytes[PROJECT_HEADER_LEN..];
+    if Sha256::digest(payload).as_slice() != &bytes[20..52] {
+        return Err("项目文件完整性校验失败".to_string());
+    }
+    bincode::deserialize(payload).map_err(|e| format!("解析项目文件失败: {e}"))
+}
+
+pub(crate) fn write_project_file(path: &Path, project: Option<Project>) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).map_err(|e| format!("创建项目目录失败: {e}"))?;
+    let document = ProjectDocument {
+        project,
+        saved_at: now_millis() as u64,
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+    };
+    let bytes = encode_project_document(&document)?;
+    let write_id = Uuid::new_v4();
+    let temporary_path = path.with_extension(format!("{PROJECT_EXTENSION}.{write_id}.tmp"));
+    fs::write(&temporary_path, bytes).map_err(|e| format!("写入项目文件失败: {e}"))?;
+
+    if path.exists() {
+        let backup_path = path.with_extension(format!("{PROJECT_EXTENSION}.{write_id}.bak"));
+        fs::rename(path, &backup_path).map_err(|e| {
+            let _ = fs::remove_file(&temporary_path);
+            format!("备份旧项目文件失败: {e}")
+        })?;
+        if let Err(error) = fs::rename(&temporary_path, path) {
+            let _ = fs::rename(&backup_path, path);
+            let _ = fs::remove_file(&temporary_path);
+            return Err(format!("完成项目文件保存失败: {error}"));
+        }
+        let _ = fs::remove_file(backup_path);
+        return Ok(());
+    }
+    fs::rename(&temporary_path, path).map_err(|e| {
+        let _ = fs::remove_file(&temporary_path);
+        format!("完成项目文件保存失败: {e}")
+    })
+}
+
+pub(crate) fn read_project_file(path: &Path) -> Result<ProjectDocument, String> {
+    if !path.is_file() {
+        return Err(format!("项目文件不存在: {}", path.to_string_lossy()));
+    }
+    let bytes = fs::read(path).map_err(|e| format!("读取项目文件失败: {e}"))?;
+    decode_project_document(&bytes)
+}
+
+#[cfg(test)]
+mod project_file_tests {
+    use super::*;
+
+    #[test]
+    fn project_document_is_binary_and_round_trips() {
+        let document = ProjectDocument {
+            project: None,
+            saved_at: 42,
+            app_version: "test".to_string(),
+        };
+        let bytes = encode_project_document(&document).expect("encode project");
+        assert_eq!(&bytes[..8], PROJECT_MAGIC);
+        assert_ne!(bytes.first(), Some(&b'{'));
+        let decoded = decode_project_document(&bytes).expect("decode project");
+        assert_eq!(decoded.saved_at, 42);
+        assert_eq!(decoded.app_version, "test");
+        assert!(decoded.project.is_none());
+    }
+
+    #[test]
+    fn project_document_rejects_corrupted_payload() {
+        let document = ProjectDocument {
+            project: None,
+            saved_at: 42,
+            app_version: "test".to_string(),
+        };
+        let mut bytes = encode_project_document(&document).expect("encode project");
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0xff;
+        assert!(decode_project_document(&bytes).is_err());
+    }
 }
