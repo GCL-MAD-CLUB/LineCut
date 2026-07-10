@@ -7,7 +7,6 @@ const US_PER_SECOND = 1_000_000;
 
 export interface TimelineTick {
   frame: number;
-  timeUs: number;
   leftPx: number;
   major: boolean;
 }
@@ -20,6 +19,10 @@ export interface TimelineRuler {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+function actualFrameRate(frameRate: number) {
+  return Number.isFinite(frameRate) ? Math.max(1, frameRate) : DEFAULT_FRAME_RATE;
 }
 
 export function parseFrameRate(value: string | null | undefined) {
@@ -56,52 +59,65 @@ export function normalizeFrameRate(...candidates: Array<string | null | undefine
 }
 
 export function frameDurationUs(frameRate: number) {
-  return US_PER_SECOND / Math.max(1, frameRate);
+  return US_PER_SECOND / actualFrameRate(frameRate);
 }
 
-export function minTimelineSpanUs(widthPx: number, frameRate: number, durationUs: number) {
+export function timeUsToFrame(timeUs: number, frameRate: number) {
+  const safeTimeUs = Number.isFinite(timeUs) ? Math.max(0, timeUs) : 0;
+  return Math.max(0, Math.round((safeTimeUs / US_PER_SECOND) * actualFrameRate(frameRate)));
+}
+
+export function frameToTimeUs(frame: number, frameRate: number) {
+  const safeFrame = Number.isFinite(frame) ? Math.max(0, Math.round(frame)) : 0;
+  return Math.round((safeFrame / actualFrameRate(frameRate)) * US_PER_SECOND);
+}
+
+export function minTimelineSpanFrames(widthPx: number, durationFrames: number) {
   const width = Math.max(1, widthPx);
-  const minSpan = (width * frameDurationUs(frameRate)) / MAX_TICK_WIDTH_PX;
-  return durationUs > 0 ? Math.min(durationUs, minSpan) : minSpan;
+  const minSpan = Math.max(MIN_TICK_FRAMES, Math.ceil(width / MAX_TICK_WIDTH_PX));
+  return durationFrames > 0 ? Math.min(durationFrames, minSpan) : minSpan;
 }
 
-export function clampTimelineSpan(
-  spanUs: number,
+export function clampTimelineSpanFrames(
+  spanFrames: number,
   widthPx: number,
-  frameRate: number,
-  durationUs: number,
+  durationFrames: number,
 ) {
-  const minSpan = minTimelineSpanUs(widthPx, frameRate, durationUs);
-  const maxSpan = durationUs > 0 ? durationUs : Math.max(minSpan, spanUs);
-  return clamp(spanUs, minSpan, maxSpan);
+  const minSpan = minTimelineSpanFrames(widthPx, durationFrames);
+  const safeSpan = Number.isFinite(spanFrames) ? spanFrames : minSpan;
+  const maxSpan = durationFrames > 0 ? durationFrames : Math.max(minSpan, safeSpan);
+  return clamp(safeSpan, minSpan, maxSpan);
 }
 
-export function clampTimelineStart(startUs: number, spanUs: number, durationUs: number) {
-  if (durationUs <= 0) {
+export function clampTimelineStartFrame(
+  startFrame: number,
+  spanFrames: number,
+  durationFrames: number,
+) {
+  if (durationFrames <= 0) {
     return 0;
   }
-  return clamp(startUs, 0, Math.max(0, durationUs - spanUs));
+  const safeStart = Number.isFinite(startFrame) ? startFrame : 0;
+  const safeSpan = Number.isFinite(spanFrames) ? spanFrames : 0;
+  return clamp(safeStart, 0, Math.max(0, durationFrames - safeSpan));
 }
 
 export function buildTimelineRuler({
-  startUs,
-  spanUs,
-  durationUs,
+  startFrame,
+  spanFrames,
+  durationFrames,
   widthPx,
-  frameRate,
 }: {
-  startUs: number;
-  spanUs: number;
-  durationUs: number;
+  startFrame: number;
+  spanFrames: number;
+  durationFrames: number;
   widthPx: number;
-  frameRate: number;
 }): TimelineRuler {
-  if (durationUs <= 0 || widthPx <= 0 || spanUs <= 0) {
+  if (durationFrames <= 0 || widthPx <= 0 || spanFrames <= 0) {
     return { ticks: [], tickStepFrames: MIN_TICK_FRAMES, tickSpacingPx: MAX_TICK_WIDTH_PX };
   }
 
-  const frameUs = frameDurationUs(frameRate);
-  const pxPerFrame = widthPx / Math.max(1, spanUs / frameUs);
+  const pxPerFrame = widthPx / Math.max(1, spanFrames);
   let tickStepFrames = MIN_TICK_FRAMES;
   let tickSpacingPx = tickStepFrames * pxPerFrame;
 
@@ -110,25 +126,23 @@ export function buildTimelineRuler({
     tickSpacingPx = tickStepFrames * pxPerFrame;
   }
 
-  const firstVisibleFrame = Math.max(0, Math.floor(startUs / frameUs));
-  const lastVisibleFrame = Math.ceil(Math.min(durationUs, startUs + spanUs) / frameUs);
+  const firstVisibleFrame = Math.max(0, Math.floor(startFrame));
+  const lastVisibleFrame = Math.ceil(Math.min(durationFrames, startFrame + spanFrames));
   const firstTickFrame = Math.floor(firstVisibleFrame / tickStepFrames) * tickStepFrames;
   const lastTickFrame = Math.ceil(lastVisibleFrame / tickStepFrames) * tickStepFrames;
   const ticks: TimelineTick[] = [];
   const majorStepFrames = tickStepFrames * 10;
 
   for (let frame = firstTickFrame; frame <= lastTickFrame; frame += tickStepFrames) {
-    const timeUs = frame * frameUs;
-    if (timeUs < 0 || timeUs > durationUs) {
+    if (frame < 0 || frame > durationFrames) {
       continue;
     }
-    const leftPx = ((timeUs - startUs) / spanUs) * widthPx;
+    const leftPx = ((frame - startFrame) / spanFrames) * widthPx;
     if (leftPx < -tickSpacingPx || leftPx > widthPx + tickSpacingPx) {
       continue;
     }
     ticks.push({
       frame,
-      timeUs,
       leftPx,
       major: frame % majorStepFrames === 0,
     });

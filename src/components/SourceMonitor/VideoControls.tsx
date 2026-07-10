@@ -7,8 +7,8 @@ import {
   type MouseEvent,
   type PointerEvent,
 } from "react";
-import { formatMonitorTime, parseMonitorTime } from "../../time";
-import { clampTimelineStart, frameDurationUs } from "../../timeline";
+import { formatMonitorFrame, parseMonitorFrame } from "../../time";
+import { clampTimelineStartFrame } from "../../timeline";
 import { SelectDropdown, type SelectDropdownItem } from "../SelectDropdown";
 import { useSourceMonitorState, type MonitorZoomLevel } from "./sourceMonitorState";
 
@@ -25,7 +25,7 @@ type PreviewMode = "source" | "proxy";
 interface TimecodeScrubState {
   pointerId: number;
   startX: number;
-  startTimeUs: number;
+  startFrame: number;
   lastFrameOffset: number;
   longPressTimer: number | null;
   isScrubbing: boolean;
@@ -35,21 +35,21 @@ interface TimecodeScrubState {
 interface VideoControlsProps {
   mediaKey: string;
   hasMedia: boolean;
-  currentTimeUs: number;
-  durationUs: number;
+  currentFrame: number;
+  durationFrames: number;
   frameRate: number;
-  timelineStartUs: number;
-  timelineSpanUs: number;
-  minTimelineSpanUs: number;
+  timelineStartFrame: number;
+  timelineSpanFrames: number;
+  minTimelineSpanFrames: number;
   isPlaying: boolean;
   previewMode: PreviewMode;
   previewModeOptions: readonly PreviewMode[];
   previewModeLabels: Record<PreviewMode, string>;
-  onSeekUs: (timeUs: number) => number;
-  onPlaybackTimeRequest: () => number;
+  onSeekFrame: (frame: number) => number;
+  onPlaybackFrameRequest: () => number;
   onPauseForPreciseSeek: () => void;
-  onTimelineStartUsChange: (startUs: number) => void;
-  onTimelineSpanUsChange: (spanUs: number) => void;
+  onTimelineStartFrameChange: (startFrame: number) => void;
+  onTimelineSpanFramesChange: (spanFrames: number) => void;
   onStepFrame: (direction: -1 | 1) => void;
   onTogglePlayback: () => void;
   onPreviewModeChange: (value: PreviewMode) => void;
@@ -70,21 +70,21 @@ function wheelDeltaPx(event: WheelEvent) {
 export function VideoControls({
   mediaKey,
   hasMedia,
-  currentTimeUs,
-  durationUs,
+  currentFrame,
+  durationFrames,
   frameRate,
-  timelineStartUs,
-  timelineSpanUs,
-  minTimelineSpanUs,
+  timelineStartFrame,
+  timelineSpanFrames,
+  minTimelineSpanFrames,
   isPlaying,
   previewMode,
   previewModeOptions,
   previewModeLabels,
-  onSeekUs,
-  onPlaybackTimeRequest,
+  onSeekFrame,
+  onPlaybackFrameRequest,
   onPauseForPreciseSeek,
-  onTimelineStartUsChange,
-  onTimelineSpanUsChange,
+  onTimelineStartFrameChange,
+  onTimelineSpanFramesChange,
   onStepFrame,
   onTogglePlayback,
   onPreviewModeChange,
@@ -96,25 +96,26 @@ export function VideoControls({
   const timeEditorRef = useRef<HTMLSpanElement | null>(null);
   const timecodeScrubRef = useRef<TimecodeScrubState | null>(null);
   const suppressTimeEditClickRef = useRef(false);
-  const timelineStartUsRef = useRef(timelineStartUs);
-  const timelineSpanUsRef = useRef(timelineSpanUs);
+  const timelineStartFrameRef = useRef(timelineStartFrame);
+  const timelineSpanFramesRef = useRef(timelineSpanFrames);
   const [editingTime, setEditingTime] = useState(false);
   const [timeEditSelection, setTimeEditSelection] = useState<"all" | "cursor">("cursor");
   const [timeDraft, setTimeDraft] = useState("");
 
-  const frameUs = frameDurationUs(frameRate);
-  const monitorTimeText = hasMedia ? formatMonitorTime(currentTimeUs, frameRate) : "00:00:00:00";
-  const monitorDurationText = hasMedia ? formatMonitorTime(durationUs, frameRate) : "00:00:00:00";
+  const monitorTimeText = hasMedia ? formatMonitorFrame(currentFrame, frameRate) : "00:00:00:00";
+  const monitorDurationText = hasMedia
+    ? formatMonitorFrame(durationFrames, frameRate)
+    : "00:00:00:00";
   const monitorTimeColumnCh = Math.max(11, monitorTimeText.length, monitorDurationText.length);
   const monitorTimeStyle = { "--monitor-time-ch": monitorTimeColumnCh } as CSSProperties;
 
   useEffect(() => {
-    timelineStartUsRef.current = timelineStartUs;
-  }, [timelineStartUs]);
+    timelineStartFrameRef.current = timelineStartFrame;
+  }, [timelineStartFrame]);
 
   useEffect(() => {
-    timelineSpanUsRef.current = timelineSpanUs;
-  }, [timelineSpanUs]);
+    timelineSpanFramesRef.current = timelineSpanFrames;
+  }, [timelineSpanFrames]);
 
   useEffect(() => {
     const row = rowRef.current;
@@ -128,7 +129,7 @@ export function VideoControls({
 
     row.addEventListener("wheel", handleWheel, { passive: false });
     return () => row.removeEventListener("wheel", handleWheel);
-  }, [durationUs, hasMedia, minTimelineSpanUs]);
+  }, [durationFrames, hasMedia, minTimelineSpanFrames]);
 
   useEffect(() => {
     if (!editingTime) {
@@ -162,32 +163,40 @@ export function VideoControls({
     [],
   );
 
-  function shiftTimeline(deltaUs: number) {
-    if (!hasMedia || durationUs <= 0) {
+  function shiftTimeline(deltaFrames: number) {
+    if (!hasMedia || durationFrames <= 0) {
       return;
     }
-    const currentStart = timelineStartUsRef.current;
-    const currentSpan = timelineSpanUsRef.current;
-    const nextStart = clampTimelineStart(currentStart + deltaUs, currentSpan, durationUs);
-    timelineStartUsRef.current = nextStart;
-    onTimelineStartUsChange(nextStart);
+    const currentStart = timelineStartFrameRef.current;
+    const currentSpan = timelineSpanFramesRef.current;
+    const nextStart = clampTimelineStartFrame(
+      currentStart + deltaFrames,
+      currentSpan,
+      durationFrames,
+    );
+    timelineStartFrameRef.current = nextStart;
+    onTimelineStartFrameChange(nextStart);
   }
 
   function resizeTimeline(deltaPx: number, anchorRatio = 0.5) {
-    if (!hasMedia || durationUs <= 0) {
+    if (!hasMedia || durationFrames <= 0) {
       return;
     }
-    const currentStart = timelineStartUsRef.current;
-    const currentSpan = timelineSpanUsRef.current;
+    const currentStart = timelineStartFrameRef.current;
+    const currentSpan = timelineSpanFramesRef.current;
     const scale = Math.exp(clamp(deltaPx, -1200, 1200) * MONITOR_RANGE_ZOOM_SENSITIVITY);
-    const nextSpan = clamp(currentSpan * scale, minTimelineSpanUs, durationUs);
-    const anchorUs = currentStart + currentSpan * anchorRatio;
-    const nextStart = clampTimelineStart(anchorUs - nextSpan * anchorRatio, nextSpan, durationUs);
+    const nextSpan = clamp(currentSpan * scale, minTimelineSpanFrames, durationFrames);
+    const anchorFrame = currentStart + currentSpan * anchorRatio;
+    const nextStart = clampTimelineStartFrame(
+      anchorFrame - nextSpan * anchorRatio,
+      nextSpan,
+      durationFrames,
+    );
 
-    timelineSpanUsRef.current = nextSpan;
-    timelineStartUsRef.current = nextStart;
-    onTimelineSpanUsChange(nextSpan);
-    onTimelineStartUsChange(nextStart);
+    timelineSpanFramesRef.current = nextSpan;
+    timelineStartFrameRef.current = nextStart;
+    onTimelineSpanFramesChange(nextSpan);
+    onTimelineStartFrameChange(nextStart);
   }
 
   function handleTimelineViewportWheel(event: WheelEvent) {
@@ -198,7 +207,7 @@ export function VideoControls({
     event.stopPropagation();
     const delta = wheelDeltaPx(event);
     if (event.altKey) {
-      shiftTimeline(delta * timelineSpanUsRef.current * MONITOR_RANGE_SCROLL_SENSITIVITY);
+      shiftTimeline(delta * timelineSpanFramesRef.current * MONITOR_RANGE_SCROLL_SENSITIVITY);
       return;
     }
     resizeTimeline(delta);
@@ -220,7 +229,7 @@ export function VideoControls({
     const state: TimecodeScrubState = {
       pointerId: event.pointerId,
       startX: event.clientX,
-      startTimeUs: onPlaybackTimeRequest(),
+      startFrame: onPlaybackFrameRequest(),
       lastFrameOffset: 0,
       longPressTimer: null,
       isScrubbing: false,
@@ -255,7 +264,7 @@ export function VideoControls({
       return;
     }
     state.lastFrameOffset = frameOffset;
-    onSeekUs(state.startTimeUs + frameOffset * frameUs);
+    onSeekFrame(state.startFrame + frameOffset);
   }
 
   function finishTimecodeScrub(event: PointerEvent<HTMLButtonElement>) {
@@ -291,7 +300,7 @@ export function VideoControls({
     if (!hasMedia) {
       return;
     }
-    setTimeDraft(formatMonitorTime(currentTimeUs, frameRate));
+    setTimeDraft(formatMonitorFrame(currentFrame, frameRate));
     setTimeEditSelection(selection);
     setEditingTime(true);
   }
@@ -343,15 +352,15 @@ export function VideoControls({
 
   function commitTimeEdit() {
     const value = timeEditorRef.current?.textContent ?? timeDraft;
-    const parsed = parseMonitorTime(value, frameRate);
-    if (parsed !== null && parsed >= 0 && (durationUs <= 0 || parsed <= durationUs)) {
-      onSeekUs(parsed);
+    const parsed = parseMonitorFrame(value, frameRate);
+    if (parsed !== null && parsed >= 0 && (durationFrames <= 0 || parsed <= durationFrames)) {
+      onSeekFrame(parsed);
     }
     setEditingTime(false);
   }
 
   function cancelTimeEdit() {
-    setTimeDraft(formatMonitorTime(currentTimeUs, frameRate));
+    setTimeDraft(formatMonitorFrame(currentFrame, frameRate));
     setEditingTime(false);
   }
 

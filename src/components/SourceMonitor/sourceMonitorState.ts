@@ -1,4 +1,5 @@
 import { createPanelState } from "../../panelState";
+import { DEFAULT_FRAME_RATE } from "../../timeline";
 
 export type MonitorZoomLevel = "fit" | number;
 
@@ -8,8 +9,8 @@ export interface ZoomOrigin {
 }
 
 export interface MonitorCueRange {
-  startUs: number;
-  endUs: number;
+  startFrame: number;
+  endFrame: number;
 }
 
 type StateUpdate<Value> = Value | ((current: Value) => Value);
@@ -20,51 +21,53 @@ function resolveUpdate<Value>(current: Value, update: StateUpdate<Value>) {
 
 interface SourceMonitorState {
   mediaKey: string;
-  currentTimeUs: number;
+  currentFrame: number;
   zoomLevel: MonitorZoomLevel;
   zoomOrigin: ZoomOrigin;
-  timelineStartUs: number;
-  timelineSpanUs: number;
+  timelineStartFrame: number;
+  timelineSpanFrames: number;
   cueRange: MonitorCueRange | null;
-  syncMedia: (mediaKey: string, durationUs: number) => void;
-  setCurrentTimeUs: (update: StateUpdate<number>) => void;
+  syncMedia: (mediaKey: string, durationFrames: number) => void;
+  setCurrentFrame: (update: StateUpdate<number>) => void;
   setZoomLevel: (update: StateUpdate<MonitorZoomLevel>) => void;
   setZoomOrigin: (update: StateUpdate<ZoomOrigin>) => void;
-  setTimelineStartUs: (update: StateUpdate<number>) => void;
-  setTimelineSpanUs: (update: StateUpdate<number>) => void;
+  setTimelineStartFrame: (update: StateUpdate<number>) => void;
+  setTimelineSpanFrames: (update: StateUpdate<number>) => void;
   setCueRange: (cueRange: MonitorCueRange | null) => void;
 }
 
+const DEFAULT_TIMELINE_SPAN_FRAMES = DEFAULT_FRAME_RATE * 60;
+
 export const useSourceMonitorState = createPanelState<SourceMonitorState>(() => (set) => ({
   mediaKey: "",
-  currentTimeUs: 0,
+  currentFrame: 0,
   zoomLevel: "fit",
   zoomOrigin: { x: 50, y: 50 },
-  timelineStartUs: 0,
-  timelineSpanUs: 60_000_000,
+  timelineStartFrame: 0,
+  timelineSpanFrames: DEFAULT_TIMELINE_SPAN_FRAMES,
   cueRange: null,
-  syncMedia: (mediaKey, durationUs) =>
+  syncMedia: (mediaKey, durationFrames) =>
     set((state) =>
       state.mediaKey === mediaKey
         ? state
         : {
             mediaKey,
-            currentTimeUs: 0,
+            currentFrame: 0,
             zoomLevel: "fit",
             zoomOrigin: { x: 50, y: 50 },
-            timelineStartUs: 0,
-            timelineSpanUs: durationUs > 0 ? durationUs : 60_000_000,
+            timelineStartFrame: 0,
+            timelineSpanFrames: durationFrames > 0 ? durationFrames : DEFAULT_TIMELINE_SPAN_FRAMES,
             cueRange: null,
           },
     ),
-  setCurrentTimeUs: (update) =>
-    set((state) => ({ currentTimeUs: resolveUpdate(state.currentTimeUs, update) })),
+  setCurrentFrame: (update) =>
+    set((state) => ({ currentFrame: resolveUpdate(state.currentFrame, update) })),
   setZoomLevel: (update) => set((state) => ({ zoomLevel: resolveUpdate(state.zoomLevel, update) })),
   setZoomOrigin: (update) =>
     set((state) => ({ zoomOrigin: resolveUpdate(state.zoomOrigin, update) })),
-  setTimelineStartUs: (update) =>
-    set((state) => ({ timelineStartUs: resolveUpdate(state.timelineStartUs, update) })),
-  setTimelineSpanUs: (update) =>
-    set((state) => ({ timelineSpanUs: resolveUpdate(state.timelineSpanUs, update) })),
+  setTimelineStartFrame: (update) =>
+    set((state) => ({ timelineStartFrame: resolveUpdate(state.timelineStartFrame, update) })),
+  setTimelineSpanFrames: (update) =>
+    set((state) => ({ timelineSpanFrames: resolveUpdate(state.timelineSpanFrames, update) })),
   setCueRange: (cueRange) => set({ cueRange }),
 }));

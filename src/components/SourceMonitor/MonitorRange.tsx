@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, PointerEventHandler } from "react";
-import { clampTimelineStart } from "../../timeline";
+import { clampTimelineStartFrame } from "../../timeline";
 
 type ActiveRangeHandle = "start" | "end" | "both" | null;
 type RangeDragUpdate = (deltaRatio: number) => void;
@@ -11,12 +11,12 @@ type RangeHandleDragController = {
 
 interface MonitorRangeProps {
   hasMedia: boolean;
-  durationUs: number;
-  timelineStartUs: number;
-  timelineSpanUs: number;
-  minTimelineSpanUs: number;
-  onTimelineStartUsChange: (startUs: number) => void;
-  onTimelineSpanUsChange: (spanUs: number) => void;
+  durationFrames: number;
+  timelineStartFrame: number;
+  timelineSpanFrames: number;
+  minTimelineSpanFrames: number;
+  onTimelineStartFrameChange: (startFrame: number) => void;
+  onTimelineSpanFramesChange: (spanFrames: number) => void;
 }
 
 const WHEEL_LINE_DELTA_PX = 16;
@@ -60,36 +60,36 @@ function wheelDeltaPx(event: WheelEvent) {
 
 export function MonitorRange({
   hasMedia,
-  durationUs,
-  timelineStartUs,
-  timelineSpanUs,
-  minTimelineSpanUs,
-  onTimelineStartUsChange,
-  onTimelineSpanUsChange,
+  durationFrames,
+  timelineStartFrame,
+  timelineSpanFrames,
+  minTimelineSpanFrames,
+  onTimelineStartFrameChange,
+  onTimelineSpanFramesChange,
 }: MonitorRangeProps) {
   const rangeRef = useRef<HTMLDivElement | null>(null);
-  const timelineStartUsRef = useRef(timelineStartUs);
-  const timelineSpanUsRef = useRef(timelineSpanUs);
+  const timelineStartFrameRef = useRef(timelineStartFrame);
+  const timelineSpanFramesRef = useRef(timelineSpanFrames);
   const [rangeWidthPx, setRangeWidthPx] = useState(0);
   const [rangeMinBarWidthPx, setRangeMinBarWidthPx] = useState(0);
   const [activeRangeHandle, setActiveRangeHandle] = useState<ActiveRangeHandle>(null);
 
-  const timelineEndUs = Math.min(durationUs, timelineStartUs + timelineSpanUs);
-  const timelineVisibleSpanUs = Math.max(1, timelineEndUs - timelineStartUs);
-  const indicatorWidthRatio = rangeWidthRatioForSpan(timelineVisibleSpanUs);
-  const indicatorLeftRatio = rangeLeftRatioForStart(timelineStartUs, timelineVisibleSpanUs);
+  const timelineEndFrame = Math.min(durationFrames, timelineStartFrame + timelineSpanFrames);
+  const timelineVisibleSpanFrames = Math.max(1, timelineEndFrame - timelineStartFrame);
+  const indicatorWidthRatio = rangeWidthRatioForSpan(timelineVisibleSpanFrames);
+  const indicatorLeftRatio = rangeLeftRatioForStart(timelineStartFrame, timelineVisibleSpanFrames);
   const rangeBarStyle = {
     "--monitor-range-left": `${indicatorLeftRatio * 100}%`,
     "--monitor-range-width": `${indicatorWidthRatio * 100}%`,
   } as CSSProperties;
 
   useEffect(() => {
-    timelineStartUsRef.current = timelineStartUs;
-  }, [timelineStartUs]);
+    timelineStartFrameRef.current = timelineStartFrame;
+  }, [timelineStartFrame]);
 
   useEffect(() => {
-    timelineSpanUsRef.current = timelineSpanUs;
-  }, [timelineSpanUs]);
+    timelineSpanFramesRef.current = timelineSpanFrames;
+  }, [timelineSpanFrames]);
 
   useEffect(() => {
     const range = rangeRef.current;
@@ -128,17 +128,17 @@ export function MonitorRange({
 
     range.addEventListener("wheel", handleWheel, { passive: false });
     return () => range.removeEventListener("wheel", handleWheel);
-  }, [durationUs, hasMedia, minTimelineSpanUs, rangeMinBarWidthPx, rangeWidthPx]);
+  }, [durationFrames, hasMedia, minTimelineSpanFrames, rangeMinBarWidthPx, rangeWidthPx]);
 
-  function rangeWidthRatioForSpan(spanUs: number) {
-    if (durationUs <= 0) {
+  function rangeWidthRatioForSpan(spanFrames: number) {
+    if (durationFrames <= 0) {
       return 1;
     }
-    const logicalWidthRatio = clamp(spanUs / durationUs, 0, 1);
+    const logicalWidthRatio = clamp(spanFrames / durationFrames, 0, 1);
     if (rangeWidthPx <= 0) {
       return logicalWidthRatio;
     }
-    const minLogicalWidthRatio = clamp(minTimelineSpanUs / durationUs, 0, 1);
+    const minLogicalWidthRatio = clamp(minTimelineSpanFrames / durationFrames, 0, 1);
     const minVisualWidthRatio = clamp(rangeMinBarWidthPx / rangeWidthPx, 0, 1);
     if (minLogicalWidthRatio >= 1 || minVisualWidthRatio >= 1) {
       return 1;
@@ -147,81 +147,91 @@ export function MonitorRange({
   }
 
   function spanForRangeWidthRatio(widthRatio: number) {
-    if (durationUs <= 0) {
+    if (durationFrames <= 0) {
       return 0;
     }
     if (rangeWidthPx <= 0) {
-      return clamp(widthRatio, 0, 1) * durationUs;
+      return clamp(widthRatio, 0, 1) * durationFrames;
     }
-    const minLogicalWidthRatio = clamp(minTimelineSpanUs / durationUs, 0, 1);
+    const minLogicalWidthRatio = clamp(minTimelineSpanFrames / durationFrames, 0, 1);
     const minVisualWidthRatio = clamp(rangeMinBarWidthPx / rangeWidthPx, 0, 1);
     if (minLogicalWidthRatio >= 1 || minVisualWidthRatio >= 1) {
-      return durationUs;
+      return durationFrames;
     }
-    return mapVisualRangeRatio(widthRatio, minLogicalWidthRatio, minVisualWidthRatio) * durationUs;
+    return (
+      mapVisualRangeRatio(widthRatio, minLogicalWidthRatio, minVisualWidthRatio) * durationFrames
+    );
   }
 
-  function rangeCenterRatioForStart(startUs: number, spanUs: number) {
-    if (durationUs <= 0) {
+  function rangeCenterRatioForStart(startFrame: number, spanFrames: number) {
+    if (durationFrames <= 0) {
       return 0;
     }
-    const widthRatio = rangeWidthRatioForSpan(spanUs);
-    const maxStartUs = Math.max(0, durationUs - spanUs);
-    if (maxStartUs <= 0) {
+    const widthRatio = rangeWidthRatioForSpan(spanFrames);
+    const maxStartFrame = Math.max(0, durationFrames - spanFrames);
+    if (maxStartFrame <= 0) {
       return 0.5;
     }
     const movableCenterRatio = Math.max(0, 1 - widthRatio);
-    return widthRatio / 2 + clamp(startUs / maxStartUs, 0, 1) * movableCenterRatio;
+    return widthRatio / 2 + clamp(startFrame / maxStartFrame, 0, 1) * movableCenterRatio;
   }
 
-  function rangeLeftRatioForStart(startUs: number, spanUs: number) {
-    const widthRatio = rangeWidthRatioForSpan(spanUs);
-    return clamp(rangeCenterRatioForStart(startUs, spanUs) - widthRatio / 2, 0, 1);
+  function rangeLeftRatioForStart(startFrame: number, spanFrames: number) {
+    const widthRatio = rangeWidthRatioForSpan(spanFrames);
+    return clamp(rangeCenterRatioForStart(startFrame, spanFrames) - widthRatio / 2, 0, 1);
   }
 
-  function rangeStartForCenterRatio(centerRatio: number, spanUs: number) {
-    if (durationUs <= 0) {
+  function rangeStartForCenterRatio(centerRatio: number, spanFrames: number) {
+    if (durationFrames <= 0) {
       return 0;
     }
-    const widthRatio = rangeWidthRatioForSpan(spanUs);
+    const widthRatio = rangeWidthRatioForSpan(spanFrames);
     const minCenterRatio = widthRatio / 2;
     const maxCenterRatio = 1 - widthRatio / 2;
     const movableCenterRatio = Math.max(0, maxCenterRatio - minCenterRatio);
-    const maxStartUs = Math.max(0, durationUs - spanUs);
-    if (movableCenterRatio <= 0 || maxStartUs <= 0) {
+    const maxStartFrame = Math.max(0, durationFrames - spanFrames);
+    if (movableCenterRatio <= 0 || maxStartFrame <= 0) {
       return 0;
     }
     const centerProgress =
       (clamp(centerRatio, minCenterRatio, maxCenterRatio) - minCenterRatio) / movableCenterRatio;
-    return clampTimelineStart(centerProgress * maxStartUs, spanUs, durationUs);
+    return clampTimelineStartFrame(centerProgress * maxStartFrame, spanFrames, durationFrames);
   }
 
-  function shiftTimeline(deltaUs: number) {
-    if (!hasMedia || durationUs <= 0) {
+  function shiftTimeline(deltaFrames: number) {
+    if (!hasMedia || durationFrames <= 0) {
       return;
     }
-    const currentStart = timelineStartUsRef.current;
-    const currentSpan = timelineSpanUsRef.current;
-    const nextStart = clampTimelineStart(currentStart + deltaUs, currentSpan, durationUs);
-    timelineStartUsRef.current = nextStart;
-    onTimelineStartUsChange(nextStart);
+    const currentStart = timelineStartFrameRef.current;
+    const currentSpan = timelineSpanFramesRef.current;
+    const nextStart = clampTimelineStartFrame(
+      currentStart + deltaFrames,
+      currentSpan,
+      durationFrames,
+    );
+    timelineStartFrameRef.current = nextStart;
+    onTimelineStartFrameChange(nextStart);
   }
 
   function resizeTimeline(deltaPx: number, anchorRatio = 0.5) {
-    if (!hasMedia || durationUs <= 0) {
+    if (!hasMedia || durationFrames <= 0) {
       return;
     }
-    const currentStart = timelineStartUsRef.current;
-    const currentSpan = timelineSpanUsRef.current;
+    const currentStart = timelineStartFrameRef.current;
+    const currentSpan = timelineSpanFramesRef.current;
     const scale = Math.exp(clamp(deltaPx, -1200, 1200) * MONITOR_RANGE_ZOOM_SENSITIVITY);
-    const nextSpan = clamp(currentSpan * scale, minTimelineSpanUs, durationUs);
-    const anchorUs = currentStart + currentSpan * anchorRatio;
-    const nextStart = clampTimelineStart(anchorUs - nextSpan * anchorRatio, nextSpan, durationUs);
+    const nextSpan = clamp(currentSpan * scale, minTimelineSpanFrames, durationFrames);
+    const anchorFrame = currentStart + currentSpan * anchorRatio;
+    const nextStart = clampTimelineStartFrame(
+      anchorFrame - nextSpan * anchorRatio,
+      nextSpan,
+      durationFrames,
+    );
 
-    timelineSpanUsRef.current = nextSpan;
-    timelineStartUsRef.current = nextStart;
-    onTimelineSpanUsChange(nextSpan);
-    onTimelineStartUsChange(nextStart);
+    timelineSpanFramesRef.current = nextSpan;
+    timelineStartFrameRef.current = nextStart;
+    onTimelineSpanFramesChange(nextSpan);
+    onTimelineStartFrameChange(nextStart);
   }
 
   function handleIndicatorWheel(event: WheelEvent) {
@@ -232,33 +242,33 @@ export function MonitorRange({
     event.stopPropagation();
     const delta = wheelDeltaPx(event);
     if (event.altKey) {
-      shiftTimeline(delta * timelineSpanUsRef.current * MONITOR_RANGE_SCROLL_SENSITIVITY);
+      shiftTimeline(delta * timelineSpanFramesRef.current * MONITOR_RANGE_SCROLL_SENSITIVITY);
       return;
     }
     resizeTimeline(delta);
   }
 
   function beginRangeDrag(): RangeDragUpdate | null {
-    if (!hasMedia || durationUs <= 0) {
+    if (!hasMedia || durationFrames <= 0) {
       return null;
     }
-    const spanUs = timelineSpanUsRef.current;
-    const startCenterRatio = rangeCenterRatioForStart(timelineStartUsRef.current, spanUs);
+    const spanFrames = timelineSpanFramesRef.current;
+    const startCenterRatio = rangeCenterRatioForStart(timelineStartFrameRef.current, spanFrames);
     return (deltaRatio: number) => {
-      const nextStart = rangeStartForCenterRatio(startCenterRatio + deltaRatio, spanUs);
-      timelineStartUsRef.current = nextStart;
-      onTimelineStartUsChange(nextStart);
+      const nextStart = rangeStartForCenterRatio(startCenterRatio + deltaRatio, spanFrames);
+      timelineStartFrameRef.current = nextStart;
+      onTimelineStartFrameChange(nextStart);
     };
   }
 
   function beginRangeHandleDrag(side: "start" | "end"): RangeHandleDragController | null {
-    if (!hasMedia || durationUs <= 0) {
+    if (!hasMedia || durationFrames <= 0) {
       return null;
     }
     setActiveRangeHandle("both");
-    const startSpanUs = timelineSpanUsRef.current;
-    const startRangeWidthRatio = rangeWidthRatioForSpan(startSpanUs);
-    const centerUs = timelineStartUsRef.current + startSpanUs / 2;
+    const startSpanFrames = timelineSpanFramesRef.current;
+    const startRangeWidthRatio = rangeWidthRatioForSpan(startSpanFrames);
+    const centerFrame = timelineStartFrameRef.current + startSpanFrames / 2;
 
     return {
       update: (deltaRatio: number) => {
@@ -266,19 +276,19 @@ export function MonitorRange({
           side === "start"
             ? startRangeWidthRatio - deltaRatio * 2
             : startRangeWidthRatio + deltaRatio * 2;
-        const nextSpanUs = clamp(
+        const nextSpanFrames = clamp(
           spanForRangeWidthRatio(nextRangeWidthRatio),
-          minTimelineSpanUs,
-          durationUs,
+          minTimelineSpanFrames,
+          durationFrames,
         );
-        timelineSpanUsRef.current = nextSpanUs;
-        timelineStartUsRef.current = clampTimelineStart(
-          centerUs - nextSpanUs / 2,
-          nextSpanUs,
-          durationUs,
+        timelineSpanFramesRef.current = nextSpanFrames;
+        timelineStartFrameRef.current = clampTimelineStartFrame(
+          centerFrame - nextSpanFrames / 2,
+          nextSpanFrames,
+          durationFrames,
         );
-        onTimelineSpanUsChange(nextSpanUs);
-        onTimelineStartUsChange(timelineStartUsRef.current);
+        onTimelineSpanFramesChange(nextSpanFrames);
+        onTimelineStartFrameChange(timelineStartFrameRef.current);
       },
       end: () => {
         setActiveRangeHandle(null);

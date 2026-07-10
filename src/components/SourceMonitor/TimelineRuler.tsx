@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEventHandler } from "react";
 import {
   buildTimelineRuler,
-  clampTimelineStart,
-  minTimelineSpanUs as getMinTimelineSpanUs,
+  clampTimelineStartFrame,
+  minTimelineSpanFrames as getMinTimelineSpanFrames,
 } from "../../timeline";
 import type { MonitorCueRange } from "./sourceMonitorState";
 
@@ -13,15 +13,14 @@ const TIMELINE_EDGE_SCROLL_MAX_SPANS_PER_SECOND = 1.2;
 
 interface TimelineRulerProps {
   hasMedia: boolean;
-  currentTimeUs: number;
-  durationUs: number;
-  frameRate: number;
-  timelineStartUs: number;
-  timelineSpanUs: number;
+  currentFrame: number;
+  durationFrames: number;
+  timelineStartFrame: number;
+  timelineSpanFrames: number;
   cueRange: MonitorCueRange | null;
-  onMinTimelineSpanUsChange: (minSpanUs: number) => void;
-  onTimelineStartUsChange: (startUs: number) => void;
-  onSeekUs: (timeUs: number) => number;
+  onMinTimelineSpanFramesChange: (minSpanFrames: number) => void;
+  onTimelineStartFrameChange: (startFrame: number) => void;
+  onSeekFrame: (frame: number) => number;
   onStepFrame: (direction: -1 | 1) => void;
 }
 
@@ -39,34 +38,33 @@ function wheelFrameDirection(event: WheelEvent) {
 
 export function TimelineRuler({
   hasMedia,
-  currentTimeUs,
-  durationUs,
-  frameRate,
-  timelineStartUs,
-  timelineSpanUs,
+  currentFrame,
+  durationFrames,
+  timelineStartFrame,
+  timelineSpanFrames,
   cueRange,
-  onMinTimelineSpanUsChange,
-  onTimelineStartUsChange,
-  onSeekUs,
+  onMinTimelineSpanFramesChange,
+  onTimelineStartFrameChange,
+  onSeekFrame,
   onStepFrame,
 }: TimelineRulerProps) {
   const timelineRef = useRef<HTMLDivElement | null>(null);
-  const timelineStartUsRef = useRef(timelineStartUs);
-  const timelineSpanUsRef = useRef(timelineSpanUs);
+  const timelineStartFrameRef = useRef(timelineStartFrame);
+  const timelineSpanFramesRef = useRef(timelineSpanFrames);
   const timelineDragScrollAtRef = useRef(0);
   const [timelineWidthPx, setTimelineWidthPx] = useState(0);
 
-  const timelineEndUs = Math.min(durationUs, timelineStartUs + timelineSpanUs);
-  const timelineVisibleSpanUs = Math.max(1, timelineEndUs - timelineStartUs);
-  const currentTimeClampedUs = clamp(currentTimeUs, 0, durationUs || currentTimeUs);
+  const timelineEndFrame = Math.min(durationFrames, timelineStartFrame + timelineSpanFrames);
+  const timelineVisibleSpanFrames = Math.max(1, timelineEndFrame - timelineStartFrame);
+  const currentFrameClamped = clamp(currentFrame, 0, durationFrames || currentFrame);
   const cursorPercent =
-    currentTimeClampedUs >= timelineStartUs && currentTimeClampedUs <= timelineEndUs
-      ? ((currentTimeClampedUs - timelineStartUs) / timelineVisibleSpanUs) * 100
+    currentFrameClamped >= timelineStartFrame && currentFrameClamped <= timelineEndFrame
+      ? ((currentFrameClamped - timelineStartFrame) / timelineVisibleSpanFrames) * 100
       : null;
   const cueRangePercent = cueRange
     ? {
-        start: ((cueRange.startUs - timelineStartUs) / timelineVisibleSpanUs) * 100,
-        end: ((cueRange.endUs - timelineStartUs) / timelineVisibleSpanUs) * 100,
+        start: ((cueRange.startFrame - timelineStartFrame) / timelineVisibleSpanFrames) * 100,
+        end: ((cueRange.endFrame - timelineStartFrame) / timelineVisibleSpanFrames) * 100,
       }
     : null;
   const visibleCueRange =
@@ -84,33 +82,32 @@ export function TimelineRuler({
   const ruler = useMemo(
     () =>
       buildTimelineRuler({
-        startUs: timelineStartUs,
-        spanUs: timelineVisibleSpanUs,
-        durationUs,
+        startFrame: timelineStartFrame,
+        spanFrames: timelineVisibleSpanFrames,
+        durationFrames,
         widthPx: timelineWidthPx,
-        frameRate,
       }),
-    [durationUs, frameRate, timelineStartUs, timelineVisibleSpanUs, timelineWidthPx],
+    [durationFrames, timelineStartFrame, timelineVisibleSpanFrames, timelineWidthPx],
   );
-  const minSpanUs = useMemo(
+  const minSpanFrames = useMemo(
     () =>
-      durationUs > 0
-        ? getMinTimelineSpanUs(Math.max(1, timelineWidthPx), frameRate, durationUs)
+      durationFrames > 0
+        ? getMinTimelineSpanFrames(Math.max(1, timelineWidthPx), durationFrames)
         : 0,
-    [durationUs, frameRate, timelineWidthPx],
+    [durationFrames, timelineWidthPx],
   );
 
   useEffect(() => {
-    timelineStartUsRef.current = timelineStartUs;
-  }, [timelineStartUs]);
+    timelineStartFrameRef.current = timelineStartFrame;
+  }, [timelineStartFrame]);
 
   useEffect(() => {
-    timelineSpanUsRef.current = timelineSpanUs;
-  }, [timelineSpanUs]);
+    timelineSpanFramesRef.current = timelineSpanFrames;
+  }, [timelineSpanFrames]);
 
   useEffect(() => {
-    onMinTimelineSpanUsChange(minSpanUs);
-  }, [minSpanUs, onMinTimelineSpanUsChange]);
+    onMinTimelineSpanFramesChange(minSpanFrames);
+  }, [minSpanFrames, onMinTimelineSpanFramesChange]);
 
   useEffect(() => {
     const element = timelineRef.current;
@@ -149,7 +146,7 @@ export function TimelineRuler({
 
   function seekFromTimeline(clientX: number, element: HTMLDivElement) {
     const rect = element.getBoundingClientRect();
-    if (rect.width <= 0 || durationUs <= 0) {
+    if (rect.width <= 0 || durationFrames <= 0) {
       return;
     }
 
@@ -161,8 +158,8 @@ export function TimelineRuler({
         : 0;
     timelineDragScrollAtRef.current = now;
 
-    const currentStartUs = timelineStartUsRef.current;
-    const currentSpanUs = timelineSpanUsRef.current;
+    const currentStartFrame = timelineStartFrameRef.current;
+    const currentSpanFrames = timelineSpanFramesRef.current;
     const edgeInsetRatio = Math.min(CURSOR_EDGE_INSET_PX / rect.width, 0.25);
     const leftEdgeX = rect.left + CURSOR_EDGE_INSET_PX;
     const rightEdgeX = rect.right - CURSOR_EDGE_INSET_PX;
@@ -171,7 +168,7 @@ export function TimelineRuler({
 
     if (!atLeftEdge && !atRightEdge) {
       const ratio = clamp((clientX - rect.left) / rect.width, 0, 1);
-      onSeekUs(currentStartUs + ratio * currentSpanUs);
+      onSeekFrame(currentStartFrame + ratio * currentSpanFrames);
       return;
     }
 
@@ -183,24 +180,24 @@ export function TimelineRuler({
       TIMELINE_EDGE_SCROLL_BASE_SPANS_PER_SECOND +
       overflowRatio *
         (TIMELINE_EDGE_SCROLL_MAX_SPANS_PER_SECOND - TIMELINE_EDGE_SCROLL_BASE_SPANS_PER_SECOND);
-    const nextStartUs = clampTimelineStart(
-      currentStartUs + direction * currentSpanUs * scrollSpeed * elapsedSeconds,
-      currentSpanUs,
-      durationUs,
+    const nextStartFrame = clampTimelineStartFrame(
+      currentStartFrame + direction * currentSpanFrames * scrollSpeed * elapsedSeconds,
+      currentSpanFrames,
+      durationFrames,
     );
-    const maxStartUs = Math.max(0, durationUs - currentSpanUs);
+    const maxStartFrame = Math.max(0, durationFrames - currentSpanFrames);
     const reachedVideoEdge =
-      (direction < 0 && nextStartUs <= 0) || (direction > 0 && nextStartUs >= maxStartUs);
+      (direction < 0 && nextStartFrame <= 0) || (direction > 0 && nextStartFrame >= maxStartFrame);
     const cursorRatio = direction < 0 ? edgeInsetRatio : 1 - edgeInsetRatio;
-    const targetUs = reachedVideoEdge
+    const targetFrame = reachedVideoEdge
       ? direction < 0
         ? 0
-        : durationUs
-      : nextStartUs + cursorRatio * currentSpanUs;
+        : durationFrames
+      : nextStartFrame + cursorRatio * currentSpanFrames;
 
-    timelineStartUsRef.current = nextStartUs;
-    onTimelineStartUsChange(nextStartUs);
-    onSeekUs(targetUs);
+    timelineStartFrameRef.current = nextStartFrame;
+    onTimelineStartFrameChange(nextStartFrame);
+    onSeekFrame(targetFrame);
   }
 
   const handlePointerDown: PointerEventHandler<HTMLDivElement> = (event) => {
@@ -284,10 +281,9 @@ export function TimelineRuler({
         {hasMedia &&
           ruler.ticks.map((tick) => (
             <span
-              key={tick.timeUs}
+              key={tick.frame}
               className={`timeline-tick ${tick.major ? "major" : ""}`}
               data-frame={tick.frame}
-              data-time-us={tick.timeUs}
               style={{ left: `${tick.leftPx}px` }}
             />
           ))}
