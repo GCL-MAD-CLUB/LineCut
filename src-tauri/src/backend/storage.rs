@@ -45,14 +45,59 @@ pub(crate) fn preferences_file() -> PathBuf {
 }
 
 pub(crate) fn load_preferences() -> Result<Preferences, String> {
+    clear_cache_when_version_changes();
     let path = preferences_file();
     if !path.exists() {
-        return Ok(Preferences::default());
+        return Ok(installer_media_preferences(Preferences::default()));
     }
     let body = fs::read_to_string(&path).map_err(|e| format!("读取首选项失败: {e}"))?;
     let preferences =
         serde_json::from_str::<Preferences>(&body).map_err(|e| format!("解析首选项失败: {e}"))?;
     normalize_preferences(preferences)
+}
+
+/// Cache data is an implementation detail and must not survive an application version change.
+/// The marker lives beside the cache, so preferences, projects, and exports remain untouched.
+fn clear_cache_when_version_changes() {
+    let root = config_root();
+    let marker = root.join("cache-version");
+    let current_version = env!("CARGO_PKG_VERSION");
+    let previous_version = fs::read_to_string(&marker).ok();
+
+    if previous_version.as_deref().map(str::trim) != Some(current_version) {
+        let cache = root.join("cache");
+        if cache.exists() {
+            let _ = fs::remove_dir_all(&cache);
+        }
+        let _ = fs::create_dir_all(&root);
+        let _ = fs::write(marker, current_version);
+    }
+}
+
+/// Applies the media tool paths selected by the Windows NSIS installer.
+///
+/// The installer deliberately writes this small line-oriented file instead of JSON so a
+/// Windows path does not require JSON escaping in the installer script. A normal user
+/// preference file always takes precedence after it has been saved by the application.
+fn installer_media_preferences(mut preferences: Preferences) -> Preferences {
+    let path = config_root().join("installer-media-paths.ini");
+    let Ok(contents) = fs::read_to_string(path) else {
+        return preferences;
+    };
+
+    for line in contents.lines() {
+        if let Some(value) = line.strip_prefix("ffmpeg_path=") {
+            if !value.trim().is_empty() {
+                preferences.ffmpeg_path = value.trim().to_string();
+            }
+        } else if let Some(value) = line.strip_prefix("ffprobe_path=") {
+            if !value.trim().is_empty() {
+                preferences.ffprobe_path = value.trim().to_string();
+            }
+        }
+    }
+
+    preferences
 }
 
 pub(crate) fn normalize_preferences(preferences: Preferences) -> Result<Preferences, String> {
