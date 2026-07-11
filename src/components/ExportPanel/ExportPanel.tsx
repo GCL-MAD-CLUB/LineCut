@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Download, Folder, Loader2, Scissors } from "lucide-react";
+import { Captions, Download, Film, Folder, Link2, Loader2, Music2, Scissors } from "lucide-react";
 import { useEffect, useMemo } from "react";
 import {
   cancelFfmpegTask,
@@ -11,6 +11,7 @@ import { useAppStore } from "../../store";
 import { isTauriRuntime } from "../../tauriRuntime";
 import type {
   ExportLayout,
+  ExportBoundMedia,
   ExportMode,
   ExportNameRule,
   ExportResult,
@@ -140,7 +141,16 @@ function useCanExport(isExporting: boolean) {
 export function ExportPanel() {
   const exportOptions = useExportPanelState((state) => state.exportOptions);
   const setExportOptions = useExportPanelState((state) => state.updateExportOptions);
+  const exportVideoId = useExportPanelState((state) => state.exportVideoId);
+  const selectedBoundMediaIds = useExportPanelState((state) => state.selectedBoundMediaIds);
+  const setExportVideoId = useExportPanelState((state) => state.setExportVideoId);
+  const setSelectedBoundMediaIds = useExportPanelState((state) => state.setSelectedBoundMediaIds);
   const project = useAppStore((state) => state.project);
+  const projects = useAppStore((state) => state.projects);
+  const mediaItems = useAppStore((state) => state.mediaItems);
+  const activeVideoId = useAppStore((state) => state.activeVideoId);
+  const detachedVideoIds = useAppStore((state) => state.detachedVideoIds);
+  const activeVideoChanged = useAppStore((state) => state.actions.activeVideoChanged);
   const activeTrackId = useAppStore((state) => state.activeTrackId);
   const selectedCueIds = useAppStore((state) => state.selectedCueIds);
   const defaultExportDir = useAppStore((state) => state.preferences.default_export_dir);
@@ -150,6 +160,17 @@ export function ExportPanel() {
   const selectedCount = useAppStore((state) => state.selectedCueIds.size);
   const { isRunning: isExporting } = getTaskProgressStatus("export");
   const canExport = useCanExport(isExporting);
+  const videoItems = useMemo(
+    () => mediaItems.filter((item) => item.kind === "video"),
+    [mediaItems],
+  );
+  const boundMediaItems = useMemo(
+    () =>
+      mediaItems.filter(
+        (item) => item.kind !== "video" && item.bound_to_video_id === exportVideoId,
+      ),
+    [exportVideoId, mediaItems],
+  );
   const dialogueLineCount = useMemo(() => {
     return dominantDialogueLineCount(labelCues);
   }, [labelCues]);
@@ -164,6 +185,20 @@ export function ExportPanel() {
     }
     return exportOptions.dialogue_line_indexes.filter((index) => index < dialogueLineCount);
   }, [dialogueLineCount, exportOptions.dialogue_line_indexes]);
+
+  useEffect(() => {
+    if (activeVideoId && exportVideoId !== activeVideoId) {
+      setExportVideoId(activeVideoId);
+    }
+  }, [activeVideoId, exportVideoId, setExportVideoId]);
+
+  useEffect(() => {
+    const availableIds = new Set(boundMediaItems.map((item) => item.id));
+    const validIds = selectedBoundMediaIds.filter((itemId) => availableIds.has(itemId));
+    if (validIds.length !== selectedBoundMediaIds.length) {
+      setSelectedBoundMediaIds(validIds);
+    }
+  }, [boundMediaItems, selectedBoundMediaIds, setSelectedBoundMediaIds]);
 
   useEffect(() => {
     if (exportOptions.layout === "merged" && isDialogueNameRule(exportOptions.export_name_rule)) {
@@ -197,6 +232,19 @@ export function ExportPanel() {
     setExportOptions({ dialogue_line_indexes: next });
   }
 
+  function changeExportVideo(videoId: string) {
+    setExportVideoId(videoId);
+    activeVideoChanged(videoId);
+  }
+
+  function toggleBoundMedia(itemId: string) {
+    setSelectedBoundMediaIds(
+      selectedBoundMediaIds.includes(itemId)
+        ? selectedBoundMediaIds.filter((current) => current !== itemId)
+        : [...selectedBoundMediaIds, itemId],
+    );
+  }
+
   async function chooseOutputDir() {
     if (!isTauriRuntime()) {
       setMessage("请在 Tauri 桌面窗口中选择导出目录。");
@@ -213,7 +261,8 @@ export function ExportPanel() {
   }
 
   async function exportSelection() {
-    if (!project || !activeTrackId) {
+    const exportProject = projects[exportVideoId] ?? project;
+    if (!exportProject || !activeTrackId) {
       return;
     }
     if (!isTauriRuntime()) {
@@ -235,11 +284,19 @@ export function ExportPanel() {
     });
     setExportResult(null);
     try {
+      const boundMedia: ExportBoundMedia[] = boundMediaItems
+        .filter((item) => selectedBoundMediaIds.includes(item.id) && item.path)
+        .map((item) => ({
+          kind: item.kind === "audio" ? "audio" : "subtitle",
+          path: item.path,
+        }));
       const result = await invoke<ExportResult>("export_clips", {
-        assetId: project.asset.id,
+        assetId: exportProject.asset.id,
         trackId: activeTrackId,
         cueIds: Array.from(selectedCueIds),
         options: exportOptions,
+        boundMedia,
+        includeSourceAudio: !detachedVideoIds.has(exportProject.asset.id),
         taskId: exportTaskId,
       });
       setExportResult(result);
@@ -259,6 +316,51 @@ export function ExportPanel() {
 
   return (
     <div className="export-panel">
+      <section className="export-media-picker">
+        <label>
+          <span>
+            <Film size={13} /> 导出视频
+          </span>
+          <SelectDropdown
+            ariaLabel="导出视频"
+            className="export-video-select"
+            menuClassName="export-video-select-menu"
+            disabled={videoItems.length === 0 || isExporting}
+            value={exportVideoId}
+            items={videoItems.map((item) => ({
+              type: "option" as const,
+              value: item.id,
+              label: item.file_name,
+            }))}
+            onChange={changeExportVideo}
+          />
+        </label>
+
+        <div className="export-bound-picker">
+          <span>
+            <Link2 size={13} /> 合成绑定媒体
+          </span>
+          {boundMediaItems.length === 0 ? (
+            <small>当前视频没有绑定的音频或字幕</small>
+          ) : (
+            <div className="export-bound-options">
+              {boundMediaItems.map((item) => (
+                <label key={item.id} title={item.path}>
+                  <input
+                    type="checkbox"
+                    checked={selectedBoundMediaIds.includes(item.id)}
+                    onChange={() => toggleBoundMedia(item.id)}
+                    disabled={isExporting}
+                  />
+                  {item.kind === "audio" ? <Music2 size={12} /> : <Captions size={12} />}
+                  <span>{item.file_name}</span>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+
       <div className="export-summary">
         <strong>{selectedCount} 条台词已选择</strong>
         <Scissors size={12.5} />

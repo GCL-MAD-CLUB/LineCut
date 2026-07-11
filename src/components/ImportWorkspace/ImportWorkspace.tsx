@@ -1,8 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
-import { confirm, open } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   Captions,
   ChevronRight,
+  FileAudio2,
   FileVideo2,
   FolderOpen,
   HardDrive,
@@ -10,26 +11,36 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { useState } from "react";
-import { createTaskProgress, getTaskProgressStatus } from "../TaskProgress";
-import {
-  cancelFfmpegTask,
-  createFfmpegTaskId,
-  listenToFfmpegTaskProgress,
-} from "../../ffmpegProgress";
+import { useMemo, useState } from "react";
+import { cancelFfmpegTask, createFfmpegTaskId } from "../../ffmpegProgress";
 import { useAppStore } from "../../store";
 import { isTauriRuntime } from "../../tauriRuntime";
-import type { ImportResult } from "../../types";
+import type { ImportResult, MediaBinItem } from "../../types";
+import { createTaskProgress, getTaskProgressStatus } from "../TaskProgress";
 import "./ImportWorkspace.css";
 
 interface ImportWorkspaceProps {
   onImportCompleted?: () => void;
 }
 
+type PendingMediaKind = "video" | "audio" | "subtitle";
+
+interface PendingMediaItem {
+  kind: PendingMediaKind;
+  path: string;
+}
+
 const videoFilters = [
   {
     name: "Video",
-    extensions: ["mkv", "mp4", "mov", "webm", "avi", "ts", "m2ts"],
+    extensions: ["mkv", "mp4", "mov", "webm", "avi", "ts", "m2ts", "mpeg", "mpg"],
+  },
+];
+
+const audioFilters = [
+  {
+    name: "Audio",
+    extensions: ["wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "wma"],
   },
 ];
 
@@ -54,120 +65,187 @@ function extension(path: string) {
   return fileName(path).split(".").pop()?.toUpperCase() ?? "";
 }
 
+function uniquePaths(current: string[], additions: string[]) {
+  return Array.from(new Set([...current, ...additions]));
+}
+
+function pendingMediaIcon(kind: PendingMediaKind) {
+  if (kind === "video") {
+    return <FileVideo2 aria-hidden="true" />;
+  }
+  if (kind === "audio") {
+    return <FileAudio2 aria-hidden="true" />;
+  }
+  return <Captions aria-hidden="true" />;
+}
+
+function pendingMediaLabel(kind: PendingMediaKind) {
+  if (kind === "video") {
+    return "视频";
+  }
+  if (kind === "audio") {
+    return "音频";
+  }
+  return "字幕";
+}
+
+function standaloneSubtitleItem(path: string, index: number): MediaBinItem {
+  const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${index}`;
+  return {
+    id: `external-subtitle:${random}:${path.length}`,
+    kind: "subtitle",
+    path,
+    file_name: fileName(path),
+    duration_us: 0,
+    start_time_us: 0,
+    bound_to_video_id: null,
+    source_video_id: null,
+    stream_index: null,
+    subtitle_track_id: null,
+    codec: path.split(".").pop()?.toLowerCase() ?? "subtitle",
+    language: null,
+    extracted: false,
+    color: "#893a04",
+  };
+}
+
 export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
-  const [videoPath, setVideoPath] = useState<string | null>(null);
+  const [videoPaths, setVideoPaths] = useState<string[]>([]);
+  const [audioPaths, setAudioPaths] = useState<string[]>([]);
   const [subtitlePaths, setSubtitlePaths] = useState<string[]>([]);
-  const project = useAppStore((state) => state.project);
-  const projectImported = useAppStore((state) => state.actions.projectImported);
+  const mediaProjectsAdded = useAppStore((state) => state.actions.mediaProjectsAdded);
+  const mediaItemsAdded = useAppStore((state) => state.actions.mediaItemsAdded);
   const messagePublished = useAppStore((state) => state.actions.messagePublished);
-  const warningsReplaced = useAppStore((state) => state.actions.warningsReplaced);
+  const warningsAppended = useAppStore((state) => state.actions.warningsAppended);
   const exportResultChanged = useAppStore((state) => state.actions.exportResultChanged);
   const { isRunning: isImporting } = getTaskProgressStatus("import");
-  const hasSelection = Boolean(videoPath || subtitlePaths.length > 0);
+  const pendingItems = useMemo<PendingMediaItem[]>(
+    () => [
+      ...videoPaths.map((path) => ({ kind: "video" as const, path })),
+      ...audioPaths.map((path) => ({ kind: "audio" as const, path })),
+      ...subtitlePaths.map((path) => ({ kind: "subtitle" as const, path })),
+    ],
+    [audioPaths, subtitlePaths, videoPaths],
+  );
+  const hasSelection = pendingItems.length > 0;
 
-  async function chooseVideo() {
+  async function choosePaths(kind: PendingMediaKind, filters: typeof videoFilters, title: string) {
     if (!isTauriRuntime()) {
-      messagePublished("请在 Tauri 桌面窗口中选择本地视频。");
+      messagePublished("请在 Tauri 桌面窗口中选择本地素材。");
       return;
     }
-    const picked = await open({
-      multiple: false,
-      title: "选择要导入的视频",
-      filters: videoFilters,
-    });
-    const path = Array.isArray(picked) ? picked[0] : picked;
-    if (path) {
-      setVideoPath(path);
-      messagePublished(`已选择 ${fileName(path)}`);
-    }
-  }
-
-  async function chooseSubtitles() {
-    if (!isTauriRuntime()) {
-      messagePublished("请在 Tauri 桌面窗口中选择本地字幕。");
-      return;
-    }
-    const picked = await open({
-      multiple: true,
-      title: "添加字幕文件",
-      filters: subtitleFilters,
-    });
+    const picked = await open({ multiple: true, title, filters });
     const paths = Array.isArray(picked) ? picked : picked ? [picked] : [];
-    if (paths.length > 0) {
-      setSubtitlePaths((current) => Array.from(new Set([...current, ...paths])));
-      messagePublished(`已添加 ${paths.length} 个字幕文件`);
+    if (paths.length === 0) {
+      return;
+    }
+    if (kind === "video") {
+      setVideoPaths((current) => uniquePaths(current, paths));
+    } else if (kind === "audio") {
+      setAudioPaths((current) => uniquePaths(current, paths));
+    } else {
+      setSubtitlePaths((current) => uniquePaths(current, paths));
+    }
+    messagePublished(`已添加 ${paths.length} 个${pendingMediaLabel(kind)}文件`);
+  }
+
+  function removePendingItem(item: PendingMediaItem) {
+    if (item.kind === "video") {
+      setVideoPaths((current) => current.filter((path) => path !== item.path));
+    } else if (item.kind === "audio") {
+      setAudioPaths((current) => current.filter((path) => path !== item.path));
+    } else {
+      setSubtitlePaths((current) => current.filter((path) => path !== item.path));
     }
   }
 
-  async function removeBackendProject(assetId = project?.asset.id) {
-    if (!assetId || !isTauriRuntime()) {
-      return;
-    }
-    await invoke("close_project", { assetId });
+  function clearPendingItems() {
+    setVideoPaths([]);
+    setAudioPaths([]);
+    setSubtitlePaths([]);
   }
 
   async function importSelectedMedia() {
     if (!isTauriRuntime()) {
-      messagePublished("浏览器预览不能导入本地 MKV，请运行 Tauri 桌面应用。");
+      messagePublished("浏览器预览不能导入本地媒体，请运行 Tauri 桌面应用。");
       return;
     }
-    if (!videoPath) {
-      messagePublished("请先选择一个视频。");
+    if (!hasSelection) {
+      messagePublished("请先选择需要导入的媒体。");
       return;
-    }
-    if (project) {
-      const shouldReplace = await confirm("导入新媒体会替换当前项目中的媒体及字幕，是否继续？", {
-        title: "LineCut",
-        kind: "warning",
-        okLabel: "继续导入",
-        cancelLabel: "取消",
-      });
-      if (!shouldReplace) {
-        return;
-      }
     }
 
-    const importTaskId = createFfmpegTaskId("import");
+    const probeItems = pendingItems.filter((item) => item.kind !== "subtitle");
+    const totalSteps = probeItems.length + (subtitlePaths.length > 0 ? 1 : 0);
+    let currentTaskId = "";
     let importCancelled = false;
     const importTask = await createTaskProgress({
       operation: "import",
-      label: "正在探测媒体并抽取字幕",
+      label: `正在导入 ${pendingItems.length} 个素材`,
       current: 0,
-      total: 1,
-      listener: listenToFfmpegTaskProgress(importTaskId),
+      total: Math.max(1, totalSteps),
       on_cancel: async () => {
-        await cancelFfmpegTask(importTaskId);
         importCancelled = true;
+        if (currentTaskId) {
+          await cancelFfmpegTask(currentTaskId);
+        }
       },
     });
-    warningsReplaced([]);
     exportResultChanged(null);
-    try {
-      const oldAssetId = project?.asset.id;
-      const result = await invoke<ImportResult>("import_media", {
-        path: videoPath,
-        externalSubtitles: subtitlePaths,
-        taskId: importTaskId,
-      });
-      if (oldAssetId && oldAssetId !== result.project.asset.id) {
-        await removeBackendProject(oldAssetId);
-      }
-      projectImported(result.project);
-      warningsReplaced(result.warnings);
-      setVideoPath(null);
-      setSubtitlePaths([]);
-      messagePublished(`已导入 ${result.project.asset.file_name}`);
-      importTask.update({ current: 1 });
-      importTask.remove();
-      onImportCompleted?.();
-    } catch (error) {
+
+    const loadedResults: ImportResult[] = [];
+    const errors: string[] = [];
+    let completedSteps = 0;
+    for (const item of probeItems) {
       if (importCancelled) {
-        messagePublished("导入已取消");
-        return;
+        break;
       }
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      importTask.fail("导入视频失败", errorMessage);
-      messagePublished(errorMessage);
+      currentTaskId = createFfmpegTaskId(`import-${item.kind}`);
+      importTask.update({ label: `正在探测 ${fileName(item.path)}` });
+      try {
+        const result = await invoke<ImportResult>("import_media", {
+          path: item.path,
+          externalSubtitles: [],
+          taskId: currentTaskId,
+        });
+        loadedResults.push(result);
+      } catch (error) {
+        if (!importCancelled) {
+          errors.push(
+            `${fileName(item.path)}：${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+      completedSteps += 1;
+      importTask.update({ current: completedSteps });
+    }
+
+    if (loadedResults.length > 0) {
+      mediaProjectsAdded(loadedResults.map((result) => result.project));
+      warningsAppended(loadedResults.flatMap((result) => result.warnings));
+    }
+    if (!importCancelled && subtitlePaths.length > 0) {
+      mediaItemsAdded(subtitlePaths.map(standaloneSubtitleItem));
+      completedSteps += 1;
+      importTask.update({ current: completedSteps });
+    }
+
+    if (importCancelled) {
+      messagePublished("媒体导入已取消");
+      return;
+    }
+
+    const importedCount = loadedResults.length + subtitlePaths.length;
+    clearPendingItems();
+    if (errors.length > 0) {
+      importTask.fail("部分素材导入失败", errors.join("\n"));
+      messagePublished(`已导入 ${importedCount} 个素材，${errors.length} 个失败`);
+    } else {
+      importTask.remove();
+      messagePublished(`已导入 ${importedCount} 个素材`);
+    }
+    if (importedCount > 0) {
+      onImportCompleted?.();
     }
   }
 
@@ -177,9 +255,9 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
         <div>
           <span className="import-workspace-eyebrow">媒体浏览器</span>
           <h1>导入媒体</h1>
-          <p>选择一个视频和与其配套的字幕文件，确认后将素材载入编辑工作区。</p>
+          <p>批量选择视频、音频和字幕；所有视频作为同级素材加入素材箱。</p>
         </div>
-        <span className="import-workspace-limit">1 个视频 · 任意数量字幕</span>
+        <span className="import-workspace-limit">多个视频 · 多个音频 · 多个字幕</span>
       </header>
 
       <div className="import-browser">
@@ -191,12 +269,16 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
           </button>
           <div className="import-browser-summary">
             <span>待导入素材</span>
-            <strong>{(videoPath ? 1 : 0) + subtitlePaths.length}</strong>
+            <strong>{pendingItems.length}</strong>
           </div>
           <dl>
             <div>
               <dt>视频</dt>
-              <dd>{videoPath ? "1 / 1" : "0 / 1"}</dd>
+              <dd>{videoPaths.length}</dd>
+            </div>
+            <div>
+              <dt>音频</dt>
+              <dd>{audioPaths.length}</dd>
             </div>
             <div>
               <dt>字幕</dt>
@@ -214,13 +296,26 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
               <strong>待导入素材</strong>
             </div>
             <div className="import-picker-actions">
-              <button type="button" onClick={() => void chooseVideo()} disabled={isImporting}>
-                <FileVideo2 aria-hidden="true" />
-                {videoPath ? "更换视频" : "选择视频"}
+              <button
+                type="button"
+                onClick={() => void choosePaths("video", videoFilters, "添加多个视频")}
+                disabled={isImporting}
+              >
+                <FileVideo2 aria-hidden="true" /> 添加视频
               </button>
-              <button type="button" onClick={() => void chooseSubtitles()} disabled={isImporting}>
-                <Plus aria-hidden="true" />
-                添加字幕
+              <button
+                type="button"
+                onClick={() => void choosePaths("audio", audioFilters, "添加多个音频")}
+                disabled={isImporting}
+              >
+                <FileAudio2 aria-hidden="true" /> 添加音频
+              </button>
+              <button
+                type="button"
+                onClick={() => void choosePaths("subtitle", subtitleFilters, "添加多个字幕")}
+                disabled={isImporting}
+              >
+                <Plus aria-hidden="true" /> 添加字幕
               </button>
             </div>
           </div>
@@ -237,65 +332,37 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
               <div className="import-empty-state">
                 <Upload aria-hidden="true" />
                 <strong>选择要导入的本地媒体</strong>
-                <span>先选择一个视频，也可以同时添加 SRT、ASS、SSA 或 VTT 字幕。</span>
-                <button type="button" onClick={() => void chooseVideo()}>
+                <span>可以一次添加多个视频、音频和字幕文件。</span>
+                <button
+                  type="button"
+                  onClick={() => void choosePaths("video", videoFilters, "添加多个视频")}
+                >
                   选择视频
                 </button>
               </div>
             )}
 
-            {videoPath && (
-              <div className="import-file-row" role="row">
-                <span className="import-file-name" role="cell" title={videoPath}>
-                  <span className="import-file-icon video">
-                    <FileVideo2 aria-hidden="true" />
+            {pendingItems.map((item) => (
+              <div className="import-file-row" role="row" key={`${item.kind}:${item.path}`}>
+                <span className="import-file-name" role="cell" title={item.path}>
+                  <span className={`import-file-icon ${item.kind}`}>
+                    {pendingMediaIcon(item.kind)}
                   </span>
-                  <span>
-                    <strong>{fileName(videoPath)}</strong>
-                    <small>主媒体</small>
-                  </span>
+                  <strong>{fileName(item.path)}</strong>
                 </span>
-                <span role="cell">{extension(videoPath)} 视频</span>
-                <span className="import-file-path" role="cell" title={parentPath(videoPath)}>
-                  {parentPath(videoPath)}
+                <span role="cell">
+                  {extension(item.path)} {pendingMediaLabel(item.kind)}
                 </span>
-                <button
-                  type="button"
-                  className="import-remove-button"
-                  onClick={() => setVideoPath(null)}
-                  disabled={isImporting}
-                  title="移除视频"
-                  aria-label="移除视频"
-                >
-                  <Trash2 aria-hidden="true" />
-                </button>
-              </div>
-            )}
-
-            {subtitlePaths.map((path) => (
-              <div className="import-file-row" role="row" key={path}>
-                <span className="import-file-name" role="cell" title={path}>
-                  <span className="import-file-icon subtitle">
-                    <Captions aria-hidden="true" />
-                  </span>
-                  <span>
-                    <strong>{fileName(path)}</strong>
-                    <small>外挂字幕</small>
-                  </span>
-                </span>
-                <span role="cell">{extension(path)} 字幕</span>
-                <span className="import-file-path" role="cell" title={parentPath(path)}>
-                  {parentPath(path)}
+                <span className="import-file-path" role="cell" title={parentPath(item.path)}>
+                  {parentPath(item.path)}
                 </span>
                 <button
                   type="button"
                   className="import-remove-button"
-                  onClick={() =>
-                    setSubtitlePaths((current) => current.filter((item) => item !== path))
-                  }
+                  onClick={() => removePendingItem(item)}
                   disabled={isImporting}
-                  title="移除字幕"
-                  aria-label={`移除字幕 ${fileName(path)}`}
+                  title={`移除${pendingMediaLabel(item.kind)}`}
+                  aria-label={`移除 ${fileName(item.path)}`}
                 >
                   <Trash2 aria-hidden="true" />
                 </button>
@@ -307,17 +374,18 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
 
       <footer className="import-workspace-footer">
         <div>
-          <strong>{videoPath ? fileName(videoPath) : "尚未选择视频"}</strong>
-          <span>{subtitlePaths.length} 个字幕文件</span>
+          <strong>
+            {pendingItems.length > 0 ? `${pendingItems.length} 个素材待导入` : "尚未选择素材"}
+          </strong>
+          <span>
+            {videoPaths.length} 个视频 · {audioPaths.length} 个音频 · {subtitlePaths.length} 个字幕
+          </span>
         </div>
         <div className="import-footer-actions">
           <button
             type="button"
             className="import-clear-button"
-            onClick={() => {
-              setVideoPath(null);
-              setSubtitlePaths([]);
-            }}
+            onClick={clearPendingItems}
             disabled={!hasSelection || isImporting}
           >
             清除
@@ -326,10 +394,10 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
             type="button"
             className="import-confirm-button"
             onClick={() => void importSelectedMedia()}
-            disabled={!videoPath || isImporting}
+            disabled={!hasSelection || isImporting}
           >
             <Upload aria-hidden="true" />
-            {isImporting ? "正在导入" : "导入"}
+            {isImporting ? "正在导入" : "导入全部"}
           </button>
         </div>
       </footer>

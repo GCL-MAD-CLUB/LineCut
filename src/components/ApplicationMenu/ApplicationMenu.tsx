@@ -4,7 +4,6 @@ import "./ApplicationMenu.css";
 
 interface ApplicationMenuProps {
   hasProject: boolean;
-  hasMedia: boolean;
   isDirty: boolean;
   isBusy: boolean;
   onNewProject: () => void | Promise<void>;
@@ -14,7 +13,8 @@ interface ApplicationMenuProps {
   onSaveProjectAs: () => void | Promise<void>;
   onSaveProjectCopy: () => void | Promise<void>;
   onImportMedia: () => void | Promise<void>;
-  onImportSubtitles: () => void | Promise<void>;
+  recentMediaPaths: string[];
+  onImportRecentMedia: (path: string) => void | Promise<void>;
   canSelectAllSubtitleCues: boolean;
   canClearSubtitleCueSelection: boolean;
   onSelectAllSubtitleCues: () => void;
@@ -28,16 +28,18 @@ interface MenuItemProps {
   shortcut?: string;
   disabled?: boolean;
   submenu?: boolean;
+  title?: string;
   onSelect?: () => void | Promise<void>;
 }
 
-function MenuItem({ children, shortcut, disabled, submenu, onSelect }: MenuItemProps) {
+function MenuItem({ children, shortcut, disabled, submenu, title, onSelect }: MenuItemProps) {
   return (
     <button
       type="button"
       className="application-menu-item"
       role="menuitem"
       disabled={disabled}
+      title={title}
       onClick={() => void onSelect?.()}
     >
       <span>{children}</span>
@@ -47,9 +49,12 @@ function MenuItem({ children, shortcut, disabled, submenu, onSelect }: MenuItemP
   );
 }
 
+function fileName(path: string) {
+  return path.split(/[\\/]/).pop() ?? path;
+}
+
 export function ApplicationMenu({
   hasProject,
-  hasMedia,
   isDirty,
   isBusy,
   onNewProject,
@@ -59,7 +64,8 @@ export function ApplicationMenu({
   onSaveProjectAs,
   onSaveProjectCopy,
   onImportMedia,
-  onImportSubtitles,
+  recentMediaPaths,
+  onImportRecentMedia,
   canSelectAllSubtitleCues,
   canClearSubtitleCueSelection,
   onSelectAllSubtitleCues,
@@ -69,6 +75,7 @@ export function ApplicationMenu({
 }: ApplicationMenuProps) {
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const [editMenuOpen, setEditMenuOpen] = useState(false);
+  const [recentImportMenuOpen, setRecentImportMenuOpen] = useState(false);
   const menuRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -95,6 +102,12 @@ export function ApplicationMenu({
       window.removeEventListener("keydown", closeOnEscape);
     };
   }, [editMenuOpen, fileMenuOpen]);
+
+  useEffect(() => {
+    if (!fileMenuOpen) {
+      setRecentImportMenuOpen(false);
+    }
+  }, [fileMenuOpen]);
 
   const select = (handler: () => void | Promise<void>) => async () => {
     setFileMenuOpen(false);
@@ -159,11 +172,34 @@ export function ApplicationMenu({
             </MenuItem>
             <div className="application-menu-separator" role="separator" />
             <MenuItem shortcut="Ctrl+I" disabled={isBusy} onSelect={select(onImportMedia)}>
-              导入媒体(I)...
+              导入(I)...
             </MenuItem>
-            <MenuItem disabled={!hasMedia || isBusy} onSelect={select(onImportSubtitles)}>
-              导入外挂字幕(T)...
-            </MenuItem>
+            <div className="application-menu-submenu">
+              <MenuItem
+                disabled={recentMediaPaths.length === 0 || isBusy}
+                submenu
+                onSelect={() => setRecentImportMenuOpen((open) => !open)}
+              >
+                导入最近使用的文件(F)
+              </MenuItem>
+              {recentImportMenuOpen && (
+                <div
+                  className="application-menu-popover application-menu-submenu-popover"
+                  role="menu"
+                >
+                  {recentMediaPaths.map((path) => (
+                    <MenuItem
+                      key={path}
+                      title={path}
+                      disabled={isBusy}
+                      onSelect={select(() => onImportRecentMedia(path))}
+                    >
+                      {fileName(path)}
+                    </MenuItem>
+                  ))}
+                </div>
+              )}
+            </div>
             <div className="application-menu-separator" role="separator" />
             <MenuItem shortcut="Ctrl+Q" onSelect={select(onExit)}>
               退出(X)

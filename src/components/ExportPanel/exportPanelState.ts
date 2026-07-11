@@ -3,7 +3,11 @@ import { createPanelState } from "../../panelState";
 
 interface ExportPanelState {
   exportOptions: ExportOptions;
+  exportVideoId: string;
+  selectedBoundMediaIds: string[];
   updateExportOptions: (options: Partial<ExportOptions>) => void;
+  setExportVideoId: (videoId: string) => void;
+  setSelectedBoundMediaIds: (itemIds: string[]) => void;
 }
 
 function defaultExportOptions(): ExportOptions {
@@ -22,6 +26,8 @@ function defaultExportOptions(): ExportOptions {
 
 export const useExportPanelState = createPanelState<ExportPanelState>(() => (set) => ({
   exportOptions: defaultExportOptions(),
+  exportVideoId: "",
+  selectedBoundMediaIds: [],
   updateExportOptions: (options) =>
     set((state) => ({
       exportOptions: {
@@ -29,4 +35,6 @@ export const useExportPanelState = createPanelState<ExportPanelState>(() => (set
         ...options,
       },
     })),
+  setExportVideoId: (exportVideoId) => set({ exportVideoId, selectedBoundMediaIds: [] }),
+  setSelectedBoundMediaIds: (selectedBoundMediaIds) => set({ selectedBoundMediaIds }),
 }));

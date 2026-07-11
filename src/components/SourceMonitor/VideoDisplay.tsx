@@ -16,6 +16,7 @@ interface VideoDisplayProps {
   stageRef: RefObject<HTMLDivElement | null>;
   videoRef: RefObject<HTMLVideoElement | null>;
   videoSrc: string | null;
+  muted: boolean;
   zoomLevel: MonitorZoomLevel;
   zoomPan: ZoomPan;
   onVideoError: () => void;
@@ -45,6 +46,7 @@ export function VideoDisplay({
   stageRef,
   videoRef,
   videoSrc,
+  muted,
   zoomLevel,
   zoomPan,
   onVideoError,
@@ -196,6 +198,7 @@ export function VideoDisplay({
     <div
       ref={stageRef}
       className="source-video-stage"
+      data-source-monitor-drop-target
       tabIndex={-1}
       onPointerEnter={() => focusStage()}
       onPointerDown={() => focusStage()}
@@ -204,6 +207,7 @@ export function VideoDisplay({
         <video
           ref={videoRef}
           src={videoSrc}
+          muted={muted}
           controls={false}
           preload="auto"
           onError={onVideoError}

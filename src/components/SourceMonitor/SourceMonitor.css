@@ -1,10 +1,40 @@
 .source-monitor {
+  position: relative;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
   gap: 8px;
   height: 100%;
   min-height: 0;
   padding: 12px;
+}
+
+.source-monitor.video-drag-over {
+  outline: 2px solid var(--color-accent-monitor);
+  outline-offset: -3px;
+}
+
+.source-drop-overlay {
+  position: absolute;
+  inset: 10px 10px auto;
+  z-index: 5;
+  display: grid;
+  height: 64px;
+  place-items: center;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  background: rgb(28 86 137 / 88%);
+  border: 1px solid #77baff;
+  border-radius: 4px;
+  pointer-events: none;
+}
+
+.bound-audio-stack {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
 }
 
 .source-video-stage,

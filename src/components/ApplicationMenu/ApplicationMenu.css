@@ -80,6 +80,22 @@
   margin-left: 18px;
 }
 
+.application-menu-submenu {
+  position: relative;
+}
+
+.application-menu-submenu-popover {
+  top: -3px;
+  left: calc(100% - 4px);
+  min-width: 240px;
+}
+
+.application-menu-submenu-popover .application-menu-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .application-menu-separator {
   height: 1px;
   margin: 5px 12px;

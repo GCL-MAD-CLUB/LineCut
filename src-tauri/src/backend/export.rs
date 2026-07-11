@@ -4,6 +4,8 @@ pub(crate) async fn export_one_range(
     input_path: &str,
     range: &ClipRange,
     mode: &ExportMode,
+    has_source_audio: bool,
+    bound_media: &[ExportBoundMedia],
     output_path: &Path,
     preferences: &Preferences,
     progress: Option<FfmpegProgressContext<'_>>,
@@ -18,23 +20,72 @@ pub(crate) async fn export_one_range(
         seconds_arg(range.start_us),
         "-i".to_string(),
         input_path.to_string(),
-        "-t".to_string(),
-        seconds_arg(duration_us),
-        "-map".to_string(),
-        "0:v:0".to_string(),
-        "-map".to_string(),
-        "0:a:0?".to_string(),
-        "-sn".to_string(),
     ];
+
+    let mut audio_input_indexes = Vec::new();
+    let mut subtitle_input_indexes = Vec::new();
+    for media in bound_media {
+        args.extend([
+            "-ss".to_string(),
+            seconds_arg(range.start_us),
+            "-i".to_string(),
+            media.path.clone(),
+        ]);
+        let input_index = audio_input_indexes.len() + subtitle_input_indexes.len() + 1;
+        match media.kind {
+            ExportBoundMediaKind::Audio => audio_input_indexes.push(input_index),
+            ExportBoundMediaKind::Subtitle => subtitle_input_indexes.push(input_index),
+        }
+    }
+
+    args.extend(["-t".to_string(), seconds_arg(duration_us)]);
+
+    args.extend(["-map".to_string(), "0:v:0".to_string()]);
+    let should_mix_audio = !audio_input_indexes.is_empty();
+    if should_mix_audio {
+        let mut audio_inputs = Vec::new();
+        if has_source_audio {
+            audio_inputs.push("[0:a:0]".to_string());
+        }
+        audio_inputs.extend(
+            audio_input_indexes
+                .iter()
+                .map(|index| format!("[{index}:a:0]")),
+        );
+        args.extend([
+            "-filter_complex".to_string(),
+            format!(
+                "{}amix=inputs={}:duration=first:dropout_transition=0:normalize=1[aout]",
+                audio_inputs.join(""),
+                audio_inputs.len()
+            ),
+            "-map".to_string(),
+            "[aout]".to_string(),
+        ]);
+    } else if has_source_audio {
+        args.extend(["-map".to_string(), "0:a:0?".to_string()]);
+    }
+    for input_index in &subtitle_input_indexes {
+        args.extend(["-map".to_string(), format!("{input_index}:s:0?")]);
+    }
 
     match mode {
         ExportMode::FastCopy => {
             args.extend([
-                "-c".to_string(),
+                "-c:v".to_string(),
                 "copy".to_string(),
                 "-avoid_negative_ts".to_string(),
                 "make_zero".to_string(),
             ]);
+            if has_source_audio || should_mix_audio {
+                args.extend([
+                    "-c:a".to_string(),
+                    if should_mix_audio { "aac" } else { "copy" }.to_string(),
+                ]);
+            }
+            if !subtitle_input_indexes.is_empty() {
+                args.extend(["-c:s".to_string(), "copy".to_string()]);
+            }
         }
         ExportMode::PreciseEncode => {
             args.extend([
@@ -53,6 +104,9 @@ pub(crate) async fn export_one_range(
                 "-movflags".to_string(),
                 "+faststart".to_string(),
             ]);
+            if !subtitle_input_indexes.is_empty() {
+                args.extend(["-c:s".to_string(), "mov_text".to_string()]);
+            }
         }
     }
 

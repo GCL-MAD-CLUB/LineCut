@@ -227,6 +227,9 @@ pub(crate) async fn import_media(
             codec_name: stream.codec_name.clone().unwrap_or_default(),
             avg_frame_rate: stream.avg_frame_rate.clone(),
             r_frame_rate: stream.r_frame_rate.clone(),
+            sample_aspect_ratio: stream.sample_aspect_ratio.clone(),
+            sample_rate: stream.sample_rate.clone(),
+            channel_layout: stream.channel_layout.clone(),
             language: tag_value(&stream.tags, &["language", "LANGUAGE"]),
             title: tag_value(&stream.tags, &["title", "TITLE"]),
             width: stream.width,
@@ -306,24 +309,27 @@ pub(crate) async fn import_media(
             )
             .await
             {
-                Ok(subtitle_path) => match parse_subtitle_file_async(
-                    subtitle_path,
-                    codec.clone(),
-                    track_id.clone(),
-                    task.cancel_token(),
-                )
-                .await
-                {
-                    Ok(parsed) => {
-                        track.cue_count = parsed.len();
-                        cues.insert(track_id.clone(), parsed);
+                Ok(subtitle_path) => {
+                    track.source_path = Some(subtitle_path.to_string_lossy().into_owned());
+                    match parse_subtitle_file_async(
+                        subtitle_path,
+                        codec.clone(),
+                        track_id.clone(),
+                        task.cancel_token(),
+                    )
+                    .await
+                    {
+                        Ok(parsed) => {
+                            track.cue_count = parsed.len();
+                            cues.insert(track_id.clone(), parsed);
+                        }
+                        Err(err) => {
+                            let message = format!("字幕流 {} 解析失败: {err}", stream.index);
+                            track.warning = Some(message.clone());
+                            warnings.push(message);
+                        }
                     }
-                    Err(err) => {
-                        let message = format!("字幕流 {} 解析失败: {err}", stream.index);
-                        track.warning = Some(message.clone());
-                        warnings.push(message);
-                    }
-                },
+                }
                 Err(err) => {
                     if err == "任务已取消" {
                         return Err(err);
@@ -387,6 +393,156 @@ pub(crate) async fn import_media(
 
     emit_ffmpeg_progress(&app, &task_id, 1.0);
     Ok(ImportResult { project, warnings })
+}
+
+#[tauri::command]
+pub(crate) async fn demux_media_streams(
+    asset_id: String,
+    task_id: String,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<DemuxMediaResult, String> {
+    let task = register_task(&task_id, state.inner())?;
+    let preferences = preferences_clone(&state)?;
+    let mut project = project_clone(&asset_id, &state)?;
+    let demux_dir = PathBuf::from(&project.cache_dir).join("demux");
+    let demux_dir_to_create = demux_dir.clone();
+    spawn_blocking_cancellable(task.cancel_token(), "创建解合成目录", move |_| {
+        fs::create_dir_all(demux_dir_to_create).map_err(|e| format!("创建解合成目录失败: {e}"))
+    })
+    .await?;
+
+    let audio_streams = project
+        .streams
+        .iter()
+        .filter(|stream| stream.codec_type == "audio")
+        .cloned()
+        .collect::<Vec<_>>();
+    let audio_total = audio_streams.len().max(1);
+    let mut audio_tracks = Vec::new();
+    emit_ffmpeg_progress(&app, &task_id, 0.0);
+
+    for (index, stream) in audio_streams.into_iter().enumerate() {
+        task.check_cancelled()?;
+        let output_path = demux_dir.join(format!("audio_stream_{}.m4a", stream.index));
+        if !output_path.exists() {
+            let args = vec![
+                "-y".to_string(),
+                "-hide_banner".to_string(),
+                "-loglevel".to_string(),
+                "error".to_string(),
+                "-i".to_string(),
+                project.asset.path.clone(),
+                "-map".to_string(),
+                format!("0:{}", stream.index),
+                "-vn".to_string(),
+                "-c:a".to_string(),
+                "aac".to_string(),
+                "-b:a".to_string(),
+                "192k".to_string(),
+                output_path.to_string_lossy().into_owned(),
+            ];
+            run_status_with_ffmpeg_progress(
+                &ffmpeg_program(&preferences),
+                &args,
+                FfmpegProgressContext {
+                    app: &app,
+                    state: state.inner(),
+                    task_id: &task_id,
+                    cancel: task.cancel_token(),
+                    base_progress: index as f64 * 0.78 / audio_total as f64,
+                    progress_span: 0.78 / audio_total as f64,
+                    duration_us: project.asset.duration_us,
+                    cleanup_paths: vec![output_path.clone()],
+                },
+            )
+            .await?;
+        }
+        audio_tracks.push(DemuxedAudioTrack {
+            path: output_path.to_string_lossy().into_owned(),
+            file_name: format!(
+                "{}_音轨_{}.m4a",
+                Path::new(&project.asset.file_name)
+                    .file_stem()
+                    .map(|value| value.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "media".to_string()),
+                stream.index
+            ),
+            duration_us: project.asset.duration_us,
+            stream_index: stream.index,
+            codec: stream.codec_name,
+            language: stream.language,
+            title: stream.title,
+        });
+    }
+
+    let asset_path = PathBuf::from(&project.asset.path);
+    let cache_dir = PathBuf::from(&project.cache_dir);
+    let duration_us = project.asset.duration_us;
+    let embedded_text_total = project
+        .tracks
+        .iter()
+        .filter(|track| {
+            matches!(&track.source_type, SubtitleSourceType::Embedded)
+                && track.source_path.is_none()
+                && is_text_subtitle_codec(&track.codec)
+        })
+        .count()
+        .max(1);
+    let mut embedded_text_index = 0usize;
+    for track in project.tracks.iter_mut().filter(|track| {
+        matches!(&track.source_type, SubtitleSourceType::Embedded)
+            && track.source_path.is_none()
+            && is_text_subtitle_codec(&track.codec)
+    }) {
+        let Some(stream_index) = track.stream_index else {
+            continue;
+        };
+        task.check_cancelled()?;
+        let current_index = embedded_text_index;
+        embedded_text_index += 1;
+        let subtitle_path = extract_embedded_subtitle(
+            &asset_path,
+            stream_index,
+            &track.codec,
+            &cache_dir,
+            &preferences,
+            Some(FfmpegProgressContext {
+                app: &app,
+                state: state.inner(),
+                task_id: &task_id,
+                cancel: task.cancel_token(),
+                base_progress: 0.78 + current_index as f64 * 0.2 / embedded_text_total as f64,
+                progress_span: 0.2 / embedded_text_total as f64,
+                duration_us,
+                cleanup_paths: Vec::new(),
+            }),
+        )
+        .await?;
+        track.source_path = Some(subtitle_path.to_string_lossy().into_owned());
+    }
+
+    let subtitle_tracks = project
+        .tracks
+        .iter()
+        .filter(|track| {
+            matches!(&track.source_type, SubtitleSourceType::Embedded)
+                && track.source_path.is_some()
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    task.check_cancelled()?;
+    state
+        .projects
+        .lock()
+        .map_err(|_| "项目状态锁定失败".to_string())?
+        .insert(asset_id, project);
+    emit_ffmpeg_progress(&app, &task_id, 1.0);
+
+    Ok(DemuxMediaResult {
+        audio_tracks,
+        subtitle_tracks,
+    })
 }
 
 #[tauri::command]
@@ -518,6 +674,8 @@ pub(crate) async fn export_clips(
     track_id: String,
     cue_ids: Vec<String>,
     options: ExportOptions,
+    bound_media: Vec<ExportBoundMedia>,
+    include_source_audio: bool,
     task_id: String,
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
@@ -616,6 +774,8 @@ pub(crate) async fn export_clips(
             &project.asset.path,
             range,
             &options.mode,
+            include_source_audio && project.asset.audio_stream_index.is_some(),
+            &bound_media,
             &output_path,
             &preferences,
             Some(FfmpegProgressContext {

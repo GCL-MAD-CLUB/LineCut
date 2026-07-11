@@ -2,7 +2,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { Captions, Play, Search } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
 import { emitAppEvent, useAppEvent } from "../../appEvents";
-import { useAppStore } from "../../store";
+import { useAppStore, visibleSubtitleTracks } from "../../store";
 import { formatDuration } from "../../time";
 import type { SubtitleCue } from "../../types";
 import { SelectDropdown } from "../SelectDropdown";
@@ -35,9 +35,14 @@ function cueMatches(cue: SubtitleCue, query: string) {
 function useActiveTrack() {
   const project = useAppStore((state) => state.project);
   const activeTrackId = useAppStore((state) => state.activeTrackId);
+  const mediaItems = useAppStore((state) => state.mediaItems);
+  const activeVideoId = useAppStore((state) => state.activeVideoId);
   return useMemo(
-    () => project?.tracks.find((track) => track.id === activeTrackId) ?? null,
-    [activeTrackId, project],
+    () =>
+      visibleSubtitleTracks(project, mediaItems, activeVideoId).find(
+        (track) => track.id === activeTrackId,
+      ) ?? null,
+    [activeTrackId, activeVideoId, mediaItems, project],
   );
 }
 
@@ -62,6 +67,8 @@ function useFilteredCues() {
 
 export function SubtitlePanel() {
   const project = useAppStore((state) => state.project);
+  const mediaItems = useAppStore((state) => state.mediaItems);
+  const activeVideoId = useAppStore((state) => state.activeVideoId);
   const activeTrackId = useAppStore((state) => state.activeTrackId);
   const query = useSubtitlePanelState((state) => state.query);
   const selectedCueIds = useAppStore((state) => state.selectedCueIds);
@@ -83,14 +90,17 @@ export function SubtitlePanel() {
     estimateSize: () => 88,
     overscan: 12,
   });
-  const trackItems =
-    project?.tracks.map((track) => ({
-      type: "option" as const,
-      value: track.id,
-      label: `${track.source_type === "embedded" ? `流 ${track.stream_index}` : "外挂"} · ${
-        track.title || track.language || track.codec
-      } · ${track.cue_count} 条`,
-    })) ?? [];
+  const visibleTracks = useMemo(
+    () => visibleSubtitleTracks(project, mediaItems, activeVideoId),
+    [activeVideoId, mediaItems, project],
+  );
+  const trackItems = visibleTracks.map((track) => ({
+    type: "option" as const,
+    value: track.id,
+    label: `${track.source_type === "embedded" ? `流 ${track.stream_index}` : "外挂"} · ${
+      track.title || track.language || track.codec
+    } · ${track.cue_count} 条`,
+  }));
 
   useEffect(() => {
     syncTrackContext(`${project?.asset.id ?? ""}:${activeTrackId}`);

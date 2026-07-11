@@ -1,5 +1,13 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+} from "react";
 import { flushSync } from "react-dom";
 import { useAppEvent } from "../../appEvents";
 import { useAppStore } from "../../store";
@@ -10,6 +18,7 @@ import {
   timeUsToFrame,
 } from "../../timeline";
 import { MonitorRange } from "./MonitorRange";
+import { activeMediaDragVideoId, markMediaDragHandled } from "../MediaBin/mediaDrag";
 import "./SourceMonitor.css";
 import { TimelineRuler } from "./TimelineRuler";
 import { getTaskProgressStatus } from "../TaskProgress";
@@ -40,6 +49,10 @@ function isEditableKeyboardTarget(target: EventTarget | null) {
 
 export function SourceMonitor() {
   const project = useAppStore((state) => state.project);
+  const mediaItems = useAppStore((state) => state.mediaItems);
+  const activeVideoId = useAppStore((state) => state.activeVideoId);
+  const detachedVideoIds = useAppStore((state) => state.detachedVideoIds);
+  const activeVideoChanged = useAppStore((state) => state.actions.activeVideoChanged);
   const proxyPath = useAppStore((state) => state.proxyPath);
   const useProxy = useAppStore((state) => state.useProxy);
   const setMessage = useAppStore((state) => state.actions.messagePublished);
@@ -48,6 +61,7 @@ export function SourceMonitor() {
   const proxyDialogOpened = useAppStore((state) => state.actions.proxyDialogOpened);
   const { isRunning: isGeneratingProxy } = getTaskProgressStatus("proxy");
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const boundAudioRefs = useRef(new Map<string, HTMLAudioElement>());
   const sourceMonitorRef = useRef<HTMLDivElement | null>(null);
   const videoStageRef = useRef<HTMLDivElement | null>(null);
   const seekTargetFrameRef = useRef(0);
@@ -72,9 +86,18 @@ export function SourceMonitor() {
   const timelineStartFrameRef = useRef(timelineStartFrame);
   const timelineSpanFramesRef = useRef(timelineSpanFrames);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isVideoDragOver, setIsVideoDragOver] = useState(false);
   const [minTimelineSpanFrames, setMinTimelineSpanFrames] = useState(0);
 
   const hasMedia = Boolean(project);
+  const boundAudioItems = useMemo(
+    () =>
+      mediaItems.filter(
+        (item) => item.kind === "audio" && item.bound_to_video_id === activeVideoId,
+      ),
+    [activeVideoId, mediaItems],
+  );
+  const sourceAudioDetached = activeVideoId ? detachedVideoIds.has(activeVideoId) : false;
   const durationUs = project?.asset.duration_us ?? 0;
   const videoStream = useMemo(() => {
     if (!project) {
@@ -425,7 +448,79 @@ export function SourceMonitor() {
     seekTargetFrameRef.current = nextFrame;
     currentFrameRef.current = nextFrame;
     setCurrentFrame(nextFrame);
+    syncBoundAudio(element);
     finishVideoSeek(element);
+  }
+
+  function syncBoundAudio(video: HTMLVideoElement, force = false) {
+    for (const audio of boundAudioRefs.current.values()) {
+      if (force || Math.abs(audio.currentTime - video.currentTime) > 0.16) {
+        try {
+          audio.currentTime = video.currentTime;
+        } catch {
+          // The browser may reject a seek until metadata is available.
+        }
+      }
+      audio.playbackRate = video.playbackRate;
+    }
+  }
+
+  function playBoundAudio(video: HTMLVideoElement) {
+    syncBoundAudio(video, true);
+    for (const audio of boundAudioRefs.current.values()) {
+      void audio.play().catch(() => undefined);
+    }
+  }
+
+  function pauseBoundAudio() {
+    for (const audio of boundAudioRefs.current.values()) {
+      audio.pause();
+    }
+  }
+
+  function handleVideoDragOver(event: DragEvent<HTMLDivElement>) {
+    const hasSupportedDragType =
+      Boolean(activeMediaDragVideoId()) ||
+      event.dataTransfer.types.includes("application/x-linecut-video") ||
+      event.dataTransfer.types.includes("application/x-linecut-media") ||
+      event.dataTransfer.types.includes("text/plain");
+    if (!hasSupportedDragType) {
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setIsVideoDragOver(true);
+  }
+
+  function handleVideoDrop(event: DragEvent<HTMLDivElement>) {
+    const directVideoId = event.dataTransfer.getData("application/x-linecut-video");
+    const serializedIds =
+      event.dataTransfer.getData("application/x-linecut-media") ||
+      event.dataTransfer.getData("text/plain");
+    let draggedIds: string[] = [];
+    if (serializedIds) {
+      try {
+        const parsed = JSON.parse(serializedIds);
+        draggedIds = Array.isArray(parsed)
+          ? parsed.filter((itemId): itemId is string => typeof itemId === "string")
+          : [];
+      } catch {
+        draggedIds = [serializedIds];
+      }
+    }
+    const videoId =
+      directVideoId ||
+      activeMediaDragVideoId() ||
+      draggedIds.find((itemId) =>
+        mediaItems.some((item) => item.id === itemId && item.kind === "video"),
+      );
+    setIsVideoDragOver(false);
+    if (!videoId) {
+      return;
+    }
+    event.preventDefault();
+    markMediaDragHandled();
+    activeVideoChanged(videoId);
   }
 
   function stopPlaybackTicker() {
@@ -500,12 +595,26 @@ export function SourceMonitor() {
   }
 
   return (
-    <div ref={sourceMonitorRef} className={`source-monitor ${hasMedia ? "" : "empty-state"}`}>
+    <div
+      ref={sourceMonitorRef}
+      className={`source-monitor ${hasMedia ? "" : "empty-state"} ${
+        isVideoDragOver ? "video-drag-over" : ""
+      }`}
+      onDragEnter={handleVideoDragOver}
+      onDragOver={handleVideoDragOver}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          setIsVideoDragOver(false);
+        }
+      }}
+      onDrop={handleVideoDrop}
+    >
       <VideoDisplay
         project={project}
         stageRef={videoStageRef}
         videoRef={videoRef}
         videoSrc={videoSrc}
+        muted={sourceAudioDetached}
         zoomLevel={zoomLevel}
         zoomPan={zoomPan}
         onVideoError={handleVideoError}
@@ -513,6 +622,7 @@ export function SourceMonitor() {
         onSyncCurrentTime={syncCurrentTimeFromVideo}
         onPlay={(video) => {
           syncCurrentTimeFromVideo(video);
+          playBoundAudio(video);
           setIsPlaying(true);
           startPlaybackTicker();
         }}
@@ -520,9 +630,27 @@ export function SourceMonitor() {
           cuePlaybackEndFrameRef.current = null;
           stopPlaybackTicker();
           syncCurrentTimeFromVideo(video);
+          pauseBoundAudio();
           setIsPlaying(false);
         }}
       />
+      <div className="bound-audio-stack" aria-hidden="true">
+        {boundAudioItems.map((item) => (
+          <audio
+            key={item.id}
+            ref={(element) => {
+              if (element) {
+                boundAudioRefs.current.set(item.id, element);
+              } else {
+                boundAudioRefs.current.delete(item.id);
+              }
+            }}
+            src={convertFileSrc(item.path)}
+            preload="auto"
+          />
+        ))}
+      </div>
+      {isVideoDragOver && <div className="source-drop-overlay">释放以载入源预览</div>}
       <div className="source-controls">
         <VideoControls
           mediaKey={mediaKey}

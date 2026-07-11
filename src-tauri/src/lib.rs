@@ -163,6 +163,12 @@ struct MediaStream {
     avg_frame_rate: Option<String>,
     #[serde(default)]
     r_frame_rate: Option<String>,
+    #[serde(default)]
+    sample_aspect_ratio: Option<String>,
+    #[serde(default)]
+    sample_rate: Option<String>,
+    #[serde(default)]
+    channel_layout: Option<String>,
     language: Option<String>,
     title: Option<String>,
     width: Option<i64>,
@@ -302,6 +308,23 @@ struct AddExternalSubtitlesResult {
     warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DemuxedAudioTrack {
+    path: String,
+    file_name: String,
+    duration_us: i64,
+    stream_index: i32,
+    codec: String,
+    language: Option<String>,
+    title: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DemuxMediaResult {
+    audio_tracks: Vec<DemuxedAudioTrack>,
+    subtitle_tracks: Vec<SubtitleTrack>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct FfmpegProgressPayload {
     task_id: String,
@@ -350,6 +373,19 @@ struct ExportOptions {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ExportBoundMediaKind {
+    Audio,
+    Subtitle,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ExportBoundMedia {
+    kind: ExportBoundMediaKind,
+    path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ClipRange {
     index: usize,
     start_us: i64,
@@ -387,6 +423,9 @@ struct ProbeStream {
     codec_type: Option<String>,
     avg_frame_rate: Option<String>,
     r_frame_rate: Option<String>,
+    sample_aspect_ratio: Option<String>,
+    sample_rate: Option<String>,
+    channel_layout: Option<String>,
     width: Option<i64>,
     height: Option<i64>,
     channels: Option<i64>,
@@ -412,6 +451,7 @@ pub fn run() {
             get_preferences,
             update_preferences,
             import_media,
+            demux_media_streams,
             generate_proxy,
             add_external_subtitles,
             save_project_file,

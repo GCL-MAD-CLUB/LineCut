@@ -23,6 +23,9 @@ export interface MediaStream {
   codec_name: string;
   avg_frame_rate?: string | null;
   r_frame_rate?: string | null;
+  sample_aspect_ratio?: string | null;
+  sample_rate?: string | null;
+  channel_layout?: string | null;
   language: string | null;
   title: string | null;
   width: number | null;
@@ -66,6 +69,45 @@ export interface Project {
   cues: Record<string, SubtitleCue[]>;
   cache_dir: string;
   proxy_path: string | null;
+}
+
+export type MediaBinItemKind = "video" | "audio" | "subtitle";
+
+export interface MediaBinItem {
+  id: string;
+  kind: MediaBinItemKind;
+  path: string;
+  file_name: string;
+  duration_us: number;
+  start_time_us: number;
+  bound_to_video_id: string | null;
+  source_video_id: string | null;
+  stream_index: number | null;
+  subtitle_track_id: string | null;
+  codec: string | null;
+  language: string | null;
+  extracted: boolean;
+  color: string;
+}
+
+export interface DemuxedAudioTrack {
+  path: string;
+  file_name: string;
+  duration_us: number;
+  stream_index: number;
+  codec: string;
+  language: string | null;
+  title: string | null;
+}
+
+export interface DemuxMediaResult {
+  audio_tracks: DemuxedAudioTrack[];
+  subtitle_tracks: SubtitleTrack[];
+}
+
+export interface ExportBoundMedia {
+  kind: "audio" | "subtitle";
+  path: string;
 }
 
 export interface ImportResult {

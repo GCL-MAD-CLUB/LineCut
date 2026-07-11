@@ -3,7 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 import { Loader2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { emitAppEvent } from "./appEvents";
+import { emitAppEvent, useAppEvent } from "./appEvents";
 import { ApplicationMenu } from "./components/ApplicationMenu";
 import {
   DockLayout,
@@ -12,6 +12,7 @@ import {
 } from "./components/DockLayout";
 import { ExportPanel } from "./components/ExportPanel";
 import { ImportWorkspace } from "./components/ImportWorkspace";
+import { MediaBin } from "./components/MediaBin";
 import { PreferencesDialog } from "./components/PreferencesDialog";
 import { ProxyCreationDialog } from "./components/ProxyCreationDialog";
 import { SecondaryTopbar } from "./components/SecondaryTopbar";
@@ -22,10 +23,10 @@ import {
   createTaskProgress,
   getTaskProgressStatus,
 } from "./components/TaskProgress";
-import { cancelFfmpegTask, createFfmpegTaskId, listenToFfmpegTaskProgress } from "./ffmpegProgress";
+import { cancelFfmpegTask, createFfmpegTaskId } from "./ffmpegProgress";
 import { useAppStore } from "./store";
 import { isTauriRuntime } from "./tauriRuntime";
-import type { AddExternalSubtitlesResult, OpenProjectResult, Preferences } from "./types";
+import type { ImportResult, MediaBinItem, OpenProjectResult, Preferences } from "./types";
 
 const projectFilters = [
   {
@@ -41,11 +42,84 @@ const subtitleFilters = [
   },
 ];
 
+const mediaFilters = [
+  {
+    name: "媒体文件",
+    extensions: [
+      "mkv",
+      "mp4",
+      "mov",
+      "webm",
+      "avi",
+      "ts",
+      "m2ts",
+      "mpeg",
+      "mpg",
+      "wav",
+      "mp3",
+      "m4a",
+      "aac",
+      "flac",
+      "ogg",
+      "opus",
+      "wma",
+      "srt",
+      "ass",
+      "ssa",
+      "vtt",
+      "webvtt",
+    ],
+  },
+];
+
+const subtitleExtensions = new Set(subtitleFilters[0].extensions);
+const recentMediaStorageKey = "linecut:recent-media-paths";
+const warningDisplayDurationMs = 5000;
+
 function fileName(path: string) {
   return path.split(/[\\/]/).pop() ?? path;
 }
 
-type AppDockPanelId = "source" | "export" | "subtitles";
+function fileExtension(path: string) {
+  return fileName(path).split(".").pop()?.toLocaleLowerCase() ?? "";
+}
+
+function readRecentMediaPaths() {
+  try {
+    const stored = window.localStorage.getItem(recentMediaStorageKey);
+    if (!stored) {
+      return [];
+    }
+    const paths = JSON.parse(stored);
+    return Array.isArray(paths)
+      ? paths.filter((path): path is string => typeof path === "string").slice(0, 12)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function standaloneSubtitleItem(path: string, index: number): MediaBinItem {
+  const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${index}`;
+  return {
+    id: `external-subtitle:${random}:${path.length}`,
+    kind: "subtitle",
+    path,
+    file_name: fileName(path),
+    duration_us: 0,
+    start_time_us: 0,
+    bound_to_video_id: null,
+    source_video_id: null,
+    stream_index: null,
+    subtitle_track_id: null,
+    codec: fileExtension(path) || "subtitle",
+    language: null,
+    extracted: false,
+    color: "#893a04",
+  };
+}
+
+type AppDockPanelId = "source" | "media" | "export" | "subtitles";
 
 const appWorkspaces = [
   { id: "import", label: "导入" },
@@ -61,8 +135,8 @@ const initialDockLayout: DockLayoutState<AppDockPanelId> = {
       activePanelId: "source",
     },
     leftBottom: {
-      tabs: ["export"],
-      activePanelId: "export",
+      tabs: ["media", "export"],
+      activePanelId: "media",
     },
     right: {
       tabs: ["subtitles"],
@@ -74,9 +148,11 @@ const initialDockLayout: DockLayoutState<AppDockPanelId> = {
 export default function App() {
   const [activeWorkspace, setActiveWorkspace] = useState<AppWorkspace>("edit");
   const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [recentMediaPaths, setRecentMediaPaths] = useState(readRecentMediaPaths);
   const closingWindowRef = useRef(false);
 
   const project = useAppStore((state) => state.project);
+  const mediaItems = useAppStore((state) => state.mediaItems);
   const projectFilePath = useAppStore((state) => state.projectFilePath);
   const projectDirty = useAppStore((state) => state.projectDirty);
   const activeTrackId = useAppStore((state) => state.activeTrackId);
@@ -87,11 +163,13 @@ export default function App() {
   const projectOpened = useAppStore((state) => state.actions.projectOpened);
   const projectSaved = useAppStore((state) => state.actions.projectSaved);
   const projectClosed = useAppStore((state) => state.actions.projectClosed);
-  const subtitleTracksAdded = useAppStore((state) => state.actions.subtitleTracksAdded);
+  const mediaProjectsAdded = useAppStore((state) => state.actions.mediaProjectsAdded);
+  const mediaItemsAdded = useAppStore((state) => state.actions.mediaItemsAdded);
   const preferencesLoaded = useAppStore((state) => state.actions.preferencesLoaded);
   const messagePublished = useAppStore((state) => state.actions.messagePublished);
   const warningsReplaced = useAppStore((state) => state.actions.warningsReplaced);
   const warningsAppended = useAppStore((state) => state.actions.warningsAppended);
+  const exportResultChanged = useAppStore((state) => state.actions.exportResultChanged);
   const { tasks: runningTasks } = getTaskProgressStatus();
   const isBusy = runningTasks.length > 0;
   const hasProject = Boolean(projectFilePath || project);
@@ -122,6 +200,18 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (warnings.length === 0) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      warningsReplaced([]);
+    }, warningDisplayDurationMs);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [warnings, warningsReplaced]);
+
+  useEffect(() => {
     if (!isTauriRuntime()) {
       return;
     }
@@ -132,6 +222,14 @@ export default function App() {
       })
       .catch((error) => messagePublished(error instanceof Error ? error.message : String(error)));
   }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(recentMediaStorageKey, JSON.stringify(recentMediaPaths));
+    } catch {
+      // Recent imports are a convenience feature; importing itself must still work.
+    }
+  }, [recentMediaPaths]);
 
   useEffect(() => {
     if (!isTauriRuntime()) {
@@ -207,11 +305,16 @@ export default function App() {
     });
   }
 
-  async function removeBackendProject(assetId = project?.asset.id) {
-    if (!assetId || !isTauriRuntime()) {
+  async function removeBackendProject(assetId?: string) {
+    if (!isTauriRuntime()) {
       return;
     }
-    await invoke("close_project", { assetId });
+    const assetIds = assetId
+      ? [assetId]
+      : mediaItems
+          .filter((item) => !item.extracted && item.kind !== "subtitle")
+          .map((item) => item.id);
+    await Promise.all(assetIds.map((id) => invoke("close_project", { assetId: id })));
   }
 
   async function exitApplication() {
@@ -339,10 +442,6 @@ export default function App() {
     }
   }
 
-  function openImportWorkspace() {
-    setActiveWorkspace("import");
-  }
-
   function selectAllSubtitleCues() {
     emitAppEvent("subtitle:select-all");
   }
@@ -351,60 +450,101 @@ export default function App() {
     emitAppEvent("subtitle:clear-selection");
   }
 
-  async function chooseExternalSubtitles() {
+  function rememberImportedMedia(paths: string[]) {
+    if (paths.length === 0) {
+      return;
+    }
+    setRecentMediaPaths((current) => Array.from(new Set([...paths, ...current])).slice(0, 12));
+  }
+
+  async function importMedia(pathsToImport?: string[]) {
+    if (isBusy) {
+      return;
+    }
     if (!isTauriRuntime()) {
-      messagePublished("请在 Tauri 桌面窗口中选择本地外挂字幕。");
+      messagePublished("请在 Tauri 桌面窗口中导入本地素材。");
       return;
     }
-    if (!project) {
-      messagePublished("请先在导入工作区选择视频和字幕。");
-      return;
-    }
-    const picked = await open({
-      multiple: true,
-      filters: subtitleFilters,
-    });
+    const picked = pathsToImport
+      ? pathsToImport
+      : await open({ multiple: true, title: "导入素材", filters: mediaFilters });
     const paths = Array.isArray(picked) ? picked : picked ? [picked] : [];
     if (paths.length === 0) {
       return;
     }
 
-    const subtitleTaskId = createFfmpegTaskId("subtitle-import");
-    let subtitleImportCancelled = false;
-    const subtitleImportTask = await createTaskProgress({
-      operation: "subtitle_import",
-      label: "导入外挂字幕",
+    const subtitlePaths = paths.filter((path) => subtitleExtensions.has(fileExtension(path)));
+    const probePaths = paths.filter((path) => !subtitleExtensions.has(fileExtension(path)));
+    let currentTaskId = "";
+    let cancelled = false;
+    const importTask = await createTaskProgress({
+      operation: "media_import",
+      label: `正在导入 ${paths.length} 个素材`,
       current: 0,
-      total: 1,
-      listener: listenToFfmpegTaskProgress(subtitleTaskId),
+      total: Math.max(1, probePaths.length + (subtitlePaths.length > 0 ? 1 : 0)),
       on_cancel: async () => {
-        await cancelFfmpegTask(subtitleTaskId);
-        subtitleImportCancelled = true;
+        cancelled = true;
+        if (currentTaskId) {
+          await cancelFfmpegTask(currentTaskId);
+        }
       },
     });
-    try {
-      const result = await invoke<AddExternalSubtitlesResult>("add_external_subtitles", {
-        assetId: project.asset.id,
-        paths,
-        taskId: subtitleTaskId,
-      });
-      subtitleTracksAdded(result.tracks, result.cues);
-      if (result.warnings.length > 0) {
-        warningsAppended(result.warnings);
+    exportResultChanged(null);
+
+    const loaded: ImportResult[] = [];
+    const errors: string[] = [];
+    for (const [index, path] of probePaths.entries()) {
+      if (cancelled) {
+        break;
       }
-      messagePublished("外挂字幕已导入");
-      subtitleImportTask.update({ current: 1 });
-      subtitleImportTask.remove();
-    } catch (error) {
-      if (subtitleImportCancelled) {
-        messagePublished("外挂字幕导入已取消");
-        return;
+      currentTaskId = createFfmpegTaskId("media-import");
+      importTask.update({ label: `正在探测 ${fileName(path)}` });
+      try {
+        const result = await invoke<ImportResult>("import_media", {
+          path,
+          externalSubtitles: [],
+          taskId: currentTaskId,
+        });
+        loaded.push(result);
+      } catch (error) {
+        if (!cancelled) {
+          errors.push(
+            `${fileName(path)}：${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
       }
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      subtitleImportTask.fail("导入外挂字幕失败", errorMessage);
-      messagePublished(errorMessage);
+      importTask.update({ current: index + 1 });
     }
+
+    if (loaded.length > 0) {
+      mediaProjectsAdded(loaded.map((result) => result.project));
+      warningsAppended(loaded.flatMap((result) => result.warnings));
+    }
+    if (!cancelled && subtitlePaths.length > 0) {
+      mediaItemsAdded(subtitlePaths.map(standaloneSubtitleItem));
+      importTask.update({ current: probePaths.length + 1 });
+    }
+    if (cancelled) {
+      messagePublished("素材导入已取消");
+      return;
+    }
+
+    const importedCount = loaded.length + subtitlePaths.length;
+    const importedPaths = [...loaded.map((result) => result.project.asset.path), ...subtitlePaths];
+    rememberImportedMedia(importedPaths);
+    if (errors.length > 0) {
+      importTask.fail("部分素材导入失败", errors.join("\n"));
+      messagePublished(`已导入 ${importedCount} 个素材，${errors.length} 个失败`);
+      return;
+    }
+
+    importTask.remove();
+    messagePublished(importedCount > 0 ? `已导入 ${importedCount} 个素材` : "未导入任何素材");
   }
+
+  useAppEvent("media:import", ({ paths }) => {
+    void importMedia(paths);
+  });
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
@@ -426,7 +566,7 @@ export default function App() {
       let action: (() => void | Promise<void>) | undefined;
       if (key === "n" && !event.shiftKey && !event.altKey) action = newProject;
       if (key === "o" && !event.shiftKey && !event.altKey) action = openProject;
-      if (key === "i" && !event.shiftKey && !event.altKey) action = openImportWorkspace;
+      if (key === "i" && !event.shiftKey && !event.altKey) action = importMedia;
       if (key === "a" && !event.shiftKey && !event.altKey && canSelectAllSubtitleCues) {
         action = selectAllSubtitleCues;
       }
@@ -459,6 +599,11 @@ export default function App() {
         render: () => <SourceMonitor />,
       },
       {
+        id: "media",
+        title: `素材箱：${project?.asset.file_name ?? "未命名项目"}`,
+        render: () => <MediaBin />,
+      },
+      {
         id: "export",
         title: "导出设置",
         render: () => <ExportPanel />,
@@ -482,7 +627,6 @@ export default function App() {
       <header className="application-menubar">
         <ApplicationMenu
           hasProject={hasProject}
-          hasMedia={Boolean(project)}
           isDirty={projectDirty}
           isBusy={isBusy}
           onNewProject={newProject}
@@ -491,8 +635,9 @@ export default function App() {
           onSaveProject={saveProject}
           onSaveProjectAs={() => saveProjectAs(true)}
           onSaveProjectCopy={() => saveProjectAs(false)}
-          onImportMedia={openImportWorkspace}
-          onImportSubtitles={chooseExternalSubtitles}
+          onImportMedia={importMedia}
+          recentMediaPaths={recentMediaPaths}
+          onImportRecentMedia={(path) => importMedia([path])}
           canSelectAllSubtitleCues={canSelectAllSubtitleCues}
           canClearSubtitleCueSelection={canClearSubtitleCueSelection}
           onSelectAllSubtitleCues={selectAllSubtitleCues}
