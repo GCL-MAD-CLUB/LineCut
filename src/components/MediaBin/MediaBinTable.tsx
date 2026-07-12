@@ -6,28 +6,25 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type DragEvent,
   type PointerEvent as ReactPointerEvent,
   type UIEvent,
 } from "react";
 import { createPortal } from "react-dom";
+import { visibleSubtitleTracks } from "../../store";
 import { formatMonitorTime } from "../../time";
 import { normalizeFrameRate } from "../../timeline";
 import type { MediaBinItem, Project } from "../../types";
-import {
-  activeMediaDragItemIds,
-  beginMediaDrag,
-  finishMediaDrag,
-  markMediaDragHandled,
-  mediaDragWasHandled,
-} from "./mediaDrag";
 import type { MediaBinViewMode } from "./mediaBinState";
+import { MediaBinVideoThumbnail } from "./MediaBinVideoThumbnail";
 
 interface MediaBinTableProps {
   rows: Array<{ item: MediaBinItem; depth: number }>;
   hasItems: boolean;
+  mediaItems: MediaBinItem[];
   projects: Record<string, Project>;
   detachedVideoIds: Set<string>;
+  mediaPreviewFrames: Record<string, number>;
+  gridCardWidth: number;
   selectedIds: Set<string>;
   viewMode: MediaBinViewMode;
   isReadOnly: boolean;
@@ -39,7 +36,6 @@ interface MediaBinTableProps {
   onUnbindItems: (itemIds: string[]) => void;
 }
 
-const mediaDragType = "application/x-linecut-media";
 const labelColumnWidth = 42;
 const titleRenameDelayMs = 350;
 
@@ -70,6 +66,11 @@ interface PointerMediaDragPreview {
 interface ActiveMediaCell {
   itemId: string;
   columnId: ResizableColumnId;
+}
+
+interface GridLayout {
+  columns: number;
+  cardWidth: number;
 }
 
 const initialColumnWidths: ResizableColumnWidths = {
@@ -140,6 +141,23 @@ function itemIcon(item: MediaBinItem, project?: Project, isDetachedVideo = false
   return <Captions aria-hidden="true" />;
 }
 
+function SubtitleBadgeIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke="currentColor" />
+      <path d="M7 10h10M7 14h10" fill="none" stroke="currentColor" />
+    </svg>
+  );
+}
+
 function itemFrameRate(item: MediaBinItem, project: Project | undefined) {
   if (item.kind === "audio") {
     const stream =
@@ -163,45 +181,18 @@ function formatItemTime(item: MediaBinItem, project: Project | undefined, valueU
   return formatMonitorTime(valueUs, frameRate);
 }
 
-function draggedItemIds(event: DragEvent, fallbackItemId?: string) {
-  const serialized = event.dataTransfer.getData(mediaDragType);
-  if (serialized) {
-    try {
-      const parsed = JSON.parse(serialized);
-      if (Array.isArray(parsed)) {
-        return parsed.filter((itemId): itemId is string => typeof itemId === "string");
-      }
-    } catch {
-      // Fall back to the row that initiated the drag.
-    }
-  }
-  const plainText = event.dataTransfer.getData("text/plain").trim();
-  if (plainText) {
-    try {
-      const parsed = JSON.parse(plainText);
-      if (Array.isArray(parsed)) {
-        return parsed.filter((itemId): itemId is string => typeof itemId === "string");
-      }
-    } catch {
-      return [plainText];
-    }
-  }
-  const activeItemIds = activeMediaDragItemIds();
-  if (activeItemIds.length > 0) {
-    return activeItemIds;
-  }
-  return fallbackItemId ? [fallbackItemId] : [];
-}
+function formatGridItemDuration(item: MediaBinItem, project: Project | undefined) {
+  const timecode = formatItemTime(item, project, item.duration_us);
+  const fields = timecode.split(":");
+  const firstNonZeroField = fields.findIndex((field) => Number(field) !== 0);
 
-function startMediaDrag(event: DragEvent, item: MediaBinItem, selectedIds: Set<string>) {
-  const itemIds = selectedIds.has(item.id) ? Array.from(selectedIds) : [item.id];
-  event.dataTransfer.effectAllowed = "copyMove";
-  event.dataTransfer.setData(mediaDragType, JSON.stringify(itemIds));
-  event.dataTransfer.setData("text/plain", JSON.stringify(itemIds));
-  beginMediaDrag(itemIds, item.kind === "video" ? item.id : null);
-  if (item.kind === "video") {
-    event.dataTransfer.setData("application/x-linecut-video", item.id);
+  if (firstNonZeroField === -1) {
+    return fields.at(-1) ?? "00";
   }
+
+  return [String(Number(fields[firstNonZeroField])), ...fields.slice(firstNonZeroField + 1)].join(
+    ":",
+  );
 }
 
 function bindingTargetVideoId(item: MediaBinItem) {
@@ -438,8 +429,11 @@ function sortMediaRows(
 export function MediaBinTable({
   rows,
   hasItems,
+  mediaItems,
   projects,
   detachedVideoIds,
+  mediaPreviewFrames,
+  gridCardWidth,
   selectedIds,
   viewMode,
   isReadOnly,
@@ -458,7 +452,10 @@ export function MediaBinTable({
   const [sort, setSort] = useState<MediaBinSort>(defaultMediaBinSort);
   const [activeCell, setActiveCell] = useState<ActiveMediaCell | null>(null);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
-  const [gridIsSingleRow, setGridIsSingleRow] = useState(false);
+  const [gridLayout, setGridLayout] = useState<GridLayout>({
+    columns: 1,
+    cardWidth: gridCardWidth,
+  });
   const [renameValue, setRenameValue] = useState("");
   const headerRef = useRef<HTMLDivElement | null>(null);
   const gridRef = useRef<HTMLDivElement | null>(null);
@@ -483,6 +480,10 @@ export function MediaBinTable({
     "--media-col-video-info": `${columnWidths.videoInfo}px`,
     "--media-col-audio-info": `${columnWidths.audioInfo}px`,
     "--media-table-min-width": `${tableMinWidth}px`,
+  } as CSSProperties;
+  const gridStyle = {
+    "--media-grid-column-count": gridLayout.columns,
+    "--media-grid-card-render-width": `${gridLayout.cardWidth}px`,
   } as CSSProperties;
   const sortedRows = useMemo(() => sortMediaRows(rows, sort, projects), [projects, rows, sort]);
 
@@ -512,28 +513,53 @@ export function MediaBinTable({
 
   useLayoutEffect(() => {
     if (viewMode !== "grid") {
-      setGridIsSingleRow(false);
       return;
     }
     const grid = gridRef.current;
     if (!grid) {
       return;
     }
-    const updateGridRowState = () => {
-      const cards = Array.from(grid.children) as HTMLElement[];
-      const firstRowTop = cards[0]?.offsetTop;
-      const isSingleRow =
-        firstRowTop !== undefined && cards.every((card) => card.offsetTop === firstRowTop);
-      setGridIsSingleRow((current) => (current === isSingleRow ? current : isSingleRow));
+    const updateGridLayout = () => {
+      const itemCount = grid.children.length;
+      if (itemCount === 0) {
+        return;
+      }
+      const style = getComputedStyle(grid);
+      const horizontalPadding =
+        Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.paddingRight);
+      const columnGap = Number.parseFloat(style.columnGap) || 0;
+      const availableWidth = Math.max(0, grid.clientWidth - horizontalPadding);
+      let columns = 1;
+      let minimumCardWidth = 0;
+      let fittedCardWidth = availableWidth;
+
+      for (let candidateColumns = itemCount; candidateColumns >= 1; candidateColumns -= 1) {
+        const candidateMinimumCardWidth =
+          (gridCardWidth * Math.max(0, candidateColumns - 1) +
+            columnGap * Math.max(0, candidateColumns - 2) -
+            Math.max(0, candidateColumns - 1)) /
+          candidateColumns;
+        const candidateFittedCardWidth =
+          (availableWidth - Math.max(0, candidateColumns - 1) * columnGap) / candidateColumns;
+        if (candidateFittedCardWidth >= candidateMinimumCardWidth) {
+          columns = candidateColumns;
+          minimumCardWidth = candidateMinimumCardWidth;
+          fittedCardWidth = candidateFittedCardWidth;
+          break;
+        }
+      }
+      const cardWidth = clamp(fittedCardWidth, minimumCardWidth, gridCardWidth);
+      setGridLayout((current) =>
+        current.columns === columns && current.cardWidth === cardWidth
+          ? current
+          : { columns, cardWidth },
+      );
     };
-    const resizeObserver = new ResizeObserver(updateGridRowState);
+    const resizeObserver = new ResizeObserver(updateGridLayout);
     resizeObserver.observe(grid);
-    for (const card of Array.from(grid.children)) {
-      resizeObserver.observe(card);
-    }
-    updateGridRowState();
+    updateGridLayout();
     return () => resizeObserver.disconnect();
-  }, [sortedRows.length, viewMode]);
+  }, [gridCardWidth, sortedRows.length, viewMode]);
 
   function toggleSort(columnId: SortableColumnId) {
     if (!hasItems) {
@@ -668,7 +694,11 @@ export function MediaBinTable({
     }));
   }
 
-  function startPointerMediaDrag(event: ReactPointerEvent<HTMLSpanElement>, item: MediaBinItem) {
+  function startPointerMediaDrag(
+    event: ReactPointerEvent<HTMLElement>,
+    item: MediaBinItem,
+    allowBinding = true,
+  ) {
     if (event.button !== 0) {
       return;
     }
@@ -679,9 +709,10 @@ export function MediaBinTable({
 
     const targetFromPoint = (clientX: number, clientY: number) => {
       const element = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
-      const bindingTarget = isReadOnly
-        ? null
-        : (element?.closest<HTMLElement>("[data-media-bind-video-id]") ?? null);
+      const bindingTarget =
+        isReadOnly || !allowBinding
+          ? null
+          : (element?.closest<HTMLElement>("[data-media-bind-video-id]") ?? null);
       const sourceTarget =
         element?.closest<HTMLElement>("[data-source-monitor-drop-target]") ?? null;
       return {
@@ -730,9 +761,9 @@ export function MediaBinTable({
         const target = targetFromPoint(finishEvent.clientX, finishEvent.clientY);
         if (target.sourceTarget && item.kind === "video") {
           onPreviewVideo(item.id);
-        } else if (!isReadOnly && target.videoId) {
+        } else if (allowBinding && !isReadOnly && target.videoId) {
           void onBindItems(itemIds, target.videoId);
-        } else if (!isReadOnly && item.bound_to_video_id) {
+        } else if (allowBinding && !isReadOnly && item.bound_to_video_id) {
           onUnbindItems(itemIds);
         }
       }
@@ -744,39 +775,6 @@ export function MediaBinTable({
     window.addEventListener("pointermove", onMove, { passive: false });
     window.addEventListener("pointerup", onUp, { once: true });
     window.addEventListener("pointercancel", onCancel, { once: true });
-  }
-
-  function handleBindingDragOver(event: DragEvent, targetVideoId: string | null) {
-    if (isReadOnly || !targetVideoId) {
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    event.dataTransfer.dropEffect = "move";
-    setDropTargetVideoId(targetVideoId);
-  }
-
-  function handleBindingDrop(event: DragEvent, targetVideoId: string | null) {
-    if (isReadOnly || !targetVideoId) {
-      return;
-    }
-    const itemIds = draggedItemIds(event);
-    if (itemIds.length === 0) {
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    markMediaDragHandled();
-    setDropTargetVideoId(null);
-    void onBindItems(itemIds, targetVideoId);
-  }
-
-  function handleDragEnd(event: DragEvent, item: MediaBinItem) {
-    setDropTargetVideoId(null);
-    if (!isReadOnly && !mediaDragWasHandled() && event.dataTransfer.dropEffect === "none") {
-      onUnbindItems(draggedItemIds(event, item.id));
-    }
-    finishMediaDrag();
   }
 
   function syncHeaderScroll(event: UIEvent<HTMLDivElement>) {
@@ -796,40 +794,71 @@ export function MediaBinTable({
       );
     }
     return (
-      <div
-        ref={gridRef}
-        className={`media-bin-grid${gridIsSingleRow ? " is-single-row" : ""}`}
-        role="list"
-      >
+      <div ref={gridRef} className="media-bin-grid" role="list" style={gridStyle}>
         {sortedRows.map(({ item }) => {
-          const targetVideoId = bindingTargetVideoId(item);
+          const project = projects[item.id];
+          const isDetachedVideo = detachedVideoIds.has(item.id);
+          const hasSourceAudio =
+            item.kind === "video" && !isDetachedVideo && project?.asset.audio_stream_index != null;
+          const hasSubtitleTrack =
+            item.kind === "video" &&
+            Boolean(project && visibleSubtitleTracks(project, mediaItems, item.id).length > 0);
           return (
             <button
               type="button"
               role="listitem"
               key={item.id}
-              className={`media-bin-card ${selectedIds.has(item.id) ? "selected" : ""} ${
-                targetVideoId && dropTargetVideoId === targetVideoId ? "binding-target" : ""
-              }`}
-              draggable
-              onDragStart={(event) => startMediaDrag(event, item, selectedIds)}
-              onDragEnd={(event) => handleDragEnd(event, item)}
-              onDragOver={(event) => handleBindingDragOver(event, targetVideoId)}
-              onDragLeave={(event) => {
-                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-                  setDropTargetVideoId(null);
-                }
-              }}
-              onDrop={(event) => handleBindingDrop(event, targetVideoId)}
+              className={`media-bin-card ${selectedIds.has(item.id) ? "selected" : ""}`}
+              draggable={false}
+              onPointerDown={(event) => startPointerMediaDrag(event, item, false)}
               onClick={(event) =>
                 event.ctrlKey || event.metaKey ? onToggleSelected(item.id) : onSelectOnly(item.id)
               }
               onDoubleClick={() => item.kind === "video" && onPreviewVideo(item.id)}
             >
               <span className={`media-bin-card-preview ${item.kind}`}>
-                {itemIcon(item, projects[item.id], detachedVideoIds.has(item.id))}
+                {item.kind === "video" && project ? (
+                  <>
+                    <MediaBinVideoThumbnail
+                      item={item}
+                      project={project}
+                      frame={mediaPreviewFrames[item.id] ?? 0}
+                    />
+                    <span className="media-bin-card-type-badges" aria-hidden="true">
+                      <span className="media-bin-card-type-badge video">
+                        <Film />
+                      </span>
+                      {hasSourceAudio && (
+                        <span className="media-bin-card-type-badge audio">
+                          <Music2 />
+                        </span>
+                      )}
+                      {hasSubtitleTrack && (
+                        <span className="media-bin-card-type-badge subtitle">
+                          <SubtitleBadgeIcon />
+                        </span>
+                      )}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    {itemIcon(item, project, isDetachedVideo)}
+                    <span className="media-bin-card-type-badges" aria-hidden="true">
+                      <span className={`media-bin-card-type-badge ${item.kind}`}>
+                        {item.kind === "audio" ? <Music2 /> : <SubtitleBadgeIcon />}
+                      </span>
+                    </span>
+                  </>
+                )}
               </span>
-              <span className="media-bin-card-name">{item.file_name}</span>
+              <span className="media-bin-card-meta">
+                <span className="media-bin-card-name">{item.file_name}</span>
+                {item.kind !== "subtitle" && (
+                  <span className="media-bin-card-duration">
+                    {formatGridItemDuration(item, project)}
+                  </span>
+                )}
+              </span>
               {item.bound_to_video_id && (
                 <span className="media-bin-card-bound" title="已绑定">
                   <Link2 aria-hidden="true" />

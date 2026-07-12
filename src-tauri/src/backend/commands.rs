@@ -146,6 +146,68 @@ pub(crate) fn close_project(
 }
 
 #[tauri::command]
+pub(crate) async fn generate_video_thumbnail(
+    asset_id: String,
+    time_us: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<u8>, String> {
+    let project = state
+        .projects
+        .lock()
+        .map_err(|_| "项目状态锁定失败".to_string())?
+        .get(&asset_id)
+        .cloned()
+        .ok_or_else(|| format!("未找到视频素材: {asset_id}"))?;
+    let stream_index = project
+        .asset
+        .video_stream_index
+        .ok_or_else(|| "素材不包含视频流".to_string())?;
+    let preferences = preferences_clone(&state)?;
+    let last_seekable_us = project.asset.duration_us.saturating_sub(1_000);
+    let target_us = time_us.max(0).min(last_seekable_us.max(0));
+    let args = vec![
+        "-hide_banner".to_string(),
+        "-loglevel".to_string(),
+        "error".to_string(),
+        "-ss".to_string(),
+        format!("{:.6}", target_us as f64 / 1_000_000.0),
+        "-i".to_string(),
+        project.asset.path,
+        "-map".to_string(),
+        format!("0:{stream_index}"),
+        "-frames:v".to_string(),
+        "1".to_string(),
+        "-vf".to_string(),
+        "scale=640:360:force_original_aspect_ratio=decrease:force_divisible_by=2".to_string(),
+        "-q:v".to_string(),
+        "3".to_string(),
+        "-f".to_string(),
+        "image2pipe".to_string(),
+        "-vcodec".to_string(),
+        "mjpeg".to_string(),
+        "pipe:1".to_string(),
+    ];
+    let program = ffmpeg_program(&preferences);
+    let output = hidden_command(&program)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(|error| format!("启动 {program} 生成视频缩略图失败: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "生成视频缩略图失败: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    if output.stdout.is_empty() {
+        return Err("生成的视频缩略图为空".to_string());
+    }
+    Ok(output.stdout)
+}
+
+#[tauri::command]
 pub(crate) async fn import_media(
     path: String,
     external_subtitles: Vec<String>,

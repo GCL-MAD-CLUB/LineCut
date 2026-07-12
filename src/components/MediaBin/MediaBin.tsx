@@ -75,6 +75,7 @@ export function MediaBin() {
   const mediaItems = useAppStore((state) => state.mediaItems);
   const activeVideoId = useAppStore((state) => state.activeVideoId);
   const detachedVideoIds = useAppStore((state) => state.detachedVideoIds);
+  const mediaPreviewFrames = useAppStore((state) => state.mediaPreviewFrames);
   const mediaItemRenamed = useAppStore((state) => state.actions.mediaItemRenamed);
   const mediaItemsBound = useAppStore((state) => state.actions.mediaItemsBound);
   const mediaItemsUnbound = useAppStore((state) => state.actions.mediaItemsUnbound);
@@ -128,6 +129,7 @@ export function MediaBin() {
   const selectedDemuxVideo = selectedVideos.length === 1 ? selectedVideos[0] : null;
   const sizeValue = viewMode === "list" ? listSize : gridSize;
   const gridScale = gridSize < 34 ? 1 : gridSize < 67 ? 1.3 : 1.6;
+  const gridCardWidth = 200 * gridScale;
   const listIconScale = 1 + listSize * 0.015;
   const contentStyle = {
     "--media-list-row-height": `${24 + listSize * 0.36}px`,
@@ -143,7 +145,7 @@ export function MediaBin() {
     "--media-list-bind-branch-last-width": `${9 * listIconScale}px`,
     "--media-list-bind-branch-radius": `${4 * listIconScale}px`,
     "--media-list-title-icon-gap": `${6 * (1 + listSize * 0.01)}px`,
-    "--media-grid-card-width": `${136 * gridScale}px`,
+    "--media-grid-card-width": `${gridCardWidth}px`,
   } as CSSProperties;
 
   const rows = useMemo(() => {
@@ -417,8 +419,11 @@ export function MediaBin() {
         <MediaBinTable
           rows={rows}
           hasItems={mediaItems.length > 0}
+          mediaItems={mediaItems}
           projects={projects}
           detachedVideoIds={detachedVideoIds}
+          mediaPreviewFrames={mediaPreviewFrames}
+          gridCardWidth={gridCardWidth}
           selectedIds={selectedIds}
           viewMode={viewMode}
           isReadOnly={isReadOnly}
