@@ -58,16 +58,11 @@ pub(crate) async fn cancel_task(
 #[tauri::command]
 pub(crate) async fn save_project_file(
     path: String,
-    asset_id: Option<String>,
-    state: tauri::State<'_, AppState>,
+    workspace: ProjectWorkspace,
 ) -> Result<String, String> {
-    let project = match asset_id {
-        Some(asset_id) => Some(project_clone(&asset_id, &state)?),
-        None => None,
-    };
     let normalized_path = normalize_project_path(&path)?;
     let output_path = normalized_path.clone();
-    tokio::task::spawn_blocking(move || write_project_file(&output_path, project))
+    tokio::task::spawn_blocking(move || write_project_file(&output_path, workspace))
         .await
         .map_err(|error| format!("保存项目任务失败: {error}"))??;
     Ok(normalized_path.to_string_lossy().into_owned())
@@ -85,7 +80,7 @@ pub(crate) async fn open_project_file(
         .map_err(|error| format!("打开项目任务失败: {error}"))??;
     let mut warnings = Vec::new();
 
-    if let Some(project) = &document.project {
+    for project in &document.workspace.projects {
         let media_path = Path::new(&project.asset.path);
         if !media_path.is_file() {
             warnings.push(format!("项目引用的媒体文件不存在: {}", project.asset.path));
@@ -96,17 +91,40 @@ pub(crate) async fn open_project_file(
                 warnings.push("源媒体自项目保存后已发生变化，导出前请确认内容正确".to_string());
             }
         }
-
-        state
-            .projects
-            .lock()
-            .map_err(|_| "项目状态锁定失败".to_string())?
-            .insert(project.asset.id.clone(), project.clone());
     }
+
+    let project_paths = document
+        .workspace
+        .projects
+        .iter()
+        .map(|project| project.asset.path.as_str())
+        .collect::<HashSet<_>>();
+    for item in &document.workspace.media_bin.items {
+        if item.path.is_empty() || project_paths.contains(item.path.as_str()) {
+            continue;
+        }
+        if !Path::new(&item.path).is_file() {
+            warnings.push(format!("素材箱引用的文件不存在: {}", item.path));
+        }
+    }
+
+    let mut projects = state
+        .projects
+        .lock()
+        .map_err(|_| "项目状态锁定失败".to_string())?;
+    projects.clear();
+    projects.extend(
+        document
+            .workspace
+            .projects
+            .iter()
+            .map(|project| (project.asset.id.clone(), project.clone())),
+    );
+    drop(projects);
 
     Ok(OpenProjectResult {
         path: input_path.to_string_lossy().into_owned(),
-        project: document.project,
+        workspace: document.workspace,
         warnings,
     })
 }
@@ -407,8 +425,8 @@ pub(crate) async fn demux_media_streams(
     let mut project = project_clone(&asset_id, &state)?;
     let demux_dir = PathBuf::from(&project.cache_dir).join("demux");
     let demux_dir_to_create = demux_dir.clone();
-    spawn_blocking_cancellable(task.cancel_token(), "创建解合成目录", move |_| {
-        fs::create_dir_all(demux_dir_to_create).map_err(|e| format!("创建解合成目录失败: {e}"))
+    spawn_blocking_cancellable(task.cancel_token(), "创建分解目录", move |_| {
+        fs::create_dir_all(demux_dir_to_create).map_err(|e| format!("创建分解目录失败: {e}"))
     })
     .await?;
 

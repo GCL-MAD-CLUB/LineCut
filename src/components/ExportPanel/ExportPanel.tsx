@@ -150,6 +150,7 @@ export function ExportPanel() {
   const mediaItems = useAppStore((state) => state.mediaItems);
   const activeVideoId = useAppStore((state) => state.activeVideoId);
   const detachedVideoIds = useAppStore((state) => state.detachedVideoIds);
+  const isMediaBinReadOnly = useAppStore((state) => state.mediaBinReadOnly);
   const activeVideoChanged = useAppStore((state) => state.actions.activeVideoChanged);
   const activeTrackId = useAppStore((state) => state.activeTrackId);
   const selectedCueIds = useAppStore((state) => state.selectedCueIds);
@@ -159,7 +160,7 @@ export function ExportPanel() {
   const labelCues = useActiveCues();
   const selectedCount = useAppStore((state) => state.selectedCueIds.size);
   const { isRunning: isExporting } = getTaskProgressStatus("export");
-  const canExport = useCanExport(isExporting);
+  const canExport = useCanExport(isExporting) && !isMediaBinReadOnly;
   const videoItems = useMemo(
     () => mediaItems.filter((item) => item.kind === "video"),
     [mediaItems],
@@ -261,6 +262,9 @@ export function ExportPanel() {
   }
 
   async function exportSelection() {
+    if (isMediaBinReadOnly) {
+      return;
+    }
     const exportProject = projects[exportVideoId] ?? project;
     if (!exportProject || !activeTrackId) {
       return;

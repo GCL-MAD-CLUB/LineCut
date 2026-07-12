@@ -2,7 +2,8 @@ use super::*;
 
 const PROJECT_EXTENSION: &str = "lcp";
 const PROJECT_MAGIC: &[u8; 8] = b"LINECUT\0";
-const PROJECT_FORMAT_VERSION: u16 = 1;
+const LEGACY_PROJECT_FORMAT_VERSION: u16 = 1;
+const PROJECT_FORMAT_VERSION: u16 = 2;
 const PROJECT_HEADER_LEN: usize = 8 + 2 + 2 + 8 + 32;
 const MAX_PROJECT_PAYLOAD_LEN: usize = 512 * 1024 * 1024;
 
@@ -264,20 +265,147 @@ pub(crate) fn normalize_project_path(path: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-fn encode_project_document(document: &ProjectDocument) -> Result<Vec<u8>, String> {
-    let payload = bincode::serialize(document).map_err(|e| format!("序列化项目失败: {e}"))?;
+fn wrap_project_payload(payload: &[u8], version: u16) -> Result<Vec<u8>, String> {
     if payload.len() > MAX_PROJECT_PAYLOAD_LEN {
         return Err("项目数据过大，无法保存".to_string());
     }
-    let checksum = Sha256::digest(&payload);
+    let checksum = Sha256::digest(payload);
     let mut bytes = Vec::with_capacity(PROJECT_HEADER_LEN + payload.len());
     bytes.extend_from_slice(PROJECT_MAGIC);
-    bytes.extend_from_slice(&PROJECT_FORMAT_VERSION.to_le_bytes());
+    bytes.extend_from_slice(&version.to_le_bytes());
     bytes.extend_from_slice(&0_u16.to_le_bytes());
     bytes.extend_from_slice(&(payload.len() as u64).to_le_bytes());
     bytes.extend_from_slice(&checksum);
-    bytes.extend_from_slice(&payload);
+    bytes.extend_from_slice(payload);
     Ok(bytes)
+}
+
+fn encode_project_document(document: &ProjectDocument) -> Result<Vec<u8>, String> {
+    let payload = bincode::serialize(document).map_err(|e| format!("序列化项目失败: {e}"))?;
+    wrap_project_payload(&payload, PROJECT_FORMAT_VERSION)
+}
+
+fn imported_project_item(project: &Project) -> MediaBinItem {
+    let is_video = project.asset.video_stream_index.is_some();
+    let has_audio = project.asset.audio_stream_index.is_some();
+    let codec_type = if is_video { "video" } else { "audio" };
+    let stream = project
+        .streams
+        .iter()
+        .find(|stream| stream.codec_type == codec_type);
+    MediaBinItem {
+        id: project.asset.id.clone(),
+        kind: if is_video {
+            MediaBinItemKind::Video
+        } else {
+            MediaBinItemKind::Audio
+        },
+        path: project.asset.path.clone(),
+        file_name: project.asset.file_name.clone(),
+        duration_us: project.asset.duration_us,
+        start_time_us: project.asset.start_time_us,
+        bound_to_video_id: None,
+        source_video_id: None,
+        stream_index: if is_video {
+            project.asset.video_stream_index
+        } else {
+            project.asset.audio_stream_index
+        },
+        subtitle_track_id: None,
+        codec: stream.map(|stream| stream.codec_name.clone()),
+        language: stream.and_then(|stream| stream.language.clone()),
+        extracted: false,
+        origin: MediaBinItemOrigin::Imported,
+        color: if is_video && has_audio {
+            "#004b67"
+        } else if is_video {
+            "#3e0aae"
+        } else {
+            "#2a5507"
+        }
+        .to_string(),
+    }
+}
+
+fn imported_external_subtitle_items(project: &Project) -> Vec<MediaBinItem> {
+    project
+        .tracks
+        .iter()
+        .filter(|track| {
+            matches!(&track.source_type, SubtitleSourceType::External)
+                && track.source_path.is_some()
+        })
+        .map(|track| {
+            let path = track.source_path.clone().unwrap_or_default();
+            let file_name = Path::new(&path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_owned)
+                .or_else(|| track.title.clone())
+                .unwrap_or_else(|| "字幕".to_string());
+            MediaBinItem {
+                id: format!("subtitle:{}", track.id),
+                kind: MediaBinItemKind::Subtitle,
+                path,
+                file_name,
+                duration_us: project.asset.duration_us,
+                start_time_us: 0,
+                bound_to_video_id: Some(project.asset.id.clone()),
+                source_video_id: None,
+                stream_index: track.stream_index,
+                subtitle_track_id: Some(track.id.clone()),
+                codec: Some(track.codec.clone()),
+                language: track.language.clone(),
+                extracted: false,
+                origin: MediaBinItemOrigin::Imported,
+                color: "#893a04".to_string(),
+            }
+        })
+        .collect()
+}
+
+fn workspace_from_legacy_project(project: Option<Project>) -> ProjectWorkspace {
+    let Some(project) = project else {
+        return ProjectWorkspace {
+            projects: Vec::new(),
+            media_bin: ProjectMediaBinState {
+                items: Vec::new(),
+                read_only: false,
+            },
+            editor: ProjectEditorState {
+                active_video_id: String::new(),
+                active_track_id: String::new(),
+                selected_cue_ids: Vec::new(),
+                detached_video_ids: Vec::new(),
+                preview: ProjectPreviewState { use_proxy: false },
+            },
+        };
+    };
+
+    let active_video_id = project.asset.id.clone();
+    let active_track_id = project
+        .tracks
+        .iter()
+        .find(|track| track.cue_count > 0)
+        .or_else(|| project.tracks.first())
+        .map(|track| track.id.clone())
+        .unwrap_or_default();
+    let mut items = vec![imported_project_item(&project)];
+    items.extend(imported_external_subtitle_items(&project));
+    ProjectWorkspace {
+        projects: vec![project],
+        media_bin: ProjectMediaBinState {
+            items,
+            read_only: false,
+        },
+        editor: ProjectEditorState {
+            active_video_id,
+            active_track_id,
+            selected_cue_ids: Vec::new(),
+            detached_video_ids: Vec::new(),
+            preview: ProjectPreviewState { use_proxy: false },
+        },
+    }
 }
 
 fn decode_project_document(bytes: &[u8]) -> Result<ProjectDocument, String> {
@@ -285,7 +413,7 @@ fn decode_project_document(bytes: &[u8]) -> Result<ProjectDocument, String> {
         return Err("不是有效的 LineCut 项目文件".to_string());
     }
     let version = u16::from_le_bytes([bytes[8], bytes[9]]);
-    if version != PROJECT_FORMAT_VERSION {
+    if version != PROJECT_FORMAT_VERSION && version != LEGACY_PROJECT_FORMAT_VERSION {
         return Err(format!(
             "不支持的项目文件版本 {version}，当前支持版本为 {PROJECT_FORMAT_VERSION}"
         ));
@@ -304,17 +432,26 @@ fn decode_project_document(bytes: &[u8]) -> Result<ProjectDocument, String> {
     if Sha256::digest(payload).as_slice() != &bytes[20..52] {
         return Err("项目文件完整性校验失败".to_string());
     }
+    if version == LEGACY_PROJECT_FORMAT_VERSION {
+        let legacy: LegacyProjectDocument =
+            bincode::deserialize(payload).map_err(|e| format!("解析旧版项目文件失败: {e}"))?;
+        return Ok(ProjectDocument {
+            workspace: workspace_from_legacy_project(legacy.project),
+            saved_at: legacy.saved_at,
+            app_version: legacy.app_version,
+        });
+    }
     bincode::deserialize(payload).map_err(|e| format!("解析项目文件失败: {e}"))
 }
 
-pub(crate) fn write_project_file(path: &Path, project: Option<Project>) -> Result<(), String> {
+pub(crate) fn write_project_file(path: &Path, workspace: ProjectWorkspace) -> Result<(), String> {
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent).map_err(|e| format!("创建项目目录失败: {e}"))?;
     let document = ProjectDocument {
-        project,
+        workspace,
         saved_at: now_millis() as u64,
         app_version: env!("CARGO_PKG_VERSION").to_string(),
     };
@@ -357,8 +494,27 @@ mod project_file_tests {
 
     #[test]
     fn project_document_is_binary_and_round_trips() {
+        let mut workspace = workspace_from_legacy_project(None);
+        workspace.media_bin.read_only = true;
+        workspace.media_bin.items.push(MediaBinItem {
+            id: "audio-1".to_string(),
+            kind: MediaBinItemKind::Audio,
+            path: "audio.wav".to_string(),
+            file_name: "旁白".to_string(),
+            duration_us: 2_000_000,
+            start_time_us: 0,
+            bound_to_video_id: Some("video-1".to_string()),
+            source_video_id: None,
+            stream_index: Some(0),
+            subtitle_track_id: None,
+            codec: Some("pcm_s16le".to_string()),
+            language: Some("zh".to_string()),
+            extracted: false,
+            origin: MediaBinItemOrigin::Imported,
+            color: "#2a5507".to_string(),
+        });
         let document = ProjectDocument {
-            project: None,
+            workspace,
             saved_at: 42,
             app_version: "test".to_string(),
         };
@@ -368,13 +524,25 @@ mod project_file_tests {
         let decoded = decode_project_document(&bytes).expect("decode project");
         assert_eq!(decoded.saved_at, 42);
         assert_eq!(decoded.app_version, "test");
-        assert!(decoded.project.is_none());
+        assert!(decoded.workspace.projects.is_empty());
+        assert!(decoded.workspace.media_bin.read_only);
+        assert_eq!(decoded.workspace.media_bin.items.len(), 1);
+        assert_eq!(
+            decoded.workspace.media_bin.items[0].origin,
+            MediaBinItemOrigin::Imported
+        );
+        assert_eq!(
+            decoded.workspace.media_bin.items[0]
+                .bound_to_video_id
+                .as_deref(),
+            Some("video-1")
+        );
     }
 
     #[test]
     fn project_document_rejects_corrupted_payload() {
         let document = ProjectDocument {
-            project: None,
+            workspace: workspace_from_legacy_project(None),
             saved_at: 42,
             app_version: "test".to_string(),
         };
@@ -382,5 +550,23 @@ mod project_file_tests {
         let last = bytes.len() - 1;
         bytes[last] ^= 0xff;
         assert!(decode_project_document(&bytes).is_err());
+    }
+
+    #[test]
+    fn legacy_project_document_migrates_to_workspace() {
+        let legacy = LegacyProjectDocument {
+            project: None,
+            saved_at: 41,
+            app_version: "legacy".to_string(),
+        };
+        let payload = bincode::serialize(&legacy).expect("serialize legacy project");
+        let bytes = wrap_project_payload(&payload, LEGACY_PROJECT_FORMAT_VERSION)
+            .expect("wrap legacy project");
+        let decoded = decode_project_document(&bytes).expect("decode legacy project");
+
+        assert_eq!(decoded.saved_at, 41);
+        assert_eq!(decoded.app_version, "legacy");
+        assert!(decoded.workspace.projects.is_empty());
+        assert!(!decoded.workspace.media_bin.read_only);
     }
 }

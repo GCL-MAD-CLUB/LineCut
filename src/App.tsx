@@ -24,7 +24,7 @@ import {
   getTaskProgressStatus,
 } from "./components/TaskProgress";
 import { cancelFfmpegTask, createFfmpegTaskId } from "./ffmpegProgress";
-import { useAppStore } from "./store";
+import { getProjectWorkspaceSnapshot, useAppStore } from "./store";
 import { isTauriRuntime } from "./tauriRuntime";
 import type { ImportResult, MediaBinItem, OpenProjectResult, Preferences } from "./types";
 
@@ -115,6 +115,7 @@ function standaloneSubtitleItem(path: string, index: number): MediaBinItem {
     codec: fileExtension(path) || "subtitle",
     language: null,
     extracted: false,
+    origin: "imported",
     color: "#893a04",
   };
 }
@@ -160,6 +161,7 @@ export default function App() {
   const message = useAppStore((state) => state.message);
   const warnings = useAppStore((state) => state.warnings);
   const exportResult = useAppStore((state) => state.exportResult);
+  const isMediaBinReadOnly = useAppStore((state) => state.mediaBinReadOnly);
   const projectOpened = useAppStore((state) => state.actions.projectOpened);
   const projectSaved = useAppStore((state) => state.actions.projectSaved);
   const projectClosed = useAppStore((state) => state.actions.projectClosed);
@@ -172,7 +174,7 @@ export default function App() {
   const exportResultChanged = useAppStore((state) => state.actions.exportResultChanged);
   const { tasks: runningTasks } = getTaskProgressStatus();
   const isBusy = runningTasks.length > 0;
-  const hasProject = Boolean(projectFilePath || project);
+  const hasProject = Boolean(projectFilePath || mediaItems.length > 0);
   const activeTrackCues = useMemo(
     () => (project && activeTrackId ? (project.cues[activeTrackId] ?? []) : []),
     [activeTrackId, project],
@@ -312,7 +314,7 @@ export default function App() {
     const assetIds = assetId
       ? [assetId]
       : mediaItems
-          .filter((item) => !item.extracted && item.kind !== "subtitle")
+          .filter((item) => item.origin === "imported" && item.kind !== "subtitle")
           .map((item) => item.id);
     await Promise.all(assetIds.map((id) => invoke("close_project", { assetId: id })));
   }
@@ -363,12 +365,8 @@ export default function App() {
     }
 
     try {
-      const oldAssetId = project?.asset.id;
       const result = await invoke<OpenProjectResult>("open_project_file", { path });
-      if (oldAssetId && oldAssetId !== result.project?.asset.id) {
-        await removeBackendProject(oldAssetId);
-      }
-      projectOpened(result.project, result.path);
+      projectOpened(result.workspace, result.path);
       warningsReplaced(result.warnings);
       messagePublished(`已打开项目 ${fileName(result.path)}`);
     } catch (error) {
@@ -392,7 +390,7 @@ export default function App() {
   async function writeProject(path: string, makeCurrent: boolean) {
     const savedPath = await invoke<string>("save_project_file", {
       path,
-      assetId: project?.asset.id ?? null,
+      workspace: getProjectWorkspaceSnapshot(),
     });
     if (makeCurrent) {
       projectSaved(savedPath);
@@ -406,7 +404,9 @@ export default function App() {
     if (projectFilePath) {
       return projectFilePath;
     }
-    const mediaName = project?.asset.file_name.replace(/\.[^.]+$/, "") || "未命名项目";
+    const mediaName =
+      (project?.asset.file_name ?? mediaItems[0]?.file_name)?.replace(/\.[^.]+$/, "") ||
+      "未命名项目";
     return `${mediaName}.lcp`;
   }
 
@@ -458,7 +458,7 @@ export default function App() {
   }
 
   async function importMedia(pathsToImport?: string[]) {
-    if (isBusy) {
+    if (isMediaBinReadOnly || isBusy) {
       return;
     }
     if (!isTauriRuntime()) {
@@ -629,6 +629,7 @@ export default function App() {
           hasProject={hasProject}
           isDirty={projectDirty}
           isBusy={isBusy}
+          isMediaBinReadOnly={isMediaBinReadOnly}
           onNewProject={newProject}
           onOpenProject={openProject}
           onCloseProject={closeProject}

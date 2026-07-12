@@ -3,7 +3,6 @@ import {
   Grid2X2,
   Link2,
   List,
-  ListFilter,
   Loader2,
   Menu,
   PanelTopOpen,
@@ -14,7 +13,7 @@ import {
   Trash2,
   Unlink2,
 } from "lucide-react";
-import { useEffect, useMemo, type DragEvent } from "react";
+import { useEffect, useMemo, type CSSProperties, type DragEvent } from "react";
 import { emitAppEvent } from "../../appEvents";
 import {
   cancelFfmpegTask,
@@ -31,6 +30,19 @@ import { activeMediaDragItemIds, markMediaDragHandled } from "./mediaDrag";
 import { useMediaBinState } from "./mediaBinState";
 
 const mediaDragType = "application/x-linecut-media";
+
+function MediaBinLockIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        fill="currentColor"
+        fillRule="evenodd"
+        stroke="none"
+        d="M7 10V7a5 5 0 0 1 10 0v3h2a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2Zm3 0h4V7a2 2 0 1 0-4 0v3Zm1 4h2v4h-2v-4Z"
+      />
+    </svg>
+  );
+}
 
 function readDraggedMediaIds(event: DragEvent) {
   const serialized = event.dataTransfer.getData(mediaDragType);
@@ -74,10 +86,14 @@ export function MediaBin() {
   );
   const messagePublished = useAppStore((state) => state.actions.messagePublished);
   const warningsAppended = useAppStore((state) => state.actions.warningsAppended);
+  const isReadOnly = useAppStore((state) => state.mediaBinReadOnly);
+  const setReadOnly = useAppStore((state) => state.actions.mediaBinReadOnlyChanged);
 
   const query = useMediaBinState((state) => state.query);
   const selectedIds = useMediaBinState((state) => state.selectedIds);
   const viewMode = useMediaBinState((state) => state.viewMode);
+  const listSize = useMediaBinState((state) => state.listSize);
+  const gridSize = useMediaBinState((state) => state.gridSize);
   const bindingPopoverOpen = useMediaBinState((state) => state.bindingPopoverOpen);
   const bindingVideoId = useMediaBinState((state) => state.bindingVideoId);
   const setQuery = useMediaBinState((state) => state.setQuery);
@@ -85,6 +101,8 @@ export function MediaBin() {
   const toggleSelected = useMediaBinState((state) => state.toggleSelected);
   const clearSelection = useMediaBinState((state) => state.clearSelection);
   const setViewMode = useMediaBinState((state) => state.setViewMode);
+  const setListSize = useMediaBinState((state) => state.setListSize);
+  const setGridSize = useMediaBinState((state) => state.setGridSize);
   const setBindingPopoverOpen = useMediaBinState((state) => state.setBindingPopoverOpen);
   const setBindingVideoId = useMediaBinState((state) => state.setBindingVideoId);
   const { isRunning: isImporting } = getTaskProgressStatus("media_import");
@@ -108,6 +126,25 @@ export function MediaBin() {
   const bindingActionIsUnbind = canUnbind;
   const canManageBinding = canBind || canUnbind;
   const selectedDemuxVideo = selectedVideos.length === 1 ? selectedVideos[0] : null;
+  const sizeValue = viewMode === "list" ? listSize : gridSize;
+  const gridScale = gridSize < 34 ? 1 : gridSize < 67 ? 1.3 : 1.6;
+  const listIconScale = 1 + listSize * 0.015;
+  const contentStyle = {
+    "--media-list-row-height": `${24 + listSize * 0.36}px`,
+    "--media-list-icon-size": `${16 * listIconScale}px`,
+    "--media-list-status-icon-size": `${12 * listIconScale}px`,
+    "--media-list-bind-branch-width": `${12.5 * listIconScale}px`,
+    "--media-list-bind-branch-margin": `${2 * listIconScale}px`,
+    "--media-list-bind-branch-line-position": `${7 * listIconScale}px`,
+    "--media-list-bind-branch-horizontal-left": `${8 * listIconScale}px`,
+    "--media-list-bind-branch-horizontal-width": `${8 * listIconScale}px`,
+    "--media-list-bind-branch-line-width": `${listIconScale}px`,
+    "--media-list-bind-branch-overhang": `-${listIconScale}px`,
+    "--media-list-bind-branch-last-width": `${9 * listIconScale}px`,
+    "--media-list-bind-branch-radius": `${4 * listIconScale}px`,
+    "--media-list-title-icon-gap": `${6 * (1 + listSize * 0.01)}px`,
+    "--media-grid-card-width": `${136 * gridScale}px`,
+  } as CSSProperties;
 
   const rows = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase();
@@ -156,8 +193,14 @@ export function MediaBin() {
     };
   }, [bindingPopoverOpen, setBindingPopoverOpen]);
 
+  useEffect(() => {
+    if (isReadOnly && bindingPopoverOpen) {
+      setBindingPopoverOpen(false);
+    }
+  }, [bindingPopoverOpen, isReadOnly, setBindingPopoverOpen]);
+
   async function bindItemsToVideo(itemIds: string[], videoId: string) {
-    if (isBusy || !projects[videoId]) {
+    if (isReadOnly || isBusy || !projects[videoId]) {
       return;
     }
     const selectedItemsToBind = mediaItems.filter(
@@ -235,6 +278,9 @@ export function MediaBin() {
   }
 
   function unbindItems(itemIds: string[]) {
+    if (isReadOnly) {
+      return;
+    }
     const boundItemIds = mediaItems
       .filter(
         (item) => itemIds.includes(item.id) && item.kind !== "video" && item.bound_to_video_id,
@@ -248,6 +294,9 @@ export function MediaBin() {
   }
 
   function handleContentDragOver(event: DragEvent<HTMLDivElement>) {
+    if (isReadOnly) {
+      return;
+    }
     if (
       activeMediaDragItemIds().length === 0 &&
       !event.dataTransfer.types.includes(mediaDragType) &&
@@ -260,6 +309,9 @@ export function MediaBin() {
   }
 
   function handleContentDrop(event: DragEvent<HTMLDivElement>) {
+    if (isReadOnly) {
+      return;
+    }
     const itemIds = readDraggedMediaIds(event);
     if (itemIds.length === 0) {
       return;
@@ -270,6 +322,9 @@ export function MediaBin() {
   }
 
   async function demuxSelectedVideo() {
+    if (isReadOnly) {
+      return;
+    }
     const video = selectedDemuxVideo;
     if (!video || detachedVideoIds.has(video.id)) {
       return;
@@ -278,7 +333,7 @@ export function MediaBin() {
     let cancelled = false;
     const task = await createTaskProgress({
       operation: "media_bin_demux",
-      label: `正在解合成 ${video.file_name}`,
+      label: `正在分解 ${video.file_name}`,
       current: 0,
       total: 1,
       listener: listenToFfmpegTaskProgress(taskId),
@@ -300,23 +355,23 @@ export function MediaBin() {
       );
     } catch (error) {
       if (cancelled) {
-        messagePublished("解合成已取消");
+        messagePublished("分解已取消");
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
-      task.fail("解合成失败", message);
+      task.fail("分解失败", message);
       messagePublished(message);
     }
   }
 
   async function removeSelection() {
-    if (selectedItems.length === 0) {
+    if (isReadOnly || selectedItems.length === 0) {
       return;
     }
     if (isTauriRuntime()) {
       await Promise.all(
         selectedItems
-          .filter((item) => !item.extracted && item.kind !== "subtitle")
+          .filter((item) => item.origin === "imported" && item.kind !== "subtitle")
           .map((item) => invoke("close_project", { assetId: item.id }).catch(() => false)),
       );
     }
@@ -355,6 +410,7 @@ export function MediaBin() {
 
       <div
         className={`media-bin-content ${viewMode}-view ${isBinding ? "is-binding" : ""}`}
+        style={contentStyle}
         onDragOver={handleContentDragOver}
         onDrop={handleContentDrop}
       >
@@ -365,6 +421,7 @@ export function MediaBin() {
           detachedVideoIds={detachedVideoIds}
           selectedIds={selectedIds}
           viewMode={viewMode}
+          isReadOnly={isReadOnly}
           onSelectOnly={selectOnly}
           onToggleSelected={toggleSelected}
           onRenameItem={mediaItemRenamed}
@@ -376,8 +433,14 @@ export function MediaBin() {
 
       <footer className="media-bin-footer">
         <div className="media-bin-view-tools">
-          <button type="button" className="media-bin-pen" title="标签工具">
-            <PenLine aria-hidden="true" />
+          <button
+            type="button"
+            className={isReadOnly ? "media-bin-lock" : "media-bin-pen"}
+            title={isReadOnly ? "解除素材箱只读" : "将素材箱设为只读"}
+            aria-pressed={isReadOnly}
+            onClick={() => setReadOnly(!isReadOnly)}
+          >
+            {isReadOnly ? <MediaBinLockIcon /> : <PenLine aria-hidden="true" />}
           </button>
           <button
             type="button"
@@ -395,10 +458,21 @@ export function MediaBin() {
           >
             <Grid2X2 aria-hidden="true" />
           </button>
-          <input type="range" min="0" max="100" defaultValue="42" aria-label="缩略图大小" />
-          <button type="button" title="筛选素材">
-            <ListFilter aria-hidden="true" />
-          </button>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            value={sizeValue}
+            aria-label={viewMode === "list" ? "列表行高" : "图标大小"}
+            onChange={(event) => {
+              const size = Number(event.currentTarget.value);
+              if (viewMode === "list") {
+                setListSize(size);
+              } else {
+                setGridSize(size);
+              }
+            }}
+          />
         </div>
 
         <div className="media-bin-action-tools">
@@ -414,7 +488,7 @@ export function MediaBin() {
                 }
                 setBindingPopoverOpen(!bindingPopoverOpen);
               }}
-              disabled={!canManageBinding || isBusy}
+              disabled={isReadOnly || !canManageBinding || isBusy}
               title={bindingActionIsUnbind ? "解除绑定" : "绑定媒体（也可直接拖到视频标题上）"}
             >
               {bindingActionIsUnbind ? (
@@ -451,7 +525,7 @@ export function MediaBin() {
                 <button
                   type="button"
                   className="media-bin-bind-confirm"
-                  disabled={!canBind || isBusy}
+                  disabled={isReadOnly || !canBind || isBusy}
                   onClick={() => void bindSelectedItems()}
                 >
                   {isBinding ? (
@@ -467,8 +541,13 @@ export function MediaBin() {
           <button
             type="button"
             onClick={() => void demuxSelectedVideo()}
-            disabled={!selectedDemuxVideo || detachedVideoIds.has(selectedDemuxVideo.id) || isBusy}
-            title="解合成音轨和字幕"
+            disabled={
+              isReadOnly ||
+              !selectedDemuxVideo ||
+              detachedVideoIds.has(selectedDemuxVideo.id) ||
+              isBusy
+            }
+            title="分解音轨和字幕"
           >
             {isDemuxing ? (
               <Loader2 className="spin" aria-hidden="true" />
@@ -479,7 +558,7 @@ export function MediaBin() {
           <button
             type="button"
             onClick={() => emitAppEvent("media:import", {})}
-            disabled={isBusy}
+            disabled={isReadOnly || isBusy}
             title="导入素材（视频、音频或字幕）"
           >
             {isImporting ? (
@@ -491,7 +570,7 @@ export function MediaBin() {
           <button
             type="button"
             onClick={() => void removeSelection()}
-            disabled={selectedItems.length === 0 || isBusy}
+            disabled={isReadOnly || selectedItems.length === 0 || isBusy}
             title="移除所选素材"
           >
             <Trash2 aria-hidden="true" />

@@ -6,6 +6,7 @@ interface ApplicationMenuProps {
   hasProject: boolean;
   isDirty: boolean;
   isBusy: boolean;
+  isMediaBinReadOnly: boolean;
   onNewProject: () => void | Promise<void>;
   onOpenProject: () => void | Promise<void>;
   onCloseProject: () => void | Promise<void>;
@@ -57,6 +58,7 @@ export function ApplicationMenu({
   hasProject,
   isDirty,
   isBusy,
+  isMediaBinReadOnly,
   onNewProject,
   onOpenProject,
   onCloseProject,
@@ -171,12 +173,16 @@ export function ApplicationMenu({
               保存副本(Y)...
             </MenuItem>
             <div className="application-menu-separator" role="separator" />
-            <MenuItem shortcut="Ctrl+I" disabled={isBusy} onSelect={select(onImportMedia)}>
+            <MenuItem
+              shortcut="Ctrl+I"
+              disabled={isMediaBinReadOnly || isBusy}
+              onSelect={select(onImportMedia)}
+            >
               导入(I)...
             </MenuItem>
             <div className="application-menu-submenu">
               <MenuItem
-                disabled={recentMediaPaths.length === 0 || isBusy}
+                disabled={recentMediaPaths.length === 0 || isMediaBinReadOnly || isBusy}
                 submenu
                 onSelect={() => setRecentImportMenuOpen((open) => !open)}
               >
@@ -191,7 +197,7 @@ export function ApplicationMenu({
                     <MenuItem
                       key={path}
                       title={path}
-                      disabled={isBusy}
+                      disabled={isMediaBinReadOnly || isBusy}
                       onSelect={select(() => onImportRecentMedia(path))}
                     >
                       {fileName(path)}

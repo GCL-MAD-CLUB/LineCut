@@ -231,8 +231,76 @@ struct Project {
     proxy_path: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum MediaBinItemKind {
+    Video,
+    Audio,
+    Subtitle,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum MediaBinItemOrigin {
+    Imported,
+    Decomposed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MediaBinItem {
+    id: String,
+    kind: MediaBinItemKind,
+    path: String,
+    file_name: String,
+    duration_us: i64,
+    start_time_us: i64,
+    bound_to_video_id: Option<String>,
+    source_video_id: Option<String>,
+    stream_index: Option<i32>,
+    subtitle_track_id: Option<String>,
+    codec: Option<String>,
+    language: Option<String>,
+    extracted: bool,
+    origin: MediaBinItemOrigin,
+    color: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProjectMediaBinState {
+    items: Vec<MediaBinItem>,
+    read_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProjectPreviewState {
+    use_proxy: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProjectEditorState {
+    active_video_id: String,
+    active_track_id: String,
+    selected_cue_ids: Vec<String>,
+    detached_video_ids: Vec<String>,
+    preview: ProjectPreviewState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProjectWorkspace {
+    projects: Vec<Project>,
+    media_bin: ProjectMediaBinState,
+    editor: ProjectEditorState,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ProjectDocument {
+    workspace: ProjectWorkspace,
+    saved_at: u64,
+    app_version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LegacyProjectDocument {
     project: Option<Project>,
     saved_at: u64,
     app_version: String,
@@ -241,7 +309,7 @@ struct ProjectDocument {
 #[derive(Debug, Clone, Serialize)]
 struct OpenProjectResult {
     path: String,
-    project: Option<Project>,
+    workspace: ProjectWorkspace,
     warnings: Vec<String>,
 }
 

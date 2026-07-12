@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   Captions,
+  CheckCircle2,
   ChevronRight,
   FileAudio2,
   FileVideo2,
@@ -66,7 +67,22 @@ function extension(path: string) {
 }
 
 function uniquePaths(current: string[], additions: string[]) {
-  return Array.from(new Set([...current, ...additions]));
+  const knownPaths = new Set(current.map(pathKey));
+  return [
+    ...current,
+    ...additions.filter((path) => {
+      const key = pathKey(path);
+      if (knownPaths.has(key)) {
+        return false;
+      }
+      knownPaths.add(key);
+      return true;
+    }),
+  ];
+}
+
+function pathKey(path: string) {
+  return path.replaceAll("\\", "/").toLocaleLowerCase();
 }
 
 function pendingMediaIcon(kind: PendingMediaKind) {
@@ -105,6 +121,7 @@ function standaloneSubtitleItem(path: string, index: number): MediaBinItem {
     codec: path.split(".").pop()?.toLowerCase() ?? "subtitle",
     language: null,
     extracted: false,
+    origin: "imported",
     color: "#893a04",
   };
 }
@@ -113,6 +130,8 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
   const [videoPaths, setVideoPaths] = useState<string[]>([]);
   const [audioPaths, setAudioPaths] = useState<string[]>([]);
   const [subtitlePaths, setSubtitlePaths] = useState<string[]>([]);
+  const mediaItems = useAppStore((state) => state.mediaItems);
+  const isMediaBinReadOnly = useAppStore((state) => state.mediaBinReadOnly);
   const mediaProjectsAdded = useAppStore((state) => state.actions.mediaProjectsAdded);
   const mediaItemsAdded = useAppStore((state) => state.actions.mediaItemsAdded);
   const messagePublished = useAppStore((state) => state.actions.messagePublished);
@@ -127,16 +146,42 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
     ],
     [audioPaths, subtitlePaths, videoPaths],
   );
+  const importedItems = useMemo(
+    () => mediaItems.filter((item) => item.origin === "imported"),
+    [mediaItems],
+  );
+  const importedPathKeys = useMemo(
+    () => new Set(importedItems.map((item) => pathKey(item.path))),
+    [importedItems],
+  );
+  const itemCounts = useMemo(
+    () => ({
+      video: importedItems.filter((item) => item.kind === "video").length + videoPaths.length,
+      audio: importedItems.filter((item) => item.kind === "audio").length + audioPaths.length,
+      subtitle:
+        importedItems.filter((item) => item.kind === "subtitle").length + subtitlePaths.length,
+    }),
+    [audioPaths.length, importedItems, subtitlePaths.length, videoPaths.length],
+  );
   const hasSelection = pendingItems.length > 0;
+  const hasItems = importedItems.length > 0 || hasSelection;
 
   async function choosePaths(kind: PendingMediaKind, filters: typeof videoFilters, title: string) {
+    if (isMediaBinReadOnly) {
+      messagePublished("素材箱处于只读状态，请先解除只读。");
+      return;
+    }
     if (!isTauriRuntime()) {
       messagePublished("请在 Tauri 桌面窗口中选择本地素材。");
       return;
     }
     const picked = await open({ multiple: true, title, filters });
-    const paths = Array.isArray(picked) ? picked : picked ? [picked] : [];
+    const selectedPaths = Array.isArray(picked) ? picked : picked ? [picked] : [];
+    const paths = selectedPaths.filter((path) => !importedPathKeys.has(pathKey(path)));
     if (paths.length === 0) {
+      if (selectedPaths.length > 0) {
+        messagePublished("所选素材已在当前素材箱中");
+      }
       return;
     }
     if (kind === "video") {
@@ -146,7 +191,10 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
     } else {
       setSubtitlePaths((current) => uniquePaths(current, paths));
     }
-    messagePublished(`已添加 ${paths.length} 个${pendingMediaLabel(kind)}文件`);
+    const ignoredCount = selectedPaths.length - paths.length;
+    messagePublished(
+      `已添加 ${paths.length} 个${pendingMediaLabel(kind)}文件${ignoredCount > 0 ? `，忽略 ${ignoredCount} 个已有素材` : ""}`,
+    );
   }
 
   function removePendingItem(item: PendingMediaItem) {
@@ -166,6 +214,10 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
   }
 
   async function importSelectedMedia() {
+    if (isMediaBinReadOnly) {
+      messagePublished("素材箱处于只读状态，请先解除只读。");
+      return;
+    }
     if (!isTauriRuntime()) {
       messagePublished("浏览器预览不能导入本地媒体，请运行 Tauri 桌面应用。");
       return;
@@ -255,7 +307,7 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
         <div>
           <span className="import-workspace-eyebrow">媒体浏览器</span>
           <h1>导入媒体</h1>
-          <p>批量选择视频、音频和字幕；所有视频作为同级素材加入素材箱。</p>
+          <p>当前素材与待导入文件统一显示；新选择的文件始终追加到素材箱。</p>
         </div>
         <span className="import-workspace-limit">多个视频 · 多个音频 · 多个字幕</span>
       </header>
@@ -268,67 +320,67 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
             <span>本地媒体</span>
           </button>
           <div className="import-browser-summary">
-            <span>待导入素材</span>
-            <strong>{pendingItems.length}</strong>
+            <span>导入素材</span>
+            <strong>{importedItems.length + pendingItems.length}</strong>
           </div>
           <dl>
             <div>
               <dt>视频</dt>
-              <dd>{videoPaths.length}</dd>
+              <dd>{itemCounts.video}</dd>
             </div>
             <div>
               <dt>音频</dt>
-              <dd>{audioPaths.length}</dd>
+              <dd>{itemCounts.audio}</dd>
             </div>
             <div>
               <dt>字幕</dt>
-              <dd>{subtitlePaths.length}</dd>
+              <dd>{itemCounts.subtitle}</dd>
             </div>
           </dl>
         </aside>
 
         <div className="import-browser-main">
           <div className="import-browser-toolbar">
-            <div className="import-breadcrumb" title="本地媒体 / 待导入素材">
+            <div className="import-breadcrumb" title="本地媒体 / 导入素材">
               <FolderOpen aria-hidden="true" />
               <span>本地媒体</span>
               <ChevronRight aria-hidden="true" />
-              <strong>待导入素材</strong>
+              <strong>导入素材</strong>
             </div>
             <div className="import-picker-actions">
               <button
                 type="button"
                 onClick={() => void choosePaths("video", videoFilters, "添加多个视频")}
-                disabled={isImporting}
+                disabled={isMediaBinReadOnly || isImporting}
               >
                 <FileVideo2 aria-hidden="true" /> 添加视频
               </button>
               <button
                 type="button"
                 onClick={() => void choosePaths("audio", audioFilters, "添加多个音频")}
-                disabled={isImporting}
+                disabled={isMediaBinReadOnly || isImporting}
               >
                 <FileAudio2 aria-hidden="true" /> 添加音频
               </button>
               <button
                 type="button"
                 onClick={() => void choosePaths("subtitle", subtitleFilters, "添加多个字幕")}
-                disabled={isImporting}
+                disabled={isMediaBinReadOnly || isImporting}
               >
                 <Plus aria-hidden="true" /> 添加字幕
               </button>
             </div>
           </div>
 
-          <div className="import-file-list" role="table" aria-label="待导入素材">
+          <div className="import-file-list" role="table" aria-label="导入素材">
             <div className="import-file-list-header" role="row">
               <span role="columnheader">名称</span>
               <span role="columnheader">类型</span>
               <span role="columnheader">所在位置</span>
-              <span role="columnheader" aria-label="操作" />
+              <span role="columnheader" aria-label="状态或操作" />
             </div>
 
-            {!hasSelection && (
+            {!hasItems && (
               <div className="import-empty-state">
                 <Upload aria-hidden="true" />
                 <strong>选择要导入的本地媒体</strong>
@@ -336,11 +388,32 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
                 <button
                   type="button"
                   onClick={() => void choosePaths("video", videoFilters, "添加多个视频")}
+                  disabled={isMediaBinReadOnly || isImporting}
                 >
                   选择视频
                 </button>
               </div>
             )}
+
+            {importedItems.map((item) => (
+              <div className="import-file-row is-imported" role="row" key={`imported:${item.id}`}>
+                <span className="import-file-name" role="cell" title={item.path}>
+                  <span className={`import-file-icon ${item.kind}`}>
+                    {pendingMediaIcon(item.kind)}
+                  </span>
+                  <strong>{item.file_name}</strong>
+                </span>
+                <span role="cell">
+                  {extension(item.path)} {pendingMediaLabel(item.kind)}
+                </span>
+                <span className="import-file-path" role="cell" title={parentPath(item.path)}>
+                  {parentPath(item.path)}
+                </span>
+                <span className="import-existing-status" role="cell" title="已在当前素材箱中">
+                  <CheckCircle2 aria-hidden="true" />
+                </span>
+              </div>
+            ))}
 
             {pendingItems.map((item) => (
               <div className="import-file-row" role="row" key={`${item.kind}:${item.path}`}>
@@ -360,7 +433,7 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
                   type="button"
                   className="import-remove-button"
                   onClick={() => removePendingItem(item)}
-                  disabled={isImporting}
+                  disabled={isMediaBinReadOnly || isImporting}
                   title={`移除${pendingMediaLabel(item.kind)}`}
                   aria-label={`移除 ${fileName(item.path)}`}
                 >
@@ -375,10 +448,12 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
       <footer className="import-workspace-footer">
         <div>
           <strong>
-            {pendingItems.length > 0 ? `${pendingItems.length} 个素材待导入` : "尚未选择素材"}
+            {pendingItems.length > 0
+              ? `${importedItems.length} 个已导入 · ${pendingItems.length} 个待导入`
+              : `${importedItems.length} 个素材已在素材箱中`}
           </strong>
           <span>
-            {videoPaths.length} 个视频 · {audioPaths.length} 个音频 · {subtitlePaths.length} 个字幕
+            {itemCounts.video} 个视频 · {itemCounts.audio} 个音频 · {itemCounts.subtitle} 个字幕
           </span>
         </div>
         <div className="import-footer-actions">
@@ -386,7 +461,7 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
             type="button"
             className="import-clear-button"
             onClick={clearPendingItems}
-            disabled={!hasSelection || isImporting}
+            disabled={isMediaBinReadOnly || !hasSelection || isImporting}
           >
             清除
           </button>
@@ -394,7 +469,7 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
             type="button"
             className="import-confirm-button"
             onClick={() => void importSelectedMedia()}
-            disabled={!hasSelection || isImporting}
+            disabled={isMediaBinReadOnly || !hasSelection || isImporting}
           >
             <Upload aria-hidden="true" />
             {isImporting ? "正在导入" : "导入全部"}

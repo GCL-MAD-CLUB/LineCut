@@ -6,13 +6,14 @@ import type {
   MediaBinItem,
   Preferences,
   Project,
+  ProjectWorkspace,
   SubtitleCue,
   SubtitleTrack,
 } from "./types";
 
 interface AppActions {
   projectImported: (project: Project) => void;
-  projectOpened: (project: Project | null, path: string) => void;
+  projectOpened: (workspace: ProjectWorkspace, path: string) => void;
   projectSaved: (path: string) => void;
   projectClosed: () => void;
   mediaProjectsAdded: (projects: Project[]) => void;
@@ -44,6 +45,7 @@ interface AppActions {
   warningsReplaced: (warnings: string[]) => void;
   warningsAppended: (warnings: string[]) => void;
   exportResultChanged: (result: ExportResult | null) => void;
+  mediaBinReadOnlyChanged: (readOnly: boolean) => void;
 }
 
 interface AppStore {
@@ -63,6 +65,7 @@ interface AppStore {
   message: string;
   warnings: string[];
   exportResult: ExportResult | null;
+  mediaBinReadOnly: boolean;
   actions: AppActions;
 }
 
@@ -97,6 +100,7 @@ function projectMediaItem(project: Project): MediaBinItem {
     codec: stream?.codec_name ?? null,
     language: stream?.language ?? null,
     extracted: false,
+    origin: "imported",
     color: isVideo
       ? hasAudio
         ? mediaLabelColors.videoWithAudio
@@ -122,6 +126,7 @@ function externalSubtitleItems(project: Project): MediaBinItem[] {
       codec: track.codec,
       language: track.language,
       extracted: false,
+      origin: "imported" as const,
       color: mediaLabelColors.subtitle,
     }));
 }
@@ -185,6 +190,47 @@ function initialProjectState(project: Project | null) {
   };
 }
 
+function openedProjectState(workspace: ProjectWorkspace) {
+  const projects = Object.fromEntries(
+    workspace.projects.map((project) => [project.asset.id, project]),
+  );
+  const mediaItems = workspace.media_bin.items;
+  const videoIds = new Set(
+    mediaItems.filter((item) => item.kind === "video" && projects[item.id]).map((item) => item.id),
+  );
+  const firstVideoId = videoIds.values().next().value ?? "";
+  const activeVideoId = videoIds.has(workspace.editor.active_video_id)
+    ? workspace.editor.active_video_id
+    : firstVideoId;
+  const project = activeVideoId ? (projects[activeVideoId] ?? null) : null;
+  const visibleTrackIds = new Set(
+    visibleSubtitleTracks(project, mediaItems, activeVideoId).map((track) => track.id),
+  );
+  const activeTrackId = visibleTrackIds.has(workspace.editor.active_track_id)
+    ? workspace.editor.active_track_id
+    : preferredTrackId(project, mediaItems, activeVideoId);
+  const validCueIds = new Set(
+    activeTrackId ? (project?.cues[activeTrackId] ?? []).map((cue) => cue.id) : [],
+  );
+
+  return {
+    project,
+    projects,
+    mediaItems,
+    activeVideoId,
+    detachedVideoIds: new Set(
+      workspace.editor.detached_video_ids.filter((videoId) => videoIds.has(videoId)),
+    ),
+    activeTrackId,
+    selectedCueIds: new Set(
+      workspace.editor.selected_cue_ids.filter((cueId) => validCueIds.has(cueId)),
+    ),
+    proxyPath: project?.proxy_path ?? null,
+    useProxy: workspace.editor.preview.use_proxy && Boolean(project?.proxy_path),
+    mediaBinReadOnly: workspace.media_bin.read_only,
+  };
+}
+
 export function defaultPreferences(): Preferences {
   return {
     cache_dir: "",
@@ -205,6 +251,7 @@ const appStore = createStore<AppStore>()((set) => ({
   message: "就绪",
   warnings: [],
   exportResult: null,
+  mediaBinReadOnly: false,
   actions: {
     projectImported: (project) =>
       set({
@@ -212,14 +259,13 @@ const appStore = createStore<AppStore>()((set) => ({
         projectDirty: true,
         selectedCueIds: new Set<string>(),
         useProxy: false,
+        mediaBinReadOnly: false,
       }),
-    projectOpened: (project, projectFilePath) =>
+    projectOpened: (workspace, projectFilePath) =>
       set({
-        ...initialProjectState(project),
+        ...openedProjectState(workspace),
         projectFilePath,
         projectDirty: false,
-        selectedCueIds: new Set<string>(),
-        useProxy: false,
         proxyDialogOpen: false,
         warnings: [],
         exportResult: null,
@@ -235,6 +281,7 @@ const appStore = createStore<AppStore>()((set) => ({
         proxyDialogOpen: false,
         warnings: [],
         exportResult: null,
+        mediaBinReadOnly: false,
       }),
     mediaProjectsAdded: (loadedProjects) =>
       set((state) => {
@@ -344,6 +391,11 @@ const appStore = createStore<AppStore>()((set) => ({
             .filter((item) => removed.has(item.id) && item.kind === "video")
             .map((item) => item.id),
         );
+        const removedProjectIds = new Set(
+          state.mediaItems
+            .filter((item) => removed.has(item.id) && state.projects[item.id])
+            .map((item) => item.id),
+        );
         const mediaItems = state.mediaItems
           .filter((item) => !removed.has(item.id))
           .map((item) =>
@@ -352,8 +404,8 @@ const appStore = createStore<AppStore>()((set) => ({
               : item,
           );
         const projects = { ...state.projects };
-        for (const videoId of removedVideoIds) {
-          delete projects[videoId];
+        for (const projectId of removedProjectIds) {
+          delete projects[projectId];
         }
         const nextVideoId = removedVideoIds.has(state.activeVideoId)
           ? (mediaItems.find((item) => item.kind === "video")?.id ?? "")
@@ -402,6 +454,7 @@ const appStore = createStore<AppStore>()((set) => ({
             codec: track.codec,
             language: track.language,
             extracted: true,
+            origin: "decomposed" as const,
             color: mediaLabelColors.audio,
           })),
           ...result.subtitle_tracks
@@ -423,6 +476,7 @@ const appStore = createStore<AppStore>()((set) => ({
               codec: track.codec,
               language: track.language,
               extracted: true,
+              origin: "decomposed" as const,
               color: mediaLabelColors.subtitle,
             })),
         ];
@@ -483,6 +537,7 @@ const appStore = createStore<AppStore>()((set) => ({
             codec: track.codec,
             language: track.language,
             extracted: false,
+            origin: "imported" as const,
             color: mediaLabelColors.subtitle,
           }));
         const firstUsableTrack = tracks.find((track) => track.cue_count > 0);
@@ -581,9 +636,35 @@ const appStore = createStore<AppStore>()((set) => ({
     warningsAppended: (warnings) =>
       set((state) => ({ warnings: [...state.warnings, ...warnings] })),
     exportResultChanged: (exportResult) => set({ exportResult }),
+    mediaBinReadOnlyChanged: (mediaBinReadOnly) =>
+      set((state) =>
+        state.mediaBinReadOnly === mediaBinReadOnly
+          ? state
+          : { mediaBinReadOnly, projectDirty: true },
+      ),
   },
 }));
 
 export function useAppStore<Selection>(selector: (state: AppStore) => Selection) {
   return useStore(appStore, selector);
+}
+
+export function getProjectWorkspaceSnapshot(): ProjectWorkspace {
+  const state = appStore.getState();
+  return {
+    projects: Object.values(state.projects),
+    media_bin: {
+      items: state.mediaItems,
+      read_only: state.mediaBinReadOnly,
+    },
+    editor: {
+      active_video_id: state.activeVideoId,
+      active_track_id: state.activeTrackId,
+      selected_cue_ids: [...state.selectedCueIds],
+      detached_video_ids: [...state.detachedVideoIds],
+      preview: {
+        use_proxy: state.useProxy,
+      },
+    },
+  };
 }

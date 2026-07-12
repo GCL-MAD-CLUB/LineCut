@@ -267,6 +267,10 @@
   background: var(--color-surface-hover);
 }
 
+.import-file-row.is-imported {
+  color: var(--color-text-muted);
+}
+
 .import-file-name {
   display: flex;
   align-items: center;
@@ -351,6 +355,17 @@
 .import-remove-button svg {
   width: 14px;
   height: 14px;
+}
+
+.import-existing-status {
+  display: grid;
+  color: #67b449;
+  place-items: center;
+}
+
+.import-existing-status svg {
+  width: 15px;
+  height: 15px;
 }
 
 .import-empty-state {

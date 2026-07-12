@@ -72,6 +72,7 @@ export interface Project {
 }
 
 export type MediaBinItemKind = "video" | "audio" | "subtitle";
+export type MediaBinItemOrigin = "imported" | "decomposed";
 
 export interface MediaBinItem {
   id: string;
@@ -87,7 +88,31 @@ export interface MediaBinItem {
   codec: string | null;
   language: string | null;
   extracted: boolean;
+  origin: MediaBinItemOrigin;
   color: string;
+}
+
+export interface ProjectMediaBinState {
+  items: MediaBinItem[];
+  read_only: boolean;
+}
+
+export interface ProjectPreviewState {
+  use_proxy: boolean;
+}
+
+export interface ProjectEditorState {
+  active_video_id: string;
+  active_track_id: string;
+  selected_cue_ids: string[];
+  detached_video_ids: string[];
+  preview: ProjectPreviewState;
+}
+
+export interface ProjectWorkspace {
+  projects: Project[];
+  media_bin: ProjectMediaBinState;
+  editor: ProjectEditorState;
 }
 
 export interface DemuxedAudioTrack {
@@ -117,7 +142,7 @@ export interface ImportResult {
 
 export interface OpenProjectResult {
   path: string;
-  project: Project | null;
+  workspace: ProjectWorkspace;
   warnings: string[];
 }
 

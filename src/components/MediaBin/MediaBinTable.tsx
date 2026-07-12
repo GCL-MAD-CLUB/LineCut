@@ -1,6 +1,7 @@
 import { Captions, Film, Link2, Music2, SplitSquareVertical } from "lucide-react";
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -29,6 +30,7 @@ interface MediaBinTableProps {
   detachedVideoIds: Set<string>;
   selectedIds: Set<string>;
   viewMode: MediaBinViewMode;
+  isReadOnly: boolean;
   onSelectOnly: (itemId: string) => void;
   onToggleSelected: (itemId: string) => void;
   onRenameItem: (itemId: string, fileName: string) => void;
@@ -440,6 +442,7 @@ export function MediaBinTable({
   detachedVideoIds,
   selectedIds,
   viewMode,
+  isReadOnly,
   onSelectOnly,
   onToggleSelected,
   onRenameItem,
@@ -455,8 +458,10 @@ export function MediaBinTable({
   const [sort, setSort] = useState<MediaBinSort>(defaultMediaBinSort);
   const [activeCell, setActiveCell] = useState<ActiveMediaCell | null>(null);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
+  const [gridIsSingleRow, setGridIsSingleRow] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const headerRef = useRef<HTMLDivElement | null>(null);
+  const gridRef = useRef<HTMLDivElement | null>(null);
   const pendingTitleRenameRef = useRef<number | null>(null);
   const columnResizeRef = useRef<{
     columnId: ResizableColumnId;
@@ -496,6 +501,39 @@ export function MediaBinTable({
     },
     [],
   );
+
+  useEffect(() => {
+    if (!isReadOnly) {
+      return;
+    }
+    cancelPendingTitleRename();
+    setEditingItemId(null);
+  }, [isReadOnly]);
+
+  useLayoutEffect(() => {
+    if (viewMode !== "grid") {
+      setGridIsSingleRow(false);
+      return;
+    }
+    const grid = gridRef.current;
+    if (!grid) {
+      return;
+    }
+    const updateGridRowState = () => {
+      const cards = Array.from(grid.children) as HTMLElement[];
+      const firstRowTop = cards[0]?.offsetTop;
+      const isSingleRow =
+        firstRowTop !== undefined && cards.every((card) => card.offsetTop === firstRowTop);
+      setGridIsSingleRow((current) => (current === isSingleRow ? current : isSingleRow));
+    };
+    const resizeObserver = new ResizeObserver(updateGridRowState);
+    resizeObserver.observe(grid);
+    for (const card of Array.from(grid.children)) {
+      resizeObserver.observe(card);
+    }
+    updateGridRowState();
+    return () => resizeObserver.disconnect();
+  }, [sortedRows.length, viewMode]);
 
   function toggleSort(columnId: SortableColumnId) {
     if (!hasItems) {
@@ -541,12 +579,18 @@ export function MediaBinTable({
   }
 
   function beginTitleRename(item: MediaBinItem) {
+    if (isReadOnly) {
+      return;
+    }
     cancelPendingTitleRename();
     setRenameValue(item.file_name);
     setEditingItemId(item.id);
   }
 
   function scheduleTitleRename(item: MediaBinItem) {
+    if (isReadOnly) {
+      return;
+    }
     cancelPendingTitleRename();
     pendingTitleRenameRef.current = window.setTimeout(() => {
       pendingTitleRenameRef.current = null;
@@ -560,7 +604,7 @@ export function MediaBinTable({
       return;
     }
     const nextName = renameValue.trim();
-    if (commit && nextName && nextName !== item.file_name) {
+    if (!isReadOnly && commit && nextName && nextName !== item.file_name) {
       onRenameItem(item.id, nextName);
     }
     setEditingItemId(null);
@@ -635,7 +679,9 @@ export function MediaBinTable({
 
     const targetFromPoint = (clientX: number, clientY: number) => {
       const element = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
-      const bindingTarget = element?.closest<HTMLElement>("[data-media-bind-video-id]") ?? null;
+      const bindingTarget = isReadOnly
+        ? null
+        : (element?.closest<HTMLElement>("[data-media-bind-video-id]") ?? null);
       const sourceTarget =
         element?.closest<HTMLElement>("[data-source-monitor-drop-target]") ?? null;
       return {
@@ -682,11 +728,11 @@ export function MediaBinTable({
       }
       if (dragging && !cancelled) {
         const target = targetFromPoint(finishEvent.clientX, finishEvent.clientY);
-        if (target.videoId) {
-          void onBindItems(itemIds, target.videoId);
-        } else if (target.sourceTarget && item.kind === "video") {
+        if (target.sourceTarget && item.kind === "video") {
           onPreviewVideo(item.id);
-        } else if (item.bound_to_video_id) {
+        } else if (!isReadOnly && target.videoId) {
+          void onBindItems(itemIds, target.videoId);
+        } else if (!isReadOnly && item.bound_to_video_id) {
           onUnbindItems(itemIds);
         }
       }
@@ -701,7 +747,7 @@ export function MediaBinTable({
   }
 
   function handleBindingDragOver(event: DragEvent, targetVideoId: string | null) {
-    if (!targetVideoId) {
+    if (isReadOnly || !targetVideoId) {
       return;
     }
     event.preventDefault();
@@ -711,7 +757,7 @@ export function MediaBinTable({
   }
 
   function handleBindingDrop(event: DragEvent, targetVideoId: string | null) {
-    if (!targetVideoId) {
+    if (isReadOnly || !targetVideoId) {
       return;
     }
     const itemIds = draggedItemIds(event);
@@ -727,7 +773,7 @@ export function MediaBinTable({
 
   function handleDragEnd(event: DragEvent, item: MediaBinItem) {
     setDropTargetVideoId(null);
-    if (!mediaDragWasHandled() && event.dataTransfer.dropEffect === "none") {
+    if (!isReadOnly && !mediaDragWasHandled() && event.dataTransfer.dropEffect === "none") {
       onUnbindItems(draggedItemIds(event, item.id));
     }
     finishMediaDrag();
@@ -750,7 +796,11 @@ export function MediaBinTable({
       );
     }
     return (
-      <div className="media-bin-grid" role="list">
+      <div
+        ref={gridRef}
+        className={`media-bin-grid${gridIsSingleRow ? " is-single-row" : ""}`}
+        role="list"
+      >
         {sortedRows.map(({ item }) => {
           const targetVideoId = bindingTargetVideoId(item);
           return (
@@ -922,7 +972,7 @@ export function MediaBinTable({
                         }
                         activateCell(item.id, "title");
                         if (selected && !event.ctrlKey && !event.metaKey) {
-                          if (event.detail === 1) {
+                          if (!isReadOnly && event.detail === 1) {
                             scheduleTitleRename(item);
                           } else {
                             cancelPendingTitleRename();
@@ -931,7 +981,7 @@ export function MediaBinTable({
                       }}
                       onDoubleClick={() => {
                         cancelPendingTitleRename();
-                        if (item.kind !== "video") {
+                        if (!isReadOnly && item.kind !== "video") {
                           beginTitleRename(item);
                         }
                       }}
@@ -974,7 +1024,7 @@ export function MediaBinTable({
                           {item.kind === "video" && detachedVideoIds.has(item.id) && (
                             <SplitSquareVertical
                               className="media-bin-status-icon"
-                              aria-label="已解合成"
+                              aria-label="已分解"
                             />
                           )}
                         </>
