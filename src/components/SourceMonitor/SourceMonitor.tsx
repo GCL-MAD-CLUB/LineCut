@@ -53,7 +53,6 @@ export function SourceMonitor() {
   const activeVideoId = useAppStore((state) => state.activeVideoId);
   const detachedVideoIds = useAppStore((state) => state.detachedVideoIds);
   const activeVideoChanged = useAppStore((state) => state.actions.activeVideoChanged);
-  const mediaPreviewFrameChanged = useAppStore((state) => state.actions.mediaPreviewFrameChanged);
   const proxyPath = useAppStore((state) => state.proxyPath);
   const useProxy = useAppStore((state) => state.useProxy);
   const setMessage = useAppStore((state) => state.actions.messagePublished);
@@ -145,15 +144,6 @@ export function SourceMonitor() {
   const updateMinTimelineSpanFrames = useCallback((spanFrames: number) => {
     setMinTimelineSpanFrames((current) => (current === spanFrames ? current : spanFrames));
   }, []);
-
-  useLayoutEffect(
-    () => () => {
-      if (activeVideoId) {
-        mediaPreviewFrameChanged(activeVideoId, currentFrameRef.current);
-      }
-    },
-    [activeVideoId, mediaPreviewFrameChanged],
-  );
 
   useLayoutEffect(() => {
     const mediaChanged = storedMediaKey !== mediaKey;

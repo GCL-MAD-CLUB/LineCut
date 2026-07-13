@@ -519,7 +519,7 @@ pub fn run() {
             get_preferences,
             update_preferences,
             import_media,
-            generate_video_thumbnail,
+            generate_video_cover_thumbnail,
             demux_media_streams,
             generate_proxy,
             add_external_subtitles,

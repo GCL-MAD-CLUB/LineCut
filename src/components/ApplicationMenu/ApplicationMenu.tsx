@@ -13,6 +13,8 @@ interface ApplicationMenuProps {
   onSaveProject: () => void | Promise<void>;
   onSaveProjectAs: () => void | Promise<void>;
   onSaveProjectCopy: () => void | Promise<void>;
+  recentProjectPaths: string[];
+  onOpenRecentProject: (path: string) => void | Promise<void>;
   onImportMedia: () => void | Promise<void>;
   recentMediaPaths: string[];
   onImportRecentMedia: (path: string) => void | Promise<void>;
@@ -65,6 +67,8 @@ export function ApplicationMenu({
   onSaveProject,
   onSaveProjectAs,
   onSaveProjectCopy,
+  recentProjectPaths,
+  onOpenRecentProject,
   onImportMedia,
   recentMediaPaths,
   onImportRecentMedia,
@@ -77,6 +81,7 @@ export function ApplicationMenu({
 }: ApplicationMenuProps) {
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const [editMenuOpen, setEditMenuOpen] = useState(false);
+  const [recentProjectMenuOpen, setRecentProjectMenuOpen] = useState(false);
   const [recentImportMenuOpen, setRecentImportMenuOpen] = useState(false);
   const menuRef = useRef<HTMLElement>(null);
 
@@ -107,6 +112,7 @@ export function ApplicationMenu({
 
   useEffect(() => {
     if (!fileMenuOpen) {
+      setRecentProjectMenuOpen(false);
       setRecentImportMenuOpen(false);
     }
   }, [fileMenuOpen]);
@@ -140,9 +146,35 @@ export function ApplicationMenu({
             <MenuItem shortcut="Ctrl+O" disabled={isBusy} onSelect={select(onOpenProject)}>
               打开项目(O)...
             </MenuItem>
-            <MenuItem disabled submenu>
-              打开最近使用的内容(E)
-            </MenuItem>
+            <div className="application-menu-submenu">
+              <MenuItem
+                disabled={recentProjectPaths.length === 0 || isBusy}
+                submenu
+                onSelect={() => {
+                  setRecentProjectMenuOpen((open) => !open);
+                  setRecentImportMenuOpen(false);
+                }}
+              >
+                打开最近使用的内容(E)
+              </MenuItem>
+              {recentProjectMenuOpen && (
+                <div
+                  className="application-menu-popover application-menu-submenu-popover"
+                  role="menu"
+                >
+                  {recentProjectPaths.map((path) => (
+                    <MenuItem
+                      key={path}
+                      title={path}
+                      disabled={isBusy}
+                      onSelect={select(() => onOpenRecentProject(path))}
+                    >
+                      {fileName(path)}
+                    </MenuItem>
+                  ))}
+                </div>
+              )}
+            </div>
             <div className="application-menu-separator" role="separator" />
             <MenuItem
               shortcut="Ctrl+Shift+W"
@@ -184,7 +216,10 @@ export function ApplicationMenu({
               <MenuItem
                 disabled={recentMediaPaths.length === 0 || isMediaBinReadOnly || isBusy}
                 submenu
-                onSelect={() => setRecentImportMenuOpen((open) => !open)}
+                onSelect={() => {
+                  setRecentImportMenuOpen((open) => !open);
+                  setRecentProjectMenuOpen(false);
+                }}
               >
                 导入最近使用的文件(F)
               </MenuItem>

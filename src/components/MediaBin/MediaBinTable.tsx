@@ -23,7 +23,6 @@ interface MediaBinTableProps {
   mediaItems: MediaBinItem[];
   projects: Record<string, Project>;
   detachedVideoIds: Set<string>;
-  mediaPreviewFrames: Record<string, number>;
   gridCardWidth: number;
   selectedIds: Set<string>;
   viewMode: MediaBinViewMode;
@@ -71,6 +70,11 @@ interface ActiveMediaCell {
 interface GridLayout {
   columns: number;
   cardWidth: number;
+}
+
+interface GridVideoHover {
+  itemId: string;
+  progress: number;
 }
 
 const initialColumnWidths: ResizableColumnWidths = {
@@ -432,7 +436,6 @@ export function MediaBinTable({
   mediaItems,
   projects,
   detachedVideoIds,
-  mediaPreviewFrames,
   gridCardWidth,
   selectedIds,
   viewMode,
@@ -456,6 +459,10 @@ export function MediaBinTable({
     columns: 1,
     cardWidth: gridCardWidth,
   });
+  const [gridVideoHover, setGridVideoHover] = useState<GridVideoHover | null>(null);
+  const [gridVideoPersistedProgress, setGridVideoPersistedProgress] = useState<
+    Record<string, number>
+  >({});
   const [renameValue, setRenameValue] = useState("");
   const headerRef = useRef<HTMLDivElement | null>(null);
   const gridRef = useRef<HTMLDivElement | null>(null);
@@ -573,6 +580,32 @@ export function MediaBinTable({
           }
         : { columnId, direction: "ascending" },
     );
+  }
+
+  function updateGridVideoHover(event: ReactPointerEvent<HTMLSpanElement>, itemId: string) {
+    if (event.buttons !== 0) {
+      return;
+    }
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const progress = clamp((event.clientX - bounds.left) / bounds.width, 0, 1);
+    setGridVideoHover((current) =>
+      current?.itemId === itemId && current.progress === progress ? current : { itemId, progress },
+    );
+  }
+
+  function finishGridVideoHover(itemId: string) {
+    if (gridVideoHover?.itemId !== itemId) {
+      return;
+    }
+    if (selectedIds.has(itemId)) {
+      setGridVideoPersistedProgress((current) => ({
+        ...current,
+        [itemId]: gridVideoHover.progress,
+      }));
+    } else {
+      setGridVideoPersistedProgress(({ [itemId]: _removed, ...remaining }) => remaining);
+    }
+    setGridVideoHover(null);
   }
 
   function cancelPendingTitleRename() {
@@ -797,6 +830,13 @@ export function MediaBinTable({
       <div ref={gridRef} className="media-bin-grid" role="list" style={gridStyle}>
         {sortedRows.map(({ item }) => {
           const project = projects[item.id];
+          const isVideoHovered = gridVideoHover?.itemId === item.id;
+          const isSelected = selectedIds.has(item.id);
+          const previewProgress = isVideoHovered
+            ? gridVideoHover.progress
+            : isSelected
+              ? (gridVideoPersistedProgress[item.id] ?? null)
+              : null;
           const isDetachedVideo = detachedVideoIds.has(item.id);
           const hasSourceAudio =
             item.kind === "video" && !isDetachedVideo && project?.asset.audio_stream_index != null;
@@ -808,7 +848,7 @@ export function MediaBinTable({
               type="button"
               role="listitem"
               key={item.id}
-              className={`media-bin-card ${selectedIds.has(item.id) ? "selected" : ""}`}
+              className={`media-bin-card ${isSelected ? "selected" : ""}`}
               draggable={false}
               onPointerDown={(event) => startPointerMediaDrag(event, item, false)}
               onClick={(event) =>
@@ -816,39 +856,61 @@ export function MediaBinTable({
               }
               onDoubleClick={() => item.kind === "video" && onPreviewVideo(item.id)}
             >
-              <span className={`media-bin-card-preview ${item.kind}`}>
-                {item.kind === "video" && project ? (
-                  <>
-                    <MediaBinVideoThumbnail
-                      item={item}
-                      project={project}
-                      frame={mediaPreviewFrames[item.id] ?? 0}
-                    />
-                    <span className="media-bin-card-type-badges" aria-hidden="true">
-                      <span className="media-bin-card-type-badge video">
-                        <Film />
-                      </span>
-                      {hasSourceAudio && (
-                        <span className="media-bin-card-type-badge audio">
-                          <Music2 />
+              <span className="media-bin-card-preview-shell">
+                <span
+                  className={`media-bin-card-preview ${item.kind}`}
+                  onPointerMove={
+                    item.kind === "video" && project
+                      ? (event) => updateGridVideoHover(event, item.id)
+                      : undefined
+                  }
+                  onPointerLeave={
+                    item.kind === "video" && project
+                      ? () => finishGridVideoHover(item.id)
+                      : undefined
+                  }
+                >
+                  {item.kind === "video" && project ? (
+                    <>
+                      <MediaBinVideoThumbnail
+                        item={item}
+                        project={project}
+                        hoverProgress={previewProgress}
+                      />
+                      <span className="media-bin-card-type-badges" aria-hidden="true">
+                        <span className="media-bin-card-type-badge video">
+                          <Film />
                         </span>
-                      )}
-                      {hasSubtitleTrack && (
-                        <span className="media-bin-card-type-badge subtitle">
-                          <SubtitleBadgeIcon />
-                        </span>
-                      )}
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    {itemIcon(item, project, isDetachedVideo)}
-                    <span className="media-bin-card-type-badges" aria-hidden="true">
-                      <span className={`media-bin-card-type-badge ${item.kind}`}>
-                        {item.kind === "audio" ? <Music2 /> : <SubtitleBadgeIcon />}
+                        {hasSourceAudio && (
+                          <span className="media-bin-card-type-badge audio">
+                            <Music2 />
+                          </span>
+                        )}
+                        {hasSubtitleTrack && (
+                          <span className="media-bin-card-type-badge subtitle">
+                            <SubtitleBadgeIcon />
+                          </span>
+                        )}
                       </span>
-                    </span>
-                  </>
+                    </>
+                  ) : (
+                    <>
+                      {itemIcon(item, project, isDetachedVideo)}
+                      <span className="media-bin-card-type-badges" aria-hidden="true">
+                        <span className={`media-bin-card-type-badge ${item.kind}`}>
+                          {item.kind === "audio" ? <Music2 /> : <SubtitleBadgeIcon />}
+                        </span>
+                      </span>
+                    </>
+                  )}
+                </span>
+                {previewProgress !== null && (
+                  <span
+                    className={`media-bin-card-hover-progress ${isSelected ? "is-selected" : ""}`}
+                    aria-hidden="true"
+                  >
+                    <span style={{ width: `${previewProgress * 100}%` }} />
+                  </span>
                 )}
               </span>
               <span className="media-bin-card-meta">

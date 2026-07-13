@@ -485,7 +485,7 @@ body.is-dragging-media-title * {
 
 .media-bin-bound-icon {
   margin-left: auto;
-  margin-right: -5px;
+  margin-right: -6px;
   flex: 0 0 var(--media-list-status-icon-size, 12px);
   width: var(--media-list-status-icon-size, 12px);
   height: var(--media-list-status-icon-size, 12px);
@@ -498,7 +498,7 @@ body.is-dragging-media-title * {
 
 .media-bin-status-icon {
   margin-left: auto;
-  margin-right: -5px;
+  margin-right: -6px;
   flex: 0 0 var(--media-list-status-icon-size, 12px);
   width: var(--media-list-status-icon-size, 12px);
   height: var(--media-list-status-icon-size, 12px);
@@ -528,7 +528,7 @@ body.is-resizing-media-column {
   position: relative;
   display: grid;
   grid-template-rows: auto auto;
-  gap: 6px;
+  gap: 7px;
   min-width: 0;
   padding: 7px;
   color: #aaa;
@@ -546,7 +546,12 @@ body.is-resizing-media-column {
 }
 
 .media-bin-card.selected {
-  border-color: #707070;
+  border-color: #fff;
+}
+
+.media-bin-card-preview-shell {
+  position: relative;
+  min-width: 0;
 }
 
 .media-bin-card-preview {
@@ -566,6 +571,41 @@ body.is-resizing-media-column {
   object-fit: contain;
   background: #111;
   pointer-events: none;
+}
+
+.media-bin-card-hover-thumbnail {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  opacity: 0;
+}
+
+.media-bin-card-hover-thumbnail.is-ready {
+  opacity: 1;
+}
+
+.media-bin-card-hover-progress {
+  position: absolute;
+  top: calc(100% + 2px);
+  right: 1px;
+  left: 1px;
+  height: 2px;
+  overflow: hidden;
+  pointer-events: none;
+  background: rgb(64 150 243 / 28%);
+  outline: 1px solid #000;
+}
+
+.media-bin-card-hover-progress.is-selected {
+  right: 0px;
+  left: 0px;
+  height: 4px;
+}
+
+.media-bin-card-hover-progress > span {
+  display: block;
+  height: 100%;
+  background: #4096f3;
 }
 
 .media-bin-card-preview svg {
@@ -590,6 +630,7 @@ body.is-resizing-media-column {
 
 .media-bin-card-type-badges {
   position: absolute;
+  z-index: 2;
   right: 0px;
   bottom: 0px;
   display: flex;
@@ -625,7 +666,7 @@ body.is-resizing-media-column {
   width: 16px;
   height: 16px;
   margin-top: -1.05px;
-  margin-left: -0.8px;
+  margin-left: -1.3px;
   aspect-ratio: 1;
 }
 

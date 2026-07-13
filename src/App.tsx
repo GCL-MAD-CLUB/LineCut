@@ -74,6 +74,7 @@ const mediaFilters = [
 
 const subtitleExtensions = new Set(subtitleFilters[0].extensions);
 const recentMediaStorageKey = "linecut:recent-media-paths";
+const recentProjectStorageKey = "linecut:recent-project-paths";
 const warningDisplayDurationMs = 5000;
 
 function fileName(path: string) {
@@ -84,9 +85,9 @@ function fileExtension(path: string) {
   return fileName(path).split(".").pop()?.toLocaleLowerCase() ?? "";
 }
 
-function readRecentMediaPaths() {
+function readRecentPaths(storageKey: string) {
   try {
-    const stored = window.localStorage.getItem(recentMediaStorageKey);
+    const stored = window.localStorage.getItem(storageKey);
     if (!stored) {
       return [];
     }
@@ -149,7 +150,12 @@ const initialDockLayout: DockLayoutState<AppDockPanelId> = {
 export default function App() {
   const [activeWorkspace, setActiveWorkspace] = useState<AppWorkspace>("edit");
   const [preferencesOpen, setPreferencesOpen] = useState(false);
-  const [recentMediaPaths, setRecentMediaPaths] = useState(readRecentMediaPaths);
+  const [recentMediaPaths, setRecentMediaPaths] = useState(() =>
+    readRecentPaths(recentMediaStorageKey),
+  );
+  const [recentProjectPaths, setRecentProjectPaths] = useState(() =>
+    readRecentPaths(recentProjectStorageKey),
+  );
   const closingWindowRef = useRef(false);
 
   const project = useAppStore((state) => state.project);
@@ -232,6 +238,14 @@ export default function App() {
       // Recent imports are a convenience feature; importing itself must still work.
     }
   }, [recentMediaPaths]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(recentProjectStorageKey, JSON.stringify(recentProjectPaths));
+    } catch {
+      // Recent projects are a convenience feature; opening and saving must still work.
+    }
+  }, [recentProjectPaths]);
 
   useEffect(() => {
     if (!isTauriRuntime()) {
@@ -346,7 +360,15 @@ export default function App() {
     }
   }
 
-  async function openProject() {
+  function rememberRecentProject(path: string) {
+    setRecentProjectPaths((current) => Array.from(new Set([path, ...current])).slice(0, 12));
+  }
+
+  function forgetRecentProject(path: string) {
+    setRecentProjectPaths((current) => current.filter((currentPath) => currentPath !== path));
+  }
+
+  async function openProject(pathToOpen?: string) {
     if (!isTauriRuntime()) {
       messagePublished("请在 Tauri 桌面窗口中打开项目。");
       return;
@@ -354,11 +376,13 @@ export default function App() {
     if (!(await confirmDiscardChanges("当前项目有尚未保存的更改，仍要打开其他项目吗？"))) {
       return;
     }
-    const picked = await open({
-      multiple: false,
-      title: "打开 LineCut 项目",
-      filters: projectFilters,
-    });
+    const picked = pathToOpen
+      ? pathToOpen
+      : await open({
+          multiple: false,
+          title: "打开 LineCut 项目",
+          filters: projectFilters,
+        });
     const path = Array.isArray(picked) ? picked[0] : picked;
     if (!path) {
       return;
@@ -368,8 +392,12 @@ export default function App() {
       const result = await invoke<OpenProjectResult>("open_project_file", { path });
       projectOpened(result.workspace, result.path);
       warningsReplaced(result.warnings);
+      rememberRecentProject(result.path);
       messagePublished(`已打开项目 ${fileName(result.path)}`);
     } catch (error) {
+      if (pathToOpen) {
+        forgetRecentProject(pathToOpen);
+      }
       publishError(error);
     }
   }
@@ -398,6 +426,7 @@ export default function App() {
     } else {
       messagePublished(`项目副本已保存到 ${savedPath}`);
     }
+    rememberRecentProject(savedPath);
   }
 
   function suggestedProjectName() {
@@ -636,6 +665,8 @@ export default function App() {
           onSaveProject={saveProject}
           onSaveProjectAs={() => saveProjectAs(true)}
           onSaveProjectCopy={() => saveProjectAs(false)}
+          recentProjectPaths={recentProjectPaths}
+          onOpenRecentProject={(path) => openProject(path)}
           onImportMedia={importMedia}
           recentMediaPaths={recentMediaPaths}
           onImportRecentMedia={(path) => importMedia([path])}

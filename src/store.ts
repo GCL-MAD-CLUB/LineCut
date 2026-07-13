@@ -24,7 +24,6 @@ interface AppActions {
   mediaItemsRemoved: (itemIds: string[]) => void;
   mediaDemuxed: (videoId: string, result: DemuxMediaResult) => void;
   activeVideoChanged: (videoId: string) => void;
-  mediaPreviewFrameChanged: (videoId: string, frame: number) => void;
   subtitleTracksAdded: (tracks: SubtitleTrack[], cues: Record<string, SubtitleCue[]>) => void;
   subtitleTracksAddedToVideo: (
     videoId: string,
@@ -67,7 +66,6 @@ interface AppStore {
   warnings: string[];
   exportResult: ExportResult | null;
   mediaBinReadOnly: boolean;
-  mediaPreviewFrames: Record<string, number>;
   actions: AppActions;
 }
 
@@ -254,7 +252,6 @@ const appStore = createStore<AppStore>()((set) => ({
   warnings: [],
   exportResult: null,
   mediaBinReadOnly: false,
-  mediaPreviewFrames: {},
   actions: {
     projectImported: (project) =>
       set({
@@ -263,7 +260,6 @@ const appStore = createStore<AppStore>()((set) => ({
         selectedCueIds: new Set<string>(),
         useProxy: false,
         mediaBinReadOnly: false,
-        mediaPreviewFrames: {},
       }),
     projectOpened: (workspace, projectFilePath) =>
       set({
@@ -273,7 +269,6 @@ const appStore = createStore<AppStore>()((set) => ({
         proxyDialogOpen: false,
         warnings: [],
         exportResult: null,
-        mediaPreviewFrames: {},
       }),
     projectSaved: (projectFilePath) => set({ projectFilePath, projectDirty: false }),
     projectClosed: () =>
@@ -287,7 +282,6 @@ const appStore = createStore<AppStore>()((set) => ({
         warnings: [],
         exportResult: null,
         mediaBinReadOnly: false,
-        mediaPreviewFrames: {},
       }),
     mediaProjectsAdded: (loadedProjects) =>
       set((state) => {
@@ -421,10 +415,6 @@ const appStore = createStore<AppStore>()((set) => ({
         for (const videoId of removedVideoIds) {
           detachedVideoIds.delete(videoId);
         }
-        const mediaPreviewFrames = { ...state.mediaPreviewFrames };
-        for (const videoId of removedVideoIds) {
-          delete mediaPreviewFrames[videoId];
-        }
         const activeTrackVisible = visibleSubtitleTracks(project, mediaItems, nextVideoId).some(
           (track) => track.id === state.activeTrackId,
         );
@@ -432,7 +422,6 @@ const appStore = createStore<AppStore>()((set) => ({
           projects,
           mediaItems,
           detachedVideoIds,
-          mediaPreviewFrames,
           activeVideoId: nextVideoId,
           project,
           activeTrackId: activeTrackVisible
@@ -519,22 +508,6 @@ const appStore = createStore<AppStore>()((set) => ({
           useProxy: false,
           proxyDialogOpen: false,
           exportResult: null,
-        };
-      }),
-    mediaPreviewFrameChanged: (videoId, frame) =>
-      set((state) => {
-        if (!state.projects[videoId]) {
-          return state;
-        }
-        const normalizedFrame = Number.isFinite(frame) ? Math.max(0, Math.round(frame)) : 0;
-        if (state.mediaPreviewFrames[videoId] === normalizedFrame) {
-          return state;
-        }
-        return {
-          mediaPreviewFrames: {
-            ...state.mediaPreviewFrames,
-            [videoId]: normalizedFrame,
-          },
         };
       }),
     subtitleTracksAdded: (tracks, cues) =>

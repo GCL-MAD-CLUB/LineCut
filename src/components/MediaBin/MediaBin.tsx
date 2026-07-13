@@ -75,7 +75,6 @@ export function MediaBin() {
   const mediaItems = useAppStore((state) => state.mediaItems);
   const activeVideoId = useAppStore((state) => state.activeVideoId);
   const detachedVideoIds = useAppStore((state) => state.detachedVideoIds);
-  const mediaPreviewFrames = useAppStore((state) => state.mediaPreviewFrames);
   const mediaItemRenamed = useAppStore((state) => state.actions.mediaItemRenamed);
   const mediaItemsBound = useAppStore((state) => state.actions.mediaItemsBound);
   const mediaItemsUnbound = useAppStore((state) => state.actions.mediaItemsUnbound);
@@ -422,7 +421,6 @@ export function MediaBin() {
           mediaItems={mediaItems}
           projects={projects}
           detachedVideoIds={detachedVideoIds}
-          mediaPreviewFrames={mediaPreviewFrames}
           gridCardWidth={gridCardWidth}
           selectedIds={selectedIds}
           viewMode={viewMode}
