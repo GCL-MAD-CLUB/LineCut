@@ -52,17 +52,16 @@ function currentCueIndexAtFrame(ranges: CueFrameRange[], currentFrame: number) {
     }
   }
 
-  let earliestActiveIndex = -1;
   for (let index = latestStartedIndex; index >= 0; index -= 1) {
     const range = ranges[index];
     if (range.maximumEndFrame < currentFrame) {
       break;
     }
     if (currentFrame <= range.endFrame) {
-      earliestActiveIndex = index;
+      return index;
     }
   }
-  return earliestActiveIndex;
+  return -1;
 }
 
 function nextCueIndexAfterFrame(ranges: CueFrameRange[], currentFrame: number) {
