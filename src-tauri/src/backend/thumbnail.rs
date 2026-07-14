@@ -18,6 +18,8 @@ const CACHE_INDEX_FOLDER: &str = "Thumbnail Cache Analyses";
 const CACHE_FILES_FOLDER: &str = "Thumbnail Cache Files";
 const CACHE_KEY_CONTEXT: &[u8] = b"linecut-thumbnail-cache-v2";
 const INDEX_KEY_CONTEXT: &[u8] = b"linecut-thumbnail-index-v1";
+const SUBTITLE_THUMBNAIL_WIDTH: usize = 160;
+const SUBTITLE_THUMBNAIL_HEIGHT: usize = 90;
 
 static THUMBNAIL_CACHE_LOCK: Mutex<()> = Mutex::new(());
 
@@ -55,6 +57,8 @@ struct ThumbnailCacheLayout {
     cache_hash: String,
 }
 
+type CoverProgressCallback = dyn Fn(f64) + Send + Sync;
+
 #[derive(Clone, Copy, Debug)]
 struct CoverCandidate {
     time_us: i64,
@@ -78,15 +82,44 @@ pub(crate) async fn generate_video_cover_thumbnail(
         .video_stream_index
         .ok_or_else(|| "素材不包含视频流".to_string())?;
     let preferences = preferences_clone(&state)?;
-    ensure_video_cover_thumbnail(&project, &preferences, None, stream_index).await
+    ensure_video_cover_thumbnail(&project, &preferences, None, None, stream_index).await
+}
+
+#[tauri::command]
+pub(crate) async fn generate_subtitle_thumbnail(
+    asset_id: String,
+    time_us: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<u8>, String> {
+    let project = state
+        .projects
+        .lock()
+        .map_err(|_| "项目状态锁定失败".to_string())?
+        .get(&asset_id)
+        .cloned()
+        .ok_or_else(|| format!("未找到视频素材: {asset_id}"))?;
+    let stream_index = project
+        .asset
+        .video_stream_index
+        .ok_or_else(|| "素材不包含视频流".to_string())?;
+    let preferences = preferences_clone(&state)?;
+    extract_subtitle_thumbnail(
+        &ffmpeg_program(&preferences),
+        &project.asset.path,
+        stream_index,
+        time_us,
+    )
+    .await
 }
 
 pub(crate) async fn ensure_video_cover_thumbnail(
     project: &Project,
     preferences: &Preferences,
     cancel: Option<Arc<AtomicBool>>,
+    progress: Option<&CoverProgressCallback>,
     stream_index: i32,
 ) -> Result<Vec<u8>, String> {
+    report_cover_progress(progress, 0.0);
     let layout = thumbnail_cache_layout(preferences, &project.asset.fingerprint);
     register_thumbnail_cache(&layout)?;
     let sample_times = analysis_sample_times(project.asset.duration_us);
@@ -99,6 +132,7 @@ pub(crate) async fn ensure_video_cover_thumbnail(
             cover: None,
         });
     if let Some(cover) = cached.cover {
+        report_cover_progress(progress, 1.0);
         return Ok(cover);
     }
 
@@ -112,14 +146,17 @@ pub(crate) async fn ensure_video_cover_thumbnail(
         &layout,
         &project.asset.fingerprint,
         cancel.as_ref(),
+        progress,
     )
     .await?;
+    report_cover_progress(progress, 0.9);
     let candidates = cached_candidates(&cached);
     if candidates.is_empty() {
         return Err("视频封面分析没有产生可用帧".to_string());
     }
     let selected = select_cover_candidate(&candidates);
     ensure_thumbnail_not_cancelled(cancel.as_ref())?;
+    report_cover_progress(progress, 0.94);
     let cover = match extract_cover_frame(
         &program,
         &project.asset.path,
@@ -142,9 +179,17 @@ pub(crate) async fn ensure_video_cover_thumbnail(
         }
     };
     ensure_thumbnail_not_cancelled(cancel.as_ref())?;
+    report_cover_progress(progress, 0.98);
     cached.cover = Some(cover.clone());
     write_media_thumbnail_cache(&layout, &project.asset.fingerprint, &cached)?;
+    report_cover_progress(progress, 1.0);
     Ok(cover)
+}
+
+fn report_cover_progress(progress: Option<&CoverProgressCallback>, value: f64) {
+    if let Some(report) = progress {
+        report(value.clamp(0.0, 1.0));
+    }
 }
 
 fn thumbnail_cache_layout(preferences: &Preferences, fingerprint: &str) -> ThumbnailCacheLayout {
@@ -239,8 +284,12 @@ async fn analyze_video_samples(
     layout: &ThumbnailCacheLayout,
     fingerprint: &str,
     cancel: Option<&Arc<AtomicBool>>,
+    progress: Option<&CoverProgressCallback>,
 ) -> Result<(), String> {
     let mut first_error = None;
+    let total = cached.sample_times.len().max(1);
+    let mut completed = cached.scores.iter().filter(|score| score.is_some()).count();
+    report_cover_progress(progress, completed as f64 / total as f64 * 0.9);
     for batch_start in (0..cached.sample_times.len()).step_by(MAX_PARALLEL_SEEKS) {
         ensure_thumbnail_not_cancelled(cancel)?;
         let batch_end = (batch_start + MAX_PARALLEL_SEEKS).min(cached.sample_times.len());
@@ -250,6 +299,7 @@ async fn analyze_video_samples(
         if missing.is_empty() {
             continue;
         }
+        let batch_size = missing.len();
         let mut tasks = tokio::task::JoinSet::new();
         for index in missing {
             let program = program.to_string();
@@ -273,6 +323,8 @@ async fn analyze_video_samples(
             }
         }
         write_media_thumbnail_cache(layout, fingerprint, cached)?;
+        completed = (completed + batch_size).min(total);
+        report_cover_progress(progress, completed as f64 / total as f64 * 0.9);
         ensure_thumbnail_not_cancelled(cancel)?;
     }
     if cached.scores.iter().all(Option::is_none) {
@@ -461,6 +513,57 @@ async fn extract_cover_frame(
     }
     if output.stdout.is_empty() {
         return Err("提取的视频封面为空".to_string());
+    }
+    Ok(output.stdout)
+}
+
+async fn extract_subtitle_thumbnail(
+    program: &str,
+    input_path: &str,
+    stream_index: i32,
+    time_us: i64,
+) -> Result<Vec<u8>, String> {
+    let args = [
+        "-hide_banner".to_string(),
+        "-loglevel".to_string(),
+        "error".to_string(),
+        "-ss".to_string(),
+        format!("{:.6}", time_us.max(0) as f64 / 1_000_000.0),
+        "-threads".to_string(),
+        "1".to_string(),
+        "-i".to_string(),
+        input_path.to_string(),
+        "-map".to_string(),
+        format!("0:{stream_index}"),
+        "-frames:v".to_string(),
+        "1".to_string(),
+        "-vf".to_string(),
+        format!(
+            "scale={SUBTITLE_THUMBNAIL_WIDTH}:{SUBTITLE_THUMBNAIL_HEIGHT}:force_original_aspect_ratio=increase,crop={SUBTITLE_THUMBNAIL_WIDTH}:{SUBTITLE_THUMBNAIL_HEIGHT}"
+        ),
+        "-q:v".to_string(),
+        "8".to_string(),
+        "-f".to_string(),
+        "image2pipe".to_string(),
+        "-vcodec".to_string(),
+        "mjpeg".to_string(),
+        "pipe:1".to_string(),
+    ];
+    let output = hidden_command(program)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(|error| format!("启动 {program} 提取字幕缩略图失败: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "提取字幕缩略图失败: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    if output.stdout.is_empty() {
+        return Err("提取的字幕缩略图为空".to_string());
     }
     Ok(output.stdout)
 }

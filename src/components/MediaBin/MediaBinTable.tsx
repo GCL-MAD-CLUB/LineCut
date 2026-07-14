@@ -10,7 +10,13 @@ import {
   type UIEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import { visibleSubtitleTracks } from "../../store";
+import {
+  isMediaItemEnabled,
+  isMediaItemHidden,
+  isMediaVideoDetached,
+  mediaItemProject,
+  visibleSubtitleTracks,
+} from "../../store";
 import { formatMonitorTime } from "../../time";
 import { normalizeFrameRate } from "../../timeline";
 import type { MediaBinItem, Project } from "../../types";
@@ -30,12 +36,15 @@ interface MediaBinTableProps {
   onSelectOnly: (itemId: string) => void;
   onToggleSelected: (itemId: string) => void;
   onRenameItem: (itemId: string, fileName: string) => void;
+  onSetItemsEnabled: (itemIds: string[], enabled: boolean) => void;
+  onSetItemsHidden: (itemIds: string[], hidden: boolean) => void;
   onPreviewVideo: (videoId: string) => void;
   onBindItems: (itemIds: string[], videoId: string) => void | Promise<void>;
   onUnbindItems: (itemIds: string[]) => void;
 }
 
 const labelColumnWidth = 42;
+const booleanColumnWidth = 62;
 const titleRenameDelayMs = 350;
 
 type ResizableColumnId =
@@ -108,7 +117,7 @@ const maximumColumnWidths: ResizableColumnWidths = {
 };
 
 const tableHeaders: Array<{
-  id: SortableColumnId | "trailing";
+  id: SortableColumnId | "enabled" | "hidden" | "trailing";
   label: string;
   resizeColumn?: ResizableColumnId;
 }> = [
@@ -120,7 +129,9 @@ const tableHeaders: Array<{
   { id: "duration", label: "媒体持续时间", resizeColumn: "mediaEnd" },
   { id: "videoInfo", label: "视频信息", resizeColumn: "duration" },
   { id: "audioInfo", label: "音频信息", resizeColumn: "videoInfo" },
-  { id: "trailing", label: "", resizeColumn: "audioInfo" },
+  { id: "enabled", label: "启用", resizeColumn: "audioInfo" },
+  { id: "hidden", label: "隐藏" },
+  { id: "trailing", label: "" },
 ];
 
 function clamp(value: number, min: number, max: number) {
@@ -443,6 +454,8 @@ export function MediaBinTable({
   onSelectOnly,
   onToggleSelected,
   onRenameItem,
+  onSetItemsEnabled,
+  onSetItemsHidden,
   onPreviewVideo,
   onBindItems,
   onUnbindItems,
@@ -476,7 +489,9 @@ export function MediaBinTable({
   const suppressRowClickRef = useRef(false);
   const hadItemsRef = useRef(hasItems);
   const tableMinWidth =
-    labelColumnWidth + Object.values(columnWidths).reduce((total, width) => total + width, 0);
+    labelColumnWidth +
+    booleanColumnWidth * 2 +
+    Object.values(columnWidths).reduce((total, width) => total + width, 0);
   const tableStyle = {
     "--media-col-label": `${labelColumnWidth}px`,
     "--media-col-title": `${columnWidths.title}px`,
@@ -486,6 +501,7 @@ export function MediaBinTable({
     "--media-col-duration": `${columnWidths.duration}px`,
     "--media-col-video-info": `${columnWidths.videoInfo}px`,
     "--media-col-audio-info": `${columnWidths.audioInfo}px`,
+    "--media-col-boolean": `${booleanColumnWidth}px`,
     "--media-table-min-width": `${tableMinWidth}px`,
   } as CSSProperties;
   const gridStyle = {
@@ -732,7 +748,7 @@ export function MediaBinTable({
     item: MediaBinItem,
     allowBinding = true,
   ) {
-    if (event.button !== 0) {
+    if (event.button !== 0 || (!allowBinding && !isMediaItemEnabled(item))) {
       return;
     }
     const itemIds = selectedIds.has(item.id) ? Array.from(selectedIds) : [item.id];
@@ -767,7 +783,7 @@ export function MediaBinTable({
       setDropTargetVideoId(target.videoId);
       setPointerDragPreview({
         item,
-        project: projects[item.id],
+        project: mediaItemProject(item, projects, mediaItems),
         x: moveEvent.clientX,
         y: moveEvent.clientY,
       });
@@ -792,7 +808,7 @@ export function MediaBinTable({
       }
       if (dragging && !cancelled) {
         const target = targetFromPoint(finishEvent.clientX, finishEvent.clientY);
-        if (target.sourceTarget && item.kind === "video") {
+        if (target.sourceTarget && item.kind === "video" && isMediaItemEnabled(item)) {
           onPreviewVideo(item.id);
         } else if (allowBinding && !isReadOnly && target.videoId) {
           void onBindItems(itemIds, target.videoId);
@@ -829,7 +845,7 @@ export function MediaBinTable({
     return (
       <div ref={gridRef} className="media-bin-grid" role="list" style={gridStyle}>
         {sortedRows.map(({ item }) => {
-          const project = projects[item.id];
+          const project = mediaItemProject(item, projects, mediaItems);
           const isVideoHovered = gridVideoHover?.itemId === item.id;
           const isSelected = selectedIds.has(item.id);
           const previewProgress = isVideoHovered
@@ -837,7 +853,7 @@ export function MediaBinTable({
             : isSelected
               ? (gridVideoPersistedProgress[item.id] ?? null)
               : null;
-          const isDetachedVideo = detachedVideoIds.has(item.id);
+          const isDetachedVideo = isMediaVideoDetached(item, detachedVideoIds);
           const hasSourceAudio =
             item.kind === "video" && !isDetachedVideo && project?.asset.audio_stream_index != null;
           const hasSubtitleTrack =
@@ -848,13 +864,18 @@ export function MediaBinTable({
               type="button"
               role="listitem"
               key={item.id}
-              className={`media-bin-card ${isSelected ? "selected" : ""}`}
+              data-media-item-id={item.id}
+              className={`media-bin-card ${isSelected ? "selected" : ""} ${
+                isMediaItemEnabled(item) ? "" : "is-disabled"
+              }`}
               draggable={false}
               onPointerDown={(event) => startPointerMediaDrag(event, item, false)}
               onClick={(event) =>
                 event.ctrlKey || event.metaKey ? onToggleSelected(item.id) : onSelectOnly(item.id)
               }
-              onDoubleClick={() => item.kind === "video" && onPreviewVideo(item.id)}
+              onDoubleClick={() =>
+                item.kind === "video" && isMediaItemEnabled(item) && onPreviewVideo(item.id)
+              }
             >
               <span className="media-bin-card-preview-shell">
                 <span
@@ -939,7 +960,10 @@ export function MediaBinTable({
         <div className="media-bin-table-header-viewport">
           <div ref={headerRef} className="media-bin-table-header" role="row">
             {tableHeaders.map((header) => {
-              const sortColumnId = header.id === "trailing" ? null : header.id;
+              const sortColumnId: SortableColumnId | null =
+                header.id === "enabled" || header.id === "hidden" || header.id === "trailing"
+                  ? null
+                  : header.id;
               const isActive = hasItems && sortColumnId !== null && sort?.columnId === sortColumnId;
               const headerName = header.id === "label" ? "标签" : header.label;
               const nextDirection = isActive && sort.direction === "ascending" ? "降序" : "升序";
@@ -1001,7 +1025,7 @@ export function MediaBinTable({
           ) : (
             <div className="media-bin-table-body" role="rowgroup">
               {sortedRows.map(({ item, depth }, rowIndex) => {
-                const project = itemProject(item, projects);
+                const project = mediaItemProject(item, projects, mediaItems);
                 const selected = selectedIds.has(item.id);
                 const endUs = item.start_time_us + item.duration_us;
                 const targetVideoId = bindingTargetVideoId(item);
@@ -1014,11 +1038,12 @@ export function MediaBinTable({
                 return (
                   <div
                     key={item.id}
+                    data-media-item-id={item.id}
                     className={`media-bin-row ${selected ? "selected" : ""} ${
                       depth ? "bound-child" : ""
                     } ${isLastBoundChild ? "last-bound-child" : ""} ${
                       targetVideoId && dropTargetVideoId === targetVideoId ? "binding-target" : ""
-                    }`}
+                    } ${isMediaItemEnabled(item) ? "" : "is-disabled"}`}
                     role="row"
                     onClick={(event) => {
                       if (suppressRowClickRef.current) {
@@ -1033,7 +1058,7 @@ export function MediaBinTable({
                     }}
                     onDoubleClick={() => {
                       cancelPendingTitleRename();
-                      if (item.kind === "video") {
+                      if (item.kind === "video" && isMediaItemEnabled(item)) {
                         onPreviewVideo(item.id);
                       }
                     }}
@@ -1079,7 +1104,7 @@ export function MediaBinTable({
                     >
                       {depth > 0 && <span className="media-bin-bind-branch" aria-hidden="true" />}
                       <span className={`media-bin-kind-icon ${item.kind}`}>
-                        {itemIcon(item, projects[item.id], detachedVideoIds.has(item.id))}
+                        {itemIcon(item, project, isMediaVideoDetached(item, detachedVideoIds))}
                       </span>
                       {editingItemId === item.id ? (
                         <input
@@ -1112,12 +1137,13 @@ export function MediaBinTable({
                           {item.bound_to_video_id && (
                             <Link2 className="media-bin-bound-icon" aria-label="已绑定" />
                           )}
-                          {item.kind === "video" && detachedVideoIds.has(item.id) && (
-                            <SplitSquareVertical
-                              className="media-bin-status-icon"
-                              aria-label="已分解"
-                            />
-                          )}
+                          {item.kind === "video" &&
+                            isMediaVideoDetached(item, detachedVideoIds) && (
+                              <SplitSquareVertical
+                                className="media-bin-status-icon"
+                                aria-label="已分解"
+                              />
+                            )}
                         </>
                       )}
                     </span>
@@ -1163,6 +1189,30 @@ export function MediaBinTable({
                     >
                       {itemAudioInfo(item, projects)}
                     </span>
+                    <span className="media-bin-boolean-cell" role="cell">
+                      <input
+                        type="checkbox"
+                        checked={isMediaItemEnabled(item)}
+                        aria-label={`启用 ${item.file_name}`}
+                        disabled={isReadOnly}
+                        onClick={(event) => event.stopPropagation()}
+                        onChange={(event) =>
+                          onSetItemsEnabled([item.id], event.currentTarget.checked)
+                        }
+                      />
+                    </span>
+                    <span className="media-bin-boolean-cell" role="cell">
+                      <input
+                        type="checkbox"
+                        checked={isMediaItemHidden(item)}
+                        aria-label={`隐藏 ${item.file_name}`}
+                        disabled={isReadOnly}
+                        onClick={(event) => event.stopPropagation()}
+                        onChange={(event) =>
+                          onSetItemsHidden([item.id], event.currentTarget.checked)
+                        }
+                      />
+                    </span>
                   </div>
                 );
               })}
@@ -1182,7 +1232,7 @@ export function MediaBinTable({
               {itemIcon(
                 pointerDragPreview.item,
                 pointerDragPreview.project,
-                detachedVideoIds.has(pointerDragPreview.item.id),
+                isMediaVideoDetached(pointerDragPreview.item, detachedVideoIds),
               )}
             </span>
             <span>{pointerDragPreview.item.file_name}</span>

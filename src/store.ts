@@ -19,6 +19,9 @@ interface AppActions {
   mediaProjectsAdded: (projects: Project[]) => void;
   mediaItemsAdded: (items: MediaBinItem[]) => void;
   mediaItemRenamed: (itemId: string, fileName: string) => void;
+  mediaItemsEnabledChanged: (itemIds: string[], enabled: boolean) => void;
+  allMediaItemsEnabledChanged: (enabled: boolean) => void;
+  mediaItemsHiddenChanged: (itemIds: string[], hidden: boolean) => void;
   mediaItemsBound: (itemIds: string[], videoId: string) => void;
   mediaItemsUnbound: (itemIds: string[]) => void;
   mediaItemsRemoved: (itemIds: string[]) => void;
@@ -80,6 +83,41 @@ function fileName(path: string) {
   return path.split(/[\\/]/).pop() ?? path;
 }
 
+export function isMediaItemEnabled(item: MediaBinItem) {
+  return item.enabled !== false;
+}
+
+export function isMediaItemHidden(item: MediaBinItem) {
+  return item.hidden === true;
+}
+
+export function mediaItemProject(
+  item: MediaBinItem,
+  projects: Record<string, Project>,
+  mediaItems: MediaBinItem[] = [],
+) {
+  const directProject =
+    projects[item.id] ?? (item.source_video_id ? projects[item.source_video_id] : undefined);
+  if (directProject) {
+    return directProject;
+  }
+  const boundVideo = item.bound_to_video_id
+    ? mediaItems.find((candidate) => candidate.id === item.bound_to_video_id)
+    : undefined;
+  return boundVideo
+    ? (projects[boundVideo.id] ??
+        (boundVideo.source_video_id ? projects[boundVideo.source_video_id] : undefined))
+    : undefined;
+}
+
+export function isMediaVideoDetached(item: MediaBinItem, detachedVideoIds: Set<string>) {
+  return (
+    item.kind === "video" &&
+    (detachedVideoIds.has(item.id) ||
+      Boolean(item.source_video_id && detachedVideoIds.has(item.source_video_id)))
+  );
+}
+
 function projectMediaItem(project: Project): MediaBinItem {
   const isVideo = project.asset.video_stream_index !== null;
   const hasAudio = project.asset.audio_stream_index !== null;
@@ -89,6 +127,8 @@ function projectMediaItem(project: Project): MediaBinItem {
   return {
     id: project.asset.id,
     kind: isVideo ? "video" : "audio",
+    enabled: true,
+    hidden: false,
     path: project.asset.path,
     file_name: project.asset.file_name,
     duration_us: project.asset.duration_us,
@@ -115,6 +155,8 @@ function externalSubtitleItems(project: Project): MediaBinItem[] {
     .map((track, index) => ({
       id: `subtitle:${track.id}`,
       kind: "subtitle" as const,
+      enabled: true,
+      hidden: false,
       path: track.source_path ?? "",
       file_name: fileName(track.source_path ?? track.title ?? `字幕 ${index + 1}`),
       duration_us: project.asset.duration_us,
@@ -140,14 +182,14 @@ export function visibleSubtitleTracks(
     return [];
   }
   return project.tracks.filter((track) => {
-    if (track.source_type === "embedded") {
-      return true;
-    }
-    const item = mediaItems.find(
+    const items = mediaItems.filter(
       (candidate) => candidate.kind === "subtitle" && candidate.subtitle_track_id === track.id,
     );
-    if (item) {
-      return item.bound_to_video_id === videoId;
+    if (items.length > 0) {
+      return items.some((item) => isMediaItemEnabled(item) && item.bound_to_video_id === videoId);
+    }
+    if (track.source_type === "embedded") {
+      return true;
     }
     const trackWasRebound = Boolean(
       track.source_path &&
@@ -194,15 +236,29 @@ function openedProjectState(workspace: ProjectWorkspace) {
   const projects = Object.fromEntries(
     workspace.projects.map((project) => [project.asset.id, project]),
   );
-  const mediaItems = workspace.media_bin.items;
+  const mediaItems = workspace.media_bin.items.map((item) => ({
+    ...item,
+    enabled: item.enabled !== false,
+    hidden: item.hidden === true,
+  }));
   const videoIds = new Set(
-    mediaItems.filter((item) => item.kind === "video" && projects[item.id]).map((item) => item.id),
+    mediaItems
+      .filter(
+        (item) =>
+          item.kind === "video" &&
+          isMediaItemEnabled(item) &&
+          Boolean(mediaItemProject(item, projects, mediaItems)),
+      )
+      .map((item) => item.id),
   );
   const firstVideoId = videoIds.values().next().value ?? "";
   const activeVideoId = videoIds.has(workspace.editor.active_video_id)
     ? workspace.editor.active_video_id
     : firstVideoId;
-  const project = activeVideoId ? (projects[activeVideoId] ?? null) : null;
+  const activeVideo = mediaItems.find((item) => item.id === activeVideoId);
+  const project = activeVideo
+    ? (mediaItemProject(activeVideo, projects, mediaItems) ?? null)
+    : null;
   const visibleTrackIds = new Set(
     visibleSubtitleTracks(project, mediaItems, activeVideoId).map((track) => track.id),
   );
@@ -338,6 +394,127 @@ const appStore = createStore<AppStore>()((set) => ({
           projectDirty: true,
         };
       }),
+    mediaItemsEnabledChanged: (itemIds, enabled) =>
+      set((state) => {
+        const changedIds = new Set(itemIds);
+        if (!enabled) {
+          for (const video of state.mediaItems) {
+            if (video.kind !== "video" || !changedIds.has(video.id)) {
+              continue;
+            }
+            for (const child of state.mediaItems) {
+              if (child.bound_to_video_id === video.id) {
+                changedIds.add(child.id);
+              }
+            }
+          }
+        }
+        const mediaItems = state.mediaItems.map((item) =>
+          changedIds.has(item.id) && isMediaItemEnabled(item) !== enabled
+            ? { ...item, enabled }
+            : item,
+        );
+        if (mediaItems.every((item, index) => item === state.mediaItems[index])) {
+          return state;
+        }
+        const currentVideo = mediaItems.find(
+          (item) =>
+            item.id === state.activeVideoId &&
+            item.kind === "video" &&
+            isMediaItemEnabled(item) &&
+            mediaItemProject(item, state.projects, mediaItems),
+        );
+        const activeVideo =
+          currentVideo ??
+          mediaItems.find(
+            (item) =>
+              item.kind === "video" &&
+              isMediaItemEnabled(item) &&
+              mediaItemProject(item, state.projects, mediaItems),
+          );
+        const activeVideoId = activeVideo?.id ?? "";
+        const project = activeVideo
+          ? (mediaItemProject(activeVideo, state.projects, mediaItems) ?? null)
+          : null;
+        const currentTrackVisible = visibleSubtitleTracks(project, mediaItems, activeVideoId).some(
+          (track) => track.id === state.activeTrackId,
+        );
+        const activeVideoChanged = activeVideoId !== state.activeVideoId;
+        return {
+          mediaItems,
+          activeVideoId,
+          project,
+          activeTrackId:
+            !activeVideoChanged && currentTrackVisible
+              ? state.activeTrackId
+              : preferredTrackId(project, mediaItems, activeVideoId),
+          selectedCueIds:
+            !activeVideoChanged && currentTrackVisible ? state.selectedCueIds : new Set<string>(),
+          proxyPath: activeVideoChanged ? (project?.proxy_path ?? null) : state.proxyPath,
+          useProxy: activeVideoChanged ? false : state.useProxy,
+          proxyDialogOpen: activeVideoChanged ? false : state.proxyDialogOpen,
+          exportResult: activeVideoChanged ? null : state.exportResult,
+          projectDirty: true,
+        };
+      }),
+    allMediaItemsEnabledChanged: (enabled) =>
+      set((state) => {
+        if (state.mediaItems.every((item) => isMediaItemEnabled(item) === enabled)) {
+          return state;
+        }
+        const mediaItems = state.mediaItems.map((item) => ({ ...item, enabled }));
+        const currentVideo = mediaItems.find(
+          (item) =>
+            item.id === state.activeVideoId &&
+            item.kind === "video" &&
+            isMediaItemEnabled(item) &&
+            mediaItemProject(item, state.projects, mediaItems),
+        );
+        const activeVideo =
+          currentVideo ??
+          mediaItems.find(
+            (item) =>
+              item.kind === "video" &&
+              isMediaItemEnabled(item) &&
+              mediaItemProject(item, state.projects, mediaItems),
+          );
+        const activeVideoId = activeVideo?.id ?? "";
+        const project = activeVideo
+          ? (mediaItemProject(activeVideo, state.projects, mediaItems) ?? null)
+          : null;
+        const activeVideoChanged = activeVideoId !== state.activeVideoId;
+        const currentTrackVisible = visibleSubtitleTracks(project, mediaItems, activeVideoId).some(
+          (track) => track.id === state.activeTrackId,
+        );
+        return {
+          mediaItems,
+          activeVideoId,
+          project,
+          activeTrackId:
+            !activeVideoChanged && currentTrackVisible
+              ? state.activeTrackId
+              : preferredTrackId(project, mediaItems, activeVideoId),
+          selectedCueIds:
+            !activeVideoChanged && currentTrackVisible ? state.selectedCueIds : new Set<string>(),
+          proxyPath: activeVideoChanged ? (project?.proxy_path ?? null) : state.proxyPath,
+          useProxy: activeVideoChanged ? false : state.useProxy,
+          proxyDialogOpen: activeVideoChanged ? false : state.proxyDialogOpen,
+          exportResult: activeVideoChanged ? null : state.exportResult,
+          projectDirty: true,
+        };
+      }),
+    mediaItemsHiddenChanged: (itemIds, hidden) =>
+      set((state) => {
+        const changedIds = new Set(itemIds);
+        const mediaItems = state.mediaItems.map((item) =>
+          changedIds.has(item.id) && isMediaItemHidden(item) !== hidden
+            ? { ...item, hidden }
+            : item,
+        );
+        return mediaItems.every((item, index) => item === state.mediaItems[index])
+          ? state
+          : { mediaItems, projectDirty: true };
+      }),
     mediaItemsBound: (itemIds, videoId) =>
       set((state) => {
         const selected = new Set(itemIds);
@@ -391,11 +568,6 @@ const appStore = createStore<AppStore>()((set) => ({
             .filter((item) => removed.has(item.id) && item.kind === "video")
             .map((item) => item.id),
         );
-        const removedProjectIds = new Set(
-          state.mediaItems
-            .filter((item) => removed.has(item.id) && state.projects[item.id])
-            .map((item) => item.id),
-        );
         const mediaItems = state.mediaItems
           .filter((item) => !removed.has(item.id))
           .map((item) =>
@@ -404,13 +576,26 @@ const appStore = createStore<AppStore>()((set) => ({
               : item,
           );
         const projects = { ...state.projects };
-        for (const projectId of removedProjectIds) {
-          delete projects[projectId];
+        for (const projectId of Object.keys(projects)) {
+          const isStillReferenced = mediaItems.some(
+            (item) => item.id === projectId || item.source_video_id === projectId,
+          );
+          if (!isStillReferenced) {
+            delete projects[projectId];
+          }
         }
-        const nextVideoId = removedVideoIds.has(state.activeVideoId)
-          ? (mediaItems.find((item) => item.kind === "video")?.id ?? "")
-          : state.activeVideoId;
-        const project = nextVideoId ? (projects[nextVideoId] ?? null) : null;
+        const nextVideo = removedVideoIds.has(state.activeVideoId)
+          ? mediaItems.find(
+              (item) =>
+                item.kind === "video" &&
+                isMediaItemEnabled(item) &&
+                mediaItemProject(item, projects, mediaItems),
+            )
+          : mediaItems.find((item) => item.id === state.activeVideoId);
+        const nextVideoId = nextVideo?.id ?? "";
+        const project = nextVideo
+          ? (mediaItemProject(nextVideo, projects, mediaItems) ?? null)
+          : null;
         const detachedVideoIds = new Set(state.detachedVideoIds);
         for (const videoId of removedVideoIds) {
           detachedVideoIds.delete(videoId);
@@ -435,7 +620,10 @@ const appStore = createStore<AppStore>()((set) => ({
       }),
     mediaDemuxed: (videoId, result) =>
       set((state) => {
-        const project = state.projects[videoId];
+        const video = state.mediaItems.find((item) => item.id === videoId);
+        const project = video
+          ? mediaItemProject(video, state.projects, state.mediaItems)
+          : undefined;
         if (!project) {
           return state;
         }
@@ -443,12 +631,14 @@ const appStore = createStore<AppStore>()((set) => ({
           ...result.audio_tracks.map((track, index) => ({
             id: `demux-audio:${videoId}:${track.stream_index}`,
             kind: "audio" as const,
+            enabled: true,
+            hidden: false,
             path: track.path,
             file_name: track.file_name,
             duration_us: track.duration_us,
             start_time_us: 0,
             bound_to_video_id: videoId,
-            source_video_id: videoId,
+            source_video_id: project.asset.id,
             stream_index: track.stream_index,
             subtitle_track_id: null,
             codec: track.codec,
@@ -460,8 +650,10 @@ const appStore = createStore<AppStore>()((set) => ({
           ...result.subtitle_tracks
             .filter((track) => track.source_path)
             .map((track, index) => ({
-              id: `demux-subtitle:${track.id}`,
+              id: `demux-subtitle:${videoId}:${track.id}`,
               kind: "subtitle" as const,
+              enabled: true,
+              hidden: false,
               path: track.source_path ?? "",
               file_name:
                 track.title ||
@@ -470,7 +662,7 @@ const appStore = createStore<AppStore>()((set) => ({
               duration_us: project.asset.duration_us,
               start_time_us: 0,
               bound_to_video_id: videoId,
-              source_video_id: videoId,
+              source_video_id: project.asset.id,
               stream_index: track.stream_index,
               subtitle_track_id: track.id,
               codec: track.codec,
@@ -495,8 +687,13 @@ const appStore = createStore<AppStore>()((set) => ({
       }),
     activeVideoChanged: (videoId) =>
       set((state) => {
-        const project = state.projects[videoId];
-        if (!project || videoId === state.activeVideoId) {
+        const video = state.mediaItems.find(
+          (item) => item.id === videoId && item.kind === "video" && isMediaItemEnabled(item),
+        );
+        const project = video
+          ? mediaItemProject(video, state.projects, state.mediaItems)
+          : undefined;
+        if (!video || !project || videoId === state.activeVideoId) {
           return state;
         }
         return {
@@ -526,6 +723,8 @@ const appStore = createStore<AppStore>()((set) => ({
           .map((track, index): MediaBinItem => ({
             id: `subtitle:${track.id}`,
             kind: "subtitle",
+            enabled: true,
+            hidden: false,
             path: track.source_path ?? "",
             file_name: fileName(track.source_path ?? track.title ?? `字幕 ${index + 1}`),
             duration_us: nextProject.asset.duration_us,
@@ -543,7 +742,7 @@ const appStore = createStore<AppStore>()((set) => ({
         const firstUsableTrack = tracks.find((track) => track.cue_count > 0);
         return {
           project: nextProject,
-          projects: { ...state.projects, [videoId]: nextProject },
+          projects: { ...state.projects, [nextProject.asset.id]: nextProject },
           mediaItems: [...state.mediaItems, ...additions],
           projectDirty: true,
           activeTrackId: firstUsableTrack?.id || state.activeTrackId || "",
@@ -552,7 +751,10 @@ const appStore = createStore<AppStore>()((set) => ({
       }),
     subtitleTracksAddedToVideo: (videoId, tracks, cues, itemIds) =>
       set((state) => {
-        const project = state.projects[videoId];
+        const video = state.mediaItems.find((item) => item.id === videoId);
+        const project = video
+          ? mediaItemProject(video, state.projects, state.mediaItems)
+          : undefined;
         if (!project) {
           return state;
         }
@@ -576,7 +778,7 @@ const appStore = createStore<AppStore>()((set) => ({
               }
             : item;
         });
-        const projects = { ...state.projects, [videoId]: nextProject };
+        const projects = { ...state.projects, [project.asset.id]: nextProject };
         if (state.activeVideoId !== videoId) {
           return { projects, mediaItems, projectDirty: true };
         }
@@ -598,6 +800,7 @@ const appStore = createStore<AppStore>()((set) => ({
       set({
         activeTrackId,
         selectedCueIds: new Set<string>(),
+        projectDirty: true,
       }),
     cueSelectionToggled: (cueId) =>
       set((state) => {
@@ -607,10 +810,25 @@ const appStore = createStore<AppStore>()((set) => ({
         } else {
           selectedCueIds.add(cueId);
         }
-        return { selectedCueIds };
+        return { selectedCueIds, projectDirty: true };
       }),
-    cueSelectionCleared: () => set({ selectedCueIds: new Set<string>() }),
-    cueSelectionReplaced: (cueIds) => set({ selectedCueIds: new Set(cueIds) }),
+    cueSelectionCleared: () =>
+      set((state) =>
+        state.selectedCueIds.size === 0
+          ? state
+          : { selectedCueIds: new Set<string>(), projectDirty: true },
+      ),
+    cueSelectionReplaced: (cueIds) =>
+      set((state) => {
+        const selectedCueIds = new Set(cueIds);
+        if (
+          selectedCueIds.size === state.selectedCueIds.size &&
+          [...selectedCueIds].every((cueId) => state.selectedCueIds.has(cueId))
+        ) {
+          return state;
+        }
+        return { selectedCueIds, projectDirty: true };
+      }),
     proxyDialogOpened: () => set({ proxyDialogOpen: true }),
     proxyDialogClosed: () => set({ proxyDialogOpen: false }),
     sourcePreviewSelected: () => set({ proxyDialogOpen: false, useProxy: false }),

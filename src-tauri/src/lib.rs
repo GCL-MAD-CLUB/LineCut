@@ -246,10 +246,18 @@ enum MediaBinItemOrigin {
     Decomposed,
 }
 
+fn media_bin_item_enabled_default() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MediaBinItem {
     id: String,
     kind: MediaBinItemKind,
+    #[serde(default = "media_bin_item_enabled_default")]
+    enabled: bool,
+    #[serde(default)]
+    hidden: bool,
     path: String,
     file_name: String,
     duration_us: i64,
@@ -520,6 +528,7 @@ pub fn run() {
             update_preferences,
             import_media,
             generate_video_cover_thumbnail,
+            generate_subtitle_thumbnail,
             demux_media_streams,
             generate_proxy,
             add_external_subtitles,

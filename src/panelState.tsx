@@ -9,6 +9,11 @@ interface PanelInstanceProviderProps {
   children: ReactNode;
 }
 
+interface PanelStateHook<State extends object> {
+  <Selection>(selector: (state: State) => Selection): Selection;
+  useInstance: <Selection>(instanceId: string, selector: (state: State) => Selection) => Selection;
+}
+
 export function PanelInstanceProvider({ instanceId, children }: PanelInstanceProviderProps) {
   return (
     <PanelInstanceContext.Provider value={instanceId}>{children}</PanelInstanceContext.Provider>
@@ -37,5 +42,14 @@ export function createPanelState<State extends object>(
     return useStore(getStore(instanceId), selector);
   }
 
-  return usePanelState;
+  function usePanelInstanceState<Selection>(
+    instanceId: string,
+    selector: (state: State) => Selection,
+  ) {
+    return useStore(getStore(instanceId), selector);
+  }
+
+  return Object.assign(usePanelState, {
+    useInstance: usePanelInstanceState,
+  }) as PanelStateHook<State>;
 }

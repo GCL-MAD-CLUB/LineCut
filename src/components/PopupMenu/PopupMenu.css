@@ -1,0 +1,100 @@
+.popup-menu {
+  --color-text: #202020;
+  --color-text-highlight: #000;
+  --color-border-default: #ddd;
+
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 100;
+  width: 280px;
+  padding: 2px 0;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  background: #fff;
+  border: 1px solid #e5e5e5;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-drawer);
+  scrollbar-color: #aaa transparent;
+  scrollbar-width: thin;
+}
+
+.popup-menu::-webkit-scrollbar {
+  width: 8px;
+}
+
+.popup-menu::-webkit-scrollbar-thumb {
+  background: #aaa;
+  border: 2px solid #fff;
+  border-radius: 4px;
+}
+
+.popup-menu-item {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto auto;
+  align-items: center;
+  width: 100%;
+  min-height: 22px;
+  padding: 0 14px 0 6px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  background: transparent;
+  border-radius: 0;
+  cursor: default;
+}
+
+.popup-menu-item:hover:not(:disabled),
+.popup-menu-item:focus-visible:not(:disabled) {
+  background: #f0f0f0;
+}
+
+.popup-menu-item:disabled {
+  color: #aaa;
+  opacity: 1;
+}
+
+.popup-menu-check {
+  display: grid;
+  width: 12px;
+  height: 12px;
+  place-items: center;
+}
+.popup-menu-submenu-icon {
+  width: 15px;
+  height: 15px;
+}
+
+.popup-menu-check svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 2.7;
+}
+
+.popup-menu-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.popup-menu-item kbd {
+  margin-left: 24px;
+  color: inherit;
+  font: inherit;
+}
+
+.popup-menu-submenu-icon {
+  margin-left: 18px;
+}
+
+.popup-menu-submenu {
+  position: relative;
+}
+
+.popup-menu-separator {
+  height: 1px;
+  margin: 5px 12px;
+  background: var(--color-border-default);
+}

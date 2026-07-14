@@ -7,7 +7,12 @@ import {
   createFfmpegTaskId,
   listenToFfmpegTaskProgress,
 } from "../../ffmpegProgress";
-import { useAppStore } from "../../store";
+import {
+  isMediaItemEnabled,
+  isMediaVideoDetached,
+  mediaItemProject,
+  useAppStore,
+} from "../../store";
 import { isTauriRuntime } from "../../tauriRuntime";
 import type {
   ExportLayout,
@@ -162,13 +167,16 @@ export function ExportPanel() {
   const { isRunning: isExporting } = getTaskProgressStatus("export");
   const canExport = useCanExport(isExporting) && !isMediaBinReadOnly;
   const videoItems = useMemo(
-    () => mediaItems.filter((item) => item.kind === "video"),
+    () => mediaItems.filter((item) => item.kind === "video" && isMediaItemEnabled(item)),
     [mediaItems],
   );
   const boundMediaItems = useMemo(
     () =>
       mediaItems.filter(
-        (item) => item.kind !== "video" && item.bound_to_video_id === exportVideoId,
+        (item) =>
+          item.kind !== "video" &&
+          isMediaItemEnabled(item) &&
+          item.bound_to_video_id === exportVideoId,
       ),
     [exportVideoId, mediaItems],
   );
@@ -265,7 +273,10 @@ export function ExportPanel() {
     if (isMediaBinReadOnly) {
       return;
     }
-    const exportProject = projects[exportVideoId] ?? project;
+    const exportVideo = mediaItems.find((item) => item.id === exportVideoId);
+    const exportProject = exportVideo
+      ? (mediaItemProject(exportVideo, projects, mediaItems) ?? project)
+      : project;
     if (!exportProject || !activeTrackId) {
       return;
     }
@@ -277,7 +288,7 @@ export function ExportPanel() {
     let exportCancelled = false;
     const exportTask = await createTaskProgress({
       operation: "export",
-      label: `导出 ${selectedCueIds.size} 条台词`,
+      label: `导出 ${selectedCueIds.size} 个片段`,
       current: 0,
       total: 1,
       listener: listenToFfmpegTaskProgress(exportTaskId),
@@ -300,7 +311,9 @@ export function ExportPanel() {
         cueIds: Array.from(selectedCueIds),
         options: exportOptions,
         boundMedia,
-        includeSourceAudio: !detachedVideoIds.has(exportProject.asset.id),
+        includeSourceAudio: exportVideo
+          ? !isMediaVideoDetached(exportVideo, detachedVideoIds)
+          : !detachedVideoIds.has(exportProject.asset.id),
         taskId: exportTaskId,
       });
       setExportResult(result);

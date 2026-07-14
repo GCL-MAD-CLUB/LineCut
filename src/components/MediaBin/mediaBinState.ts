@@ -8,15 +8,18 @@ interface MediaBinPanelState {
   viewMode: MediaBinViewMode;
   listSize: number;
   gridSize: number;
+  showHidden: boolean;
   bindingPopoverOpen: boolean;
   bindingVideoId: string;
   setQuery: (query: string) => void;
   selectOnly: (itemId: string) => void;
   toggleSelected: (itemId: string) => void;
+  selectItems: (itemIds: string[]) => void;
   clearSelection: () => void;
   setViewMode: (viewMode: MediaBinViewMode) => void;
   setListSize: (size: number) => void;
   setGridSize: (size: number) => void;
+  setShowHidden: (showHidden: boolean) => void;
   setBindingPopoverOpen: (open: boolean) => void;
   setBindingVideoId: (videoId: string) => void;
 }
@@ -27,6 +30,7 @@ export const useMediaBinState = createPanelState<MediaBinPanelState>(() => (set)
   viewMode: "list",
   listSize: 0,
   gridSize: 0,
+  showHidden: false,
   bindingPopoverOpen: false,
   bindingVideoId: "",
   setQuery: (query) => set({ query }),
@@ -41,10 +45,12 @@ export const useMediaBinState = createPanelState<MediaBinPanelState>(() => (set)
       }
       return { selectedIds };
     }),
+  selectItems: (itemIds) => set({ selectedIds: new Set(itemIds) }),
   clearSelection: () => set({ selectedIds: new Set<string>() }),
   setViewMode: (viewMode) => set({ viewMode }),
   setListSize: (listSize) => set({ listSize }),
   setGridSize: (gridSize) => set({ gridSize }),
+  setShowHidden: (showHidden) => set({ showHidden }),
   setBindingPopoverOpen: (bindingPopoverOpen) => set({ bindingPopoverOpen }),
   setBindingVideoId: (bindingVideoId) => set({ bindingVideoId }),
 }));

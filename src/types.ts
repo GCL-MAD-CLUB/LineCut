@@ -77,6 +77,8 @@ export type MediaBinItemOrigin = "imported" | "decomposed";
 export interface MediaBinItem {
   id: string;
   kind: MediaBinItemKind;
+  enabled: boolean;
+  hidden: boolean;
   path: string;
   file_name: string;
   duration_us: number;

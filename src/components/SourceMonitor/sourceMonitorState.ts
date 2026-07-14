@@ -22,6 +22,7 @@ function resolveUpdate<Value>(current: Value, update: StateUpdate<Value>) {
 interface SourceMonitorState {
   mediaKey: string;
   currentFrame: number;
+  isPlaying: boolean;
   zoomLevel: MonitorZoomLevel;
   zoomPan: ZoomPan;
   timelineStartFrame: number;
@@ -29,6 +30,7 @@ interface SourceMonitorState {
   cueRange: MonitorCueRange | null;
   syncMedia: (mediaKey: string, durationFrames: number) => void;
   setCurrentFrame: (update: StateUpdate<number>) => void;
+  setIsPlaying: (isPlaying: boolean) => void;
   setZoomLevel: (update: StateUpdate<MonitorZoomLevel>) => void;
   setZoomPan: (update: StateUpdate<ZoomPan>) => void;
   setTimelineStartFrame: (update: StateUpdate<number>) => void;
@@ -41,6 +43,7 @@ const DEFAULT_TIMELINE_SPAN_FRAMES = DEFAULT_FRAME_RATE * 60;
 export const useSourceMonitorState = createPanelState<SourceMonitorState>(() => (set) => ({
   mediaKey: "",
   currentFrame: 0,
+  isPlaying: false,
   zoomLevel: "fit",
   zoomPan: { x: 0, y: 0 },
   timelineStartFrame: 0,
@@ -53,6 +56,7 @@ export const useSourceMonitorState = createPanelState<SourceMonitorState>(() => 
         : {
             mediaKey,
             currentFrame: 0,
+            isPlaying: false,
             zoomLevel: "fit",
             zoomPan: { x: 0, y: 0 },
             timelineStartFrame: 0,
@@ -62,6 +66,7 @@ export const useSourceMonitorState = createPanelState<SourceMonitorState>(() => 
     ),
   setCurrentFrame: (update) =>
     set((state) => ({ currentFrame: resolveUpdate(state.currentFrame, update) })),
+  setIsPlaying: (isPlaying) => set({ isPlaying }),
   setZoomLevel: (update) => set((state) => ({ zoomLevel: resolveUpdate(state.zoomLevel, update) })),
   setZoomPan: (update) => set((state) => ({ zoomPan: resolveUpdate(state.zoomPan, update) })),
   setTimelineStartFrame: (update) =>

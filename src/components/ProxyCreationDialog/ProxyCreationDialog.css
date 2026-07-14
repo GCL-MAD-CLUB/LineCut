@@ -12,7 +12,7 @@
   gap: 8px;
   transform: translateX(-4px);
   color: var(--color-text);
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 .proxy-dialog-field:has(.proxy-dialog-select.open) {
@@ -37,7 +37,7 @@
 .proxy-dialog-select .select-dropdown-trigger > span {
   padding: 0 10px;
   color: var(--color-text);
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 20px;
 }
 
@@ -53,7 +53,7 @@
 }
 
 .proxy-dialog-select-menu .select-dropdown-option {
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 .proxy-dialog-select-menu .select-dropdown-separator {
@@ -81,12 +81,12 @@
   gap: 6px;
   min-height: 24px;
   color: var(--color-text);
-  font-size: 11.4px;
+  font-size: 12px;
 }
 
 .proxy-dialog-size-inputs input {
   min-height: 24px;
-  font-size: 11.4px;
+  font-size: 12px;
   color: var(--color-text);
   background: black;
 }

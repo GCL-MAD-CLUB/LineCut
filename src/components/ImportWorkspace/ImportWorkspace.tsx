@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   Captions,
@@ -13,11 +12,11 @@ import {
   Upload,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { cancelFfmpegTask, createFfmpegTaskId } from "../../ffmpegProgress";
+import { runMediaImportTask } from "../../mediaImportTask";
 import { useAppStore } from "../../store";
 import { isTauriRuntime } from "../../tauriRuntime";
-import type { ImportResult, MediaBinItem } from "../../types";
-import { createTaskProgress, getTaskProgressStatus } from "../TaskProgress";
+import type { MediaBinItem } from "../../types";
+import { getTaskProgressStatus } from "../TaskProgress";
 import "./ImportWorkspace.css";
 
 interface ImportWorkspaceProps {
@@ -110,6 +109,8 @@ function standaloneSubtitleItem(path: string, index: number): MediaBinItem {
   return {
     id: `external-subtitle:${random}:${path.length}`,
     kind: "subtitle",
+    enabled: true,
+    hidden: false,
     path,
     file_name: fileName(path),
     duration_us: 0,
@@ -228,74 +229,40 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
     }
 
     const probeItems = pendingItems.filter((item) => item.kind !== "subtitle");
-    const totalSteps = probeItems.length + (subtitlePaths.length > 0 ? 1 : 0);
-    let currentTaskId = "";
-    let importCancelled = false;
-    const importTask = await createTaskProgress({
-      operation: "import",
-      label: `正在导入 ${pendingItems.length} 个素材`,
-      current: 0,
-      total: Math.max(1, totalSteps),
-      on_cancel: async () => {
-        importCancelled = true;
-        if (currentTaskId) {
-          await cancelFfmpegTask(currentTaskId);
-        }
-      },
-    });
     exportResultChanged(null);
-
-    const loadedResults: ImportResult[] = [];
-    const errors: string[] = [];
-    let completedSteps = 0;
-    for (const item of probeItems) {
-      if (importCancelled) {
-        break;
-      }
-      currentTaskId = createFfmpegTaskId(`import-${item.kind}`);
-      importTask.update({ label: `正在探测 ${fileName(item.path)}` });
-      try {
-        const result = await invoke<ImportResult>("import_media", {
-          path: item.path,
-          externalSubtitles: [],
-          taskId: currentTaskId,
-        });
-        loadedResults.push(result);
-      } catch (error) {
-        if (!importCancelled) {
-          errors.push(
-            `${fileName(item.path)}：${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-      }
-      completedSteps += 1;
-      importTask.update({ current: completedSteps });
-    }
-
-    if (loadedResults.length > 0) {
-      mediaProjectsAdded(loadedResults.map((result) => result.project));
-      warningsAppended(loadedResults.flatMap((result) => result.warnings));
-    }
-    if (!importCancelled && subtitlePaths.length > 0) {
+    if (subtitlePaths.length > 0) {
       mediaItemsAdded(subtitlePaths.map(standaloneSubtitleItem));
-      completedSteps += 1;
-      importTask.update({ current: completedSteps });
+      setSubtitlePaths([]);
     }
 
-    if (importCancelled) {
-      messagePublished("媒体导入已取消");
-      return;
-    }
+    const outcomes = await Promise.all(
+      probeItems.map((item) =>
+        runMediaImportTask({
+          path: item.path,
+          operation: "import",
+          taskIdPrefix: `import-${item.kind}`,
+          onSuccess: (result) => {
+            mediaProjectsAdded([result.project]);
+            warningsAppended(result.warnings);
+            removePendingItem(item);
+          },
+        }),
+      ),
+    );
+    const loadedResults = outcomes.flatMap((outcome) =>
+      outcome.status === "success" ? [outcome.result] : [],
+    );
+    const errors = outcomes.filter((outcome) => outcome.status === "failed");
+    const cancelledCount = outcomes.filter((outcome) => outcome.status === "cancelled").length;
 
     const importedCount = loadedResults.length + subtitlePaths.length;
     clearPendingItems();
-    if (errors.length > 0) {
-      importTask.fail("部分素材导入失败", errors.join("\n"));
-      messagePublished(`已导入 ${importedCount} 个素材，${errors.length} 个失败`);
-    } else {
-      importTask.remove();
-      messagePublished(`已导入 ${importedCount} 个素材`);
-    }
+    const resultParts = [
+      importedCount > 0 ? `已导入 ${importedCount} 个素材` : "未导入任何素材",
+      ...(errors.length > 0 ? [`${errors.length} 个失败`] : []),
+      ...(cancelledCount > 0 ? [`${cancelledCount} 个已取消`] : []),
+    ];
+    messagePublished(resultParts.join("，"));
     if (importedCount > 0) {
       onImportCompleted?.();
     }

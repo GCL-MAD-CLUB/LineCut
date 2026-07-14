@@ -148,11 +148,15 @@ pub(crate) fn close_project(
 #[tauri::command]
 pub(crate) async fn import_media(
     path: String,
-    external_subtitles: Vec<String>,
     task_id: String,
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<ImportResult, String> {
+    const SUBTITLE_PROGRESS_START: f64 = 0.08;
+    const SUBTITLE_PROGRESS_END: f64 = 0.54;
+    const COVER_PROGRESS_START: f64 = 0.54;
+    const COVER_PROGRESS_END: f64 = 0.99;
+
     let task = register_task(&task_id, state.inner())?;
     let preferences = preferences_clone(&state)?;
     let input_path = PathBuf::from(&path);
@@ -318,9 +322,12 @@ pub(crate) async fn import_media(
                     state: state.inner(),
                     task_id: &task_id,
                     cancel: task.cancel_token(),
-                    base_progress: 0.08
-                        + (current_subtitle - 1) as f64 * 0.72 / text_subtitle_total as f64,
-                    progress_span: 0.72 / text_subtitle_total as f64,
+                    base_progress: SUBTITLE_PROGRESS_START
+                        + (current_subtitle - 1) as f64
+                            * (SUBTITLE_PROGRESS_END - SUBTITLE_PROGRESS_START)
+                            / text_subtitle_total as f64,
+                    progress_span: (SUBTITLE_PROGRESS_END - SUBTITLE_PROGRESS_START)
+                        / text_subtitle_total as f64,
                     duration_us,
                     cleanup_paths: Vec::new(),
                 }),
@@ -370,25 +377,6 @@ pub(crate) async fn import_media(
         task.check_cancelled()?;
     }
 
-    let external_total = external_subtitles.len().max(1);
-    for (index, external) in external_subtitles.into_iter().enumerate() {
-        task.check_cancelled()?;
-        let (track, parsed_cues, warning) =
-            load_external_subtitle_async(external, asset.id.clone(), task.cancel_token()).await?;
-        if let Some(message) = warning {
-            warnings.push(message);
-        }
-        if !parsed_cues.is_empty() {
-            cues.insert(track.id.clone(), parsed_cues);
-        }
-        tracks.push(track);
-        emit_ffmpeg_progress(
-            &app,
-            &task_id,
-            0.8 + (index + 1) as f64 * 0.15 / external_total as f64,
-        );
-    }
-
     if tracks.is_empty() {
         warnings.push("未检测到字幕流；可稍后通过“外挂字幕”按钮导入".to_string());
     }
@@ -403,12 +391,22 @@ pub(crate) async fn import_media(
     };
 
     task.check_cancelled()?;
-    emit_ffmpeg_progress(&app, &task_id, 0.95);
+    emit_ffmpeg_progress(&app, &task_id, SUBTITLE_PROGRESS_END);
     if let Some(stream_index) = project.asset.video_stream_index {
+        let progress_app = app.clone();
+        let cover_task_id = task_id.clone();
+        let cover_progress = move |progress: f64| {
+            emit_ffmpeg_progress(
+                &progress_app,
+                &cover_task_id,
+                COVER_PROGRESS_START + progress * (COVER_PROGRESS_END - COVER_PROGRESS_START),
+            );
+        };
         if let Err(error) = ensure_video_cover_thumbnail(
             &project,
             &preferences,
             Some(task.cancel_token()),
+            Some(&cover_progress),
             stream_index,
         )
         .await
@@ -420,7 +418,7 @@ pub(crate) async fn import_media(
         }
     }
     task.check_cancelled()?;
-    emit_ffmpeg_progress(&app, &task_id, 0.99);
+    emit_ffmpeg_progress(&app, &task_id, COVER_PROGRESS_END);
     state
         .projects
         .lock()

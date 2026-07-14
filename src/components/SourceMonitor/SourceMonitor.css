@@ -197,11 +197,11 @@
 .monitor-select .select-dropdown-trigger > span {
   padding: 0 32px 0 10px;
   line-height: var(--control-height-sm);
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 .monitor-select-menu .select-dropdown-option {
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 .monitor-select .select-dropdown-trigger svg {

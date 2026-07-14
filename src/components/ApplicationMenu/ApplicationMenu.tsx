@@ -1,5 +1,5 @@
-import { ChevronRight } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
+import { PopupMenu, PopupMenuItem, PopupMenuSeparator, PopupMenuSubmenu } from "../PopupMenu";
 import "./ApplicationMenu.css";
 
 interface ApplicationMenuProps {
@@ -24,32 +24,6 @@ interface ApplicationMenuProps {
   onClearSubtitleCueSelection: () => void;
   onOpenPreferences: () => void;
   onExit: () => void | Promise<void>;
-}
-
-interface MenuItemProps {
-  children: ReactNode;
-  shortcut?: string;
-  disabled?: boolean;
-  submenu?: boolean;
-  title?: string;
-  onSelect?: () => void | Promise<void>;
-}
-
-function MenuItem({ children, shortcut, disabled, submenu, title, onSelect }: MenuItemProps) {
-  return (
-    <button
-      type="button"
-      className="application-menu-item"
-      role="menuitem"
-      disabled={disabled}
-      title={title}
-      onClick={() => void onSelect?.()}
-    >
-      <span>{children}</span>
-      {shortcut && <kbd>{shortcut}</kbd>}
-      {submenu && <ChevronRight aria-hidden="true" />}
-    </button>
-  );
 }
 
 function fileName(path: string) {
@@ -139,113 +113,99 @@ export function ApplicationMenu({
           文件(F)
         </button>
         {fileMenuOpen && (
-          <div className="application-menu-popover" role="menu">
-            <MenuItem shortcut="Ctrl+N" disabled={isBusy} onSelect={select(onNewProject)}>
+          <PopupMenu>
+            <PopupMenuItem shortcut="Ctrl+N" disabled={isBusy} onSelect={select(onNewProject)}>
               新建项目(N)...
-            </MenuItem>
-            <MenuItem shortcut="Ctrl+O" disabled={isBusy} onSelect={select(onOpenProject)}>
+            </PopupMenuItem>
+            <PopupMenuItem shortcut="Ctrl+O" disabled={isBusy} onSelect={select(onOpenProject)}>
               打开项目(O)...
-            </MenuItem>
-            <div className="application-menu-submenu">
-              <MenuItem
-                disabled={recentProjectPaths.length === 0 || isBusy}
-                submenu
-                onSelect={() => {
-                  setRecentProjectMenuOpen((open) => !open);
+            </PopupMenuItem>
+            <PopupMenuSubmenu
+              label="打开最近使用的内容(E)"
+              open={recentProjectMenuOpen}
+              disabled={recentProjectPaths.length === 0 || isBusy}
+              onOpenChange={(open) => {
+                setRecentProjectMenuOpen(open);
+                if (open) {
                   setRecentImportMenuOpen(false);
-                }}
-              >
-                打开最近使用的内容(E)
-              </MenuItem>
-              {recentProjectMenuOpen && (
-                <div
-                  className="application-menu-popover application-menu-submenu-popover"
-                  role="menu"
+                }
+              }}
+            >
+              {recentProjectPaths.map((path) => (
+                <PopupMenuItem
+                  key={path}
+                  title={path}
+                  disabled={isBusy}
+                  onSelect={select(() => onOpenRecentProject(path))}
                 >
-                  {recentProjectPaths.map((path) => (
-                    <MenuItem
-                      key={path}
-                      title={path}
-                      disabled={isBusy}
-                      onSelect={select(() => onOpenRecentProject(path))}
-                    >
-                      {fileName(path)}
-                    </MenuItem>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="application-menu-separator" role="separator" />
-            <MenuItem
+                  {fileName(path)}
+                </PopupMenuItem>
+              ))}
+            </PopupMenuSubmenu>
+            <PopupMenuSeparator />
+            <PopupMenuItem
               shortcut="Ctrl+Shift+W"
               disabled={!hasProject || isBusy}
               onSelect={select(onCloseProject)}
             >
               关闭项目(P)
-            </MenuItem>
-            <MenuItem
+            </PopupMenuItem>
+            <PopupMenuItem
               shortcut="Ctrl+S"
               disabled={!hasProject || !isDirty || isBusy}
               onSelect={select(onSaveProject)}
             >
               保存(S)
-            </MenuItem>
-            <MenuItem
+            </PopupMenuItem>
+            <PopupMenuItem
               shortcut="Ctrl+Shift+S"
               disabled={!hasProject || isBusy}
               onSelect={select(onSaveProjectAs)}
             >
               另存为(A)...
-            </MenuItem>
-            <MenuItem
+            </PopupMenuItem>
+            <PopupMenuItem
               shortcut="Ctrl+Alt+S"
               disabled={!hasProject || isBusy}
               onSelect={select(onSaveProjectCopy)}
             >
               保存副本(Y)...
-            </MenuItem>
-            <div className="application-menu-separator" role="separator" />
-            <MenuItem
+            </PopupMenuItem>
+            <PopupMenuSeparator />
+            <PopupMenuItem
               shortcut="Ctrl+I"
               disabled={isMediaBinReadOnly || isBusy}
               onSelect={select(onImportMedia)}
             >
               导入(I)...
-            </MenuItem>
-            <div className="application-menu-submenu">
-              <MenuItem
-                disabled={recentMediaPaths.length === 0 || isMediaBinReadOnly || isBusy}
-                submenu
-                onSelect={() => {
-                  setRecentImportMenuOpen((open) => !open);
+            </PopupMenuItem>
+            <PopupMenuSubmenu
+              label="导入最近使用的文件(F)"
+              open={recentImportMenuOpen}
+              disabled={recentMediaPaths.length === 0 || isMediaBinReadOnly || isBusy}
+              onOpenChange={(open) => {
+                setRecentImportMenuOpen(open);
+                if (open) {
                   setRecentProjectMenuOpen(false);
-                }}
-              >
-                导入最近使用的文件(F)
-              </MenuItem>
-              {recentImportMenuOpen && (
-                <div
-                  className="application-menu-popover application-menu-submenu-popover"
-                  role="menu"
+                }
+              }}
+            >
+              {recentMediaPaths.map((path) => (
+                <PopupMenuItem
+                  key={path}
+                  title={path}
+                  disabled={isMediaBinReadOnly || isBusy}
+                  onSelect={select(() => onImportRecentMedia(path))}
                 >
-                  {recentMediaPaths.map((path) => (
-                    <MenuItem
-                      key={path}
-                      title={path}
-                      disabled={isMediaBinReadOnly || isBusy}
-                      onSelect={select(() => onImportRecentMedia(path))}
-                    >
-                      {fileName(path)}
-                    </MenuItem>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="application-menu-separator" role="separator" />
-            <MenuItem shortcut="Ctrl+Q" onSelect={select(onExit)}>
+                  {fileName(path)}
+                </PopupMenuItem>
+              ))}
+            </PopupMenuSubmenu>
+            <PopupMenuSeparator />
+            <PopupMenuItem shortcut="Ctrl+Q" onSelect={select(onExit)}>
               退出(X)
-            </MenuItem>
-          </div>
+            </PopupMenuItem>
+          </PopupMenu>
         )}
       </div>
       <div className="application-menu-root">
@@ -262,26 +222,26 @@ export function ApplicationMenu({
           编辑(E)
         </button>
         {editMenuOpen && (
-          <div className="application-menu-popover" role="menu">
-            <MenuItem
+          <PopupMenu>
+            <PopupMenuItem
               shortcut="Ctrl+A"
               disabled={!canSelectAllSubtitleCues || isBusy}
               onSelect={select(onSelectAllSubtitleCues)}
             >
               全选(A)
-            </MenuItem>
-            <MenuItem
+            </PopupMenuItem>
+            <PopupMenuItem
               shortcut="Ctrl+Shift+A"
               disabled={!canClearSubtitleCueSelection || isBusy}
               onSelect={select(onClearSubtitleCueSelection)}
             >
               取消全选(D)
-            </MenuItem>
-            <div className="application-menu-separator" role="separator" />
-            <MenuItem disabled={isBusy} onSelect={select(onOpenPreferences)}>
+            </PopupMenuItem>
+            <PopupMenuSeparator />
+            <PopupMenuItem disabled={isBusy} onSelect={select(onOpenPreferences)}>
               首选项...
-            </MenuItem>
-          </div>
+            </PopupMenuItem>
+          </PopupMenu>
         )}
       </div>
       {[

@@ -18,15 +18,11 @@ import { ProxyCreationDialog } from "./components/ProxyCreationDialog";
 import { SecondaryTopbar } from "./components/SecondaryTopbar";
 import { SourceMonitor } from "./components/SourceMonitor";
 import { SubtitlePanel } from "./components/SubtitlePanel";
-import {
-  cancelAllTaskProgress,
-  createTaskProgress,
-  getTaskProgressStatus,
-} from "./components/TaskProgress";
-import { cancelFfmpegTask, createFfmpegTaskId } from "./ffmpegProgress";
+import { cancelAllTaskProgress, getTaskProgressStatus } from "./components/TaskProgress";
+import { runMediaImportTask } from "./mediaImportTask";
 import { getProjectWorkspaceSnapshot, useAppStore } from "./store";
 import { isTauriRuntime } from "./tauriRuntime";
-import type { ImportResult, MediaBinItem, OpenProjectResult, Preferences } from "./types";
+import type { MediaBinItem, OpenProjectResult, Preferences } from "./types";
 
 const projectFilters = [
   {
@@ -75,6 +71,7 @@ const mediaFilters = [
 const subtitleExtensions = new Set(subtitleFilters[0].extensions);
 const recentMediaStorageKey = "linecut:recent-media-paths";
 const recentProjectStorageKey = "linecut:recent-project-paths";
+const recentPathsLimit = 10;
 const warningDisplayDurationMs = 5000;
 
 function fileName(path: string) {
@@ -93,7 +90,7 @@ function readRecentPaths(storageKey: string) {
     }
     const paths = JSON.parse(stored);
     return Array.isArray(paths)
-      ? paths.filter((path): path is string => typeof path === "string").slice(0, 12)
+      ? paths.filter((path): path is string => typeof path === "string").slice(0, recentPathsLimit)
       : [];
   } catch {
     return [];
@@ -105,6 +102,8 @@ function standaloneSubtitleItem(path: string, index: number): MediaBinItem {
   return {
     id: `external-subtitle:${random}:${path.length}`,
     kind: "subtitle",
+    enabled: true,
+    hidden: false,
     path,
     file_name: fileName(path),
     duration_us: 0,
@@ -361,7 +360,9 @@ export default function App() {
   }
 
   function rememberRecentProject(path: string) {
-    setRecentProjectPaths((current) => Array.from(new Set([path, ...current])).slice(0, 12));
+    setRecentProjectPaths((current) =>
+      Array.from(new Set([path, ...current])).slice(0, recentPathsLimit),
+    );
   }
 
   function forgetRecentProject(path: string) {
@@ -483,7 +484,9 @@ export default function App() {
     if (paths.length === 0) {
       return;
     }
-    setRecentMediaPaths((current) => Array.from(new Set([...paths, ...current])).slice(0, 12));
+    setRecentMediaPaths((current) =>
+      Array.from(new Set([...paths, ...current])).slice(0, recentPathsLimit),
+    );
   }
 
   async function importMedia(pathsToImport?: string[]) {
@@ -504,71 +507,39 @@ export default function App() {
 
     const subtitlePaths = paths.filter((path) => subtitleExtensions.has(fileExtension(path)));
     const probePaths = paths.filter((path) => !subtitleExtensions.has(fileExtension(path)));
-    let currentTaskId = "";
-    let cancelled = false;
-    const importTask = await createTaskProgress({
-      operation: "media_import",
-      label: `正在导入 ${paths.length} 个素材`,
-      current: 0,
-      total: Math.max(1, probePaths.length + (subtitlePaths.length > 0 ? 1 : 0)),
-      on_cancel: async () => {
-        cancelled = true;
-        if (currentTaskId) {
-          await cancelFfmpegTask(currentTaskId);
-        }
-      },
-    });
     exportResultChanged(null);
-
-    const loaded: ImportResult[] = [];
-    const errors: string[] = [];
-    for (const [index, path] of probePaths.entries()) {
-      if (cancelled) {
-        break;
-      }
-      currentTaskId = createFfmpegTaskId("media-import");
-      importTask.update({ label: `正在探测 ${fileName(path)}` });
-      try {
-        const result = await invoke<ImportResult>("import_media", {
-          path,
-          externalSubtitles: [],
-          taskId: currentTaskId,
-        });
-        loaded.push(result);
-      } catch (error) {
-        if (!cancelled) {
-          errors.push(
-            `${fileName(path)}：${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-      }
-      importTask.update({ current: index + 1 });
-    }
-
-    if (loaded.length > 0) {
-      mediaProjectsAdded(loaded.map((result) => result.project));
-      warningsAppended(loaded.flatMap((result) => result.warnings));
-    }
-    if (!cancelled && subtitlePaths.length > 0) {
+    if (subtitlePaths.length > 0) {
       mediaItemsAdded(subtitlePaths.map(standaloneSubtitleItem));
-      importTask.update({ current: probePaths.length + 1 });
+      rememberImportedMedia(subtitlePaths);
     }
-    if (cancelled) {
-      messagePublished("素材导入已取消");
-      return;
-    }
+
+    const outcomes = await Promise.all(
+      probePaths.map((path) =>
+        runMediaImportTask({
+          path,
+          operation: "media_import",
+          taskIdPrefix: "media-import",
+          onSuccess: (result) => {
+            mediaProjectsAdded([result.project]);
+            warningsAppended(result.warnings);
+            rememberImportedMedia([result.project.asset.path]);
+          },
+        }),
+      ),
+    );
+    const loaded = outcomes.flatMap((outcome) =>
+      outcome.status === "success" ? [outcome.result] : [],
+    );
+    const errors = outcomes.filter((outcome) => outcome.status === "failed");
+    const cancelledCount = outcomes.filter((outcome) => outcome.status === "cancelled").length;
 
     const importedCount = loaded.length + subtitlePaths.length;
-    const importedPaths = [...loaded.map((result) => result.project.asset.path), ...subtitlePaths];
-    rememberImportedMedia(importedPaths);
-    if (errors.length > 0) {
-      importTask.fail("部分素材导入失败", errors.join("\n"));
-      messagePublished(`已导入 ${importedCount} 个素材，${errors.length} 个失败`);
-      return;
-    }
-
-    importTask.remove();
-    messagePublished(importedCount > 0 ? `已导入 ${importedCount} 个素材` : "未导入任何素材");
+    const resultParts = [
+      importedCount > 0 ? `已导入 ${importedCount} 个素材` : "未导入任何素材",
+      ...(errors.length > 0 ? [`${errors.length} 个失败`] : []),
+      ...(cancelledCount > 0 ? [`${cancelledCount} 个已取消`] : []),
+    ];
+    messagePublished(resultParts.join("，"));
   }
 
   useAppEvent("media:import", ({ paths }) => {

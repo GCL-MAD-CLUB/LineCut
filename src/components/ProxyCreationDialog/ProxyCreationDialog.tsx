@@ -140,7 +140,7 @@ export function ProxyCreationDialog() {
     let proxyCancelled = false;
     const proxyTask = await createTaskProgress({
       operation: "proxy",
-      label: "生成代理",
+      label: `生成代理 ${project.asset.file_name}`,
       current: 0,
       total: 1,
       listener: listenToFfmpegTaskProgress(proxyTaskId),

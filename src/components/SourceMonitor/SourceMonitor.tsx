@@ -10,7 +10,7 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import { useAppEvent } from "../../appEvents";
-import { useAppStore } from "../../store";
+import { isMediaItemEnabled, isMediaVideoDetached, useAppStore } from "../../store";
 import {
   clampTimelineStartFrame,
   frameToTimeUs,
@@ -32,6 +32,20 @@ const previewModeLabels: Record<(typeof previewModeOptions)[number], string> = {
   proxy: "代理",
 };
 type PreviewMode = (typeof previewModeOptions)[number];
+
+interface BoundAudioElementProps {
+  itemId: string;
+  path: string;
+  onElementChanged: (itemId: string, element: HTMLAudioElement | null) => void;
+}
+
+function BoundAudioElement({ itemId, path, onElementChanged }: BoundAudioElementProps) {
+  const setElement = useCallback(
+    (element: HTMLAudioElement | null) => onElementChanged(itemId, element),
+    [itemId, onElementChanged],
+  );
+  return <audio ref={setElement} src={convertFileSrc(path)} preload="auto" />;
+}
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -72,6 +86,8 @@ export function SourceMonitor() {
   const cuePlaybackEndFrameRef = useRef<number | null>(null);
   const currentFrame = useSourceMonitorState((state) => state.currentFrame);
   const setCurrentFrame = useSourceMonitorState((state) => state.setCurrentFrame);
+  const isPlaying = useSourceMonitorState((state) => state.isPlaying);
+  const setIsPlaying = useSourceMonitorState((state) => state.setIsPlaying);
   const currentFrameRef = useRef(currentFrame);
   const zoomLevel = useSourceMonitorState((state) => state.zoomLevel);
   const zoomPan = useSourceMonitorState((state) => state.zoomPan);
@@ -85,19 +101,51 @@ export function SourceMonitor() {
   const syncMedia = useSourceMonitorState((state) => state.syncMedia);
   const timelineStartFrameRef = useRef(timelineStartFrame);
   const timelineSpanFramesRef = useRef(timelineSpanFrames);
-  const [isPlaying, setIsPlaying] = useState(false);
   const [isVideoDragOver, setIsVideoDragOver] = useState(false);
   const [minTimelineSpanFrames, setMinTimelineSpanFrames] = useState(0);
+
+  const registerBoundAudioElement = useCallback(
+    (itemId: string, element: HTMLAudioElement | null) => {
+      const previous = boundAudioRefs.current.get(itemId);
+      if (!element) {
+        previous?.pause();
+        boundAudioRefs.current.delete(itemId);
+        return;
+      }
+      if (previous && previous !== element) {
+        previous.pause();
+      }
+      boundAudioRefs.current.set(itemId, element);
+      const video = videoRef.current;
+      if (!video || video.paused || video.ended) {
+        return;
+      }
+      try {
+        element.currentTime = video.currentTime;
+      } catch {
+        // Metadata may not be available during the first ref callback.
+      }
+      element.playbackRate = video.playbackRate;
+      void element.play().catch(() => undefined);
+    },
+    [],
+  );
 
   const hasMedia = Boolean(project);
   const boundAudioItems = useMemo(
     () =>
       mediaItems.filter(
-        (item) => item.kind === "audio" && item.bound_to_video_id === activeVideoId,
+        (item) =>
+          item.kind === "audio" &&
+          isMediaItemEnabled(item) &&
+          item.bound_to_video_id === activeVideoId,
       ),
     [activeVideoId, mediaItems],
   );
-  const sourceAudioDetached = activeVideoId ? detachedVideoIds.has(activeVideoId) : false;
+  const activeVideoItem = mediaItems.find((item) => item.id === activeVideoId);
+  const sourceAudioDetached = activeVideoItem
+    ? isMediaVideoDetached(activeVideoItem, detachedVideoIds)
+    : false;
   const durationUs = project?.asset.duration_us ?? 0;
   const videoStream = useMemo(() => {
     if (!project) {
@@ -122,7 +170,7 @@ export function SourceMonitor() {
     return path ? convertFileSrc(path) : "";
   }, [project, proxyPath, useProxy]);
   const mediaKey = project
-    ? `${project.asset.id}:${durationUs}:${frameRate}`
+    ? `${activeVideoId}:${project.asset.id}:${durationUs}:${frameRate}`
     : `empty:${frameRate}`;
 
   const defaultTimelineSpanFrames = Math.max(1, Math.round(frameRate * 60));
@@ -226,7 +274,9 @@ export function SourceMonitor() {
       detail.focusEndUs !== undefined,
       detail.focusEndUs === undefined,
     );
-    void videoRef.current?.play();
+    if (detail.play) {
+      void videoRef.current?.play();
+    }
   });
 
   useEffect(() => {
@@ -512,10 +562,17 @@ export function SourceMonitor() {
       directVideoId ||
       activeMediaDragVideoId() ||
       draggedIds.find((itemId) =>
-        mediaItems.some((item) => item.id === itemId && item.kind === "video"),
+        mediaItems.some(
+          (item) => item.id === itemId && item.kind === "video" && isMediaItemEnabled(item),
+        ),
       );
     setIsVideoDragOver(false);
-    if (!videoId) {
+    if (
+      !videoId ||
+      !mediaItems.some(
+        (item) => item.id === videoId && item.kind === "video" && isMediaItemEnabled(item),
+      )
+    ) {
       return;
     }
     event.preventDefault();
@@ -535,6 +592,7 @@ export function SourceMonitor() {
     const tick = () => {
       const video = videoRef.current;
       if (!video || video.paused || video.ended) {
+        setIsPlaying(false);
         playbackTickRef.current = null;
         return;
       }
@@ -610,6 +668,7 @@ export function SourceMonitor() {
       onDrop={handleVideoDrop}
     >
       <VideoDisplay
+        key={mediaKey}
         project={project}
         stageRef={videoStageRef}
         videoRef={videoRef}
@@ -636,17 +695,11 @@ export function SourceMonitor() {
       />
       <div className="bound-audio-stack" aria-hidden="true">
         {boundAudioItems.map((item) => (
-          <audio
+          <BoundAudioElement
             key={item.id}
-            ref={(element) => {
-              if (element) {
-                boundAudioRefs.current.set(item.id, element);
-              } else {
-                boundAudioRefs.current.delete(item.id);
-              }
-            }}
-            src={convertFileSrc(item.path)}
-            preload="auto"
+            itemId={item.id}
+            path={item.path}
+            onElementChanged={registerBoundAudioElement}
           />
         ))}
       </div>

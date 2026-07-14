@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 
 interface AppEventMap {
   "media:import": { paths?: string[] };
-  "monitor:seek": { timeUs: number; focusEndUs?: number };
+  "monitor:seek": { timeUs: number; focusEndUs?: number; play?: boolean };
   "subtitle:select-all": undefined;
   "subtitle:clear-selection": undefined;
 }
