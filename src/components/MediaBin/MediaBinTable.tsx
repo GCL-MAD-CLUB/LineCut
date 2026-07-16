@@ -1,3 +1,4 @@
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Captions, Film, Link2, Music2, SplitSquareVertical } from "lucide-react";
 import {
   useEffect,
@@ -13,10 +14,12 @@ import { createPortal } from "react-dom";
 import {
   isMediaItemEnabled,
   isMediaItemHidden,
+  isMediaItemOffline,
   isMediaVideoDetached,
   mediaItemProject,
   visibleSubtitleTracks,
 } from "../../store";
+import { isTauriRuntime } from "../../tauriRuntime";
 import { formatMonitorTime } from "../../time";
 import { normalizeFrameRate } from "../../timeline";
 import type { MediaBinItem, Project } from "../../types";
@@ -33,6 +36,7 @@ interface MediaBinTableProps {
   selectedIds: Set<string>;
   viewMode: MediaBinViewMode;
   isReadOnly: boolean;
+  canImport: boolean;
   onSelectOnly: (itemId: string) => void;
   onToggleSelected: (itemId: string) => void;
   onRenameItem: (itemId: string, fileName: string) => void;
@@ -41,6 +45,7 @@ interface MediaBinTableProps {
   onPreviewVideo: (videoId: string) => void;
   onBindItems: (itemIds: string[], videoId: string) => void | Promise<void>;
   onUnbindItems: (itemIds: string[]) => void;
+  onImportPaths: (paths: string[]) => void;
 }
 
 const labelColumnWidth = 42;
@@ -451,6 +456,7 @@ export function MediaBinTable({
   selectedIds,
   viewMode,
   isReadOnly,
+  canImport,
   onSelectOnly,
   onToggleSelected,
   onRenameItem,
@@ -459,6 +465,7 @@ export function MediaBinTable({
   onPreviewVideo,
   onBindItems,
   onUnbindItems,
+  onImportPaths,
 }: MediaBinTableProps) {
   const [dropTargetVideoId, setDropTargetVideoId] = useState<string | null>(null);
   const [pointerDragPreview, setPointerDragPreview] = useState<PointerMediaDragPreview | null>(
@@ -477,8 +484,12 @@ export function MediaBinTable({
     Record<string, number>
   >({});
   const [renameValue, setRenameValue] = useState("");
+  const [systemFileDragOver, setSystemFileDragOver] = useState(false);
+  const [systemFileDragActive, setSystemFileDragActive] = useState(false);
   const headerRef = useRef<HTMLDivElement | null>(null);
   const gridRef = useRef<HTMLDivElement | null>(null);
+  const tableScrollRef = useRef<HTMLDivElement | null>(null);
+  const onImportPathsRef = useRef(onImportPaths);
   const pendingTitleRenameRef = useRef<number | null>(null);
   const columnResizeRef = useRef<{
     columnId: ResizableColumnId;
@@ -510,6 +521,16 @@ export function MediaBinTable({
   } as CSSProperties;
   const sortedRows = useMemo(() => sortMediaRows(rows, sort, projects), [projects, rows, sort]);
 
+  onImportPathsRef.current = onImportPaths;
+
+  useEffect(() => {
+    document.body.classList.toggle("system-file-drag-active", systemFileDragActive);
+
+    return () => {
+      document.body.classList.remove("system-file-drag-active");
+    };
+  }, [systemFileDragActive]);
+
   useEffect(() => {
     if (!hadItemsRef.current && hasItems) {
       setSort(defaultMediaBinSort);
@@ -533,6 +554,73 @@ export function MediaBinTable({
     cancelPendingTitleRename();
     setEditingItemId(null);
   }, [isReadOnly]);
+
+  useEffect(() => {
+    if (!isTauriRuntime() || viewMode !== "list" || !canImport) {
+      setSystemFileDragOver(false);
+      setSystemFileDragActive(false);
+      return;
+    }
+
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    const positionIsInTableArea = (x: number, y: number) => {
+      const tableScroll = tableScrollRef.current;
+      if (!tableScroll) {
+        return false;
+      }
+      const scaleFactor = window.devicePixelRatio || 1;
+      const clientX = x / scaleFactor;
+      const clientY = y / scaleFactor;
+      const bounds = tableScroll.getBoundingClientRect();
+      return (
+        clientX >= bounds.left &&
+        clientX <= bounds.right &&
+        clientY >= bounds.top &&
+        clientY <= bounds.bottom
+      );
+    };
+
+    void getCurrentWebview()
+      .onDragDropEvent(({ payload }) => {
+        if (payload.type === "leave") {
+          setSystemFileDragOver(false);
+          setSystemFileDragActive(false);
+          return;
+        }
+        const isOverTable = positionIsInTableArea(payload.position.x, payload.position.y);
+        if (payload.type === "drop") {
+          setSystemFileDragOver(false);
+          setSystemFileDragActive(false);
+          if (isOverTable && payload.paths.length > 0) {
+            onImportPathsRef.current(Array.from(new Set(payload.paths)));
+          }
+          return;
+        }
+        setSystemFileDragActive(true);
+        setSystemFileDragOver(isOverTable);
+      })
+      .then((stopListening) => {
+        if (disposed) {
+          stopListening();
+        } else {
+          unlisten = stopListening;
+        }
+      })
+      .catch(() => {
+        if (!disposed) {
+          setSystemFileDragOver(false);
+          setSystemFileDragActive(false);
+        }
+      });
+
+    return () => {
+      disposed = true;
+      setSystemFileDragOver(false);
+      setSystemFileDragActive(false);
+      unlisten?.();
+    };
+  }, [canImport, viewMode]);
 
   useLayoutEffect(() => {
     if (viewMode !== "grid") {
@@ -837,7 +925,7 @@ export function MediaBinTable({
       return (
         <div className="media-bin-empty media-bin-grid-empty">
           <Film aria-hidden="true" />
-          <strong>素材箱为空</strong>
+          <strong>项目为空</strong>
           <span>使用底部导入按钮添加视频、音频或字幕。</span>
         </div>
       );
@@ -858,7 +946,9 @@ export function MediaBinTable({
             item.kind === "video" && !isDetachedVideo && project?.asset.audio_stream_index != null;
           const hasSubtitleTrack =
             item.kind === "video" &&
-            Boolean(project && visibleSubtitleTracks(project, mediaItems, item.id).length > 0);
+            Boolean(
+              project && visibleSubtitleTracks(project, mediaItems, item.id, projects).length > 0,
+            );
           return (
             <button
               type="button"
@@ -867,31 +957,40 @@ export function MediaBinTable({
               data-media-item-id={item.id}
               className={`media-bin-card ${isSelected ? "selected" : ""} ${
                 isMediaItemEnabled(item) ? "" : "is-disabled"
-              }`}
+              } ${isMediaItemOffline(item) ? "is-offline" : ""}`}
               draggable={false}
               onPointerDown={(event) => startPointerMediaDrag(event, item, false)}
               onClick={(event) =>
                 event.ctrlKey || event.metaKey ? onToggleSelected(item.id) : onSelectOnly(item.id)
               }
               onDoubleClick={() =>
-                item.kind === "video" && isMediaItemEnabled(item) && onPreviewVideo(item.id)
+                item.kind === "video" &&
+                isMediaItemEnabled(item) &&
+                (!isMediaItemOffline(item) || Boolean(project?.proxy_path)) &&
+                onPreviewVideo(item.id)
               }
             >
               <span className="media-bin-card-preview-shell">
                 <span
                   className={`media-bin-card-preview ${item.kind}`}
                   onPointerMove={
-                    item.kind === "video" && project
+                    item.kind === "video" &&
+                    project &&
+                    (!isMediaItemOffline(item) || Boolean(project.proxy_path))
                       ? (event) => updateGridVideoHover(event, item.id)
                       : undefined
                   }
                   onPointerLeave={
-                    item.kind === "video" && project
+                    item.kind === "video" &&
+                    project &&
+                    (!isMediaItemOffline(item) || Boolean(project.proxy_path))
                       ? () => finishGridVideoHover(item.id)
                       : undefined
                   }
                 >
-                  {item.kind === "video" && project ? (
+                  {item.kind === "video" &&
+                  project &&
+                  (!isMediaItemOffline(item) || Boolean(project.proxy_path)) ? (
                     <>
                       <MediaBinVideoThumbnail
                         item={item}
@@ -924,6 +1023,9 @@ export function MediaBinTable({
                       </span>
                     </>
                   )}
+                  {isMediaItemOffline(item) && (
+                    <span className="media-bin-card-offline">媒体脱机</span>
+                  )}
                 </span>
                 {previewProgress !== null && (
                   <span
@@ -955,7 +1057,7 @@ export function MediaBinTable({
   }
 
   return (
-    <div className="media-bin-table" role="table" aria-label="素材列表" style={tableStyle}>
+    <div className="media-bin-table" role="table" aria-label="媒体列表" style={tableStyle}>
       <div className="media-bin-table-frame">
         <div className="media-bin-table-header-viewport">
           <div ref={headerRef} className="media-bin-table-header" role="row">
@@ -1015,12 +1117,19 @@ export function MediaBinTable({
             })}
           </div>
         </div>
-        <div className="media-bin-table-scroll" onScroll={syncHeaderScroll}>
+        <div
+          ref={tableScrollRef}
+          className={`media-bin-table-scroll ${systemFileDragOver ? "system-file-drop-target" : ""}`}
+          onScroll={syncHeaderScroll}
+        >
           {sortedRows.length === 0 ? (
-            <div className="media-bin-empty">
-              <Film aria-hidden="true" />
-              <strong>素材箱为空</strong>
-              <span>使用底部导入按钮添加视频、音频或字幕。</span>
+            <div className="media-bin-table-empty-content">
+              <div className="media-bin-empty">
+                <Film aria-hidden="true" />
+                <strong>项目为空</strong>
+                <span>使用底部导入按钮或将系统媒体拖入此处。</span>
+              </div>
+              <div className="media-bin-table-tail-spacer" aria-hidden="true" />
             </div>
           ) : (
             <div className="media-bin-table-body" role="rowgroup">
@@ -1043,7 +1152,9 @@ export function MediaBinTable({
                       depth ? "bound-child" : ""
                     } ${isLastBoundChild ? "last-bound-child" : ""} ${
                       targetVideoId && dropTargetVideoId === targetVideoId ? "binding-target" : ""
-                    } ${isMediaItemEnabled(item) ? "" : "is-disabled"}`}
+                    } ${isMediaItemEnabled(item) ? "" : "is-disabled"} ${
+                      isMediaItemOffline(item) ? "is-offline" : ""
+                    }`}
                     role="row"
                     onClick={(event) => {
                       if (suppressRowClickRef.current) {
@@ -1058,7 +1169,11 @@ export function MediaBinTable({
                     }}
                     onDoubleClick={() => {
                       cancelPendingTitleRename();
-                      if (item.kind === "video" && isMediaItemEnabled(item)) {
+                      if (
+                        item.kind === "video" &&
+                        isMediaItemEnabled(item) &&
+                        (!isMediaItemOffline(item) || Boolean(project?.proxy_path))
+                      ) {
                         onPreviewVideo(item.id);
                       }
                     }}
@@ -1110,7 +1225,7 @@ export function MediaBinTable({
                         <input
                           className="media-bin-title-editor"
                           value={renameValue}
-                          aria-label="重命名素材标题"
+                          aria-label="重命名媒体"
                           autoFocus
                           onFocus={(event) => event.currentTarget.select()}
                           onChange={(event) => setRenameValue(event.currentTarget.value)}
@@ -1144,6 +1259,9 @@ export function MediaBinTable({
                                 aria-label="已分解"
                               />
                             )}
+                          {isMediaItemOffline(item) && (
+                            <span className="media-bin-offline-label">脱机</span>
+                          )}
                         </>
                       )}
                     </span>
@@ -1216,6 +1334,7 @@ export function MediaBinTable({
                   </div>
                 );
               })}
+              <div className="media-bin-table-tail-spacer" aria-hidden="true" />
             </div>
           )}
         </div>

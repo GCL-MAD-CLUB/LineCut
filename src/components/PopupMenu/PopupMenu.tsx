@@ -1,5 +1,5 @@
 import { Check, ChevronRight } from "lucide-react";
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type {
   CSSProperties,
@@ -37,6 +37,7 @@ interface PopupMenuProps {
   ariaLabel?: string;
   submenuAnchor?: DOMRect;
   contextMenuAnchor?: PopupMenuContextAnchor;
+  enableMnemonics?: boolean;
   onPointerDown?: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onContextMenu?: (event: ReactMouseEvent<HTMLDivElement>) => void;
 }
@@ -48,6 +49,7 @@ export function PopupMenu({
   ariaLabel,
   submenuAnchor,
   contextMenuAnchor,
+  enableMnemonics = false,
   onPointerDown,
   onContextMenu,
 }: PopupMenuProps) {
@@ -65,10 +67,10 @@ export function PopupMenu({
     const rect = menu.getBoundingClientRect();
     const anchorLeft = submenuAnchor
       ? submenuAnchor.right - 4
-      : contextMenuAnchor?.x ?? rect.left - current.translateX;
+      : (contextMenuAnchor?.x ?? rect.left - current.translateX);
     const anchorTop = submenuAnchor
       ? submenuAnchor.top - 3
-      : contextMenuAnchor?.y ?? rect.top - current.translateY;
+      : (contextMenuAnchor?.y ?? rect.top - current.translateY);
     const borderHeight = Math.max(0, rect.height - menu.clientHeight);
     const naturalHeight = menu.scrollHeight + borderHeight;
     const maximumViewportHeight = Math.max(0, window.innerHeight - popupViewportMargin * 2);
@@ -146,6 +148,39 @@ export function PopupMenu({
     };
   }, [children, fitToViewport, style]);
 
+  useEffect(() => {
+    if (!enableMnemonics) {
+      return;
+    }
+
+    const selectByMnemonic = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.repeat ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.altKey ||
+        event.shiftKey
+      ) {
+        return;
+      }
+      const mnemonic = event.key.toLocaleLowerCase();
+      const item = Array.from(
+        menuRef.current?.querySelectorAll<HTMLButtonElement>("[data-popup-menu-mnemonic]") ?? [],
+      ).find((candidate) => candidate.dataset.popupMenuMnemonic === mnemonic);
+      if (!item) {
+        return;
+      }
+      event.preventDefault();
+      if (!item.disabled) {
+        item.click();
+      }
+    };
+
+    window.addEventListener("keydown", selectByMnemonic);
+    return () => window.removeEventListener("keydown", selectByMnemonic);
+  }, [enableMnemonics]);
+
   const transforms = [
     style?.transform,
     viewportLayout.translateX || viewportLayout.translateY
@@ -177,6 +212,7 @@ export function PopupMenu({
 interface PopupMenuItemProps {
   children: ReactNode;
   shortcut?: string;
+  mnemonic?: string;
   checked?: boolean;
   disabled?: boolean;
   submenu?: boolean;
@@ -187,6 +223,7 @@ interface PopupMenuItemProps {
 export function PopupMenuItem({
   children,
   shortcut,
+  mnemonic,
   checked,
   disabled,
   submenu,
@@ -199,6 +236,8 @@ export function PopupMenuItem({
       className="popup-menu-item"
       role={checked === undefined ? "menuitem" : "menuitemcheckbox"}
       aria-checked={checked}
+      aria-keyshortcuts={mnemonic}
+      data-popup-menu-mnemonic={mnemonic?.toLocaleLowerCase()}
       disabled={disabled}
       title={title}
       onClick={() => void onSelect?.()}
@@ -220,6 +259,8 @@ interface PopupMenuSubmenuProps {
   children: ReactNode;
   open: boolean;
   disabled?: boolean;
+  mnemonic?: string;
+  menuClassName?: string;
   onOpenChange: (open: boolean) => void;
 }
 
@@ -228,6 +269,8 @@ export function PopupMenuSubmenu({
   children,
   open,
   disabled,
+  mnemonic,
+  menuClassName,
   onOpenChange,
 }: PopupMenuSubmenuProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -263,7 +306,12 @@ export function PopupMenuSubmenu({
 
   return (
     <div ref={hostRef} className="popup-menu-submenu">
-      <PopupMenuItem submenu disabled={disabled} onSelect={() => onOpenChange(!open)}>
+      <PopupMenuItem
+        submenu
+        disabled={disabled}
+        mnemonic={mnemonic}
+        onSelect={() => onOpenChange(!open)}
+      >
         {label}
       </PopupMenuItem>
       {open &&
@@ -271,6 +319,7 @@ export function PopupMenuSubmenu({
         createPortal(
           <PopupMenu
             ariaLabel={typeof label === "string" ? label : undefined}
+            className={menuClassName}
             submenuAnchor={anchor}
             style={{ position: "fixed", left: anchor.right - 4, top: anchor.top - 3 }}
             onPointerDown={(event) => event.stopPropagation()}

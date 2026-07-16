@@ -20,8 +20,15 @@ const CACHE_KEY_CONTEXT: &[u8] = b"linecut-thumbnail-cache-v2";
 const INDEX_KEY_CONTEXT: &[u8] = b"linecut-thumbnail-index-v1";
 const SUBTITLE_THUMBNAIL_WIDTH: usize = 160;
 const SUBTITLE_THUMBNAIL_HEIGHT: usize = 90;
+const SUBTITLE_THUMBNAIL_CACHE_VERSION: u16 = 1;
+const SUBTITLE_THUMBNAIL_CACHE_FOLDER: &str = "Subtitle Thumbnail Cache Files";
+const SUBTITLE_THUMBNAIL_CACHE_KEY_CONTEXT: &[u8] = b"linecut-subtitle-thumbnail-cache-v1";
+const SUBTITLE_THUMBNAIL_BUCKET_US: i64 = 100_000;
+const SUBTITLE_THUMBNAIL_MATCH_TOLERANCE_US: i64 = 100_000;
+const MAX_SUBTITLE_THUMBNAIL_BYTES: usize = 2 * 1024 * 1024;
 
 static THUMBNAIL_CACHE_LOCK: Mutex<()> = Mutex::new(());
+static SUBTITLE_THUMBNAIL_CACHE_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Serialize, Deserialize)]
 struct CachedMediaThumbnail {
@@ -57,6 +64,19 @@ struct ThumbnailCacheLayout {
     cache_hash: String,
 }
 
+#[derive(Serialize, Deserialize)]
+struct CachedSubtitleThumbnail {
+    version: u16,
+    time_us: i64,
+    jpeg: Vec<u8>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct SubtitleThumbnailCacheLookup {
+    cache_time_us: i64,
+    bytes: Option<Vec<u8>>,
+}
+
 type CoverProgressCallback = dyn Fn(f64) + Send + Sync;
 
 #[derive(Clone, Copy, Debug)]
@@ -76,11 +96,11 @@ pub(crate) async fn generate_video_cover_thumbnail(
         .map_err(|_| "项目状态锁定失败".to_string())?
         .get(&asset_id)
         .cloned()
-        .ok_or_else(|| format!("未找到视频素材: {asset_id}"))?;
+        .ok_or_else(|| format!("未找到媒体: {asset_id}"))?;
     let stream_index = project
         .asset
         .video_stream_index
-        .ok_or_else(|| "素材不包含视频流".to_string())?;
+        .ok_or_else(|| "媒体不包含视频流".to_string())?;
     let preferences = preferences_clone(&state)?;
     ensure_video_cover_thumbnail(&project, &preferences, None, None, stream_index).await
 }
@@ -97,19 +117,98 @@ pub(crate) async fn generate_subtitle_thumbnail(
         .map_err(|_| "项目状态锁定失败".to_string())?
         .get(&asset_id)
         .cloned()
-        .ok_or_else(|| format!("未找到视频素材: {asset_id}"))?;
+        .ok_or_else(|| format!("未找到媒体: {asset_id}"))?;
     let stream_index = project
         .asset
         .video_stream_index
-        .ok_or_else(|| "素材不包含视频流".to_string())?;
+        .ok_or_else(|| "媒体不包含视频流".to_string())?;
     let preferences = preferences_clone(&state)?;
-    extract_subtitle_thumbnail(
+    let cache_preferences = preferences.clone();
+    let fingerprint = project.asset.fingerprint.clone();
+    let duration_us = project.asset.duration_us;
+    let lookup = tokio::task::spawn_blocking(move || {
+        read_subtitle_thumbnail_cache(&cache_preferences, &fingerprint, time_us, duration_us)
+    })
+    .await
+    .map_err(|error| format!("读取字幕缩略图缓存失败: {error}"))?;
+    if let Some(bytes) = lookup.bytes {
+        return Ok(bytes);
+    }
+    let jpeg = extract_subtitle_thumbnail(
         &ffmpeg_program(&preferences),
         &project.asset.path,
         stream_index,
-        time_us,
+        lookup.cache_time_us,
     )
+    .await?;
+    let fingerprint = project.asset.fingerprint;
+    tokio::task::spawn_blocking(move || {
+        write_subtitle_thumbnail_cache(
+            &preferences,
+            &fingerprint,
+            lookup.cache_time_us,
+            duration_us,
+            &jpeg,
+        )?;
+        Ok::<Vec<u8>, String>(jpeg)
+    })
     .await
+    .map_err(|error| format!("写入字幕缩略图缓存失败: {error}"))?
+}
+
+#[tauri::command]
+pub(crate) async fn get_cached_subtitle_thumbnail(
+    asset_id: String,
+    time_us: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<SubtitleThumbnailCacheLookup, String> {
+    let project = state
+        .projects
+        .lock()
+        .map_err(|_| "项目状态锁定失败".to_string())?
+        .get(&asset_id)
+        .cloned()
+        .ok_or_else(|| format!("未找到媒体: {asset_id}"))?;
+    let preferences = preferences_clone(&state)?;
+    tokio::task::spawn_blocking(move || {
+        Ok(read_subtitle_thumbnail_cache(
+            &preferences,
+            &project.asset.fingerprint,
+            time_us,
+            project.asset.duration_us,
+        ))
+    })
+    .await
+    .map_err(|error| format!("读取字幕缩略图缓存失败: {error}"))?
+}
+
+#[tauri::command]
+pub(crate) async fn cache_subtitle_thumbnail(
+    asset_id: String,
+    time_us: i64,
+    bytes: Vec<u8>,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    validate_subtitle_thumbnail_jpeg(&bytes)?;
+    let project = state
+        .projects
+        .lock()
+        .map_err(|_| "项目状态锁定失败".to_string())?
+        .get(&asset_id)
+        .cloned()
+        .ok_or_else(|| format!("未找到媒体: {asset_id}"))?;
+    let preferences = preferences_clone(&state)?;
+    tokio::task::spawn_blocking(move || {
+        write_subtitle_thumbnail_cache(
+            &preferences,
+            &project.asset.fingerprint,
+            time_us,
+            project.asset.duration_us,
+            &bytes,
+        )
+    })
+    .await
+    .map_err(|error| format!("写入字幕缩略图缓存失败: {error}"))?
 }
 
 pub(crate) async fn ensure_video_cover_thumbnail(
@@ -207,6 +306,159 @@ fn thumbnail_cache_layout(preferences: &Preferences, fingerprint: &str) -> Thumb
         index_key,
         cache_hash,
     }
+}
+
+fn clamped_subtitle_thumbnail_time(time_us: i64, duration_us: i64) -> i64 {
+    time_us.clamp(0, duration_us.saturating_sub(1_000).max(0))
+}
+
+fn subtitle_thumbnail_bucket(time_us: i64, duration_us: i64) -> i64 {
+    clamped_subtitle_thumbnail_time(time_us, duration_us)
+        .saturating_add(SUBTITLE_THUMBNAIL_BUCKET_US / 2)
+        / SUBTITLE_THUMBNAIL_BUCKET_US
+}
+
+fn subtitle_thumbnail_bucket_time(bucket: i64, duration_us: i64) -> i64 {
+    bucket
+        .max(0)
+        .saturating_mul(SUBTITLE_THUMBNAIL_BUCKET_US)
+        .min(duration_us.saturating_sub(1_000).max(0))
+}
+
+fn subtitle_thumbnail_time_distance(left: i64, right: i64) -> i64 {
+    left.max(right) - left.min(right)
+}
+
+fn subtitle_thumbnail_candidate_buckets(time_us: i64, duration_us: i64) -> Vec<i64> {
+    let requested_time_us = clamped_subtitle_thumbnail_time(time_us, duration_us);
+    let primary_bucket = subtitle_thumbnail_bucket(requested_time_us, duration_us);
+    let mut buckets = vec![
+        primary_bucket,
+        primary_bucket.saturating_sub(1),
+        primary_bucket.saturating_add(1),
+    ];
+    buckets.retain(|bucket| *bucket >= 0);
+    buckets.sort_by_key(|bucket| {
+        subtitle_thumbnail_time_distance(
+            subtitle_thumbnail_bucket_time(*bucket, duration_us),
+            requested_time_us,
+        )
+    });
+    buckets.dedup_by_key(|bucket| subtitle_thumbnail_bucket_time(*bucket, duration_us));
+    buckets
+}
+
+fn subtitle_thumbnail_cache_layout(
+    preferences: &Preferences,
+    fingerprint: &str,
+    bucket: i64,
+) -> (PathBuf, String) {
+    let cache_key = format!("{fingerprint}:{bucket}");
+    let cache_hash = hash_name(SUBTITLE_THUMBNAIL_CACHE_KEY_CONTEXT, cache_key.as_bytes());
+    let path = configured_cache_root(preferences)
+        .join(CACHE_PARENT_FOLDER)
+        .join(SUBTITLE_THUMBNAIL_CACHE_FOLDER)
+        .join(&cache_hash[..2])
+        .join(format!("{cache_hash}.lcst"));
+    (path, cache_key)
+}
+
+fn subtitle_thumbnail_cache_miss(time_us: i64, duration_us: i64) -> SubtitleThumbnailCacheLookup {
+    let bucket = subtitle_thumbnail_bucket(time_us, duration_us);
+    SubtitleThumbnailCacheLookup {
+        cache_time_us: subtitle_thumbnail_bucket_time(bucket, duration_us),
+        bytes: None,
+    }
+}
+
+fn read_subtitle_thumbnail_cache(
+    preferences: &Preferences,
+    fingerprint: &str,
+    time_us: i64,
+    duration_us: i64,
+) -> SubtitleThumbnailCacheLookup {
+    let Ok(_guard) = SUBTITLE_THUMBNAIL_CACHE_LOCK.lock() else {
+        return subtitle_thumbnail_cache_miss(time_us, duration_us);
+    };
+    read_subtitle_thumbnail_cache_unlocked(preferences, fingerprint, time_us, duration_us)
+}
+
+fn read_subtitle_thumbnail_cache_unlocked(
+    preferences: &Preferences,
+    fingerprint: &str,
+    time_us: i64,
+    duration_us: i64,
+) -> SubtitleThumbnailCacheLookup {
+    let requested_time_us = clamped_subtitle_thumbnail_time(time_us, duration_us);
+    for bucket in subtitle_thumbnail_candidate_buckets(requested_time_us, duration_us) {
+        let cache_time_us = subtitle_thumbnail_bucket_time(bucket, duration_us);
+        if subtitle_thumbnail_time_distance(cache_time_us, requested_time_us)
+            > SUBTITLE_THUMBNAIL_MATCH_TOLERANCE_US
+        {
+            continue;
+        }
+        let (path, cache_key) = subtitle_thumbnail_cache_layout(preferences, fingerprint, bucket);
+        let Some(cached) = read_private_cache::<CachedSubtitleThumbnail>(
+            &path,
+            &cache_key,
+            SUBTITLE_THUMBNAIL_CACHE_KEY_CONTEXT,
+        ) else {
+            continue;
+        };
+        if cached.version != SUBTITLE_THUMBNAIL_CACHE_VERSION
+            || cached.time_us != cache_time_us
+            || validate_subtitle_thumbnail_jpeg(&cached.jpeg).is_err()
+        {
+            continue;
+        }
+        return SubtitleThumbnailCacheLookup {
+            cache_time_us,
+            bytes: Some(cached.jpeg),
+        };
+    }
+    subtitle_thumbnail_cache_miss(requested_time_us, duration_us)
+}
+
+fn write_subtitle_thumbnail_cache(
+    preferences: &Preferences,
+    fingerprint: &str,
+    time_us: i64,
+    duration_us: i64,
+    jpeg: &[u8],
+) -> Result<(), String> {
+    validate_subtitle_thumbnail_jpeg(jpeg)?;
+    let _guard = SUBTITLE_THUMBNAIL_CACHE_LOCK
+        .lock()
+        .map_err(|_| "字幕缩略图缓存锁定失败".to_string())?;
+    if read_subtitle_thumbnail_cache_unlocked(preferences, fingerprint, time_us, duration_us)
+        .bytes
+        .is_some()
+    {
+        return Ok(());
+    }
+    let bucket = subtitle_thumbnail_bucket(time_us, duration_us);
+    let cache_time_us = subtitle_thumbnail_bucket_time(bucket, duration_us);
+    let (path, cache_key) = subtitle_thumbnail_cache_layout(preferences, fingerprint, bucket);
+    write_private_cache(
+        &path,
+        &cache_key,
+        SUBTITLE_THUMBNAIL_CACHE_KEY_CONTEXT,
+        &CachedSubtitleThumbnail {
+            version: SUBTITLE_THUMBNAIL_CACHE_VERSION,
+            time_us: cache_time_us,
+            jpeg: jpeg.to_vec(),
+        },
+    )
+}
+
+fn validate_subtitle_thumbnail_jpeg(bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() < 4 || bytes.len() > MAX_SUBTITLE_THUMBNAIL_BYTES {
+        return Err("字幕缩略图缓存数据大小无效".to_string());
+    }
+    if !bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        return Err("字幕缩略图缓存不是有效的 JPEG 数据".to_string());
+    }
+    Ok(())
 }
 
 fn register_thumbnail_cache(layout: &ThumbnailCacheLayout) -> Result<(), String> {
@@ -629,18 +881,18 @@ where
     Value: Serialize,
 {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| format!("创建视频封面缓存目录失败: {error}"))?;
+        fs::create_dir_all(parent).map_err(|error| format!("创建缩略图缓存目录失败: {error}"))?;
     }
     let serialized =
-        bincode::serialize(value).map_err(|error| format!("编码视频封面缓存失败: {error}"))?;
+        bincode::serialize(value).map_err(|error| format!("编码缩略图缓存失败: {error}"))?;
     let envelope = PrivateCacheEnvelope {
         version: 1,
         digest: private_cache_digest(&serialized, key, context),
         payload: transform_private_payload(&serialized, key, context),
     };
     let output =
-        bincode::serialize(&envelope).map_err(|error| format!("封装视频封面缓存失败: {error}"))?;
-    fs::write(path, output).map_err(|error| format!("写入视频封面缓存失败: {error}"))
+        bincode::serialize(&envelope).map_err(|error| format!("封装缩略图缓存失败: {error}"))?;
+    fs::write(path, output).map_err(|error| format!("写入缩略图缓存失败: {error}"))
 }
 
 fn private_cache_digest(bytes: &[u8], key: &str, context: &[u8]) -> [u8; 32] {
@@ -729,6 +981,62 @@ mod tests {
             second_fingerprint.push('x');
         };
         assert_ne!(first.index_path, second.index_path);
+    }
+
+    #[test]
+    fn subtitle_thumbnail_times_share_stable_hundred_millisecond_buckets() {
+        let duration_us = 10_000_000;
+        assert_eq!(
+            subtitle_thumbnail_bucket(1_200_001, duration_us),
+            subtitle_thumbnail_bucket(1_249_999, duration_us)
+        );
+        assert_eq!(
+            subtitle_thumbnail_bucket_time(
+                subtitle_thumbnail_bucket(1_249_999, duration_us),
+                duration_us
+            ),
+            1_200_000
+        );
+    }
+
+    #[test]
+    fn subtitle_thumbnail_cache_hits_across_bucket_boundaries() {
+        let cache_root = env::temp_dir().join(format!(
+            "linecut-subtitle-thumbnail-test-{}",
+            Uuid::new_v4()
+        ));
+        let preferences = Preferences {
+            cache_dir: cache_root.to_string_lossy().into_owned(),
+            ..Preferences::default()
+        };
+        let fingerprint = "subtitle-cache-fingerprint";
+        let duration_us = 10_000_000;
+        let jpeg = vec![0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4];
+
+        write_subtitle_thumbnail_cache(&preferences, fingerprint, 1_249_999, duration_us, &jpeg)
+            .expect("write subtitle thumbnail cache");
+        let lookup =
+            read_subtitle_thumbnail_cache(&preferences, fingerprint, 1_250_001, duration_us);
+
+        assert_eq!(lookup.cache_time_us, 1_200_000);
+        assert_eq!(lookup.bytes, Some(jpeg.clone()));
+        write_subtitle_thumbnail_cache(
+            &preferences,
+            fingerprint,
+            1_250_001,
+            duration_us,
+            &[0xff, 0xd8, 0xff, 0xe0, 9, 9, 9, 9],
+        )
+        .expect("reuse nearby subtitle thumbnail cache");
+        let primary_bucket = subtitle_thumbnail_bucket(1_250_001, duration_us);
+        let (unnecessary_path, _) =
+            subtitle_thumbnail_cache_layout(&preferences, fingerprint, primary_bucket);
+        assert!(!unnecessary_path.exists());
+        assert_eq!(
+            read_subtitle_thumbnail_cache(&preferences, fingerprint, 1_250_001, duration_us).bytes,
+            Some(jpeg)
+        );
+        let _ = fs::remove_dir_all(cache_root);
     }
 
     #[test]

@@ -3,6 +3,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import "./ModalDialog.css";
 
 export interface ModalDialogProps {
+  actions?: ReactNode;
   bodyClassName?: string;
   cancelDisabled?: boolean;
   cancelLabel?: string;
@@ -53,6 +54,7 @@ function playPromptSound() {
 }
 
 export function ModalDialog({
+  actions,
   bodyClassName,
   cancelDisabled = false,
   cancelLabel = "取消",
@@ -119,22 +121,26 @@ export function ModalDialog({
         <div className={`modal-dialog-body ${bodyClassName ?? ""}`}>{children}</div>
 
         <footer className="modal-dialog-actions">
-          <button
-            type="button"
-            className="modal-dialog-confirm"
-            onClick={onConfirm}
-            disabled={confirmDisabled}
-          >
-            {confirmLabel}
-          </button>
-          <button
-            type="button"
-            className="modal-dialog-cancel"
-            onClick={onCancel}
-            disabled={cancelDisabled}
-          >
-            {cancelLabel}
-          </button>
+          {actions ?? (
+            <>
+              <button
+                type="button"
+                className="modal-dialog-confirm"
+                onClick={onConfirm}
+                disabled={confirmDisabled}
+              >
+                {confirmLabel}
+              </button>
+              <button
+                type="button"
+                className="modal-dialog-cancel"
+                onClick={onCancel}
+                disabled={cancelDisabled}
+              >
+                {cancelLabel}
+              </button>
+            </>
+          )}
         </footer>
       </section>
     </div>

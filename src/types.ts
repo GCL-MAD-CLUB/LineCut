@@ -79,6 +79,7 @@ export interface MediaBinItem {
   kind: MediaBinItemKind;
   enabled: boolean;
   hidden: boolean;
+  offline: boolean;
   path: string;
   file_name: string;
   duration_us: number;
@@ -96,7 +97,6 @@ export interface MediaBinItem {
 
 export interface ProjectMediaBinState {
   items: MediaBinItem[];
-  read_only: boolean;
 }
 
 export interface ProjectPreviewState {
@@ -106,7 +106,7 @@ export interface ProjectPreviewState {
 export interface ProjectEditorState {
   active_video_id: string;
   active_track_id: string;
-  selected_cue_ids: string[];
+  subtitle_selections: Record<string, Record<string, string[]>>;
   detached_video_ids: string[];
   preview: ProjectPreviewState;
 }
@@ -118,7 +118,6 @@ export interface ProjectWorkspace {
 }
 
 export interface DemuxedAudioTrack {
-  path: string;
   file_name: string;
   duration_us: number;
   stream_index: number;
@@ -134,7 +133,9 @@ export interface DemuxMediaResult {
 
 export interface ExportBoundMedia {
   kind: "audio" | "subtitle";
+  source: "file" | "embedded_stream";
   path: string;
+  stream_index: number | null;
 }
 
 export interface ImportResult {

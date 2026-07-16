@@ -32,6 +32,7 @@ const FFMPEG_PROGRESS_EVENT: &str = "ffmpeg-progress";
 const PROXY_FILE_NAME: &str = "proxy_preview_i.mp4";
 const DEFAULT_FFMPEG_PROGRAM: &str = "ffmpeg";
 const DEFAULT_FFPROBE_PROGRAM: &str = "ffprobe";
+const PROJECT_FILE_EXTENSION: &str = "lcp";
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -39,6 +40,7 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 struct AppState {
     projects: Mutex<HashMap<String, Project>>,
     preferences: Mutex<Preferences>,
+    launch_project_path: Mutex<Option<String>>,
     running_tasks: Mutex<HashMap<String, RunningTask>>,
     running_ffmpeg: Mutex<HashMap<String, RunningFfmpeg>>,
 }
@@ -48,10 +50,25 @@ impl AppState {
         Self {
             projects: Mutex::new(HashMap::new()),
             preferences: Mutex::new(load_preferences().unwrap_or_default()),
+            launch_project_path: Mutex::new(project_path_from_launch_args()),
             running_tasks: Mutex::new(HashMap::new()),
             running_ffmpeg: Mutex::new(HashMap::new()),
         }
     }
+}
+
+fn project_path_from_launch_args() -> Option<String> {
+    env::args_os()
+        .skip(1)
+        .map(PathBuf::from)
+        .find(|path| {
+            path.is_file()
+                && path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case(PROJECT_FILE_EXTENSION))
+        })
+        .map(|path| path.to_string_lossy().into_owned())
 }
 
 #[derive(Clone)]
@@ -246,18 +263,13 @@ enum MediaBinItemOrigin {
     Decomposed,
 }
 
-fn media_bin_item_enabled_default() -> bool {
-    true
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MediaBinItem {
     id: String,
     kind: MediaBinItemKind,
-    #[serde(default = "media_bin_item_enabled_default")]
     enabled: bool,
-    #[serde(default)]
     hidden: bool,
+    offline: bool,
     path: String,
     file_name: String,
     duration_us: i64,
@@ -276,7 +288,6 @@ struct MediaBinItem {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ProjectMediaBinState {
     items: Vec<MediaBinItem>,
-    read_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -288,7 +299,7 @@ struct ProjectPreviewState {
 struct ProjectEditorState {
     active_video_id: String,
     active_track_id: String,
-    selected_cue_ids: Vec<String>,
+    subtitle_selections: HashMap<String, HashMap<String, Vec<String>>>,
     detached_video_ids: Vec<String>,
     preview: ProjectPreviewState,
 }
@@ -303,13 +314,6 @@ struct ProjectWorkspace {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ProjectDocument {
     workspace: ProjectWorkspace,
-    saved_at: u64,
-    app_version: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct LegacyProjectDocument {
-    project: Option<Project>,
     saved_at: u64,
     app_version: String,
 }
@@ -386,7 +390,6 @@ struct AddExternalSubtitlesResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct DemuxedAudioTrack {
-    path: String,
     file_name: String,
     duration_us: i64,
     stream_index: i32,
@@ -456,9 +459,18 @@ enum ExportBoundMediaKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ExportBoundMediaSource {
+    File,
+    EmbeddedStream,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ExportBoundMedia {
     kind: ExportBoundMediaKind,
+    source: ExportBoundMediaSource,
     path: String,
+    stream_index: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -525,16 +537,22 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_preferences,
+            take_launch_project_path,
             update_preferences,
             import_media,
             generate_video_cover_thumbnail,
+            get_cached_subtitle_thumbnail,
+            cache_subtitle_thumbnail,
             generate_subtitle_thumbnail,
             demux_media_streams,
             generate_proxy,
             add_external_subtitles,
             save_project_file,
             open_project_file,
+            sync_project_workspace,
             close_project,
+            path_is_file,
+            reveal_in_file_manager,
             cancel_task,
             export_clips
         ])

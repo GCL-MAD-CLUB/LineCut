@@ -10,7 +10,10 @@ import {
 import {
   isMediaItemEnabled,
   isMediaVideoDetached,
+  isVirtualMediaItem,
   mediaItemProject,
+  subtitleTrackContext,
+  subtitleTrackCues,
   useAppStore,
 } from "../../store";
 import { isTauriRuntime } from "../../tauriRuntime";
@@ -129,10 +132,16 @@ function buildDialogueLineLabels(cues: SubtitleCue[], lineCount: number) {
 
 function useActiveCues() {
   const project = useAppStore((state) => state.project);
+  const projects = useAppStore((state) => state.projects);
+  const mediaItems = useAppStore((state) => state.mediaItems);
+  const activeVideoId = useAppStore((state) => state.activeVideoId);
   const activeTrackId = useAppStore((state) => state.activeTrackId);
   return useMemo(
-    () => (activeTrackId && project ? (project.cues[activeTrackId] ?? []) : []),
-    [activeTrackId, project],
+    () =>
+      activeTrackId
+        ? subtitleTrackCues(project, projects, mediaItems, activeVideoId, activeTrackId)
+        : [],
+    [activeTrackId, activeVideoId, mediaItems, project, projects],
   );
 }
 
@@ -280,6 +289,17 @@ export function ExportPanel() {
     if (!exportProject || !activeTrackId) {
       return;
     }
+    const trackContext = subtitleTrackContext(
+      exportProject,
+      projects,
+      mediaItems,
+      exportVideoId,
+      activeTrackId,
+    );
+    if (!trackContext) {
+      setMessage("无法解析当前字幕轨的来源，请重新绑定字幕后再导出。");
+      return;
+    }
     if (!isTauriRuntime()) {
       setMessage("浏览器预览不能导出视频，请运行 Tauri 桌面应用。");
       return;
@@ -300,13 +320,29 @@ export function ExportPanel() {
     setExportResult(null);
     try {
       const boundMedia: ExportBoundMedia[] = boundMediaItems
-        .filter((item) => selectedBoundMediaIds.includes(item.id) && item.path)
-        .map((item) => ({
-          kind: item.kind === "audio" ? "audio" : "subtitle",
-          path: item.path,
-        }));
+        .filter((item) => selectedBoundMediaIds.includes(item.id))
+        .map((item): ExportBoundMedia => {
+          const kind = item.kind === "audio" ? "audio" : "subtitle";
+          if (isVirtualMediaItem(item)) {
+            const sourceProject = mediaItemProject(item, projects, mediaItems);
+            if (!sourceProject) {
+              throw new Error(`无法解析虚拟媒体“${item.file_name}”的来源视频。`);
+            }
+            return {
+              kind,
+              source: "embedded_stream",
+              path: sourceProject.asset.path,
+              stream_index: item.stream_index,
+            };
+          }
+          if (!item.path) {
+            throw new Error(`绑定媒体“${item.file_name}”缺少来源路径。`);
+          }
+          return { kind, source: "file", path: item.path, stream_index: null };
+        });
       const result = await invoke<ExportResult>("export_clips", {
         assetId: exportProject.asset.id,
+        trackAssetId: trackContext.project.asset.id,
         trackId: activeTrackId,
         cueIds: Array.from(selectedCueIds),
         options: exportOptions,

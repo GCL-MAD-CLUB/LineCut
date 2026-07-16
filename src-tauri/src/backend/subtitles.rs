@@ -1,33 +1,22 @@
 use super::*;
 
-pub(crate) async fn extract_embedded_subtitle(
+pub(crate) async fn parse_embedded_subtitle_async(
     video_path: &Path,
     stream_index: i32,
     codec: &str,
-    cache_dir: &Path,
+    track_id: &str,
     preferences: &Preferences,
-    progress: Option<FfmpegProgressContext<'_>>,
-) -> Result<PathBuf, String> {
-    let ext = subtitle_extension_for_codec(codec);
-    let subtitle_dir = cache_dir.join("subtitles");
-    if let Some(cancel) = progress.as_ref().map(|context| context.cancel.clone()) {
-        let directory = subtitle_dir.clone();
-        spawn_blocking_cancellable(cancel, "创建字幕缓存目录", move |_| {
-            fs::create_dir_all(directory).map_err(|e| format!("创建字幕缓存目录失败: {e}"))
-        })
-        .await?;
+    state: &AppState,
+    task_id: &str,
+    cancel: Arc<AtomicBool>,
+) -> Result<Vec<SubtitleCue>, String> {
+    let output_codec = if matches!(codec.to_ascii_lowercase().as_str(), "ass" | "ssa") {
+        "ass"
     } else {
-        fs::create_dir_all(&subtitle_dir).map_err(|e| format!("创建字幕缓存目录失败: {e}"))?;
-    }
-    let output = subtitle_dir.join(format!("stream_{stream_index}.{ext}"));
-    if output.exists() {
-        if let Some(progress) = &progress {
-            ensure_not_cancelled(&progress.cancel)?;
-        }
-        return Ok(output);
-    }
+        "srt"
+    };
     let args = vec![
-        "-y".to_string(),
+        "-nostdin".to_string(),
         "-hide_banner".to_string(),
         "-loglevel".to_string(),
         "error".to_string(),
@@ -35,16 +24,18 @@ pub(crate) async fn extract_embedded_subtitle(
         video_path.to_string_lossy().into_owned(),
         "-map".to_string(),
         format!("0:{stream_index}"),
-        output.to_string_lossy().into_owned(),
+        "-f".to_string(),
+        output_codec.to_string(),
+        "pipe:1".to_string(),
     ];
     let program = ffmpeg_program(preferences);
-    if let Some(mut progress) = progress {
-        progress.cleanup_paths.push(output.clone());
-        run_status_with_ffmpeg_progress(&program, &args, progress).await?;
-    } else {
-        run_status(&program, &args).await?;
-    }
-    Ok(output)
+    let text = run_output(&program, &args, state, task_id, cancel.clone()).await?;
+    let track_id = track_id.to_string();
+    let output_codec = output_codec.to_string();
+    spawn_blocking_cancellable(cancel, "解析内嵌字幕", move |cancel| {
+        parse_subtitle_text_cancellable(&text, &output_codec, &track_id, Some(cancel))
+    })
+    .await
 }
 
 pub(crate) fn load_external_subtitle_cancellable(
@@ -117,31 +108,25 @@ pub(crate) fn parse_subtitle_file_cancellable(
     let bytes = fs::read(path).map_err(|e| format!("读取字幕文件失败: {e}"))?;
     check_optional_cancel(cancel)?;
     let text = decode_text(&bytes);
-    let lower_codec = codec.to_ascii_lowercase();
-    let ext = path
-        .extension()
-        .map(|value| value.to_string_lossy().to_ascii_lowercase())
-        .unwrap_or_default();
-
-    if lower_codec.contains("ass") || lower_codec.contains("ssa") || ext == "ass" || ext == "ssa" {
-        let cues = parse_ass_cancellable(&text, track_id, cancel)?;
-        normalize_cues_cancellable(cues, track_id, cancel)
-    } else {
-        let cues = parse_srt_or_vtt_cancellable(&text, track_id, cancel)?;
-        normalize_cues_cancellable(cues, track_id, cancel)
-    }
+    parse_subtitle_text_cancellable(&text, codec, track_id, cancel)
 }
 
-pub(crate) async fn parse_subtitle_file_async(
-    path: PathBuf,
-    codec: String,
-    track_id: String,
-    cancel: Arc<AtomicBool>,
+pub(crate) fn parse_subtitle_text_cancellable(
+    text: &str,
+    codec: &str,
+    track_id: &str,
+    cancel: Option<&AtomicBool>,
 ) -> Result<Vec<SubtitleCue>, String> {
-    spawn_blocking_cancellable(cancel, "解析字幕", move |cancel| {
-        parse_subtitle_file_cancellable(&path, &codec, &track_id, Some(cancel))
-    })
-    .await
+    check_optional_cancel(cancel)?;
+    let lower_codec = codec.to_ascii_lowercase();
+
+    if lower_codec.contains("ass") || lower_codec.contains("ssa") {
+        let cues = parse_ass_cancellable(text, track_id, cancel)?;
+        normalize_cues_cancellable(cues, track_id, cancel)
+    } else {
+        let cues = parse_srt_or_vtt_cancellable(text, track_id, cancel)?;
+        normalize_cues_cancellable(cues, track_id, cancel)
+    }
 }
 
 pub(crate) fn normalize_cues_cancellable(
@@ -494,14 +479,6 @@ pub(crate) fn is_text_subtitle_codec(codec: &str) -> bool {
     )
 }
 
-pub(crate) fn subtitle_extension_for_codec(codec: &str) -> &'static str {
-    match codec.to_ascii_lowercase().as_str() {
-        "ass" | "ssa" => "ass",
-        "webvtt" => "vtt",
-        _ => "srt",
-    }
-}
-
 pub(crate) fn codec_from_path(path: &Path) -> String {
     match path
         .extension()
@@ -513,5 +490,22 @@ pub(crate) fn codec_from_path(path: &Path) -> String {
         "ssa" => "ssa".to_string(),
         "vtt" | "webvtt" => "webvtt".to_string(),
         _ => "subrip".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_embedded_subtitle_text_without_a_cache_file() {
+        let text = "1\n00:00:01,250 --> 00:00:02,500\n第一句\n\n2\n00:00:03,000 --> 00:00:04,000\n第二句\n";
+        let cues = parse_subtitle_text_cancellable(text, "srt", "virtual-track", None)
+            .expect("parse in-memory subtitle text");
+
+        assert_eq!(cues.len(), 2);
+        assert_eq!(cues[0].id, "virtual-track:0");
+        assert_eq!(cues[0].start_us, 1_250_000);
+        assert_eq!(cues[1].plain_text, "第二句");
     }
 }

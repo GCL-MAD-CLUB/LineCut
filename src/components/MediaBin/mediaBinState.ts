@@ -5,6 +5,7 @@ export type MediaBinViewMode = "list" | "grid";
 interface MediaBinPanelState {
   query: string;
   selectedIds: Set<string>;
+  clipboardItemCount: number;
   viewMode: MediaBinViewMode;
   listSize: number;
   gridSize: number;
@@ -12,6 +13,7 @@ interface MediaBinPanelState {
   bindingPopoverOpen: boolean;
   bindingVideoId: string;
   setQuery: (query: string) => void;
+  setClipboardItemCount: (count: number) => void;
   selectOnly: (itemId: string) => void;
   toggleSelected: (itemId: string) => void;
   selectItems: (itemIds: string[]) => void;
@@ -27,6 +29,7 @@ interface MediaBinPanelState {
 export const useMediaBinState = createPanelState<MediaBinPanelState>(() => (set) => ({
   query: "",
   selectedIds: new Set<string>(),
+  clipboardItemCount: 0,
   viewMode: "list",
   listSize: 0,
   gridSize: 0,
@@ -34,6 +37,7 @@ export const useMediaBinState = createPanelState<MediaBinPanelState>(() => (set)
   bindingPopoverOpen: false,
   bindingVideoId: "",
   setQuery: (query) => set({ query }),
+  setClipboardItemCount: (clipboardItemCount) => set({ clipboardItemCount }),
   selectOnly: (itemId) => set({ selectedIds: new Set([itemId]) }),
   toggleSelected: (itemId) =>
     set((state) => {

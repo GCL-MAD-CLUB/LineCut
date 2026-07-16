@@ -7,10 +7,18 @@ import {
   useRef,
   useState,
   type DragEvent,
+  type SyntheticEvent,
 } from "react";
 import { flushSync } from "react-dom";
 import { useAppEvent } from "../../appEvents";
-import { isMediaItemEnabled, isMediaVideoDetached, useAppStore } from "../../store";
+import {
+  isMediaItemEnabled,
+  isMediaItemOffline,
+  isMediaVideoDetached,
+  isVirtualMediaItem,
+  mediaItemProject,
+  useAppStore,
+} from "../../store";
 import {
   clampTimelineStartFrame,
   frameToTimeUs,
@@ -33,18 +41,67 @@ const previewModeLabels: Record<(typeof previewModeOptions)[number], string> = {
 };
 type PreviewMode = (typeof previewModeOptions)[number];
 
+interface PendingPreviewRestore {
+  frame: number;
+  resumePlayback: boolean;
+}
+
 interface BoundAudioElementProps {
   itemId: string;
   path: string;
+  audioTrackIndex: number;
   onElementChanged: (itemId: string, element: HTMLAudioElement | null) => void;
 }
 
-function BoundAudioElement({ itemId, path, onElementChanged }: BoundAudioElementProps) {
+interface SelectableAudioTrack {
+  enabled: boolean;
+}
+
+interface SelectableAudioTrackList {
+  length: number;
+  [index: number]: SelectableAudioTrack;
+}
+
+function selectEmbeddedAudioTrack(element: HTMLAudioElement, audioTrackIndex: number) {
+  const audioTracks = (element as HTMLAudioElement & { audioTracks?: SelectableAudioTrackList })
+    .audioTracks;
+  if (!audioTracks || audioTrackIndex < 0 || audioTrackIndex >= audioTracks.length) {
+    return;
+  }
+  for (let index = 0; index < audioTracks.length; index += 1) {
+    audioTracks[index].enabled = index === audioTrackIndex;
+  }
+}
+
+function BoundAudioElement({
+  itemId,
+  path,
+  audioTrackIndex,
+  onElementChanged,
+}: BoundAudioElementProps) {
   const setElement = useCallback(
-    (element: HTMLAudioElement | null) => onElementChanged(itemId, element),
-    [itemId, onElementChanged],
+    (element: HTMLAudioElement | null) => {
+      if (element) {
+        selectEmbeddedAudioTrack(element, audioTrackIndex);
+      }
+      onElementChanged(itemId, element);
+    },
+    [audioTrackIndex, itemId, onElementChanged],
   );
-  return <audio ref={setElement} src={convertFileSrc(path)} preload="auto" />;
+  const handleLoadedMetadata = useCallback(
+    (event: SyntheticEvent<HTMLAudioElement>) => {
+      selectEmbeddedAudioTrack(event.currentTarget, audioTrackIndex);
+    },
+    [audioTrackIndex],
+  );
+  return (
+    <audio
+      ref={setElement}
+      src={convertFileSrc(path)}
+      preload="auto"
+      onLoadedMetadata={handleLoadedMetadata}
+    />
+  );
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -63,6 +120,7 @@ function isEditableKeyboardTarget(target: EventTarget | null) {
 
 export function SourceMonitor() {
   const project = useAppStore((state) => state.project);
+  const projects = useAppStore((state) => state.projects);
   const mediaItems = useAppStore((state) => state.mediaItems);
   const activeVideoId = useAppStore((state) => state.activeVideoId);
   const detachedVideoIds = useAppStore((state) => state.detachedVideoIds);
@@ -83,6 +141,7 @@ export function SourceMonitor() {
   const videoSeekInFlightRef = useRef(false);
   const lastSeekCommandAtRef = useRef(0);
   const playbackTickRef = useRef<number | null>(null);
+  const pendingPreviewRestoreRef = useRef<PendingPreviewRestore | null>(null);
   const cuePlaybackEndFrameRef = useRef<number | null>(null);
   const currentFrame = useSourceMonitorState((state) => state.currentFrame);
   const setCurrentFrame = useSourceMonitorState((state) => state.setCurrentFrame);
@@ -134,18 +193,59 @@ export function SourceMonitor() {
   const hasMedia = Boolean(project);
   const boundAudioItems = useMemo(
     () =>
-      mediaItems.filter(
-        (item) =>
+      mediaItems.filter((item) => {
+        const sourceVideo = item.source_video_id
+          ? mediaItems.find((candidate) => candidate.id === item.source_video_id)
+          : null;
+        return (
           item.kind === "audio" &&
           isMediaItemEnabled(item) &&
-          item.bound_to_video_id === activeVideoId,
-      ),
+          !isMediaItemOffline(item) &&
+          !Boolean(sourceVideo && isMediaItemOffline(sourceVideo)) &&
+          item.bound_to_video_id === activeVideoId
+        );
+      }),
     [activeVideoId, mediaItems],
   );
   const activeVideoItem = mediaItems.find((item) => item.id === activeVideoId);
+  const activeVideoOffline = Boolean(activeVideoItem && isMediaItemOffline(activeVideoItem));
   const sourceAudioDetached = activeVideoItem
     ? isMediaVideoDetached(activeVideoItem, detachedVideoIds)
     : false;
+  const primaryVirtualAudioEnabled = Boolean(
+    project &&
+    boundAudioItems.some(
+      (item) =>
+        isVirtualMediaItem(item) &&
+        item.source_video_id === project.asset.id &&
+        item.stream_index === project.asset.audio_stream_index,
+    ),
+  );
+  const boundAudioSources = useMemo(
+    () =>
+      boundAudioItems.flatMap((item) => {
+        if (!isVirtualMediaItem(item)) {
+          return item.path ? [{ itemId: item.id, path: item.path, audioTrackIndex: 0 }] : [];
+        }
+        const sourceProject = mediaItemProject(item, projects, mediaItems);
+        if (!sourceProject) {
+          return [];
+        }
+        if (
+          sourceProject.asset.id === project?.asset.id &&
+          item.stream_index === sourceProject.asset.audio_stream_index
+        ) {
+          return [];
+        }
+        const audioTrackIndex = sourceProject.streams
+          .filter((stream) => stream.codec_type === "audio")
+          .findIndex((stream) => stream.index === item.stream_index);
+        return audioTrackIndex >= 0
+          ? [{ itemId: item.id, path: sourceProject.asset.path, audioTrackIndex }]
+          : [];
+      }),
+    [boundAudioItems, mediaItems, project?.asset.id, projects],
+  );
   const durationUs = project?.asset.duration_us ?? 0;
   const videoStream = useMemo(() => {
     if (!project) {
@@ -166,9 +266,9 @@ export function SourceMonitor() {
     if (!project) {
       return "";
     }
-    const path = useProxy ? proxyPath : project.asset.path;
+    const path = useProxy ? proxyPath : activeVideoOffline ? "" : project.asset.path;
     return path ? convertFileSrc(path) : "";
-  }, [project, proxyPath, useProxy]);
+  }, [activeVideoOffline, project, proxyPath, useProxy]);
   const mediaKey = project
     ? `${activeVideoId}:${project.asset.id}:${durationUs}:${frameRate}`
     : `empty:${frameRate}`;
@@ -203,6 +303,9 @@ export function SourceMonitor() {
     currentFrameRef.current = mediaChanged ? 0 : currentFrame;
     timelineStartFrameRef.current = mediaChanged ? 0 : timelineStartFrame;
     timelineSpanFramesRef.current = mediaChanged ? nextSpan : timelineSpanFrames;
+    if (mediaChanged) {
+      pendingPreviewRestoreRef.current = null;
+    }
     cuePlaybackEndFrameRef.current = null;
     setIsPlaying(false);
   }, [mediaKey]);
@@ -334,6 +437,14 @@ export function SourceMonitor() {
 
   function changePreviewMode(value: PreviewMode) {
     if (value === "source") {
+      if (activeVideoOffline) {
+        setMessage("完整分辨率媒体已脱机，请先重新链接媒体。");
+        return;
+      }
+      if (!useProxy) {
+        return;
+      }
+      preservePreviewPlayback();
       sourcePreviewSelected();
       return;
     }
@@ -341,6 +452,10 @@ export function SourceMonitor() {
       return;
     }
     if (proxyPath) {
+      if (useProxy) {
+        return;
+      }
+      preservePreviewPlayback();
       proxyPreviewSelected();
       return;
     }
@@ -351,9 +466,11 @@ export function SourceMonitor() {
   function handleVideoError() {
     if (!useProxy && project) {
       if (proxyPath) {
+        preservePreviewPlayback();
         proxyPreviewSelected();
         setMessage("原文件无法直接播放，已切换到代理模式。");
       } else {
+        pendingPreviewRestoreRef.current = null;
         proxyDialogOpened();
         setMessage("原文件无法直接播放，请创建代理后预览。");
       }
@@ -363,6 +480,23 @@ export function SourceMonitor() {
   function clampMonitorFrame(valueFrame: number) {
     const roundedFrame = Number.isFinite(valueFrame) ? Math.round(valueFrame) : 0;
     return durationFrames > 0 ? clamp(roundedFrame, 0, durationFrames) : Math.max(0, roundedFrame);
+  }
+
+  function preservePreviewPlayback() {
+    const video = videoRef.current;
+    const pending = pendingPreviewRestoreRef.current;
+    const frame = clampMonitorFrame(pending?.frame ?? playbackFrame());
+    const resumePlayback =
+      pending?.resumePlayback ?? Boolean(video && !video.paused && !video.ended);
+    pendingPreviewRestoreRef.current = { frame, resumePlayback };
+    currentFrameRef.current = frame;
+    seekTargetFrameRef.current = frame;
+    setCurrentFrame(frame);
+    stopPlaybackTicker();
+    pauseBoundAudio();
+    if (resumePlayback) {
+      setIsPlaying(true);
+    }
   }
 
   function usToMonitorFrame(valueUs: number) {
@@ -603,11 +737,30 @@ export function SourceMonitor() {
   }
 
   function handleLoadedMetadata(element: HTMLVideoElement) {
-    const restoredFrame = clampMonitorFrame(currentFrame);
+    const restore = pendingPreviewRestoreRef.current;
+    const restoredFrame = clampMonitorFrame(restore?.frame ?? currentFrame);
     seekTargetFrameRef.current = restoredFrame;
+    const resumePlayback = () => {
+      if (pendingPreviewRestoreRef.current !== restore) {
+        return;
+      }
+      pendingPreviewRestoreRef.current = null;
+      if (!restore?.resumePlayback) {
+        return;
+      }
+      void element.play().catch(() => setIsPlaying(false));
+    };
     if (usToMonitorFrame(element.currentTime * 1_000_000) !== restoredFrame) {
-      element.currentTime = frameToClampedUs(restoredFrame) / 1_000_000;
+      element.addEventListener("seeked", resumePlayback, { once: true });
+      try {
+        element.currentTime = frameToClampedUs(restoredFrame) / 1_000_000;
+      } catch {
+        element.removeEventListener("seeked", resumePlayback);
+        resumePlayback();
+      }
+      return;
     }
+    resumePlayback();
   }
 
   function togglePlayback() {
@@ -673,7 +826,10 @@ export function SourceMonitor() {
         stageRef={videoStageRef}
         videoRef={videoRef}
         videoSrc={videoSrc}
-        muted={sourceAudioDetached}
+        unavailableMessage={
+          activeVideoOffline && !useProxy ? "媒体脱机，请通过右键菜单重新链接媒体" : undefined
+        }
+        muted={sourceAudioDetached && !primaryVirtualAudioEnabled}
         zoomLevel={zoomLevel}
         zoomPan={zoomPan}
         onVideoError={handleVideoError}
@@ -688,17 +844,23 @@ export function SourceMonitor() {
         onPause={(video) => {
           cuePlaybackEndFrameRef.current = null;
           stopPlaybackTicker();
+          if (pendingPreviewRestoreRef.current) {
+            pauseBoundAudio();
+            setIsPlaying(pendingPreviewRestoreRef.current.resumePlayback);
+            return;
+          }
           syncCurrentTimeFromVideo(video);
           pauseBoundAudio();
           setIsPlaying(false);
         }}
       />
       <div className="bound-audio-stack" aria-hidden="true">
-        {boundAudioItems.map((item) => (
+        {boundAudioSources.map((source) => (
           <BoundAudioElement
-            key={item.id}
-            itemId={item.id}
-            path={item.path}
+            key={source.itemId}
+            itemId={source.itemId}
+            path={source.path}
+            audioTrackIndex={source.audioTrackIndex}
             onElementChanged={registerBoundAudioElement}
           />
         ))}

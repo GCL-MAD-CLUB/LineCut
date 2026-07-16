@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   Grid2X2,
   Link2,
@@ -24,7 +25,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import { emitAppEvent } from "../../appEvents";
+import { emitAppEvent, useAppEvent } from "../../appEvents";
 import {
   cancelFfmpegTask,
   createFfmpegTaskId,
@@ -33,12 +34,17 @@ import {
 import {
   isMediaItemEnabled,
   isMediaItemHidden,
+  isMediaItemOffline,
   isMediaVideoDetached,
+  isVirtualMediaItem,
   mediaItemProject,
+  getProjectWorkspaceSnapshot,
   useAppStore,
 } from "../../store";
 import { isTauriRuntime } from "../../tauriRuntime";
 import type { AddExternalSubtitlesResult, DemuxMediaResult, MediaBinItem } from "../../types";
+import { runMediaImportTask } from "../../mediaImportTask";
+import { MediaLinkDialog, type MediaLinkCandidate, type MediaLinkMode } from "../MediaLinkDialog";
 import { ModalDialog } from "../ModalDialog";
 import { PopupMenu, PopupMenuItem, PopupMenuSeparator, PopupMenuSubmenu } from "../PopupMenu";
 import { SelectDropdown, selectDropdownItems } from "../SelectDropdown";
@@ -50,12 +56,19 @@ import { useMediaBinState } from "./mediaBinState";
 
 const mediaDragType = "application/x-linecut-media";
 let mediaBinClipboard: MediaBinItem[] = [];
+const duplicateSuffixPattern = /^(.*) 复制(\d+)$/;
 
 interface MediaBinContextMenuState {
   x: number;
   y: number;
   itemId: string | null;
   bindingSubmenuOpen: boolean;
+  proxySubmenuOpen: boolean;
+}
+
+interface MediaLinkDialogState {
+  mode: MediaLinkMode;
+  itemIds: string[];
 }
 
 function isEditableTarget(target: EventTarget | null) {
@@ -71,6 +84,32 @@ function isEditableTarget(target: EventTarget | null) {
 function copiedMediaItemId() {
   const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
   return `media-copy:${random}`;
+}
+
+function duplicateFileName(
+  item: MediaBinItem,
+  mediaItems: MediaBinItem[],
+  counts: Map<string, number>,
+) {
+  const sourceName = item.file_name.match(duplicateSuffixPattern)?.[1] ?? item.file_name;
+  const key = `${item.path}\u0000${sourceName}`;
+  const currentCount = counts.get(key);
+  if (currentCount !== undefined) {
+    const nextCount = currentCount + 1;
+    counts.set(key, nextCount);
+    return `${sourceName} 复制${String(nextCount).padStart(2, "0")}`;
+  }
+
+  const nextCount =
+    mediaItems.reduce((maximum, candidate) => {
+      if (candidate.path !== item.path) {
+        return maximum;
+      }
+      const match = candidate.file_name.match(duplicateSuffixPattern);
+      return match?.[1] === sourceName ? Math.max(maximum, Number(match[2])) : maximum;
+    }, 0) + 1;
+  counts.set(key, nextCount);
+  return `${sourceName} 复制${String(nextCount).padStart(2, "0")}`;
 }
 
 function MediaBinLockIcon() {
@@ -124,11 +163,15 @@ export function MediaBin() {
     (state) => state.actions.allMediaItemsEnabledChanged,
   );
   const mediaItemsHiddenChanged = useAppStore((state) => state.actions.mediaItemsHiddenChanged);
+  const mediaItemsOfflineChanged = useAppStore((state) => state.actions.mediaItemsOfflineChanged);
+  const mediaItemRelinked = useAppStore((state) => state.actions.mediaItemRelinked);
+  const mediaProxyPathChanged = useAppStore((state) => state.actions.mediaProxyPathChanged);
   const mediaItemsBound = useAppStore((state) => state.actions.mediaItemsBound);
   const mediaItemsUnbound = useAppStore((state) => state.actions.mediaItemsUnbound);
   const mediaItemsRemoved = useAppStore((state) => state.actions.mediaItemsRemoved);
   const mediaDemuxed = useAppStore((state) => state.actions.mediaDemuxed);
   const activeVideoChanged = useAppStore((state) => state.actions.activeVideoChanged);
+  const proxyDialogOpened = useAppStore((state) => state.actions.proxyDialogOpened);
   const subtitleTracksAddedToVideo = useAppStore(
     (state) => state.actions.subtitleTracksAddedToVideo,
   );
@@ -146,6 +189,7 @@ export function MediaBin() {
   const bindingPopoverOpen = useMediaBinState((state) => state.bindingPopoverOpen);
   const bindingVideoId = useMediaBinState((state) => state.bindingVideoId);
   const setQuery = useMediaBinState((state) => state.setQuery);
+  const setClipboardItemCount = useMediaBinState((state) => state.setClipboardItemCount);
   const selectOnly = useMediaBinState((state) => state.selectOnly);
   const toggleSelected = useMediaBinState((state) => state.toggleSelected);
   const selectItems = useMediaBinState((state) => state.selectItems);
@@ -159,9 +203,12 @@ export function MediaBin() {
   const { isRunning: isImporting } = getTaskProgressStatus("media_import");
   const { isRunning: isBinding } = getTaskProgressStatus("media_bin_bind");
   const { isRunning: isDemuxing } = getTaskProgressStatus("media_bin_demux");
-  const isBusy = isImporting || isBinding || isDemuxing;
+  const { isRunning: isRelinking } = getTaskProgressStatus("media_relink");
+  const { isRunning: isGeneratingProxy } = getTaskProgressStatus("proxy");
+  const isBusy = isImporting || isBinding || isDemuxing || isRelinking;
   const panelRef = useRef<HTMLElement | null>(null);
   const [contextMenu, setContextMenu] = useState<MediaBinContextMenuState | null>(null);
+  const [linkDialog, setLinkDialog] = useState<MediaLinkDialogState | null>(null);
 
   const selectedItems = useMemo(
     () => mediaItems.filter((item) => selectedIds.has(item.id)),
@@ -179,6 +226,18 @@ export function MediaBin() {
   const selectedAuxiliaryNames = selectedAuxiliary.map((item) => item.file_name).join("、");
   const selectedVideos = selectedItems.filter((item) => item.kind === "video");
   const videos = useMemo(() => mediaItems.filter((item) => item.kind === "video"), [mediaItems]);
+  const selectedFileItems = selectedItems.filter(
+    (item) => item.origin === "imported" && !item.extracted,
+  );
+  const selectedOfflineItems = selectedFileItems.filter(isMediaItemOffline);
+  const selectedOnlineItems = selectedFileItems.filter((item) => !isMediaItemOffline(item));
+  const selectedProjectVideos = selectedVideos.filter((item) =>
+    Boolean(mediaItemProject(item, projects, mediaItems)),
+  );
+  const selectedVideosWithProxy = selectedProjectVideos.filter((item) =>
+    Boolean(mediaItemProject(item, projects, mediaItems)?.proxy_path),
+  );
+  const selectedOfflineProjectVideos = selectedProjectVideos.filter(isMediaItemOffline);
   const allItemsEnabled = mediaItems.every(isMediaItemEnabled);
   const selectedBindingVideoId =
     selectedVideos.length === 1
@@ -200,6 +259,30 @@ export function MediaBin() {
   const gridScale = gridSize < 34 ? 1 : gridSize < 67 ? 1.3 : 1.6;
   const gridCardWidth = 200 * gridScale;
   const listIconScale = 1 + listSize * 0.015;
+  const linkDialogCandidates = useMemo(() => {
+    if (!linkDialog) {
+      return [];
+    }
+    const ids = new Set(linkDialog.itemIds);
+    return mediaItems
+      .filter((item) => ids.has(item.id))
+      .map((item): MediaLinkCandidate => {
+        const project = mediaItemProject(item, projects, mediaItems);
+        const filePath =
+          linkDialog.mode === "proxy"
+            ? (project?.proxy_path ?? item.path)
+            : linkDialog.mode === "full-resolution"
+              ? (project?.asset.path ?? item.path)
+              : item.path;
+        return {
+          id: item.id,
+          clipName: item.file_name,
+          filePath,
+          kind: item.kind,
+          mediaStartUs: item.start_time_us,
+        };
+      });
+  }, [linkDialog, mediaItems, projects]);
   const contentStyle = {
     "--media-list-row-height": `${24 + listSize * 0.36}px`,
     "--media-list-icon-size": `${16 * listIconScale}px`,
@@ -305,7 +388,9 @@ export function MediaBin() {
     }
     const subtitlesToParse = selectedItemsToBind.filter(
       (item) =>
-        item.kind === "subtitle" && (!item.subtitle_track_id || item.bound_to_video_id !== videoId),
+        item.kind === "subtitle" &&
+        !isVirtualMediaItem(item) &&
+        (!item.subtitle_track_id || item.bound_to_video_id !== videoId),
     );
     const directItems = selectedItemsToBind.filter(
       (item) => item.kind === "audio" || !subtitlesToParse.includes(item),
@@ -356,7 +441,7 @@ export function MediaBin() {
       );
     }
     const targetName = targetVideo.file_name;
-    messagePublished(`已将 ${selectedItemsToBind.length} 个素材绑定到 ${targetName}`);
+    messagePublished(`已将 ${selectedItemsToBind.length} 个媒体绑定到 ${targetName}`);
   }
 
   async function bindSelectedItems() {
@@ -383,7 +468,7 @@ export function MediaBin() {
       return;
     }
     mediaItemsUnbound(boundItemIds);
-    messagePublished(`已解除 ${boundItemIds.length} 个素材的绑定`);
+    messagePublished(`已解除 ${boundItemIds.length} 个媒体的绑定`);
   }
 
   function handleContentDragOver(event: DragEvent<HTMLDivElement>) {
@@ -445,7 +530,7 @@ export function MediaBin() {
       task.update({ current: 1 });
       task.remove();
       messagePublished(
-        `已拆出 ${result.audio_tracks.length} 条音轨和 ${result.subtitle_tracks.length} 条字幕`,
+        `已创建 ${result.audio_tracks.length} 条虚拟音轨和 ${result.subtitle_tracks.length} 条虚拟字幕`,
       );
     } catch (error) {
       if (cancelled) {
@@ -485,7 +570,7 @@ export function MediaBin() {
     }
     mediaItemsRemoved(selectedItems.map((item) => item.id));
     clearSelection();
-    messagePublished(`已从素材箱移除 ${selectedItems.length} 个素材`);
+    messagePublished(`已从项目移除 ${selectedItems.length} 个媒体`);
   }
 
   function previewVideo(videoId: string) {
@@ -511,30 +596,44 @@ export function MediaBin() {
         source_video_id: item.source_video_id ?? projectId,
       };
     });
-    messagePublished(`已复制 ${mediaBinClipboard.length} 个素材索引`);
+    setClipboardItemCount(mediaBinClipboard.length);
+    messagePublished(`已复制 ${mediaBinClipboard.length} 个媒体索引`);
   }
 
-  function pasteClipboard() {
+  function pasteClipboard(duplicate = false) {
     if (isReadOnly || mediaBinClipboard.length === 0) {
       return;
     }
     const copiedIdMap = new Map(mediaBinClipboard.map((item) => [item.id, copiedMediaItemId()]));
+    const duplicateCounts = new Map<string, number>();
     const copies = mediaBinClipboard.map((item) => ({
       ...item,
       id: copiedIdMap.get(item.id)!,
+      file_name: duplicate ? duplicateFileName(item, mediaItems, duplicateCounts) : item.file_name,
       bound_to_video_id: item.bound_to_video_id
         ? (copiedIdMap.get(item.bound_to_video_id) ?? item.bound_to_video_id)
         : null,
     }));
-    mediaItemsAdded(copies);
+    mediaItemsAdded(copies, duplicate ? `重复 ${copies.length} 个媒体` : undefined);
     selectItems(copies.map((item) => item.id));
-    messagePublished(`已粘贴 ${copies.length} 个素材索引`);
+    mediaBinClipboard = [];
+    setClipboardItemCount(0);
+    messagePublished(
+      duplicate ? `已重复 ${copies.length} 个媒体索引` : `已粘贴 ${copies.length} 个媒体索引`,
+    );
   }
 
   function duplicateSelection() {
     copySelection();
-    pasteClipboard();
+    pasteClipboard(true);
   }
+
+  useAppEvent("media:copy", copySelection);
+  useAppEvent("media:paste", pasteClipboard);
+  useAppEvent("media:clear", () => {
+    void removeSelection();
+  });
+  useAppEvent("media:duplicate", duplicateSelection);
 
   function setSelectionEnabled(enabled: boolean) {
     if (isReadOnly || selectedItems.length === 0) {
@@ -557,6 +656,148 @@ export function MediaBin() {
     }
   }
 
+  async function restoreBackendWorkspace() {
+    if (!isTauriRuntime()) {
+      return;
+    }
+    await invoke("sync_project_workspace", { workspace: getProjectWorkspaceSnapshot() }).catch(
+      () => undefined,
+    );
+  }
+
+  async function relinkMediaItem(item: MediaBinItem, path: string, historyLabel: string) {
+    const currentProject = mediaItemProject(item, projects, mediaItems);
+    if (!currentProject) {
+      mediaItemRelinked(item.id, path, null, historyLabel);
+      messagePublished(`已重新链接 ${item.file_name}`);
+      return true;
+    }
+    if (!isTauriRuntime()) {
+      messagePublished("浏览器预览不能重新链接本地媒体，请运行 Tauri 桌面应用。");
+      return false;
+    }
+
+    const outcome = await runMediaImportTask({
+      path,
+      operation: "media_relink",
+      taskIdPrefix: "media-relink",
+      assetId: currentProject.asset.id,
+      label: `重新链接 ${item.file_name}`,
+    });
+    if (outcome.status !== "success") {
+      if (outcome.status === "failed") {
+        messagePublished(outcome.error);
+      }
+      return false;
+    }
+
+    const linkedKind = outcome.result.project.asset.video_stream_index !== null ? "video" : "audio";
+    if (linkedKind !== item.kind) {
+      await restoreBackendWorkspace();
+      messagePublished(
+        `${item.file_name} 需要${item.kind === "video" ? "视频" : "音频"}文件，所选文件类型不匹配。`,
+      );
+      return false;
+    }
+
+    mediaItemRelinked(item.id, path, outcome.result.project, historyLabel);
+    warningsAppended(outcome.result.warnings);
+    messagePublished(`已重新链接 ${item.file_name}`);
+    return true;
+  }
+
+  async function attachLinkedFile(candidate: MediaLinkCandidate, path: string) {
+    const item = mediaItems.find((current) => current.id === candidate.id);
+    if (!item || !linkDialog) {
+      return false;
+    }
+    if (linkDialog.mode === "proxy") {
+      mediaProxyPathChanged(item.id, path);
+      messagePublished(`已为 ${item.file_name} 连接代理`);
+      return true;
+    }
+    return relinkMediaItem(
+      item,
+      path,
+      linkDialog.mode === "full-resolution" ? "重新连接完整分辨率媒体" : "链接媒体",
+    );
+  }
+
+  function openLinkDialog(mode: MediaLinkMode, items: MediaBinItem[]) {
+    if (items.length === 0) {
+      return;
+    }
+    setContextMenu(null);
+    setLinkDialog({ mode, itemIds: items.map((item) => item.id) });
+  }
+
+  async function replaceSelectedMedia() {
+    const item = selectedFileItems.length === 1 ? selectedFileItems[0] : null;
+    setContextMenu(null);
+    if (!item || isMediaItemOffline(item) || !isTauriRuntime()) {
+      if (!isTauriRuntime()) {
+        messagePublished("请在 Tauri 桌面窗口中替换本地素材。");
+      }
+      return;
+    }
+    try {
+      const picked = await openDialog({ multiple: false, title: `替换素材：${item.file_name}` });
+      const path = Array.isArray(picked) ? picked[0] : picked;
+      if (path) {
+        await relinkMediaItem(item, path, "替换素材");
+      }
+    } catch (error) {
+      messagePublished(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  function makeSelectedMediaOffline() {
+    if (selectedOnlineItems.length === 0) {
+      return;
+    }
+    mediaItemsOfflineChanged(
+      selectedOnlineItems.map((item) => item.id),
+      true,
+    );
+    messagePublished(`已将 ${selectedOnlineItems.length} 个媒体设为脱机`);
+    setContextMenu(null);
+  }
+
+  function createProxyForSelection() {
+    const video = selectedProjectVideos.length === 1 ? selectedProjectVideos[0] : null;
+    if (!video || selectedItems.length !== 1 || isMediaItemOffline(video)) {
+      return;
+    }
+    activeVideoChanged(video.id);
+    proxyDialogOpened();
+    setContextMenu(null);
+  }
+
+  function detachSelectedProxies() {
+    for (const video of selectedVideosWithProxy) {
+      mediaProxyPathChanged(video.id, null);
+    }
+    if (selectedVideosWithProxy.length > 0) {
+      messagePublished(`已分离 ${selectedVideosWithProxy.length} 个代理`);
+    }
+    setContextMenu(null);
+  }
+
+  async function revealSelectedProxy() {
+    const proxyPath = selectedVideosWithProxy
+      .map((video) => mediaItemProject(video, projects, mediaItems)?.proxy_path)
+      .find((path): path is string => Boolean(path));
+    setContextMenu(null);
+    if (!proxyPath) {
+      return;
+    }
+    try {
+      await invoke("reveal_in_file_manager", { path: proxyPath });
+    } catch (error) {
+      messagePublished(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   function openContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
     event.preventDefault();
     const itemElement = (event.target as HTMLElement | null)?.closest<HTMLElement>(
@@ -567,7 +808,13 @@ export function MediaBin() {
       selectOnly(itemId);
     }
     panelRef.current?.focus({ preventScroll: true });
-    setContextMenu({ x: event.clientX, y: event.clientY, itemId, bindingSubmenuOpen: false });
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      itemId,
+      bindingSubmenuOpen: false,
+      proxySubmenuOpen: false,
+    });
   }
 
   function handleMediaKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
@@ -589,7 +836,12 @@ export function MediaBin() {
       }
       return;
     }
-    if (event.key === "Delete" && !isReadOnly && selectedItems.length > 0 && !isBusy) {
+    if (
+      (event.key === "Backspace" || event.key === "Delete") &&
+      !isReadOnly &&
+      selectedItems.length > 0 &&
+      !isBusy
+    ) {
       event.preventDefault();
       void removeSelection();
     }
@@ -605,7 +857,7 @@ export function MediaBin() {
       >
         <div className="media-bin-project-row">
           <PanelTopOpen aria-hidden="true" />
-          <span>项目素材</span>
+          <span>项目媒体</span>
         </div>
 
         <div className="media-bin-search-row">
@@ -614,8 +866,8 @@ export function MediaBin() {
             <input
               value={query}
               onChange={(event) => setQuery(event.currentTarget.value)}
-              placeholder="搜索素材"
-              aria-label="搜索素材"
+              placeholder="搜索媒体"
+              aria-label="搜索媒体"
             />
           </label>
           <span>
@@ -645,6 +897,7 @@ export function MediaBin() {
             selectedIds={selectedIds}
             viewMode={viewMode}
             isReadOnly={isReadOnly}
+            canImport={!isReadOnly && !isBusy}
             onSelectOnly={selectOnly}
             onToggleSelected={toggleSelected}
             onRenameItem={mediaItemRenamed}
@@ -653,6 +906,7 @@ export function MediaBin() {
             onPreviewVideo={previewVideo}
             onBindItems={bindItemsToVideo}
             onUnbindItems={unbindItems}
+            onImportPaths={(paths) => emitAppEvent("media:import", { paths })}
           />
         </div>
 
@@ -661,7 +915,7 @@ export function MediaBin() {
             <button
               type="button"
               className={isReadOnly ? "media-bin-lock" : "media-bin-pen"}
-              title={isReadOnly ? "解除素材箱只读" : "将素材箱设为只读"}
+              title={isReadOnly ? "解除项目只读" : "将项目设为只读"}
               aria-pressed={isReadOnly}
               onClick={() => setReadOnly(!isReadOnly)}
             >
@@ -739,7 +993,7 @@ export function MediaBin() {
               type="button"
               onClick={() => emitAppEvent("media:import", {})}
               disabled={isReadOnly || isBusy}
-              title="导入素材（视频、音频或字幕）"
+              title="导入媒体（视频、音频或字幕）"
             >
               {isImporting ? (
                 <Loader2 className="spin" aria-hidden="true" />
@@ -751,7 +1005,7 @@ export function MediaBin() {
               type="button"
               onClick={() => void removeSelection()}
               disabled={isReadOnly || selectedItems.length === 0 || isBusy}
-              title="移除所选素材"
+              title="移除所选媒体"
             >
               <Trash2 aria-hidden="true" />
             </button>
@@ -772,15 +1026,15 @@ export function MediaBin() {
               <div className="media-bin-bind-dialog-intro">
                 <Link2 aria-hidden="true" />
                 <div>
-                  <strong>关联所选素材与目标视频</strong>
+                  <strong>关联所选媒体与目标视频</strong>
                   <span>绑定后，音频和字幕会归入目标视频，方便集中预览和导出。</span>
                 </div>
               </div>
               <div className="media-bin-bind-dialog-field">
-                <span className="media-bin-bind-dialog-label">已选素材：</span>
+                <span className="media-bin-bind-dialog-label">已选媒体：</span>
                 <div className="media-bin-bind-dialog-value">
                   <strong>
-                    {selectedAuxiliary.length} 个素材（{selectedAuxiliaryTypeSummary}）
+                    {selectedAuxiliary.length} 个媒体（{selectedAuxiliaryTypeSummary}）
                   </strong>
                   <span title={selectedAuxiliaryNames}>{selectedAuxiliaryNames}</span>
                 </div>
@@ -808,6 +1062,18 @@ export function MediaBin() {
             document.querySelector(".app-shell") ?? document.body,
           )}
       </section>
+      {linkDialog &&
+        linkDialogCandidates.length > 0 &&
+        createPortal(
+          <MediaLinkDialog
+            candidates={linkDialogCandidates}
+            mode={linkDialog.mode}
+            onAttach={attachLinkedFile}
+            onCancel={() => setLinkDialog(null)}
+            onError={messagePublished}
+          />,
+          document.querySelector(".app-shell") ?? document.body,
+        )}
       {contextMenu &&
         createPortal(
           <PopupMenu
@@ -824,7 +1090,6 @@ export function MediaBin() {
             {contextMenu.itemId ? (
               <>
                 <PopupMenuItem
-                  shortcut="Ctrl+C"
                   onSelect={() => {
                     copySelection();
                     setContextMenu(null);
@@ -834,7 +1099,6 @@ export function MediaBin() {
                   复制
                 </PopupMenuItem>
                 <PopupMenuItem
-                  shortcut="Ctrl+V"
                   onSelect={() => {
                     pasteClipboard();
                     setContextMenu(null);
@@ -844,7 +1108,6 @@ export function MediaBin() {
                   粘贴
                 </PopupMenuItem>
                 <PopupMenuItem
-                  shortcut="Del"
                   onSelect={() => {
                     void removeSelection();
                     setContextMenu(null);
@@ -855,7 +1118,6 @@ export function MediaBin() {
                 </PopupMenuItem>
                 <PopupMenuSeparator />
                 <PopupMenuItem
-                  title="立即创建素材索引副本"
                   onSelect={() => {
                     duplicateSelection();
                     setContextMenu(null);
@@ -880,9 +1142,16 @@ export function MediaBin() {
                   <PopupMenuSubmenu
                     label="绑定媒体"
                     open={contextMenu.bindingSubmenuOpen}
+                    menuClassName="media-bin-context-menu"
                     onOpenChange={(open) =>
                       setContextMenu((current) =>
-                        current ? { ...current, bindingSubmenuOpen: open } : current,
+                        current
+                          ? {
+                              ...current,
+                              bindingSubmenuOpen: open,
+                              proxySubmenuOpen: open ? false : current.proxySubmenuOpen,
+                            }
+                          : current,
                       )
                     }
                     disabled={isReadOnly || !canManageBinding || isBusy}
@@ -951,11 +1220,92 @@ export function MediaBin() {
                 >
                   查看隐藏内容
                 </PopupMenuItem>
+                <PopupMenuSeparator />
+                <PopupMenuItem
+                  onSelect={() => void replaceSelectedMedia()}
+                  disabled={
+                    isReadOnly ||
+                    isBusy ||
+                    selectedFileItems.length !== 1 ||
+                    isMediaItemOffline(selectedFileItems[0])
+                  }
+                >
+                  替换素材...
+                </PopupMenuItem>
+                <PopupMenuItem
+                  onSelect={() => openLinkDialog("media", selectedOfflineItems)}
+                  disabled={isReadOnly || isBusy || selectedOfflineItems.length === 0}
+                >
+                  链接媒体...
+                </PopupMenuItem>
+                <PopupMenuItem
+                  onSelect={makeSelectedMediaOffline}
+                  disabled={isReadOnly || isBusy || selectedOnlineItems.length === 0}
+                >
+                  设为脱机...
+                </PopupMenuItem>
+                <PopupMenuItem mnemonic="O" disabled>
+                  脱机编辑(O)...
+                </PopupMenuItem>
+                <PopupMenuSubmenu
+                  label="代理"
+                  open={contextMenu.proxySubmenuOpen}
+                  menuClassName="media-bin-context-menu media-bin-proxy-context-menu"
+                  onOpenChange={(open) =>
+                    setContextMenu((current) =>
+                      current
+                        ? {
+                            ...current,
+                            proxySubmenuOpen: open,
+                            bindingSubmenuOpen: open ? false : current.bindingSubmenuOpen,
+                          }
+                        : current,
+                    )
+                  }
+                  disabled={selectedProjectVideos.length === 0}
+                >
+                  <PopupMenuItem
+                    onSelect={createProxyForSelection}
+                    disabled={
+                      isReadOnly ||
+                      isBusy ||
+                      isGeneratingProxy ||
+                      selectedItems.length !== 1 ||
+                      selectedProjectVideos.length !== 1 ||
+                      isMediaItemOffline(selectedProjectVideos[0])
+                    }
+                  >
+                    创建代理...
+                  </PopupMenuItem>
+                  <PopupMenuItem
+                    onSelect={() => openLinkDialog("proxy", selectedProjectVideos)}
+                    disabled={isReadOnly || isBusy || selectedProjectVideos.length === 0}
+                  >
+                    连接代理...
+                  </PopupMenuItem>
+                  <PopupMenuItem
+                    onSelect={detachSelectedProxies}
+                    disabled={isReadOnly || isBusy || selectedVideosWithProxy.length === 0}
+                  >
+                    分离代理
+                  </PopupMenuItem>
+                  <PopupMenuItem
+                    onSelect={() => void revealSelectedProxy()}
+                    disabled={selectedVideosWithProxy.length === 0}
+                  >
+                    在资源管理器中显示
+                  </PopupMenuItem>
+                  <PopupMenuItem
+                    onSelect={() => openLinkDialog("full-resolution", selectedOfflineProjectVideos)}
+                    disabled={isReadOnly || isBusy || selectedOfflineProjectVideos.length === 0}
+                  >
+                    重新连接完整分辨率媒体...
+                  </PopupMenuItem>
+                </PopupMenuSubmenu>
               </>
             ) : (
               <>
                 <PopupMenuItem
-                  shortcut="Ctrl+V"
                   onSelect={() => {
                     pasteClipboard();
                     setContextMenu(null);

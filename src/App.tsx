@@ -11,8 +11,10 @@ import {
   type DockPanelDefinition,
 } from "./components/DockLayout";
 import { ExportPanel } from "./components/ExportPanel";
+import { HistoryPanel } from "./components/HistoryPanel";
 import { ImportWorkspace } from "./components/ImportWorkspace";
 import { MediaBin } from "./components/MediaBin";
+import { useMediaBinState } from "./components/MediaBin/mediaBinState";
 import { PreferencesDialog } from "./components/PreferencesDialog";
 import { ProxyCreationDialog } from "./components/ProxyCreationDialog";
 import { SecondaryTopbar } from "./components/SecondaryTopbar";
@@ -20,7 +22,7 @@ import { SourceMonitor } from "./components/SourceMonitor";
 import { SubtitlePanel } from "./components/SubtitlePanel";
 import { cancelAllTaskProgress, getTaskProgressStatus } from "./components/TaskProgress";
 import { runMediaImportTask } from "./mediaImportTask";
-import { getProjectWorkspaceSnapshot, useAppStore } from "./store";
+import { getProjectWorkspaceSnapshot, subtitleTrackCues, useAppStore } from "./store";
 import { isTauriRuntime } from "./tauriRuntime";
 import type { MediaBinItem, OpenProjectResult, Preferences } from "./types";
 
@@ -82,6 +84,16 @@ function fileExtension(path: string) {
   return fileName(path).split(".").pop()?.toLocaleLowerCase() ?? "";
 }
 
+function isEditableKeyboardTarget(target: EventTarget | null) {
+  const element = target as HTMLElement | null;
+  return (
+    element?.tagName === "INPUT" ||
+    element?.tagName === "TEXTAREA" ||
+    element?.tagName === "SELECT" ||
+    Boolean(element?.isContentEditable)
+  );
+}
+
 function readRecentPaths(storageKey: string) {
   try {
     const stored = window.localStorage.getItem(storageKey);
@@ -104,6 +116,7 @@ function standaloneSubtitleItem(path: string, index: number): MediaBinItem {
     kind: "subtitle",
     enabled: true,
     hidden: false,
+    offline: false,
     path,
     file_name: fileName(path),
     duration_us: 0,
@@ -120,7 +133,7 @@ function standaloneSubtitleItem(path: string, index: number): MediaBinItem {
   };
 }
 
-type AppDockPanelId = "source" | "media" | "export" | "subtitles";
+type AppDockPanelId = "source" | "media" | "export" | "subtitles" | "history";
 
 const appWorkspaces = [
   { id: "import", label: "导入" },
@@ -140,7 +153,7 @@ const initialDockLayout: DockLayoutState<AppDockPanelId> = {
       activePanelId: "media",
     },
     right: {
-      tabs: ["subtitles"],
+      tabs: ["subtitles", "history"],
       activePanelId: "subtitles",
     },
   },
@@ -149,6 +162,7 @@ const initialDockLayout: DockLayoutState<AppDockPanelId> = {
 export default function App() {
   const [activeWorkspace, setActiveWorkspace] = useState<AppWorkspace>("edit");
   const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [historyNavigating, setHistoryNavigating] = useState(false);
   const [recentMediaPaths, setRecentMediaPaths] = useState(() =>
     readRecentPaths(recentMediaStorageKey),
   );
@@ -158,7 +172,9 @@ export default function App() {
   const closingWindowRef = useRef(false);
 
   const project = useAppStore((state) => state.project);
+  const projects = useAppStore((state) => state.projects);
   const mediaItems = useAppStore((state) => state.mediaItems);
+  const activeVideoId = useAppStore((state) => state.activeVideoId);
   const projectFilePath = useAppStore((state) => state.projectFilePath);
   const projectDirty = useAppStore((state) => state.projectDirty);
   const activeTrackId = useAppStore((state) => state.activeTrackId);
@@ -167,7 +183,17 @@ export default function App() {
   const warnings = useAppStore((state) => state.warnings);
   const exportResult = useAppStore((state) => state.exportResult);
   const isMediaBinReadOnly = useAppStore((state) => state.mediaBinReadOnly);
+  const projectHistory = useAppStore((state) => state.projectHistory);
+  const selectedMediaItemCount = useMediaBinState.useInstance(
+    "media",
+    (state) => state.selectedIds.size,
+  );
+  const mediaClipboardItemCount = useMediaBinState.useInstance(
+    "media",
+    (state) => state.clipboardItemCount,
+  );
   const projectOpened = useAppStore((state) => state.actions.projectOpened);
+  const projectCreated = useAppStore((state) => state.actions.projectCreated);
   const projectSaved = useAppStore((state) => state.actions.projectSaved);
   const projectClosed = useAppStore((state) => state.actions.projectClosed);
   const mediaProjectsAdded = useAppStore((state) => state.actions.mediaProjectsAdded);
@@ -177,15 +203,30 @@ export default function App() {
   const warningsReplaced = useAppStore((state) => state.actions.warningsReplaced);
   const warningsAppended = useAppStore((state) => state.actions.warningsAppended);
   const exportResultChanged = useAppStore((state) => state.actions.exportResultChanged);
+  const projectHistoryJumped = useAppStore((state) => state.actions.projectHistoryJumped);
+  const projectHistoryFutureDiscarded = useAppStore(
+    (state) => state.actions.projectHistoryFutureDiscarded,
+  );
   const { tasks: runningTasks } = getTaskProgressStatus();
-  const isBusy = runningTasks.length > 0;
+  const isBusy = runningTasks.length > 0 || historyNavigating;
   const hasProject = Boolean(projectFilePath || mediaItems.length > 0);
+  const canUndo = projectHistory.active && projectHistory.cursor > 0;
+  const canRedo = projectHistory.active && projectHistory.cursor < projectHistory.entries.length;
   const activeTrackCues = useMemo(
-    () => (project && activeTrackId ? (project.cues[activeTrackId] ?? []) : []),
-    [activeTrackId, project],
+    () =>
+      activeTrackId
+        ? subtitleTrackCues(project, projects, mediaItems, activeVideoId, activeTrackId)
+        : [],
+    [activeTrackId, activeVideoId, mediaItems, project, projects],
   );
   const canSelectAllSubtitleCues = activeWorkspace === "edit" && activeTrackCues.length > 0;
   const canClearSubtitleCueSelection = activeWorkspace === "edit" && selectedCueCount > 0;
+  const canUseMediaBinActions = activeWorkspace === "edit";
+  const canCopyMedia = canUseMediaBinActions && selectedMediaItemCount > 0;
+  const canPasteMedia = canUseMediaBinActions && !isMediaBinReadOnly && mediaClipboardItemCount > 0;
+  const canClearMedia = canUseMediaBinActions && !isMediaBinReadOnly && selectedMediaItemCount > 0;
+  const canDuplicateMedia =
+    canUseMediaBinActions && !isMediaBinReadOnly && selectedMediaItemCount > 0;
   const activeStatusLabel =
     runningTasks.length === 1 ? runningTasks[0].label : `正在执行 ${runningTasks.length} 项操作...`;
 
@@ -228,6 +269,20 @@ export default function App() {
         preferencesLoaded(loaded);
       })
       .catch((error) => messagePublished(error instanceof Error ? error.message : String(error)));
+  }, []);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+
+    void invoke<string | null>("take_launch_project_path")
+      .then((path) => {
+        if (path) {
+          return openProject(path);
+        }
+      })
+      .catch(publishError);
   }, []);
 
   useEffect(() => {
@@ -351,7 +406,7 @@ export default function App() {
 
     try {
       await removeBackendProject();
-      projectClosed();
+      projectCreated();
       setActiveWorkspace("import");
       messagePublished("已新建项目");
     } catch (error) {
@@ -494,12 +549,12 @@ export default function App() {
       return;
     }
     if (!isTauriRuntime()) {
-      messagePublished("请在 Tauri 桌面窗口中导入本地素材。");
+      messagePublished("请在 Tauri 桌面窗口中导入本地媒体。");
       return;
     }
     const picked = pathsToImport
       ? pathsToImport
-      : await open({ multiple: true, title: "导入素材", filters: mediaFilters });
+      : await open({ multiple: true, title: "导入媒体", filters: mediaFilters });
     const paths = Array.isArray(picked) ? picked : picked ? [picked] : [];
     if (paths.length === 0) {
       return;
@@ -535,11 +590,67 @@ export default function App() {
 
     const importedCount = loaded.length + subtitlePaths.length;
     const resultParts = [
-      importedCount > 0 ? `已导入 ${importedCount} 个素材` : "未导入任何素材",
+      importedCount > 0 ? `已导入 ${importedCount} 个媒体` : "未导入任何媒体",
       ...(errors.length > 0 ? [`${errors.length} 个失败`] : []),
       ...(cancelledCount > 0 ? [`${cancelledCount} 个已取消`] : []),
     ];
     messagePublished(resultParts.join("，"));
+  }
+
+  async function navigateProjectHistory(targetCursor: number): Promise<boolean> {
+    if (isBusy) {
+      return false;
+    }
+    const previousCursor = projectHistory.cursor;
+    setHistoryNavigating(true);
+    const changed = projectHistoryJumped(targetCursor);
+    if (!changed) {
+      setHistoryNavigating(false);
+      return false;
+    }
+
+    try {
+      if (isTauriRuntime()) {
+        await invoke("sync_project_workspace", {
+          workspace: getProjectWorkspaceSnapshot(),
+        });
+      }
+      const target = Math.max(0, Math.min(targetCursor, projectHistory.entries.length));
+      if (Math.abs(target - previousCursor) > 1) {
+        messagePublished("已跳转到所选历史记录");
+      } else if (target < previousCursor) {
+        messagePublished("已撤销上一步项目操作");
+      } else {
+        messagePublished("已重做下一步项目操作");
+      }
+      return true;
+    } catch (error) {
+      projectHistoryJumped(previousCursor);
+      publishError(error);
+      return false;
+    } finally {
+      setHistoryNavigating(false);
+    }
+  }
+
+  async function undoProjectOperation() {
+    await navigateProjectHistory(projectHistory.cursor - 1);
+  }
+
+  async function redoProjectOperation() {
+    await navigateProjectHistory(projectHistory.cursor + 1);
+  }
+
+  async function deleteCurrentHistoryBranch(selectedCursor: number) {
+    if (isBusy || selectedCursor <= 0 || selectedCursor > projectHistory.entries.length) {
+      return;
+    }
+    const removedCount = projectHistory.entries.length - selectedCursor + 1;
+    if (!(await navigateProjectHistory(selectedCursor - 1))) {
+      return;
+    }
+    projectHistoryFutureDiscarded();
+    messagePublished(`已删除当前事件及其后的 ${removedCount} 条历史记录`);
   }
 
   useAppEvent("media:import", ({ paths }) => {
@@ -555,6 +666,23 @@ export default function App() {
       if (key === "q" && !event.shiftKey && !event.altKey) {
         event.preventDefault();
         void exitApplication();
+        return;
+      }
+      if (key === "z" && !event.altKey && !isEditableKeyboardTarget(event.target)) {
+        if (isBusy) {
+          return;
+        }
+        const action = event.shiftKey
+          ? canRedo
+            ? redoProjectOperation
+            : undefined
+          : canUndo
+            ? undoProjectOperation
+            : undefined;
+        if (action) {
+          event.preventDefault();
+          void action();
+        }
         return;
       }
       if (isBusy) {
@@ -600,7 +728,12 @@ export default function App() {
       },
       {
         id: "media",
-        title: `素材箱：${project?.asset.file_name ?? "未命名项目"}`,
+        title: `项目：${
+          projectFilePath
+            ?.split(/[\\/]/)
+            .pop()
+            ?.replace(/\.lcp$/i, "") ?? "未命名项目"
+        }`,
         render: () => <MediaBin />,
       },
       {
@@ -613,8 +746,19 @@ export default function App() {
         title: "字幕轨",
         render: () => <SubtitlePanel />,
       },
+      {
+        id: "history",
+        title: "历史记录",
+        render: () => (
+          <HistoryPanel
+            disabled={isBusy}
+            onNavigate={navigateProjectHistory}
+            onDelete={deleteCurrentHistoryBranch}
+          />
+        ),
+      },
     ],
-    [project?.asset.file_name],
+    [isBusy, projectFilePath, projectHistory, projectHistoryFutureDiscarded],
   );
 
   const workspaceContent: Record<AppWorkspace, ReactNode> = {
@@ -641,6 +785,14 @@ export default function App() {
           onImportMedia={importMedia}
           recentMediaPaths={recentMediaPaths}
           onImportRecentMedia={(path) => importMedia([path])}
+          canUndo={canUndo}
+          canRedo={canRedo}
+          onUndo={undoProjectOperation}
+          onRedo={redoProjectOperation}
+          canCopyMedia={canCopyMedia}
+          canPasteMedia={canPasteMedia}
+          canClearMedia={canClearMedia}
+          canDuplicateMedia={canDuplicateMedia}
           canSelectAllSubtitleCues={canSelectAllSubtitleCues}
           canClearSubtitleCueSelection={canClearSubtitleCueSelection}
           onSelectAllSubtitleCues={selectAllSubtitleCues}

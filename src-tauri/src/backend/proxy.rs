@@ -10,8 +10,8 @@ pub(crate) fn proxy_output_path(
             let source_path = PathBuf::from(&project.asset.path);
             source_path
                 .parent()
-                .map(|parent| parent.join("代理"))
-                .unwrap_or_else(|| PathBuf::from(&project.cache_dir).join("代理"))
+                .map(|parent| parent.join("Proxy"))
+                .unwrap_or_else(|| PathBuf::from(&project.cache_dir).join("Proxy"))
         }
         ProxyLocation::Custom => {
             let trimmed = options.custom_location.trim();
@@ -29,33 +29,8 @@ pub(crate) fn proxy_output_path(
         .file_stem()
         .map(|value| value.to_string_lossy().into_owned())
         .unwrap_or_else(|| "media".to_string());
-    let frame_slug = proxy_frame_slug(options);
-    let preset_slug = proxy_preset_slug(options.preset);
-    let stem = safe_component(&format!("{source_stem}_proxy_{frame_slug}_{preset_slug}"));
+    let stem = safe_component(&format!("{source_stem}_Proxy"));
     Ok(output_dir.join(format!("{stem}.{}", proxy_extension(options.preset))))
-}
-
-pub(crate) fn proxy_frame_slug(options: &ProxyOptions) -> String {
-    match options.frame_size {
-        ProxyFrameSize::Full => "full".to_string(),
-        ProxyFrameSize::Half => "half".to_string(),
-        ProxyFrameSize::Quarter => "quarter".to_string(),
-        ProxyFrameSize::Custom => format!(
-            "custom_{}x{}",
-            proxy_custom_width(options),
-            proxy_custom_height(options)
-        ),
-    }
-}
-
-pub(crate) fn proxy_preset_slug(preset: ProxyPreset) -> &'static str {
-    match preset {
-        ProxyPreset::H264Mp4 => "h264_mp4",
-        ProxyPreset::H264Mp4AllIntra => "h264_mp4_all_intra",
-        ProxyPreset::H264Quicktime => "h264_quicktime",
-        ProxyPreset::Vp8Webm => "vp8_webm",
-        ProxyPreset::Vp9Webm => "vp9_webm",
-    }
 }
 
 pub(crate) fn proxy_extension(preset: ProxyPreset) -> &'static str {

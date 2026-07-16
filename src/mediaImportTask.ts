@@ -12,6 +12,8 @@ interface RunMediaImportTaskOptions {
   path: string;
   operation: string;
   taskIdPrefix: string;
+  assetId?: string;
+  label?: string;
   onSuccess?: (result: ImportResult) => void;
 }
 
@@ -27,13 +29,15 @@ export async function runMediaImportTask({
   path,
   operation,
   taskIdPrefix,
+  assetId,
+  label,
   onSuccess,
 }: RunMediaImportTaskOptions): Promise<MediaImportTaskOutcome> {
   const taskId = createFfmpegTaskId(taskIdPrefix);
   let cancelled = false;
   const task = await createTaskProgress({
     operation,
-    label: `导入 ${fileName(path)}`,
+    label: label ?? `导入 ${fileName(path)}`,
     current: 0,
     total: 1,
     listener: listenToFfmpegTaskProgress(taskId),
@@ -47,6 +51,7 @@ export async function runMediaImportTask({
     const result = await invoke<ImportResult>("import_media", {
       path,
       taskId,
+      assetId: assetId ?? null,
     });
     if (cancelled) {
       task.remove();

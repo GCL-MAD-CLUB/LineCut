@@ -1,5 +1,18 @@
 import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
+import {
+  appendProjectHistoryEntry,
+  applyProjectFileEvent,
+  createProjectHistory,
+  createProjectHistoryEntry,
+  discardFutureProjectHistory,
+  isProjectHistoryDirty,
+  markProjectHistorySaved,
+  type ProjectFileState,
+  type ProjectHistoryCategory,
+  type ProjectHistoryState,
+  type SubtitleSelections,
+} from "./projectHistory";
 import type {
   DemuxMediaResult,
   ExportResult,
@@ -13,15 +26,24 @@ import type {
 
 interface AppActions {
   projectImported: (project: Project) => void;
+  projectCreated: () => void;
   projectOpened: (workspace: ProjectWorkspace, path: string) => void;
   projectSaved: (path: string) => void;
   projectClosed: () => void;
   mediaProjectsAdded: (projects: Project[]) => void;
-  mediaItemsAdded: (items: MediaBinItem[]) => void;
+  mediaItemsAdded: (items: MediaBinItem[], historyLabel?: string) => void;
   mediaItemRenamed: (itemId: string, fileName: string) => void;
   mediaItemsEnabledChanged: (itemIds: string[], enabled: boolean) => void;
   allMediaItemsEnabledChanged: (enabled: boolean) => void;
   mediaItemsHiddenChanged: (itemIds: string[], hidden: boolean) => void;
+  mediaItemsOfflineChanged: (itemIds: string[], offline: boolean) => void;
+  mediaItemRelinked: (
+    itemId: string,
+    path: string,
+    linkedProject: Project | null,
+    historyLabel?: string,
+  ) => void;
+  mediaProxyPathChanged: (itemId: string, path: string | null) => void;
   mediaItemsBound: (itemIds: string[], videoId: string) => void;
   mediaItemsUnbound: (itemIds: string[]) => void;
   mediaItemsRemoved: (itemIds: string[]) => void;
@@ -49,6 +71,8 @@ interface AppActions {
   warningsAppended: (warnings: string[]) => void;
   exportResultChanged: (result: ExportResult | null) => void;
   mediaBinReadOnlyChanged: (readOnly: boolean) => void;
+  projectHistoryJumped: (cursor: number) => boolean;
+  projectHistoryFutureDiscarded: () => void;
 }
 
 interface AppStore {
@@ -60,6 +84,7 @@ interface AppStore {
   projectFilePath: string | null;
   projectDirty: boolean;
   activeTrackId: string;
+  subtitleSelections: SubtitleSelections;
   selectedCueIds: Set<string>;
   proxyPath: string | null;
   useProxy: boolean;
@@ -69,6 +94,7 @@ interface AppStore {
   warnings: string[];
   exportResult: ExportResult | null;
   mediaBinReadOnly: boolean;
+  projectHistory: ProjectHistoryState;
   actions: AppActions;
 }
 
@@ -89,6 +115,21 @@ export function isMediaItemEnabled(item: MediaBinItem) {
 
 export function isMediaItemHidden(item: MediaBinItem) {
   return item.hidden === true;
+}
+
+export function isMediaItemOffline(item: MediaBinItem) {
+  return item.offline === true;
+}
+
+export function isVirtualMediaItem(
+  item: MediaBinItem,
+): item is MediaBinItem & { source_video_id: string; stream_index: number } {
+  return (
+    item.origin === "decomposed" &&
+    typeof item.source_video_id === "string" &&
+    typeof item.stream_index === "number" &&
+    (item.kind === "audio" || item.kind === "subtitle")
+  );
 }
 
 export function mediaItemProject(
@@ -129,6 +170,7 @@ function projectMediaItem(project: Project): MediaBinItem {
     kind: isVideo ? "video" : "audio",
     enabled: true,
     hidden: false,
+    offline: false,
     path: project.asset.path,
     file_name: project.asset.file_name,
     duration_us: project.asset.duration_us,
@@ -157,6 +199,7 @@ function externalSubtitleItems(project: Project): MediaBinItem[] {
       kind: "subtitle" as const,
       enabled: true,
       hidden: false,
+      offline: false,
       path: track.source_path ?? "",
       file_name: fileName(track.source_path ?? track.title ?? `字幕 ${index + 1}`),
       duration_us: project.asset.duration_us,
@@ -177,11 +220,12 @@ export function visibleSubtitleTracks(
   project: Project | null,
   mediaItems: MediaBinItem[],
   videoId: string,
+  projects: Record<string, Project> = project ? { [project.asset.id]: project } : {},
 ) {
   if (!project) {
     return [];
   }
-  return project.tracks.filter((track) => {
+  const tracks = project.tracks.filter((track) => {
     const items = mediaItems.filter(
       (candidate) => candidate.kind === "subtitle" && candidate.subtitle_track_id === track.id,
     );
@@ -199,12 +243,147 @@ export function visibleSubtitleTracks(
     );
     return !trackWasRebound;
   });
+
+  const visibleTrackIds = new Set(tracks.map((track) => track.id));
+  for (const item of mediaItems) {
+    if (
+      item.kind !== "subtitle" ||
+      !isMediaItemEnabled(item) ||
+      item.bound_to_video_id !== videoId ||
+      !item.subtitle_track_id ||
+      visibleTrackIds.has(item.subtitle_track_id)
+    ) {
+      continue;
+    }
+    const sourceProject = mediaItemProject(item, projects, mediaItems);
+    const sourceTrack = sourceProject?.tracks.find((track) => track.id === item.subtitle_track_id);
+    if (sourceTrack) {
+      tracks.push(sourceTrack);
+      visibleTrackIds.add(sourceTrack.id);
+    }
+  }
+  return tracks;
 }
 
-function preferredTrackId(project: Project | null, mediaItems: MediaBinItem[], videoId: string) {
-  const tracks = visibleSubtitleTracks(project, mediaItems, videoId);
+export function subtitleTrackContext(
+  project: Project | null,
+  projects: Record<string, Project>,
+  mediaItems: MediaBinItem[],
+  videoId: string,
+  trackId: string,
+) {
+  for (const item of mediaItems) {
+    if (
+      item.kind !== "subtitle" ||
+      !isMediaItemEnabled(item) ||
+      item.bound_to_video_id !== videoId ||
+      item.subtitle_track_id !== trackId
+    ) {
+      continue;
+    }
+    const sourceProject = mediaItemProject(item, projects, mediaItems);
+    const track = sourceProject?.tracks.find((candidate) => candidate.id === trackId);
+    if (sourceProject && track) {
+      return { project: sourceProject, track };
+    }
+  }
+
+  const track = project?.tracks.find((candidate) => candidate.id === trackId);
+  return project && track ? { project, track } : null;
+}
+
+export function subtitleTrackCues(
+  project: Project | null,
+  projects: Record<string, Project>,
+  mediaItems: MediaBinItem[],
+  videoId: string,
+  trackId: string,
+) {
+  const context = subtitleTrackContext(project, projects, mediaItems, videoId, trackId);
+  return context?.project.cues[trackId] ?? [];
+}
+
+function preferredTrackId(
+  project: Project | null,
+  projects: Record<string, Project>,
+  mediaItems: MediaBinItem[],
+  videoId: string,
+) {
+  const tracks = visibleSubtitleTracks(project, mediaItems, videoId, projects);
   return (
     tracks.find((track) => track.kind === "text" && track.cue_count > 0)?.id ?? tracks[0]?.id ?? ""
+  );
+}
+
+function selectedCueIdsForContext(
+  subtitleSelections: SubtitleSelections,
+  videoId: string,
+  trackId: string,
+) {
+  return new Set(subtitleSelections[videoId]?.[trackId] ?? []);
+}
+
+function subtitleContextState(
+  subtitleSelections: SubtitleSelections,
+  activeVideoId: string,
+  activeTrackId: string,
+) {
+  return {
+    activeVideoId,
+    activeTrackId,
+    selectedCueIds: selectedCueIdsForContext(subtitleSelections, activeVideoId, activeTrackId),
+  };
+}
+
+function replaceCurrentSubtitleSelection(state: AppStore, selectedCueIds: Set<string>) {
+  const subtitleSelections = { ...state.subtitleSelections };
+  const videoSelections = { ...(subtitleSelections[state.activeVideoId] ?? {}) };
+  if (selectedCueIds.size > 0) {
+    videoSelections[state.activeTrackId] = selectedCueIds;
+  } else {
+    delete videoSelections[state.activeTrackId];
+  }
+  if (Object.keys(videoSelections).length > 0) {
+    subtitleSelections[state.activeVideoId] = videoSelections;
+  } else {
+    delete subtitleSelections[state.activeVideoId];
+  }
+  return { subtitleSelections, selectedCueIds };
+}
+
+function restoreSubtitleSelections(
+  serialized: ProjectWorkspace["editor"]["subtitle_selections"],
+  projects: Record<string, Project>,
+  mediaItems: MediaBinItem[],
+) {
+  const restored: SubtitleSelections = {};
+  for (const [videoId, trackSelections] of Object.entries(serialized)) {
+    const video = mediaItems.find((item) => item.id === videoId && item.kind === "video");
+    const project = video ? mediaItemProject(video, projects, mediaItems) : null;
+    if (!project) {
+      continue;
+    }
+    for (const [trackId, cueIds] of Object.entries(trackSelections)) {
+      const validCueIds = new Set(
+        subtitleTrackCues(project, projects, mediaItems, videoId, trackId).map((cue) => cue.id),
+      );
+      const selection = new Set(cueIds.filter((cueId) => validCueIds.has(cueId)));
+      if (selection.size > 0) {
+        (restored[videoId] ??= {})[trackId] = selection;
+      }
+    }
+  }
+  return restored;
+}
+
+function serializeSubtitleSelections(subtitleSelections: SubtitleSelections) {
+  return Object.fromEntries(
+    Object.entries(subtitleSelections).map(([videoId, trackSelections]) => [
+      videoId,
+      Object.fromEntries(
+        Object.entries(trackSelections).map(([trackId, cueIds]) => [trackId, [...cueIds]]),
+      ),
+    ]),
   );
 }
 
@@ -217,6 +396,8 @@ function initialProjectState(project: Project | null) {
       activeVideoId: "",
       detachedVideoIds: new Set<string>(),
       activeTrackId: "",
+      subtitleSelections: {},
+      selectedCueIds: new Set<string>(),
       proxyPath: null,
     };
   }
@@ -227,7 +408,14 @@ function initialProjectState(project: Project | null) {
     mediaItems,
     activeVideoId: project.asset.id,
     detachedVideoIds: new Set<string>(),
-    activeTrackId: preferredTrackId(project, mediaItems, project.asset.id),
+    activeTrackId: preferredTrackId(
+      project,
+      { [project.asset.id]: project },
+      mediaItems,
+      project.asset.id,
+    ),
+    subtitleSelections: {},
+    selectedCueIds: new Set<string>(),
     proxyPath: project.proxy_path,
   };
 }
@@ -240,6 +428,9 @@ function openedProjectState(workspace: ProjectWorkspace) {
     ...item,
     enabled: item.enabled !== false,
     hidden: item.hidden === true,
+    offline: isVirtualMediaItem(item) ? false : item.offline === true,
+    path: isVirtualMediaItem(item) ? "" : item.path,
+    extracted: isVirtualMediaItem(item) ? false : item.extracted,
   }));
   const videoIds = new Set(
     mediaItems
@@ -260,13 +451,15 @@ function openedProjectState(workspace: ProjectWorkspace) {
     ? (mediaItemProject(activeVideo, projects, mediaItems) ?? null)
     : null;
   const visibleTrackIds = new Set(
-    visibleSubtitleTracks(project, mediaItems, activeVideoId).map((track) => track.id),
+    visibleSubtitleTracks(project, mediaItems, activeVideoId, projects).map((track) => track.id),
   );
   const activeTrackId = visibleTrackIds.has(workspace.editor.active_track_id)
     ? workspace.editor.active_track_id
-    : preferredTrackId(project, mediaItems, activeVideoId);
-  const validCueIds = new Set(
-    activeTrackId ? (project?.cues[activeTrackId] ?? []).map((cue) => cue.id) : [],
+    : preferredTrackId(project, projects, mediaItems, activeVideoId);
+  const subtitleSelections = restoreSubtitleSelections(
+    workspace.editor.subtitle_selections,
+    projects,
+    mediaItems,
   );
 
   return {
@@ -278,12 +471,14 @@ function openedProjectState(workspace: ProjectWorkspace) {
       workspace.editor.detached_video_ids.filter((videoId) => videoIds.has(videoId)),
     ),
     activeTrackId,
-    selectedCueIds: new Set(
-      workspace.editor.selected_cue_ids.filter((cueId) => validCueIds.has(cueId)),
-    ),
+    subtitleSelections,
+    selectedCueIds: selectedCueIdsForContext(subtitleSelections, activeVideoId, activeTrackId),
     proxyPath: project?.proxy_path ?? null,
-    useProxy: workspace.editor.preview.use_proxy && Boolean(project?.proxy_path),
-    mediaBinReadOnly: workspace.media_bin.read_only,
+    useProxy:
+      Boolean(project?.proxy_path) &&
+      (workspace.editor.preview.use_proxy ||
+        Boolean(activeVideo && isMediaItemOffline(activeVideo))),
+    mediaBinReadOnly: false,
   };
 }
 
@@ -294,6 +489,71 @@ export function defaultPreferences(): Preferences {
     ffmpeg_path: "ffmpeg",
     ffprobe_path: "ffprobe",
   };
+}
+
+function projectFileStateFromStore(state: AppStore): ProjectFileState {
+  return {
+    projects: state.projects,
+    mediaItems: state.mediaItems,
+    activeVideoId: state.activeVideoId,
+    activeTrackId: state.activeTrackId,
+    subtitleSelections: state.subtitleSelections,
+    detachedVideoIds: state.detachedVideoIds,
+    useProxy: state.useProxy,
+  };
+}
+
+function reconciledProjectFileState(projectFileState: ProjectFileState): Partial<AppStore> {
+  const activeVideo = projectFileState.mediaItems.find(
+    (item) => item.id === projectFileState.activeVideoId,
+  );
+  const project = activeVideo
+    ? (mediaItemProject(activeVideo, projectFileState.projects, projectFileState.mediaItems) ??
+      null)
+    : null;
+
+  return {
+    ...projectFileState,
+    selectedCueIds: selectedCueIdsForContext(
+      projectFileState.subtitleSelections,
+      projectFileState.activeVideoId,
+      projectFileState.activeTrackId,
+    ),
+    project,
+    proxyPath: project?.proxy_path ?? null,
+    proxyDialogOpen: false,
+    exportResult: null,
+  };
+}
+
+function commitProjectEvent(
+  set: (updater: (state: AppStore) => AppStore) => void,
+  label: string,
+  category: ProjectHistoryCategory,
+  recipe: (state: AppStore) => Partial<AppStore> | AppStore,
+) {
+  set((state) => {
+    const update = recipe(state);
+    if (update === state) {
+      return state;
+    }
+    const candidate = { ...state, ...update, projectDirty: state.projectDirty };
+    const entry = createProjectHistoryEntry(
+      label,
+      category,
+      projectFileStateFromStore(state),
+      projectFileStateFromStore(candidate),
+    );
+    if (!entry) {
+      return candidate;
+    }
+    const projectHistory = appendProjectHistoryEntry(state.projectHistory, entry);
+    return {
+      ...candidate,
+      projectHistory,
+      projectDirty: isProjectHistoryDirty(projectHistory),
+    };
+  });
 }
 
 const appStore = createStore<AppStore>()((set) => ({
@@ -308,6 +568,7 @@ const appStore = createStore<AppStore>()((set) => ({
   warnings: [],
   exportResult: null,
   mediaBinReadOnly: false,
+  projectHistory: createProjectHistory(),
   actions: {
     projectImported: (project) =>
       set({
@@ -316,6 +577,20 @@ const appStore = createStore<AppStore>()((set) => ({
         selectedCueIds: new Set<string>(),
         useProxy: false,
         mediaBinReadOnly: false,
+        projectHistory: createProjectHistory(true, false),
+      }),
+    projectCreated: () =>
+      set({
+        ...initialProjectState(null),
+        projectFilePath: null,
+        projectDirty: false,
+        selectedCueIds: new Set<string>(),
+        useProxy: false,
+        proxyDialogOpen: false,
+        warnings: [],
+        exportResult: null,
+        mediaBinReadOnly: false,
+        projectHistory: createProjectHistory(true),
       }),
     projectOpened: (workspace, projectFilePath) =>
       set({
@@ -325,8 +600,14 @@ const appStore = createStore<AppStore>()((set) => ({
         proxyDialogOpen: false,
         warnings: [],
         exportResult: null,
+        projectHistory: createProjectHistory(true),
       }),
-    projectSaved: (projectFilePath) => set({ projectFilePath, projectDirty: false }),
+    projectSaved: (projectFilePath) =>
+      set((state) => ({
+        projectFilePath,
+        projectDirty: false,
+        projectHistory: markProjectHistorySaved(state.projectHistory),
+      })),
     projectClosed: () =>
       set({
         ...initialProjectState(null),
@@ -338,51 +619,67 @@ const appStore = createStore<AppStore>()((set) => ({
         warnings: [],
         exportResult: null,
         mediaBinReadOnly: false,
+        projectHistory: createProjectHistory(),
       }),
     mediaProjectsAdded: (loadedProjects) =>
-      set((state) => {
-        if (loadedProjects.length === 0) {
-          return state;
-        }
-        const projects = { ...state.projects };
-        const nextItems = [...state.mediaItems];
-        let firstVideo: Project | null = null;
-        for (const loadedProject of loadedProjects) {
-          const item = projectMediaItem(loadedProject);
-          projects[loadedProject.asset.id] = loadedProject;
-          if (!nextItems.some((current) => current.id === item.id)) {
-            nextItems.push(item);
+      commitProjectEvent(
+        set,
+        loadedProjects.length === 1
+          ? `导入媒体：${loadedProjects[0].asset.file_name}`
+          : `导入 ${loadedProjects.length} 个媒体`,
+        "import",
+        (state) => {
+          if (loadedProjects.length === 0) {
+            return state;
           }
-          if (item.kind === "video") {
-            firstVideo ??= loadedProject;
+          const projects = { ...state.projects };
+          const nextItems = [...state.mediaItems];
+          let firstVideo: Project | null = null;
+          for (const loadedProject of loadedProjects) {
+            const item = projectMediaItem(loadedProject);
+            projects[loadedProject.asset.id] = loadedProject;
+            if (!nextItems.some((current) => current.id === item.id)) {
+              nextItems.push(item);
+            }
+            if (item.kind === "video") {
+              firstVideo ??= loadedProject;
+            }
           }
-        }
 
-        if (state.project || !firstVideo) {
-          return { projects, mediaItems: nextItems, projectDirty: true };
-        }
-        return {
-          projects,
-          mediaItems: nextItems,
-          project: firstVideo,
-          activeVideoId: firstVideo.asset.id,
-          activeTrackId: preferredTrackId(firstVideo, nextItems, firstVideo.asset.id),
-          proxyPath: firstVideo.proxy_path,
-          useProxy: false,
-          selectedCueIds: new Set<string>(),
-          projectDirty: true,
-        };
-      }),
-    mediaItemsAdded: (items) =>
-      set((state) => {
-        const knownIds = new Set(state.mediaItems.map((item) => item.id));
-        const additions = items.filter((item) => !knownIds.has(item.id));
-        return additions.length === 0
-          ? state
-          : { mediaItems: [...state.mediaItems, ...additions], projectDirty: true };
-      }),
+          if (state.project || !firstVideo) {
+            return { projects, mediaItems: nextItems, projectDirty: true };
+          }
+          const activeVideoId = firstVideo.asset.id;
+          const activeTrackId = preferredTrackId(firstVideo, projects, nextItems, activeVideoId);
+          return {
+            projects,
+            mediaItems: nextItems,
+            project: firstVideo,
+            ...subtitleContextState(state.subtitleSelections, activeVideoId, activeTrackId),
+            proxyPath: firstVideo.proxy_path,
+            useProxy: false,
+            projectDirty: true,
+          };
+        },
+      ),
+    mediaItemsAdded: (items, historyLabel) =>
+      commitProjectEvent(
+        set,
+        historyLabel ??
+          (items.every((item) => item.id.startsWith("media-copy:"))
+            ? `粘贴 ${items.length} 个媒体`
+            : `导入 ${items.length} 个媒体`),
+        items.every((item) => item.id.startsWith("media-copy:")) ? "paste" : "import",
+        (state) => {
+          const knownIds = new Set(state.mediaItems.map((item) => item.id));
+          const additions = items.filter((item) => !knownIds.has(item.id));
+          return additions.length === 0
+            ? state
+            : { mediaItems: [...state.mediaItems, ...additions], projectDirty: true };
+        },
+      ),
     mediaItemRenamed: (itemId, fileName) =>
-      set((state) => {
+      commitProjectEvent(set, `重命名媒体：${fileName}`, "rename", (state) => {
         const item = state.mediaItems.find((candidate) => candidate.id === itemId);
         if (!item || item.file_name === fileName) {
           return state;
@@ -395,128 +692,260 @@ const appStore = createStore<AppStore>()((set) => ({
         };
       }),
     mediaItemsEnabledChanged: (itemIds, enabled) =>
-      set((state) => {
-        const changedIds = new Set(itemIds);
-        if (!enabled) {
-          for (const video of state.mediaItems) {
-            if (video.kind !== "video" || !changedIds.has(video.id)) {
-              continue;
-            }
-            for (const child of state.mediaItems) {
-              if (child.bound_to_video_id === video.id) {
-                changedIds.add(child.id);
+      commitProjectEvent(
+        set,
+        `${enabled ? "启用" : "禁用"} ${itemIds.length} 个媒体`,
+        enabled ? "enable" : "disable",
+        (state) => {
+          const changedIds = new Set(itemIds);
+          if (!enabled) {
+            for (const video of state.mediaItems) {
+              if (video.kind !== "video" || !changedIds.has(video.id)) {
+                continue;
+              }
+              for (const child of state.mediaItems) {
+                if (child.bound_to_video_id === video.id) {
+                  changedIds.add(child.id);
+                }
               }
             }
           }
-        }
-        const mediaItems = state.mediaItems.map((item) =>
-          changedIds.has(item.id) && isMediaItemEnabled(item) !== enabled
-            ? { ...item, enabled }
-            : item,
-        );
-        if (mediaItems.every((item, index) => item === state.mediaItems[index])) {
-          return state;
-        }
-        const currentVideo = mediaItems.find(
-          (item) =>
-            item.id === state.activeVideoId &&
-            item.kind === "video" &&
-            isMediaItemEnabled(item) &&
-            mediaItemProject(item, state.projects, mediaItems),
-        );
-        const activeVideo =
-          currentVideo ??
-          mediaItems.find(
+          const mediaItems = state.mediaItems.map((item) =>
+            changedIds.has(item.id) && isMediaItemEnabled(item) !== enabled
+              ? { ...item, enabled }
+              : item,
+          );
+          if (mediaItems.every((item, index) => item === state.mediaItems[index])) {
+            return state;
+          }
+          const currentVideo = mediaItems.find(
             (item) =>
+              item.id === state.activeVideoId &&
               item.kind === "video" &&
               isMediaItemEnabled(item) &&
               mediaItemProject(item, state.projects, mediaItems),
           );
-        const activeVideoId = activeVideo?.id ?? "";
-        const project = activeVideo
-          ? (mediaItemProject(activeVideo, state.projects, mediaItems) ?? null)
-          : null;
-        const currentTrackVisible = visibleSubtitleTracks(project, mediaItems, activeVideoId).some(
-          (track) => track.id === state.activeTrackId,
-        );
-        const activeVideoChanged = activeVideoId !== state.activeVideoId;
-        return {
-          mediaItems,
-          activeVideoId,
-          project,
-          activeTrackId:
+          const activeVideo =
+            currentVideo ??
+            mediaItems.find(
+              (item) =>
+                item.kind === "video" &&
+                isMediaItemEnabled(item) &&
+                mediaItemProject(item, state.projects, mediaItems),
+            );
+          const activeVideoId = activeVideo?.id ?? "";
+          const project = activeVideo
+            ? (mediaItemProject(activeVideo, state.projects, mediaItems) ?? null)
+            : null;
+          const currentTrackVisible = visibleSubtitleTracks(
+            project,
+            mediaItems,
+            activeVideoId,
+            state.projects,
+          ).some((track) => track.id === state.activeTrackId);
+          const activeVideoChanged = activeVideoId !== state.activeVideoId;
+          const activeTrackId =
             !activeVideoChanged && currentTrackVisible
               ? state.activeTrackId
-              : preferredTrackId(project, mediaItems, activeVideoId),
-          selectedCueIds:
-            !activeVideoChanged && currentTrackVisible ? state.selectedCueIds : new Set<string>(),
-          proxyPath: activeVideoChanged ? (project?.proxy_path ?? null) : state.proxyPath,
-          useProxy: activeVideoChanged ? false : state.useProxy,
-          proxyDialogOpen: activeVideoChanged ? false : state.proxyDialogOpen,
-          exportResult: activeVideoChanged ? null : state.exportResult,
-          projectDirty: true,
-        };
-      }),
+              : preferredTrackId(project, state.projects, mediaItems, activeVideoId);
+          return {
+            mediaItems,
+            project,
+            ...subtitleContextState(state.subtitleSelections, activeVideoId, activeTrackId),
+            proxyPath: activeVideoChanged ? (project?.proxy_path ?? null) : state.proxyPath,
+            useProxy: activeVideoChanged ? false : state.useProxy,
+            proxyDialogOpen: activeVideoChanged ? false : state.proxyDialogOpen,
+            exportResult: activeVideoChanged ? null : state.exportResult,
+            projectDirty: true,
+          };
+        },
+      ),
     allMediaItemsEnabledChanged: (enabled) =>
-      set((state) => {
-        if (state.mediaItems.every((item) => isMediaItemEnabled(item) === enabled)) {
-          return state;
-        }
-        const mediaItems = state.mediaItems.map((item) => ({ ...item, enabled }));
-        const currentVideo = mediaItems.find(
-          (item) =>
-            item.id === state.activeVideoId &&
-            item.kind === "video" &&
-            isMediaItemEnabled(item) &&
-            mediaItemProject(item, state.projects, mediaItems),
-        );
-        const activeVideo =
-          currentVideo ??
-          mediaItems.find(
+      commitProjectEvent(
+        set,
+        enabled ? "启用全部媒体" : "禁用全部媒体",
+        enabled ? "enable" : "disable",
+        (state) => {
+          if (state.mediaItems.every((item) => isMediaItemEnabled(item) === enabled)) {
+            return state;
+          }
+          const mediaItems = state.mediaItems.map((item) => ({ ...item, enabled }));
+          const currentVideo = mediaItems.find(
             (item) =>
+              item.id === state.activeVideoId &&
               item.kind === "video" &&
               isMediaItemEnabled(item) &&
               mediaItemProject(item, state.projects, mediaItems),
           );
-        const activeVideoId = activeVideo?.id ?? "";
-        const project = activeVideo
-          ? (mediaItemProject(activeVideo, state.projects, mediaItems) ?? null)
-          : null;
-        const activeVideoChanged = activeVideoId !== state.activeVideoId;
-        const currentTrackVisible = visibleSubtitleTracks(project, mediaItems, activeVideoId).some(
-          (track) => track.id === state.activeTrackId,
-        );
-        return {
-          mediaItems,
-          activeVideoId,
-          project,
-          activeTrackId:
+          const activeVideo =
+            currentVideo ??
+            mediaItems.find(
+              (item) =>
+                item.kind === "video" &&
+                isMediaItemEnabled(item) &&
+                mediaItemProject(item, state.projects, mediaItems),
+            );
+          const activeVideoId = activeVideo?.id ?? "";
+          const project = activeVideo
+            ? (mediaItemProject(activeVideo, state.projects, mediaItems) ?? null)
+            : null;
+          const activeVideoChanged = activeVideoId !== state.activeVideoId;
+          const currentTrackVisible = visibleSubtitleTracks(
+            project,
+            mediaItems,
+            activeVideoId,
+            state.projects,
+          ).some((track) => track.id === state.activeTrackId);
+          const activeTrackId =
             !activeVideoChanged && currentTrackVisible
               ? state.activeTrackId
-              : preferredTrackId(project, mediaItems, activeVideoId),
-          selectedCueIds:
-            !activeVideoChanged && currentTrackVisible ? state.selectedCueIds : new Set<string>(),
-          proxyPath: activeVideoChanged ? (project?.proxy_path ?? null) : state.proxyPath,
-          useProxy: activeVideoChanged ? false : state.useProxy,
-          proxyDialogOpen: activeVideoChanged ? false : state.proxyDialogOpen,
-          exportResult: activeVideoChanged ? null : state.exportResult,
+              : preferredTrackId(project, state.projects, mediaItems, activeVideoId);
+          return {
+            mediaItems,
+            project,
+            ...subtitleContextState(state.subtitleSelections, activeVideoId, activeTrackId),
+            proxyPath: activeVideoChanged ? (project?.proxy_path ?? null) : state.proxyPath,
+            useProxy: activeVideoChanged ? false : state.useProxy,
+            proxyDialogOpen: activeVideoChanged ? false : state.proxyDialogOpen,
+            exportResult: activeVideoChanged ? null : state.exportResult,
+            projectDirty: true,
+          };
+        },
+      ),
+    mediaItemsHiddenChanged: (itemIds, hidden) =>
+      commitProjectEvent(
+        set,
+        `${hidden ? "隐藏" : "显示"} ${itemIds.length} 个媒体`,
+        hidden ? "hide" : "show",
+        (state) => {
+          const changedIds = new Set(itemIds);
+          const mediaItems = state.mediaItems.map((item) =>
+            changedIds.has(item.id) && isMediaItemHidden(item) !== hidden
+              ? { ...item, hidden }
+              : item,
+          );
+          return mediaItems.every((item, index) => item === state.mediaItems[index])
+            ? state
+            : { mediaItems, projectDirty: true };
+        },
+      ),
+    mediaItemsOfflineChanged: (itemIds, offline) =>
+      commitProjectEvent(
+        set,
+        `${offline ? "设为脱机" : "恢复联机"} ${itemIds.length} 个媒体`,
+        offline ? "offline" : "online",
+        (state) => {
+          const changedIds = new Set(itemIds);
+          const mediaItems = state.mediaItems.map((item) =>
+            changedIds.has(item.id) && isMediaItemOffline(item) !== offline
+              ? { ...item, offline }
+              : item,
+          );
+          if (mediaItems.every((item, index) => item === state.mediaItems[index])) {
+            return state;
+          }
+          const activeVideo = mediaItems.find((item) => item.id === state.activeVideoId);
+          const activeProject = activeVideo
+            ? (mediaItemProject(activeVideo, state.projects, mediaItems) ?? null)
+            : null;
+          return {
+            mediaItems,
+            useProxy:
+              activeVideo && isMediaItemOffline(activeVideo)
+                ? Boolean(activeProject?.proxy_path)
+                : state.useProxy,
+            proxyDialogOpen:
+              activeVideo && isMediaItemOffline(activeVideo) ? false : state.proxyDialogOpen,
+            projectDirty: true,
+          };
+        },
+      ),
+    mediaItemRelinked: (itemId, path, linkedProject, historyLabel = "重新链接媒体") =>
+      commitProjectEvent(set, historyLabel, "relink", (state) => {
+        const item = state.mediaItems.find((candidate) => candidate.id === itemId);
+        if (!item) {
+          return state;
+        }
+        const currentProject = mediaItemProject(item, state.projects, state.mediaItems);
+        if (!linkedProject || !currentProject) {
+          const mediaItems = state.mediaItems.map((candidate) =>
+            candidate.id === itemId ? { ...candidate, path, offline: false } : candidate,
+          );
+          return { mediaItems, projectDirty: true };
+        }
+
+        const projectId = currentProject.asset.id;
+        const project: Project = {
+          ...linkedProject,
+          asset: { ...linkedProject.asset, id: projectId },
+          tracks: linkedProject.tracks.map((track) => ({ ...track, asset_id: projectId })),
+        };
+        const descriptor = projectMediaItem(project);
+        const mediaItems = state.mediaItems.map((candidate) =>
+          candidate.id === itemId
+            ? {
+                ...candidate,
+                kind: descriptor.kind,
+                offline: false,
+                path,
+                duration_us: descriptor.duration_us,
+                start_time_us: descriptor.start_time_us,
+                stream_index: descriptor.stream_index,
+                codec: descriptor.codec,
+                language: descriptor.language,
+                color: descriptor.color,
+              }
+            : candidate,
+        );
+        const projects = { ...state.projects, [projectId]: project };
+        const activeProject = state.project?.asset.id === projectId ? project : state.project;
+        const currentTrackVisible = visibleSubtitleTracks(
+          activeProject,
+          mediaItems,
+          state.activeVideoId,
+          projects,
+        ).some((track) => track.id === state.activeTrackId);
+        const activeTrackId = currentTrackVisible
+          ? state.activeTrackId
+          : preferredTrackId(activeProject, projects, mediaItems, state.activeVideoId);
+        return {
+          projects,
+          mediaItems,
+          project: activeProject,
+          ...subtitleContextState(state.subtitleSelections, state.activeVideoId, activeTrackId),
+          proxyPath: activeProject === project ? project.proxy_path : state.proxyPath,
+          useProxy:
+            activeProject === project
+              ? state.useProxy && Boolean(project.proxy_path)
+              : state.useProxy,
+          proxyDialogOpen: activeProject === project ? false : state.proxyDialogOpen,
+          exportResult: activeProject === project ? null : state.exportResult,
           projectDirty: true,
         };
       }),
-    mediaItemsHiddenChanged: (itemIds, hidden) =>
-      set((state) => {
-        const changedIds = new Set(itemIds);
-        const mediaItems = state.mediaItems.map((item) =>
-          changedIds.has(item.id) && isMediaItemHidden(item) !== hidden
-            ? { ...item, hidden }
-            : item,
-        );
-        return mediaItems.every((item, index) => item === state.mediaItems[index])
-          ? state
-          : { mediaItems, projectDirty: true };
+    mediaProxyPathChanged: (itemId, path) =>
+      commitProjectEvent(set, path ? "连接代理" : "分离代理", "proxy", (state) => {
+        const item = state.mediaItems.find((candidate) => candidate.id === itemId);
+        const currentProject = item
+          ? mediaItemProject(item, state.projects, state.mediaItems)
+          : undefined;
+        if (!currentProject || currentProject.proxy_path === path) {
+          return state;
+        }
+        const project = { ...currentProject, proxy_path: path };
+        const projects = { ...state.projects, [project.asset.id]: project };
+        const isActiveProject = state.project?.asset.id === project.asset.id;
+        return {
+          projects,
+          project: isActiveProject ? project : state.project,
+          proxyPath: isActiveProject ? path : state.proxyPath,
+          useProxy: isActiveProject ? Boolean(path) : state.useProxy,
+          proxyDialogOpen: isActiveProject ? false : state.proxyDialogOpen,
+          projectDirty: true,
+        };
       }),
     mediaItemsBound: (itemIds, videoId) =>
-      set((state) => {
+      commitProjectEvent(set, `绑定 ${itemIds.length} 个媒体`, "bind", (state) => {
         const selected = new Set(itemIds);
         const mediaItems = state.mediaItems.map((item) =>
           selected.has(item.id) && item.kind !== "video"
@@ -528,18 +957,19 @@ const appStore = createStore<AppStore>()((set) => ({
           activeProject,
           mediaItems,
           state.activeVideoId,
+          state.projects,
         ).some((track) => track.id === state.activeTrackId);
+        const activeTrackId = currentTrackVisible
+          ? state.activeTrackId
+          : preferredTrackId(activeProject, state.projects, mediaItems, state.activeVideoId);
         return {
           mediaItems,
           projectDirty: true,
-          activeTrackId: currentTrackVisible
-            ? state.activeTrackId
-            : preferredTrackId(activeProject, mediaItems, state.activeVideoId),
-          selectedCueIds: currentTrackVisible ? state.selectedCueIds : new Set<string>(),
+          ...subtitleContextState(state.subtitleSelections, state.activeVideoId, activeTrackId),
         };
       }),
     mediaItemsUnbound: (itemIds) =>
-      set((state) => {
+      commitProjectEvent(set, `解除 ${itemIds.length} 个媒体的绑定`, "unbind", (state) => {
         const selected = new Set(itemIds);
         const mediaItems = state.mediaItems.map((item) =>
           selected.has(item.id) && item.kind !== "video"
@@ -550,18 +980,19 @@ const appStore = createStore<AppStore>()((set) => ({
           state.project,
           mediaItems,
           state.activeVideoId,
+          state.projects,
         ).some((track) => track.id === state.activeTrackId);
+        const activeTrackId = currentTrackVisible
+          ? state.activeTrackId
+          : preferredTrackId(state.project, state.projects, mediaItems, state.activeVideoId);
         return {
           mediaItems,
           projectDirty: true,
-          activeTrackId: currentTrackVisible
-            ? state.activeTrackId
-            : preferredTrackId(state.project, mediaItems, state.activeVideoId),
-          selectedCueIds: currentTrackVisible ? state.selectedCueIds : new Set<string>(),
+          ...subtitleContextState(state.subtitleSelections, state.activeVideoId, activeTrackId),
         };
       }),
     mediaItemsRemoved: (itemIds) =>
-      set((state) => {
+      commitProjectEvent(set, `移除 ${itemIds.length} 个媒体`, "delete", (state) => {
         const removed = new Set(itemIds);
         const removedVideoIds = new Set(
           state.mediaItems
@@ -600,26 +1031,33 @@ const appStore = createStore<AppStore>()((set) => ({
         for (const videoId of removedVideoIds) {
           detachedVideoIds.delete(videoId);
         }
-        const activeTrackVisible = visibleSubtitleTracks(project, mediaItems, nextVideoId).some(
-          (track) => track.id === state.activeTrackId,
-        );
+        const activeTrackVisible = visibleSubtitleTracks(
+          project,
+          mediaItems,
+          nextVideoId,
+          projects,
+        ).some((track) => track.id === state.activeTrackId);
+        const activeTrackId = activeTrackVisible
+          ? state.activeTrackId
+          : preferredTrackId(project, projects, mediaItems, nextVideoId);
+        const subtitleSelections = { ...state.subtitleSelections };
+        for (const videoId of removedVideoIds) {
+          delete subtitleSelections[videoId];
+        }
         return {
           projects,
           mediaItems,
           detachedVideoIds,
-          activeVideoId: nextVideoId,
           project,
-          activeTrackId: activeTrackVisible
-            ? state.activeTrackId
-            : preferredTrackId(project, mediaItems, nextVideoId),
-          selectedCueIds: new Set<string>(),
+          subtitleSelections,
+          ...subtitleContextState(subtitleSelections, nextVideoId, activeTrackId),
           proxyPath: project?.proxy_path ?? null,
-          useProxy: false,
+          useProxy: Boolean(nextVideo && isMediaItemOffline(nextVideo) && project?.proxy_path),
           projectDirty: true,
         };
       }),
     mediaDemuxed: (videoId, result) =>
-      set((state) => {
+      commitProjectEvent(set, "分解媒体轨道", "demux", (state) => {
         const video = state.mediaItems.find((item) => item.id === videoId);
         const project = video
           ? mediaItemProject(video, state.projects, state.mediaItems)
@@ -633,7 +1071,8 @@ const appStore = createStore<AppStore>()((set) => ({
             kind: "audio" as const,
             enabled: true,
             hidden: false,
-            path: track.path,
+            offline: false,
+            path: "",
             file_name: track.file_name,
             duration_us: track.duration_us,
             start_time_us: 0,
@@ -643,38 +1082,44 @@ const appStore = createStore<AppStore>()((set) => ({
             subtitle_track_id: null,
             codec: track.codec,
             language: track.language,
-            extracted: true,
+            extracted: false,
             origin: "decomposed" as const,
             color: mediaLabelColors.audio,
           })),
-          ...result.subtitle_tracks
-            .filter((track) => track.source_path)
-            .map((track, index) => ({
-              id: `demux-subtitle:${videoId}:${track.id}`,
-              kind: "subtitle" as const,
-              enabled: true,
-              hidden: false,
-              path: track.source_path ?? "",
-              file_name:
-                track.title ||
-                fileName(track.source_path ?? "") ||
-                `字幕流 ${track.stream_index ?? index + 1}`,
-              duration_us: project.asset.duration_us,
-              start_time_us: 0,
-              bound_to_video_id: videoId,
-              source_video_id: project.asset.id,
-              stream_index: track.stream_index,
-              subtitle_track_id: track.id,
-              codec: track.codec,
-              language: track.language,
-              extracted: true,
-              origin: "decomposed" as const,
-              color: mediaLabelColors.subtitle,
-            })),
+          ...result.subtitle_tracks.map((track, index) => ({
+            id: `demux-subtitle:${videoId}:${track.id}`,
+            kind: "subtitle" as const,
+            enabled: true,
+            hidden: false,
+            offline: false,
+            path: "",
+            file_name:
+              track.title ||
+              fileName(track.source_path ?? "") ||
+              `字幕流 ${track.stream_index ?? index + 1}`,
+            duration_us: project.asset.duration_us,
+            start_time_us: 0,
+            bound_to_video_id: videoId,
+            source_video_id: project.asset.id,
+            stream_index: track.stream_index,
+            subtitle_track_id: track.id,
+            codec: track.codec,
+            language: track.language,
+            extracted: false,
+            origin: "decomposed" as const,
+            color: mediaLabelColors.subtitle,
+          })),
         ];
         const knownIds = new Set(state.mediaItems.map((item) => item.id));
         const detachedVideoIds = new Set(state.detachedVideoIds).add(videoId);
+        const demuxedTracks = new Map(result.subtitle_tracks.map((track) => [track.id, track]));
+        const nextProject = {
+          ...project,
+          tracks: project.tracks.map((track) => demuxedTracks.get(track.id) ?? track),
+        };
         return {
+          projects: { ...state.projects, [nextProject.asset.id]: nextProject },
+          project: state.project?.asset.id === nextProject.asset.id ? nextProject : state.project,
           mediaItems: [
             ...state.mediaItems.map((item) =>
               item.id === videoId ? { ...item, color: mediaLabelColors.videoOnly } : item,
@@ -696,19 +1141,18 @@ const appStore = createStore<AppStore>()((set) => ({
         if (!video || !project || videoId === state.activeVideoId) {
           return state;
         }
+        const activeTrackId = preferredTrackId(project, state.projects, state.mediaItems, videoId);
         return {
           project,
-          activeVideoId: videoId,
-          activeTrackId: preferredTrackId(project, state.mediaItems, videoId),
-          selectedCueIds: new Set<string>(),
+          ...subtitleContextState(state.subtitleSelections, videoId, activeTrackId),
           proxyPath: project.proxy_path,
-          useProxy: false,
+          useProxy: isMediaItemOffline(video) && Boolean(project.proxy_path),
           proxyDialogOpen: false,
           exportResult: null,
         };
       }),
     subtitleTracksAdded: (tracks, cues) =>
-      set((state) => {
+      commitProjectEvent(set, `添加 ${tracks.length} 条字幕轨`, "subtitle", (state) => {
         if (!state.project) {
           return state;
         }
@@ -725,6 +1169,7 @@ const appStore = createStore<AppStore>()((set) => ({
             kind: "subtitle",
             enabled: true,
             hidden: false,
+            offline: false,
             path: track.source_path ?? "",
             file_name: fileName(track.source_path ?? track.title ?? `字幕 ${index + 1}`),
             duration_us: nextProject.asset.duration_us,
@@ -740,17 +1185,17 @@ const appStore = createStore<AppStore>()((set) => ({
             color: mediaLabelColors.subtitle,
           }));
         const firstUsableTrack = tracks.find((track) => track.cue_count > 0);
+        const activeTrackId = firstUsableTrack?.id || state.activeTrackId || "";
         return {
           project: nextProject,
           projects: { ...state.projects, [nextProject.asset.id]: nextProject },
           mediaItems: [...state.mediaItems, ...additions],
           projectDirty: true,
-          activeTrackId: firstUsableTrack?.id || state.activeTrackId || "",
-          selectedCueIds: new Set<string>(),
+          ...subtitleContextState(state.subtitleSelections, videoId, activeTrackId),
         };
       }),
     subtitleTracksAddedToVideo: (videoId, tracks, cues, itemIds) =>
-      set((state) => {
+      commitProjectEvent(set, `绑定 ${tracks.length} 条字幕轨`, "bind", (state) => {
         const video = state.mediaItems.find((item) => item.id === videoId);
         const project = video
           ? mediaItemProject(video, state.projects, state.mediaItems)
@@ -782,44 +1227,52 @@ const appStore = createStore<AppStore>()((set) => ({
         if (state.activeVideoId !== videoId) {
           return { projects, mediaItems, projectDirty: true };
         }
-        const currentTrackVisible = visibleSubtitleTracks(nextProject, mediaItems, videoId).some(
-          (track) => track.id === state.activeTrackId,
-        );
+        const currentTrackVisible = visibleSubtitleTracks(
+          nextProject,
+          mediaItems,
+          videoId,
+          projects,
+        ).some((track) => track.id === state.activeTrackId);
+        const activeTrackId = currentTrackVisible
+          ? state.activeTrackId
+          : (tracks.find((track) => track.cue_count > 0)?.id ?? state.activeTrackId);
         return {
           projects,
           mediaItems,
           project: nextProject,
           projectDirty: true,
-          activeTrackId: currentTrackVisible
-            ? state.activeTrackId
-            : (tracks.find((track) => track.cue_count > 0)?.id ?? state.activeTrackId),
-          selectedCueIds: new Set<string>(),
+          ...subtitleContextState(state.subtitleSelections, videoId, activeTrackId),
         };
       }),
     activeTrackChanged: (activeTrackId) =>
-      set({
-        activeTrackId,
-        selectedCueIds: new Set<string>(),
+      commitProjectEvent(set, "切换字幕轨", "subtitle", (state) => ({
+        ...subtitleContextState(state.subtitleSelections, state.activeVideoId, activeTrackId),
         projectDirty: true,
-      }),
+      })),
     cueSelectionToggled: (cueId) =>
-      set((state) => {
+      commitProjectEvent(set, "更改台词选择", "selection", (state) => {
         const selectedCueIds = new Set(state.selectedCueIds);
         if (selectedCueIds.has(cueId)) {
           selectedCueIds.delete(cueId);
         } else {
           selectedCueIds.add(cueId);
         }
-        return { selectedCueIds, projectDirty: true };
+        return {
+          ...replaceCurrentSubtitleSelection(state, selectedCueIds),
+          projectDirty: true,
+        };
       }),
     cueSelectionCleared: () =>
-      set((state) =>
+      commitProjectEvent(set, "清除台词选择", "delete", (state) =>
         state.selectedCueIds.size === 0
           ? state
-          : { selectedCueIds: new Set<string>(), projectDirty: true },
+          : {
+              ...replaceCurrentSubtitleSelection(state, new Set<string>()),
+              projectDirty: true,
+            },
       ),
     cueSelectionReplaced: (cueIds) =>
-      set((state) => {
+      commitProjectEvent(set, `选择 ${cueIds.length} 条台词`, "selection", (state) => {
         const selectedCueIds = new Set(cueIds);
         if (
           selectedCueIds.size === state.selectedCueIds.size &&
@@ -827,20 +1280,29 @@ const appStore = createStore<AppStore>()((set) => ({
         ) {
           return state;
         }
-        return { selectedCueIds, projectDirty: true };
+        return {
+          ...replaceCurrentSubtitleSelection(state, selectedCueIds),
+          projectDirty: true,
+        };
       }),
     proxyDialogOpened: () => set({ proxyDialogOpen: true }),
     proxyDialogClosed: () => set({ proxyDialogOpen: false }),
-    sourcePreviewSelected: () => set({ proxyDialogOpen: false, useProxy: false }),
+    sourcePreviewSelected: () =>
+      set((state) => {
+        const activeVideo = state.mediaItems.find((item) => item.id === state.activeVideoId);
+        return activeVideo && isMediaItemOffline(activeVideo)
+          ? state
+          : { ...state, proxyDialogOpen: false, useProxy: false };
+      }),
     proxyPreviewSelected: () => set((state) => (state.proxyPath ? { useProxy: true } : state)),
     proxyGenerated: (proxyPath) =>
-      set((state) => {
+      commitProjectEvent(set, "生成代理文件", "proxy", (state) => {
         const project = state.project ? { ...state.project, proxy_path: proxyPath } : null;
         return {
           project,
           projects:
             project && state.activeVideoId
-              ? { ...state.projects, [state.activeVideoId]: project }
+              ? { ...state.projects, [project.asset.id]: project }
               : state.projects,
           projectDirty: Boolean(project),
           proxyPath,
@@ -854,12 +1316,49 @@ const appStore = createStore<AppStore>()((set) => ({
     warningsAppended: (warnings) =>
       set((state) => ({ warnings: [...state.warnings, ...warnings] })),
     exportResultChanged: (exportResult) => set({ exportResult }),
-    mediaBinReadOnlyChanged: (mediaBinReadOnly) =>
-      set((state) =>
-        state.mediaBinReadOnly === mediaBinReadOnly
+    mediaBinReadOnlyChanged: (mediaBinReadOnly) => set({ mediaBinReadOnly }),
+    projectHistoryJumped: (targetCursor) => {
+      let changed = false;
+      set((state) => {
+        const target = Math.max(0, Math.min(targetCursor, state.projectHistory.entries.length));
+        if (!state.projectHistory.active || target === state.projectHistory.cursor) {
+          return state;
+        }
+
+        let projectFileState = projectFileStateFromStore(state);
+        if (target < state.projectHistory.cursor) {
+          for (let index = state.projectHistory.cursor - 1; index >= target; index -= 1) {
+            projectFileState = applyProjectFileEvent(
+              projectFileState,
+              state.projectHistory.entries[index].inverseEvent,
+            );
+          }
+        } else {
+          for (let index = state.projectHistory.cursor; index < target; index += 1) {
+            projectFileState = applyProjectFileEvent(
+              projectFileState,
+              state.projectHistory.entries[index].event,
+            );
+          }
+        }
+
+        const projectHistory = { ...state.projectHistory, cursor: target };
+        changed = true;
+        return {
+          ...reconciledProjectFileState(projectFileState),
+          projectHistory,
+          projectDirty: isProjectHistoryDirty(projectHistory),
+        };
+      });
+      return changed;
+    },
+    projectHistoryFutureDiscarded: () =>
+      set((state) => {
+        const projectHistory = discardFutureProjectHistory(state.projectHistory);
+        return projectHistory === state.projectHistory
           ? state
-          : { mediaBinReadOnly, projectDirty: true },
-      ),
+          : { projectHistory, projectDirty: isProjectHistoryDirty(projectHistory) };
+      }),
   },
 }));
 
@@ -872,13 +1371,17 @@ export function getProjectWorkspaceSnapshot(): ProjectWorkspace {
   return {
     projects: Object.values(state.projects),
     media_bin: {
-      items: state.mediaItems,
-      read_only: state.mediaBinReadOnly,
+      items: state.mediaItems.map((item) => ({
+        ...item,
+        enabled: item.enabled !== false,
+        hidden: item.hidden === true,
+        offline: item.offline === true,
+      })),
     },
     editor: {
       active_video_id: state.activeVideoId,
       active_track_id: state.activeTrackId,
-      selected_cue_ids: [...state.selectedCueIds],
+      subtitle_selections: serializeSubtitleSelections(state.subtitleSelections),
       detached_video_ids: [...state.detachedVideoIds],
       preview: {
         use_proxy: state.useProxy,

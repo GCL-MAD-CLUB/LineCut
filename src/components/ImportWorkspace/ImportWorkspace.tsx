@@ -111,6 +111,7 @@ function standaloneSubtitleItem(path: string, index: number): MediaBinItem {
     kind: "subtitle",
     enabled: true,
     hidden: false,
+    offline: false,
     path,
     file_name: fileName(path),
     duration_us: 0,
@@ -169,11 +170,11 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
 
   async function choosePaths(kind: PendingMediaKind, filters: typeof videoFilters, title: string) {
     if (isMediaBinReadOnly) {
-      messagePublished("素材箱处于只读状态，请先解除只读。");
+      messagePublished("项目处于只读状态。");
       return;
     }
     if (!isTauriRuntime()) {
-      messagePublished("请在 Tauri 桌面窗口中选择本地素材。");
+      messagePublished("请在 Tauri 桌面窗口中选择本地媒体。");
       return;
     }
     const picked = await open({ multiple: true, title, filters });
@@ -181,7 +182,7 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
     const paths = selectedPaths.filter((path) => !importedPathKeys.has(pathKey(path)));
     if (paths.length === 0) {
       if (selectedPaths.length > 0) {
-        messagePublished("所选素材已在当前素材箱中");
+        messagePublished("所选媒体已在当前项目中。");
       }
       return;
     }
@@ -194,7 +195,7 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
     }
     const ignoredCount = selectedPaths.length - paths.length;
     messagePublished(
-      `已添加 ${paths.length} 个${pendingMediaLabel(kind)}文件${ignoredCount > 0 ? `，忽略 ${ignoredCount} 个已有素材` : ""}`,
+      `已添加 ${paths.length} 个${pendingMediaLabel(kind)}文件${ignoredCount > 0 ? `，忽略 ${ignoredCount} 个已有媒体` : ""}`,
     );
   }
 
@@ -216,7 +217,7 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
 
   async function importSelectedMedia() {
     if (isMediaBinReadOnly) {
-      messagePublished("素材箱处于只读状态，请先解除只读。");
+      messagePublished("项目处于只读状态，请先解除只读。");
       return;
     }
     if (!isTauriRuntime()) {
@@ -258,7 +259,7 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
     const importedCount = loadedResults.length + subtitlePaths.length;
     clearPendingItems();
     const resultParts = [
-      importedCount > 0 ? `已导入 ${importedCount} 个素材` : "未导入任何素材",
+      importedCount > 0 ? `已导入 ${importedCount} 个媒体` : "未导入任何媒体",
       ...(errors.length > 0 ? [`${errors.length} 个失败`] : []),
       ...(cancelledCount > 0 ? [`${cancelledCount} 个已取消`] : []),
     ];
@@ -274,7 +275,7 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
         <div>
           <span className="import-workspace-eyebrow">媒体浏览器</span>
           <h1>导入媒体</h1>
-          <p>当前素材与待导入文件统一显示；新选择的文件始终追加到素材箱。</p>
+          <p>当前媒体与待导入文件统一显示；新选择的文件始终追加到项目。</p>
         </div>
         <span className="import-workspace-limit">多个视频 · 多个音频 · 多个字幕</span>
       </header>
@@ -287,7 +288,7 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
             <span>本地媒体</span>
           </button>
           <div className="import-browser-summary">
-            <span>导入素材</span>
+            <span>导入媒体</span>
             <strong>{importedItems.length + pendingItems.length}</strong>
           </div>
           <dl>
@@ -308,11 +309,11 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
 
         <div className="import-browser-main">
           <div className="import-browser-toolbar">
-            <div className="import-breadcrumb" title="本地媒体 / 导入素材">
+            <div className="import-breadcrumb" title="本地媒体 / 导入媒体">
               <FolderOpen aria-hidden="true" />
               <span>本地媒体</span>
               <ChevronRight aria-hidden="true" />
-              <strong>导入素材</strong>
+              <strong>导入媒体</strong>
             </div>
             <div className="import-picker-actions">
               <button
@@ -339,7 +340,7 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
             </div>
           </div>
 
-          <div className="import-file-list" role="table" aria-label="导入素材">
+          <div className="import-file-list" role="table" aria-label="导入媒体">
             <div className="import-file-list-header" role="row">
               <span role="columnheader">名称</span>
               <span role="columnheader">类型</span>
@@ -376,7 +377,7 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
                 <span className="import-file-path" role="cell" title={parentPath(item.path)}>
                   {parentPath(item.path)}
                 </span>
-                <span className="import-existing-status" role="cell" title="已在当前素材箱中">
+                <span className="import-existing-status" role="cell" title="已在当前项目中">
                   <CheckCircle2 aria-hidden="true" />
                 </span>
               </div>
@@ -417,7 +418,7 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
           <strong>
             {pendingItems.length > 0
               ? `${importedItems.length} 个已导入 · ${pendingItems.length} 个待导入`
-              : `${importedItems.length} 个素材已在素材箱中`}
+              : `${importedItems.length} 个媒体已在项目中`}
           </strong>
           <span>
             {itemCounts.video} 个视频 · {itemCounts.audio} 个音频 · {itemCounts.subtitle} 个字幕

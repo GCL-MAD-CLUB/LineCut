@@ -2,97 +2,10 @@ use super::*;
 
 const PROJECT_EXTENSION: &str = "lcp";
 const PROJECT_MAGIC: &[u8; 8] = b"LINECUT\0";
-const LEGACY_PROJECT_FORMAT_VERSION: u16 = 1;
-const WORKSPACE_PROJECT_FORMAT_VERSION: u16 = 2;
-const PROJECT_FORMAT_VERSION: u16 = 3;
+const PROJECT_FORMAT_FAMILY: u16 = 1;
+const PROJECT_FORMAT_VERSION: u16 = 1;
 const PROJECT_HEADER_LEN: usize = 8 + 2 + 2 + 8 + 32;
 const MAX_PROJECT_PAYLOAD_LEN: usize = 512 * 1024 * 1024;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct MediaBinItemV2 {
-    id: String,
-    kind: MediaBinItemKind,
-    path: String,
-    file_name: String,
-    duration_us: i64,
-    start_time_us: i64,
-    bound_to_video_id: Option<String>,
-    source_video_id: Option<String>,
-    stream_index: Option<i32>,
-    subtitle_track_id: Option<String>,
-    codec: Option<String>,
-    language: Option<String>,
-    extracted: bool,
-    origin: MediaBinItemOrigin,
-    color: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ProjectMediaBinStateV2 {
-    items: Vec<MediaBinItemV2>,
-    read_only: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ProjectWorkspaceV2 {
-    projects: Vec<Project>,
-    media_bin: ProjectMediaBinStateV2,
-    editor: ProjectEditorState,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ProjectDocumentV2 {
-    workspace: ProjectWorkspaceV2,
-    saved_at: u64,
-    app_version: String,
-}
-
-impl From<MediaBinItemV2> for MediaBinItem {
-    fn from(item: MediaBinItemV2) -> Self {
-        Self {
-            id: item.id,
-            kind: item.kind,
-            enabled: true,
-            hidden: false,
-            path: item.path,
-            file_name: item.file_name,
-            duration_us: item.duration_us,
-            start_time_us: item.start_time_us,
-            bound_to_video_id: item.bound_to_video_id,
-            source_video_id: item.source_video_id,
-            stream_index: item.stream_index,
-            subtitle_track_id: item.subtitle_track_id,
-            codec: item.codec,
-            language: item.language,
-            extracted: item.extracted,
-            origin: item.origin,
-            color: item.color,
-        }
-    }
-}
-
-impl From<ProjectDocumentV2> for ProjectDocument {
-    fn from(document: ProjectDocumentV2) -> Self {
-        Self {
-            workspace: ProjectWorkspace {
-                projects: document.workspace.projects,
-                media_bin: ProjectMediaBinState {
-                    items: document
-                        .workspace
-                        .media_bin
-                        .items
-                        .into_iter()
-                        .map(MediaBinItem::from)
-                        .collect(),
-                    read_only: document.workspace.media_bin.read_only,
-                },
-                editor: document.workspace.editor,
-            },
-            saved_at: document.saved_at,
-            app_version: document.app_version,
-        }
-    }
-}
 
 pub(crate) fn config_root() -> PathBuf {
     if let Some(value) = env::var_os("LINECUT_DATA_DIR") {
@@ -360,7 +273,7 @@ fn wrap_project_payload(payload: &[u8], version: u16) -> Result<Vec<u8>, String>
     let mut bytes = Vec::with_capacity(PROJECT_HEADER_LEN + payload.len());
     bytes.extend_from_slice(PROJECT_MAGIC);
     bytes.extend_from_slice(&version.to_le_bytes());
-    bytes.extend_from_slice(&0_u16.to_le_bytes());
+    bytes.extend_from_slice(&PROJECT_FORMAT_FAMILY.to_le_bytes());
     bytes.extend_from_slice(&(payload.len() as u64).to_le_bytes());
     bytes.extend_from_slice(&checksum);
     bytes.extend_from_slice(payload);
@@ -372,142 +285,16 @@ fn encode_project_document(document: &ProjectDocument) -> Result<Vec<u8>, String
     wrap_project_payload(&payload, PROJECT_FORMAT_VERSION)
 }
 
-fn imported_project_item(project: &Project) -> MediaBinItem {
-    let is_video = project.asset.video_stream_index.is_some();
-    let has_audio = project.asset.audio_stream_index.is_some();
-    let codec_type = if is_video { "video" } else { "audio" };
-    let stream = project
-        .streams
-        .iter()
-        .find(|stream| stream.codec_type == codec_type);
-    MediaBinItem {
-        id: project.asset.id.clone(),
-        kind: if is_video {
-            MediaBinItemKind::Video
-        } else {
-            MediaBinItemKind::Audio
-        },
-        enabled: true,
-        hidden: false,
-        path: project.asset.path.clone(),
-        file_name: project.asset.file_name.clone(),
-        duration_us: project.asset.duration_us,
-        start_time_us: project.asset.start_time_us,
-        bound_to_video_id: None,
-        source_video_id: None,
-        stream_index: if is_video {
-            project.asset.video_stream_index
-        } else {
-            project.asset.audio_stream_index
-        },
-        subtitle_track_id: None,
-        codec: stream.map(|stream| stream.codec_name.clone()),
-        language: stream.and_then(|stream| stream.language.clone()),
-        extracted: false,
-        origin: MediaBinItemOrigin::Imported,
-        color: if is_video && has_audio {
-            "#004b67"
-        } else if is_video {
-            "#3e0aae"
-        } else {
-            "#2a5507"
-        }
-        .to_string(),
-    }
-}
-
-fn imported_external_subtitle_items(project: &Project) -> Vec<MediaBinItem> {
-    project
-        .tracks
-        .iter()
-        .filter(|track| {
-            matches!(&track.source_type, SubtitleSourceType::External)
-                && track.source_path.is_some()
-        })
-        .map(|track| {
-            let path = track.source_path.clone().unwrap_or_default();
-            let file_name = Path::new(&path)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .map(str::to_owned)
-                .or_else(|| track.title.clone())
-                .unwrap_or_else(|| "字幕".to_string());
-            MediaBinItem {
-                id: format!("subtitle:{}", track.id),
-                kind: MediaBinItemKind::Subtitle,
-                enabled: true,
-                hidden: false,
-                path,
-                file_name,
-                duration_us: project.asset.duration_us,
-                start_time_us: 0,
-                bound_to_video_id: Some(project.asset.id.clone()),
-                source_video_id: None,
-                stream_index: track.stream_index,
-                subtitle_track_id: Some(track.id.clone()),
-                codec: Some(track.codec.clone()),
-                language: track.language.clone(),
-                extracted: false,
-                origin: MediaBinItemOrigin::Imported,
-                color: "#893a04".to_string(),
-            }
-        })
-        .collect()
-}
-
-fn workspace_from_legacy_project(project: Option<Project>) -> ProjectWorkspace {
-    let Some(project) = project else {
-        return ProjectWorkspace {
-            projects: Vec::new(),
-            media_bin: ProjectMediaBinState {
-                items: Vec::new(),
-                read_only: false,
-            },
-            editor: ProjectEditorState {
-                active_video_id: String::new(),
-                active_track_id: String::new(),
-                selected_cue_ids: Vec::new(),
-                detached_video_ids: Vec::new(),
-                preview: ProjectPreviewState { use_proxy: false },
-            },
-        };
-    };
-
-    let active_video_id = project.asset.id.clone();
-    let active_track_id = project
-        .tracks
-        .iter()
-        .find(|track| track.cue_count > 0)
-        .or_else(|| project.tracks.first())
-        .map(|track| track.id.clone())
-        .unwrap_or_default();
-    let mut items = vec![imported_project_item(&project)];
-    items.extend(imported_external_subtitle_items(&project));
-    ProjectWorkspace {
-        projects: vec![project],
-        media_bin: ProjectMediaBinState {
-            items,
-            read_only: false,
-        },
-        editor: ProjectEditorState {
-            active_video_id,
-            active_track_id,
-            selected_cue_ids: Vec::new(),
-            detached_video_ids: Vec::new(),
-            preview: ProjectPreviewState { use_proxy: false },
-        },
-    }
-}
-
 fn decode_project_document(bytes: &[u8]) -> Result<ProjectDocument, String> {
     if bytes.len() < PROJECT_HEADER_LEN || &bytes[..8] != PROJECT_MAGIC {
         return Err("不是有效的 LineCut 项目文件".to_string());
     }
     let version = u16::from_le_bytes([bytes[8], bytes[9]]);
-    if version != PROJECT_FORMAT_VERSION
-        && version != WORKSPACE_PROJECT_FORMAT_VERSION
-        && version != LEGACY_PROJECT_FORMAT_VERSION
-    {
+    let format_family = u16::from_le_bytes([bytes[10], bytes[11]]);
+    if format_family != PROJECT_FORMAT_FAMILY {
+        return Err("不支持此项目文件格式系列".to_string());
+    }
+    if version != PROJECT_FORMAT_VERSION {
         return Err(format!(
             "不支持的项目文件版本 {version}，当前支持版本为 {PROJECT_FORMAT_VERSION}"
         ));
@@ -525,20 +312,6 @@ fn decode_project_document(bytes: &[u8]) -> Result<ProjectDocument, String> {
     let payload = &bytes[PROJECT_HEADER_LEN..];
     if Sha256::digest(payload).as_slice() != &bytes[20..52] {
         return Err("项目文件完整性校验失败".to_string());
-    }
-    if version == LEGACY_PROJECT_FORMAT_VERSION {
-        let legacy: LegacyProjectDocument =
-            bincode::deserialize(payload).map_err(|e| format!("解析旧版项目文件失败: {e}"))?;
-        return Ok(ProjectDocument {
-            workspace: workspace_from_legacy_project(legacy.project),
-            saved_at: legacy.saved_at,
-            app_version: legacy.app_version,
-        });
-    }
-    if version == WORKSPACE_PROJECT_FORMAT_VERSION {
-        let workspace_document: ProjectDocumentV2 = bincode::deserialize(payload)
-            .map_err(|e| format!("解析旧版工作区项目文件失败: {e}"))?;
-        return Ok(workspace_document.into());
     }
     bincode::deserialize(payload).map_err(|e| format!("解析项目文件失败: {e}"))
 }
@@ -591,15 +364,29 @@ pub(crate) fn read_project_file(path: &Path) -> Result<ProjectDocument, String> 
 mod project_file_tests {
     use super::*;
 
+    fn empty_workspace() -> ProjectWorkspace {
+        ProjectWorkspace {
+            projects: Vec::new(),
+            media_bin: ProjectMediaBinState { items: Vec::new() },
+            editor: ProjectEditorState {
+                active_video_id: String::new(),
+                active_track_id: String::new(),
+                subtitle_selections: HashMap::new(),
+                detached_video_ids: Vec::new(),
+                preview: ProjectPreviewState { use_proxy: false },
+            },
+        }
+    }
+
     #[test]
     fn project_document_is_binary_and_round_trips() {
-        let mut workspace = workspace_from_legacy_project(None);
-        workspace.media_bin.read_only = true;
+        let mut workspace = empty_workspace();
         workspace.media_bin.items.push(MediaBinItem {
             id: "audio-1".to_string(),
             kind: MediaBinItemKind::Audio,
             enabled: false,
             hidden: true,
+            offline: true,
             path: "audio.wav".to_string(),
             file_name: "旁白".to_string(),
             duration_us: 2_000_000,
@@ -614,6 +401,10 @@ mod project_file_tests {
             origin: MediaBinItemOrigin::Imported,
             color: "#2a5507".to_string(),
         });
+        workspace.editor.subtitle_selections.insert(
+            "video-1".to_string(),
+            HashMap::from([("track-1".to_string(), vec!["cue-1".to_string()])]),
+        );
         let document = ProjectDocument {
             workspace,
             saved_at: 42,
@@ -626,10 +417,10 @@ mod project_file_tests {
         assert_eq!(decoded.saved_at, 42);
         assert_eq!(decoded.app_version, "test");
         assert!(decoded.workspace.projects.is_empty());
-        assert!(decoded.workspace.media_bin.read_only);
         assert_eq!(decoded.workspace.media_bin.items.len(), 1);
         assert!(!decoded.workspace.media_bin.items[0].enabled);
         assert!(decoded.workspace.media_bin.items[0].hidden);
+        assert!(decoded.workspace.media_bin.items[0].offline);
         assert_eq!(
             decoded.workspace.media_bin.items[0].origin,
             MediaBinItemOrigin::Imported
@@ -640,12 +431,16 @@ mod project_file_tests {
                 .as_deref(),
             Some("video-1")
         );
+        assert_eq!(
+            decoded.workspace.editor.subtitle_selections["video-1"]["track-1"],
+            vec!["cue-1"]
+        );
     }
 
     #[test]
     fn project_document_rejects_corrupted_payload() {
         let document = ProjectDocument {
-            workspace: workspace_from_legacy_project(None),
+            workspace: empty_workspace(),
             saved_at: 42,
             app_version: "test".to_string(),
         };
@@ -656,62 +451,31 @@ mod project_file_tests {
     }
 
     #[test]
-    fn legacy_project_document_migrates_to_workspace() {
-        let legacy = LegacyProjectDocument {
-            project: None,
-            saved_at: 41,
-            app_version: "legacy".to_string(),
+    fn project_document_rejects_unsupported_version() {
+        let document = ProjectDocument {
+            workspace: empty_workspace(),
+            saved_at: 42,
+            app_version: "test".to_string(),
         };
-        let payload = bincode::serialize(&legacy).expect("serialize legacy project");
-        let bytes = wrap_project_payload(&payload, LEGACY_PROJECT_FORMAT_VERSION)
-            .expect("wrap legacy project");
-        let decoded = decode_project_document(&bytes).expect("decode legacy project");
+        let payload = bincode::serialize(&document).expect("serialize project");
+        let bytes = wrap_project_payload(&payload, PROJECT_FORMAT_VERSION + 1)
+            .expect("wrap unsupported project version");
 
-        assert_eq!(decoded.saved_at, 41);
-        assert_eq!(decoded.app_version, "legacy");
-        assert!(decoded.workspace.projects.is_empty());
-        assert!(!decoded.workspace.media_bin.read_only);
+        let error = decode_project_document(&bytes).expect_err("reject unsupported version");
+        assert!(error.contains("当前支持版本为 1"));
     }
 
     #[test]
-    fn workspace_v2_project_document_defaults_media_visibility_and_enabled_state() {
-        let workspace = workspace_from_legacy_project(None);
-        let document = ProjectDocumentV2 {
-            workspace: ProjectWorkspaceV2 {
-                projects: Vec::new(),
-                media_bin: ProjectMediaBinStateV2 {
-                    items: vec![MediaBinItemV2 {
-                        id: "audio-v2".to_string(),
-                        kind: MediaBinItemKind::Audio,
-                        path: "audio-v2.wav".to_string(),
-                        file_name: "旧版音频".to_string(),
-                        duration_us: 1_000_000,
-                        start_time_us: 0,
-                        bound_to_video_id: None,
-                        source_video_id: None,
-                        stream_index: Some(0),
-                        subtitle_track_id: None,
-                        codec: Some("pcm_s16le".to_string()),
-                        language: None,
-                        extracted: false,
-                        origin: MediaBinItemOrigin::Imported,
-                        color: "#2a5507".to_string(),
-                    }],
-                    read_only: false,
-                },
-                editor: workspace.editor,
-            },
-            saved_at: 43,
-            app_version: "v2".to_string(),
+    fn project_document_rejects_retired_format_family() {
+        let document = ProjectDocument {
+            workspace: empty_workspace(),
+            saved_at: 42,
+            app_version: "test".to_string(),
         };
-        let payload = bincode::serialize(&document).expect("serialize v2 project");
-        let bytes = wrap_project_payload(&payload, WORKSPACE_PROJECT_FORMAT_VERSION)
-            .expect("wrap v2 project");
-        let decoded = decode_project_document(&bytes).expect("decode v2 project");
+        let mut bytes = encode_project_document(&document).expect("encode project");
+        bytes[10..12].copy_from_slice(&0_u16.to_le_bytes());
 
-        assert_eq!(decoded.saved_at, 43);
-        assert_eq!(decoded.workspace.media_bin.items.len(), 1);
-        assert!(decoded.workspace.media_bin.items[0].enabled);
-        assert!(!decoded.workspace.media_bin.items[0].hidden);
+        let error = decode_project_document(&bytes).expect_err("reject retired format family");
+        assert!(error.contains("格式系列"));
     }
 }

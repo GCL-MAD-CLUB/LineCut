@@ -2,7 +2,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { Captions, CheckCheck, ListFilter, Search, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { emitAppEvent, useAppEvent } from "../../appEvents";
-import { useAppStore, visibleSubtitleTracks } from "../../store";
+import { subtitleTrackCues, useAppStore, visibleSubtitleTracks } from "../../store";
 import { requestSubtitleThumbnail } from "../../subtitleThumbnail";
 import { formatDuration } from "../../time";
 import { normalizeFrameRate, timeUsToFrame } from "../../timeline";
@@ -32,6 +32,8 @@ interface CueFrameRange {
 
 const MIN_UPCOMING_SCROLL_DURATION_MS = 1000;
 const MAX_UPCOMING_SCROLL_DURATION_MS = 1200;
+const THUMBNAIL_PREFETCH_ROWS_BEFORE = 12;
+const THUMBNAIL_PREFETCH_ROWS_AFTER = 36;
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(Math.max(value, minimum), maximum);
@@ -102,9 +104,10 @@ interface CueFrameButtonProps {
   assetId: string;
   fingerprint: string;
   videoPath: string;
+  priority: number;
 }
 
-function CueFrameButton({ cue, assetId, fingerprint, videoPath }: CueFrameButtonProps) {
+function CueFrameButton({ cue, assetId, fingerprint, videoPath, priority }: CueFrameButtonProps) {
   const [thumbnailSrc, setThumbnailSrc] = useState("");
 
   useEffect(() => {
@@ -115,6 +118,7 @@ function CueFrameButton({ cue, assetId, fingerprint, videoPath }: CueFrameButton
       fingerprint,
       videoPath,
       timeUs: cue.start_us,
+      priority,
     });
     void request.promise.then(
       (url) => {
@@ -128,7 +132,7 @@ function CueFrameButton({ cue, assetId, fingerprint, videoPath }: CueFrameButton
       active = false;
       request.cancel();
     };
-  }, [assetId, cue.start_us, fingerprint, videoPath]);
+  }, [assetId, cue.start_us, fingerprint, priority, videoPath]);
 
   return (
     <button
@@ -165,28 +169,61 @@ function cueMatches(cue: SubtitleCue, query: string) {
     .every((token) => haystack.includes(token));
 }
 
+function closestCueIndexToViewportCenter(
+  rows: readonly { index: number; start: number; end: number }[],
+  scrollOffset: number,
+  viewportHeight: number,
+) {
+  if (rows.length === 0) {
+    return 0;
+  }
+  if (viewportHeight <= 0) {
+    return Math.floor((rows[0].index + rows[rows.length - 1].index) / 2);
+  }
+
+  const centerOffset = scrollOffset + viewportHeight / 2;
+  let closestRow = rows[0];
+  let closestDistance = Math.abs((closestRow.start + closestRow.end) / 2 - centerOffset);
+  for (let index = 1; index < rows.length; index += 1) {
+    const row = rows[index];
+    const distance = Math.abs((row.start + row.end) / 2 - centerOffset);
+    if (distance < closestDistance) {
+      closestRow = row;
+      closestDistance = distance;
+    }
+  }
+  return closestRow.index;
+}
+
 function useActiveTrack() {
   const project = useAppStore((state) => state.project);
+  const projects = useAppStore((state) => state.projects);
   const activeTrackId = useAppStore((state) => state.activeTrackId);
   const mediaItems = useAppStore((state) => state.mediaItems);
   const activeVideoId = useAppStore((state) => state.activeVideoId);
   return useMemo(
     () =>
-      visibleSubtitleTracks(project, mediaItems, activeVideoId).find(
+      visibleSubtitleTracks(project, mediaItems, activeVideoId, projects).find(
         (track) => track.id === activeTrackId,
       ) ?? null,
-    [activeTrackId, activeVideoId, mediaItems, project],
+    [activeTrackId, activeVideoId, mediaItems, project, projects],
   );
 }
 
 function useFilteredCues(visibleTrackId: string) {
   const project = useAppStore((state) => state.project);
+  const projects = useAppStore((state) => state.projects);
+  const mediaItems = useAppStore((state) => state.mediaItems);
+  const activeVideoId = useAppStore((state) => state.activeVideoId);
   const query = useSubtitlePanelState((state) => state.query);
   const selectedCueIds = useAppStore((state) => state.selectedCueIds);
   const showOnlySelected = useSubtitlePanelState((state) => state.showOnlySelected);
   const cues = useMemo(
-    () => (visibleTrackId && project ? (project.cues[visibleTrackId] ?? []) : []),
-    [project, visibleTrackId],
+    () =>
+      visibleTrackId
+        ? subtitleTrackCues(project, projects, mediaItems, activeVideoId, visibleTrackId)
+        : [],
+    [activeVideoId, mediaItems, project, projects, visibleTrackId],
   );
   const matchingCues = useMemo(() => cues.filter((cue) => cueMatches(cue, query)), [cues, query]);
   return useMemo(
@@ -198,6 +235,7 @@ function useFilteredCues(visibleTrackId: string) {
 
 export function SubtitlePanel() {
   const project = useAppStore((state) => state.project);
+  const projects = useAppStore((state) => state.projects);
   const mediaItems = useAppStore((state) => state.mediaItems);
   const activeVideoId = useAppStore((state) => state.activeVideoId);
   const activeTrackId = useAppStore((state) => state.activeTrackId);
@@ -231,9 +269,25 @@ export function SubtitlePanel() {
     measureElement: (element) => element.getBoundingClientRect().height,
     overscan: 4,
   });
+  const virtualRows = rowVirtualizer.getVirtualItems();
+  const firstRenderedCueIndex = virtualRows[0]?.index ?? 0;
+  const lastRenderedCueIndex = virtualRows.at(-1)?.index ?? 0;
+  const thumbnailPriorityCenterIndex = closestCueIndexToViewportCenter(
+    virtualRows,
+    rowVirtualizer.scrollOffset ?? 0,
+    rowVirtualizer.scrollRect?.height ?? 0,
+  );
+  const thumbnailPrefetchStart = Math.max(
+    0,
+    firstRenderedCueIndex - THUMBNAIL_PREFETCH_ROWS_BEFORE,
+  );
+  const thumbnailPrefetchEnd = Math.min(
+    filteredCues.length,
+    lastRenderedCueIndex + 1 + THUMBNAIL_PREFETCH_ROWS_AFTER,
+  );
   const visibleTracks = useMemo(
-    () => visibleSubtitleTracks(project, mediaItems, activeVideoId),
-    [activeVideoId, mediaItems, project],
+    () => visibleSubtitleTracks(project, mediaItems, activeVideoId, projects),
+    [activeVideoId, mediaItems, project, projects],
   );
   const trackItems = visibleTracks.map((track) => ({
     type: "option" as const,
@@ -285,6 +339,39 @@ export function SubtitlePanel() {
     return currentCueIndex;
   }, [cueFrameRanges, currentCueIndex, currentFrame, nextCueAfterCurrentIndex, upcomingCueIndex]);
   const followCueId = followCueIndex >= 0 ? filteredCues[followCueIndex]?.id : undefined;
+
+  useEffect(() => {
+    if (!thumbnailVideoPath || thumbnailPrefetchStart >= thumbnailPrefetchEnd) {
+      return;
+    }
+    const requests = filteredCues
+      .slice(thumbnailPrefetchStart, thumbnailPrefetchEnd)
+      .map((cue, offset) =>
+        requestSubtitleThumbnail({
+          assetId: thumbnailAssetId,
+          fingerprint: thumbnailFingerprint,
+          videoPath: thumbnailVideoPath,
+          timeUs: cue.start_us,
+          priority: Math.abs(thumbnailPrefetchStart + offset - thumbnailPriorityCenterIndex),
+        }),
+      );
+    for (const request of requests) {
+      void request.promise.catch(() => undefined);
+    }
+    return () => {
+      for (const request of requests) {
+        request.cancel();
+      }
+    };
+  }, [
+    filteredCues,
+    thumbnailAssetId,
+    thumbnailFingerprint,
+    thumbnailPrefetchEnd,
+    thumbnailPrefetchStart,
+    thumbnailPriorityCenterIndex,
+    thumbnailVideoPath,
+  ]);
 
   useEffect(() => {
     syncTrackContext(`${activeVideoId}:${project?.asset.id ?? ""}:${visibleActiveTrackId}`);
@@ -434,7 +521,7 @@ export function SubtitlePanel() {
                 className="virtual-spacer"
                 style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
               >
-                {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                {virtualRows.map((virtualRow) => {
                   const cue = filteredCues[virtualRow.index];
                   const checked = selectedCueIds.has(cue.id);
                   const isCurrentCue = virtualRow.index === currentCueIndex;
@@ -463,6 +550,7 @@ export function SubtitlePanel() {
                           assetId={thumbnailAssetId}
                           fingerprint={thumbnailFingerprint}
                           videoPath={thumbnailVideoPath}
+                          priority={Math.abs(virtualRow.index - thumbnailPriorityCenterIndex)}
                         />
                       )}
                       <button

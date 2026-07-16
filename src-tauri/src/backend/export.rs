@@ -10,6 +10,30 @@ pub(crate) async fn export_one_range(
     preferences: &Preferences,
     progress: Option<FfmpegProgressContext<'_>>,
 ) -> Result<(), String> {
+    let args = build_export_args(
+        input_path,
+        range,
+        mode,
+        has_source_audio,
+        bound_media,
+        output_path,
+    )?;
+    let program = ffmpeg_program(preferences);
+    if let Some(progress) = progress {
+        run_status_with_ffmpeg_progress(&program, &args, progress).await
+    } else {
+        run_status(&program, &args).await
+    }
+}
+
+fn build_export_args(
+    input_path: &str,
+    range: &ClipRange,
+    mode: &ExportMode,
+    has_source_audio: bool,
+    bound_media: &[ExportBoundMedia],
+    output_path: &Path,
+) -> Result<Vec<String>, String> {
     let duration_us = range.end_us.saturating_sub(range.start_us).max(1);
     let mut args = vec![
         "-y".to_string(),
@@ -22,51 +46,101 @@ pub(crate) async fn export_one_range(
         input_path.to_string(),
     ];
 
-    let mut audio_input_indexes = Vec::new();
-    let mut subtitle_input_indexes = Vec::new();
+    let mut audio_stream_specs = Vec::new();
+    let mut subtitle_stream_specs = Vec::new();
+    let mut next_input_index = 1usize;
+    let mut additional_input_indexes = HashMap::new();
     for media in bound_media {
-        args.extend([
-            "-ss".to_string(),
-            seconds_arg(range.start_us),
-            "-i".to_string(),
-            media.path.clone(),
-        ]);
-        let input_index = audio_input_indexes.len() + subtitle_input_indexes.len() + 1;
+        if media.path.trim().is_empty() {
+            return Err("绑定媒体缺少来源路径".to_string());
+        }
+        let stream_spec = match media.source {
+            ExportBoundMediaSource::EmbeddedStream if media.path == input_path => {
+                let stream_index = media
+                    .stream_index
+                    .ok_or_else(|| "虚拟媒体缺少流索引".to_string())?;
+                format!("0:{stream_index}")
+            }
+            ExportBoundMediaSource::EmbeddedStream => {
+                let stream_index = media
+                    .stream_index
+                    .ok_or_else(|| "虚拟媒体缺少流索引".to_string())?;
+                let input_index = *additional_input_indexes
+                    .entry(media.path.clone())
+                    .or_insert_with(|| {
+                        let input_index = next_input_index;
+                        next_input_index += 1;
+                        args.extend([
+                            "-ss".to_string(),
+                            seconds_arg(range.start_us),
+                            "-i".to_string(),
+                            media.path.clone(),
+                        ]);
+                        input_index
+                    });
+                format!("{input_index}:{stream_index}")
+            }
+            ExportBoundMediaSource::File => {
+                let input_index = *additional_input_indexes
+                    .entry(media.path.clone())
+                    .or_insert_with(|| {
+                        let input_index = next_input_index;
+                        next_input_index += 1;
+                        args.extend([
+                            "-ss".to_string(),
+                            seconds_arg(range.start_us),
+                            "-i".to_string(),
+                            media.path.clone(),
+                        ]);
+                        input_index
+                    });
+                match media.kind {
+                    ExportBoundMediaKind::Audio => format!("{input_index}:a:0"),
+                    ExportBoundMediaKind::Subtitle => format!("{input_index}:s:0"),
+                }
+            }
+        };
         match media.kind {
-            ExportBoundMediaKind::Audio => audio_input_indexes.push(input_index),
-            ExportBoundMediaKind::Subtitle => subtitle_input_indexes.push(input_index),
+            ExportBoundMediaKind::Audio => audio_stream_specs.push(stream_spec),
+            ExportBoundMediaKind::Subtitle => subtitle_stream_specs.push(stream_spec),
         }
     }
 
     args.extend(["-t".to_string(), seconds_arg(duration_us)]);
 
     args.extend(["-map".to_string(), "0:v:0".to_string()]);
-    let should_mix_audio = !audio_input_indexes.is_empty();
-    if should_mix_audio {
-        let mut audio_inputs = Vec::new();
-        if has_source_audio {
-            audio_inputs.push("[0:a:0]".to_string());
-        }
-        audio_inputs.extend(
-            audio_input_indexes
-                .iter()
-                .map(|index| format!("[{index}:a:0]")),
-        );
+    let has_bound_audio = !audio_stream_specs.is_empty();
+    if has_source_audio {
+        audio_stream_specs.insert(0, "0:a:0".to_string());
+    }
+    let has_audio = !audio_stream_specs.is_empty();
+    if has_bound_audio {
+        let mut audio_filters = audio_stream_specs
+            .iter()
+            .enumerate()
+            .map(|(index, stream)| {
+                format!("[{stream}]aresample=async=1:first_pts=0[export_audio_{index}]")
+            })
+            .collect::<Vec<_>>();
+        let audio_inputs = (0..audio_stream_specs.len())
+            .map(|index| format!("[export_audio_{index}]"))
+            .collect::<Vec<_>>();
+        audio_filters.push(format!(
+            "{}amix=inputs={}:duration=longest:dropout_transition=0:normalize=1[aout]",
+            audio_inputs.join(""),
+            audio_inputs.len()
+        ));
         args.extend([
             "-filter_complex".to_string(),
-            format!(
-                "{}amix=inputs={}:duration=first:dropout_transition=0:normalize=1[aout]",
-                audio_inputs.join(""),
-                audio_inputs.len()
-            ),
+            audio_filters.join(";"),
             "-map".to_string(),
             "[aout]".to_string(),
         ]);
-    } else if has_source_audio {
-        args.extend(["-map".to_string(), "0:a:0?".to_string()]);
+    } else if let Some(stream) = audio_stream_specs.first() {
+        args.extend(["-map".to_string(), format!("{stream}?")]);
     }
-    for input_index in &subtitle_input_indexes {
-        args.extend(["-map".to_string(), format!("{input_index}:s:0?")]);
+    for stream in &subtitle_stream_specs {
+        args.extend(["-map".to_string(), stream.clone()]);
     }
 
     match mode {
@@ -77,13 +151,13 @@ pub(crate) async fn export_one_range(
                 "-avoid_negative_ts".to_string(),
                 "make_zero".to_string(),
             ]);
-            if has_source_audio || should_mix_audio {
+            if has_audio {
                 args.extend([
                     "-c:a".to_string(),
-                    if should_mix_audio { "aac" } else { "copy" }.to_string(),
+                    if has_bound_audio { "aac" } else { "copy" }.to_string(),
                 ]);
             }
-            if !subtitle_input_indexes.is_empty() {
+            if !subtitle_stream_specs.is_empty() {
                 args.extend(["-c:s".to_string(), "copy".to_string()]);
             }
         }
@@ -104,18 +178,107 @@ pub(crate) async fn export_one_range(
                 "-movflags".to_string(),
                 "+faststart".to_string(),
             ]);
-            if !subtitle_input_indexes.is_empty() {
+            if !subtitle_stream_specs.is_empty() {
                 args.extend(["-c:s".to_string(), "mov_text".to_string()]);
             }
         }
     }
 
     args.push(output_path.to_string_lossy().into_owned());
-    let program = ffmpeg_program(preferences);
-    if let Some(progress) = progress {
-        run_status_with_ffmpeg_progress(&program, &args, progress).await
-    } else {
-        run_status(&program, &args).await
+    Ok(args)
+}
+
+#[cfg(test)]
+mod export_args_tests {
+    use super::*;
+
+    fn range() -> ClipRange {
+        ClipRange {
+            index: 0,
+            start_us: 1_000_000,
+            end_us: 2_500_000,
+            cue_ids: vec!["cue".to_string()],
+            head_padding_us: 0,
+            tail_padding_us: 0,
+        }
+    }
+
+    fn embedded(kind: ExportBoundMediaKind, path: &str, stream_index: i32) -> ExportBoundMedia {
+        ExportBoundMedia {
+            kind,
+            source: ExportBoundMediaSource::EmbeddedStream,
+            path: path.to_string(),
+            stream_index: Some(stream_index),
+        }
+    }
+
+    #[test]
+    fn selected_virtual_audio_is_filtered_and_mapped_as_required_output() {
+        let args = build_export_args(
+            "target.mkv",
+            &range(),
+            &ExportMode::PreciseEncode,
+            false,
+            &[embedded(ExportBoundMediaKind::Audio, "target.mkv", 2)],
+            Path::new("output.mp4"),
+        )
+        .expect("virtual audio arguments");
+
+        let filter = args
+            .windows(2)
+            .find(|pair| pair[0] == "-filter_complex")
+            .map(|pair| pair[1].as_str())
+            .expect("audio filter");
+        assert!(filter.contains("[0:2]aresample=async=1:first_pts=0"));
+        assert!(args.windows(2).any(|pair| pair == ["-map", "[aout]"]));
+        assert!(!args.iter().any(|arg| arg == "0:2?"));
+    }
+
+    #[test]
+    fn cross_video_virtual_streams_share_one_source_input_and_keep_exact_indexes() {
+        let args = build_export_args(
+            "target.mkv",
+            &range(),
+            &ExportMode::FastCopy,
+            false,
+            &[
+                embedded(ExportBoundMediaKind::Audio, "source.mkv", 1),
+                embedded(ExportBoundMediaKind::Subtitle, "source.mkv", 3),
+            ],
+            Path::new("output.mkv"),
+        )
+        .expect("cross-video virtual media arguments");
+
+        let source_input_count = args
+            .windows(2)
+            .filter(|pair| pair[0] == "-i" && pair[1] == "source.mkv")
+            .count();
+        assert_eq!(source_input_count, 1);
+        assert!(args
+            .iter()
+            .any(|arg| arg.contains("[1:1]aresample=async=1:first_pts=0")));
+        assert!(args.windows(2).any(|pair| pair == ["-map", "1:3"]));
+        assert!(!args.iter().any(|arg| arg == "1:3?"));
+    }
+
+    #[test]
+    fn virtual_stream_without_index_is_rejected() {
+        let error = build_export_args(
+            "target.mkv",
+            &range(),
+            &ExportMode::PreciseEncode,
+            false,
+            &[ExportBoundMedia {
+                kind: ExportBoundMediaKind::Audio,
+                source: ExportBoundMediaSource::EmbeddedStream,
+                path: "target.mkv".to_string(),
+                stream_index: None,
+            }],
+            Path::new("output.mp4"),
+        )
+        .expect_err("missing stream index must fail");
+
+        assert!(error.contains("流索引"));
     }
 }
 
@@ -171,6 +334,8 @@ pub(crate) async fn concat_segments(
         "0".to_string(),
         "-i".to_string(),
         list_path.to_string_lossy().into_owned(),
+        "-map".to_string(),
+        "0".to_string(),
         "-c".to_string(),
         "copy".to_string(),
         output_path.to_string_lossy().into_owned(),

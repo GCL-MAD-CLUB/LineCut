@@ -2,6 +2,10 @@ import { useEffect, useRef } from "react";
 
 interface AppEventMap {
   "media:import": { paths?: string[] };
+  "media:copy": undefined;
+  "media:paste": undefined;
+  "media:clear": undefined;
+  "media:duplicate": undefined;
   "monitor:seek": { timeUs: number; focusEndUs?: number; play?: boolean };
   "subtitle:select-all": undefined;
   "subtitle:clear-selection": undefined;

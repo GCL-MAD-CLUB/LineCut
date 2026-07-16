@@ -10,6 +10,17 @@ pub(crate) fn get_preferences(state: tauri::State<'_, AppState>) -> Result<Prefe
 }
 
 #[tauri::command]
+pub(crate) fn take_launch_project_path(
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    state
+        .launch_project_path
+        .lock()
+        .map_err(|_| "启动项目路径状态锁定失败".to_string())
+        .map(|mut path| path.take())
+}
+
+#[tauri::command]
 pub(crate) async fn update_preferences(
     preferences: Preferences,
     task_id: String,
@@ -75,13 +86,43 @@ pub(crate) async fn open_project_file(
 ) -> Result<OpenProjectResult, String> {
     let input_path = PathBuf::from(path);
     let read_path = input_path.clone();
-    let document = tokio::task::spawn_blocking(move || read_project_file(&read_path))
+    let mut document = tokio::task::spawn_blocking(move || read_project_file(&read_path))
         .await
         .map_err(|error| format!("打开项目任务失败: {error}"))??;
     let mut warnings = Vec::new();
 
+    for project in &mut document.workspace.projects {
+        for track in &mut project.tracks {
+            if matches!(&track.source_type, SubtitleSourceType::Embedded) {
+                track.source_path = None;
+            }
+        }
+    }
+    for item in &mut document.workspace.media_bin.items {
+        let is_virtual_reference = item.origin == MediaBinItemOrigin::Decomposed
+            && item.source_video_id.is_some()
+            && item.stream_index.is_some()
+            && matches!(
+                item.kind,
+                MediaBinItemKind::Audio | MediaBinItemKind::Subtitle
+            );
+        if is_virtual_reference {
+            item.path.clear();
+            item.extracted = false;
+            item.offline = false;
+        }
+    }
+
     for project in &document.workspace.projects {
         let media_path = Path::new(&project.asset.path);
+        let was_set_offline = document.workspace.media_bin.items.iter().any(|item| {
+            item.offline
+                && (item.id == project.asset.id
+                    || item.source_video_id.as_deref() == Some(project.asset.id.as_str()))
+        });
+        if was_set_offline {
+            continue;
+        }
         if !media_path.is_file() {
             warnings.push(format!("项目引用的媒体文件不存在: {}", project.asset.path));
         } else if let Ok(metadata) = fs::metadata(media_path) {
@@ -97,14 +138,17 @@ pub(crate) async fn open_project_file(
         .workspace
         .projects
         .iter()
-        .map(|project| project.asset.path.as_str())
+        .map(|project| project.asset.path.clone())
         .collect::<HashSet<_>>();
-    for item in &document.workspace.media_bin.items {
-        if item.path.is_empty() || project_paths.contains(item.path.as_str()) {
+    for item in &mut document.workspace.media_bin.items {
+        if item.offline || item.path.is_empty() {
             continue;
         }
         if !Path::new(&item.path).is_file() {
-            warnings.push(format!("素材箱引用的文件不存在: {}", item.path));
+            item.offline = true;
+            if !project_paths.contains(&item.path) {
+                warnings.push(format!("项目引用的文件不存在: {}", item.path));
+            }
         }
     }
 
@@ -130,6 +174,25 @@ pub(crate) async fn open_project_file(
 }
 
 #[tauri::command]
+pub(crate) fn sync_project_workspace(
+    workspace: ProjectWorkspace,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let mut projects = state
+        .projects
+        .lock()
+        .map_err(|_| "项目状态锁定失败".to_string())?;
+    projects.clear();
+    projects.extend(
+        workspace
+            .projects
+            .into_iter()
+            .map(|project| (project.asset.id.clone(), project)),
+    );
+    Ok(())
+}
+
+#[tauri::command]
 pub(crate) fn close_project(
     asset_id: Option<String>,
     state: tauri::State<'_, AppState>,
@@ -146,9 +209,47 @@ pub(crate) fn close_project(
 }
 
 #[tauri::command]
+pub(crate) fn path_is_file(path: String) -> bool {
+    Path::new(&path).is_file()
+}
+
+#[tauri::command]
+pub(crate) fn reveal_in_file_manager(path: String) -> Result<(), String> {
+    let target = PathBuf::from(path);
+    if !target.exists() {
+        return Err(format!("文件不存在: {}", target.to_string_lossy()));
+    }
+
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = std::process::Command::new("explorer");
+        command.arg("/select,").arg(&target);
+        command
+    };
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = std::process::Command::new("open");
+        command.arg("-R").arg(&target);
+        command
+    };
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let mut command = {
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(target.parent().unwrap_or_else(|| Path::new(".")));
+        command
+    };
+
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("无法在资源管理器中显示文件: {error}"))
+}
+
+#[tauri::command]
 pub(crate) async fn import_media(
     path: String,
     task_id: String,
+    asset_id: Option<String>,
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<ImportResult, String> {
@@ -187,11 +288,6 @@ pub(crate) async fn import_media(
         })
         .await?;
     let cache_dir = configured_cache_root(&preferences).join(&fingerprint);
-    let subtitle_cache_dir = cache_dir.join("subtitles");
-    spawn_blocking_cancellable(task.cancel_token(), "创建缓存目录", move |_| {
-        fs::create_dir_all(subtitle_cache_dir).map_err(|e| format!("创建缓存目录失败: {e}"))
-    })
-    .await?;
     emit_ffmpeg_progress(&app, &task_id, 0.08);
     let proxy_path = cache_dir.join(PROXY_FILE_NAME);
     let proxy_path_str = if proxy_path.exists() {
@@ -225,7 +321,7 @@ pub(crate) async fn import_media(
         .map(|s| s.index);
 
     let asset = MediaAsset {
-        id: Uuid::new_v4().to_string(),
+        id: asset_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
         file_name: input_path
             .file_name()
             .map(|v| v.to_string_lossy().into_owned())
@@ -311,59 +407,39 @@ pub(crate) async fn import_media(
         if is_text_subtitle_codec(&codec) {
             let current_subtitle = text_subtitle_index + 1;
             text_subtitle_index += 1;
-            match extract_embedded_subtitle(
+            let subtitle_progress_start = SUBTITLE_PROGRESS_START
+                + (current_subtitle - 1) as f64 * (SUBTITLE_PROGRESS_END - SUBTITLE_PROGRESS_START)
+                    / text_subtitle_total as f64;
+            let subtitle_progress_end = SUBTITLE_PROGRESS_START
+                + current_subtitle as f64 * (SUBTITLE_PROGRESS_END - SUBTITLE_PROGRESS_START)
+                    / text_subtitle_total as f64;
+            emit_ffmpeg_progress(&app, &task_id, subtitle_progress_start);
+            match parse_embedded_subtitle_async(
                 &input_path,
                 stream.index,
                 &codec,
-                &cache_dir,
+                &track_id,
                 &preferences,
-                Some(FfmpegProgressContext {
-                    app: &app,
-                    state: state.inner(),
-                    task_id: &task_id,
-                    cancel: task.cancel_token(),
-                    base_progress: SUBTITLE_PROGRESS_START
-                        + (current_subtitle - 1) as f64
-                            * (SUBTITLE_PROGRESS_END - SUBTITLE_PROGRESS_START)
-                            / text_subtitle_total as f64,
-                    progress_span: (SUBTITLE_PROGRESS_END - SUBTITLE_PROGRESS_START)
-                        / text_subtitle_total as f64,
-                    duration_us,
-                    cleanup_paths: Vec::new(),
-                }),
+                state.inner(),
+                &task_id,
+                task.cancel_token(),
             )
             .await
             {
-                Ok(subtitle_path) => {
-                    track.source_path = Some(subtitle_path.to_string_lossy().into_owned());
-                    match parse_subtitle_file_async(
-                        subtitle_path,
-                        codec.clone(),
-                        track_id.clone(),
-                        task.cancel_token(),
-                    )
-                    .await
-                    {
-                        Ok(parsed) => {
-                            track.cue_count = parsed.len();
-                            cues.insert(track_id.clone(), parsed);
-                        }
-                        Err(err) => {
-                            let message = format!("字幕流 {} 解析失败: {err}", stream.index);
-                            track.warning = Some(message.clone());
-                            warnings.push(message);
-                        }
-                    }
+                Ok(parsed) => {
+                    track.cue_count = parsed.len();
+                    cues.insert(track_id.clone(), parsed);
                 }
                 Err(err) => {
                     if err == "任务已取消" {
                         return Err(err);
                     }
-                    let message = format!("字幕流 {} 抽取失败: {err}", stream.index);
+                    let message = format!("字幕流 {} 解析失败: {err}", stream.index);
                     track.warning = Some(message.clone());
                     warnings.push(message);
                 }
             }
+            emit_ffmpeg_progress(&app, &task_id, subtitle_progress_end);
         } else {
             let message = format!(
                 "字幕流 {} 是图像字幕({codec})，当前版本暂不支持台词浏览",
@@ -378,7 +454,16 @@ pub(crate) async fn import_media(
     }
 
     if tracks.is_empty() {
-        warnings.push("未检测到字幕流；可稍后通过“外挂字幕”按钮导入".to_string());
+        warnings.push(
+            format!(
+                "未检测到字幕流：{}",
+                Path::new(&path)
+                    .file_name()
+                    .and_then(|v| v.to_str())
+                    .unwrap_or_default()
+            )
+            .to_string(),
+        );
     }
 
     let project = Project {
@@ -437,133 +522,39 @@ pub(crate) async fn demux_media_streams(
     state: tauri::State<'_, AppState>,
 ) -> Result<DemuxMediaResult, String> {
     let task = register_task(&task_id, state.inner())?;
-    let preferences = preferences_clone(&state)?;
     let mut project = project_clone(&asset_id, &state)?;
-    let demux_dir = PathBuf::from(&project.cache_dir).join("demux");
-    let demux_dir_to_create = demux_dir.clone();
-    spawn_blocking_cancellable(task.cancel_token(), "创建分解目录", move |_| {
-        fs::create_dir_all(demux_dir_to_create).map_err(|e| format!("创建分解目录失败: {e}"))
-    })
-    .await?;
+    emit_ffmpeg_progress(&app, &task_id, 0.0);
+    task.check_cancelled()?;
 
-    let audio_streams = project
+    let source_stem = Path::new(&project.asset.file_name)
+        .file_stem()
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "media".to_string());
+    let audio_tracks = project
         .streams
         .iter()
         .filter(|stream| stream.codec_type == "audio")
-        .cloned()
-        .collect::<Vec<_>>();
-    let audio_total = audio_streams.len().max(1);
-    let mut audio_tracks = Vec::new();
-    emit_ffmpeg_progress(&app, &task_id, 0.0);
-
-    for (index, stream) in audio_streams.into_iter().enumerate() {
-        task.check_cancelled()?;
-        let output_path = demux_dir.join(format!("audio_stream_{}.m4a", stream.index));
-        if !output_path.exists() {
-            let args = vec![
-                "-y".to_string(),
-                "-hide_banner".to_string(),
-                "-loglevel".to_string(),
-                "error".to_string(),
-                "-i".to_string(),
-                project.asset.path.clone(),
-                "-map".to_string(),
-                format!("0:{}", stream.index),
-                "-vn".to_string(),
-                "-c:a".to_string(),
-                "aac".to_string(),
-                "-b:a".to_string(),
-                "192k".to_string(),
-                output_path.to_string_lossy().into_owned(),
-            ];
-            run_status_with_ffmpeg_progress(
-                &ffmpeg_program(&preferences),
-                &args,
-                FfmpegProgressContext {
-                    app: &app,
-                    state: state.inner(),
-                    task_id: &task_id,
-                    cancel: task.cancel_token(),
-                    base_progress: index as f64 * 0.78 / audio_total as f64,
-                    progress_span: 0.78 / audio_total as f64,
-                    duration_us: project.asset.duration_us,
-                    cleanup_paths: vec![output_path.clone()],
-                },
-            )
-            .await?;
-        }
-        audio_tracks.push(DemuxedAudioTrack {
-            path: output_path.to_string_lossy().into_owned(),
-            file_name: format!(
-                "{}_音轨_{}.m4a",
-                Path::new(&project.asset.file_name)
-                    .file_stem()
-                    .map(|value| value.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "media".to_string()),
-                stream.index
-            ),
+        .map(|stream| DemuxedAudioTrack {
+            file_name: format!("{source_stem}_音轨_{}", stream.index),
             duration_us: project.asset.duration_us,
             stream_index: stream.index,
-            codec: stream.codec_name,
-            language: stream.language,
-            title: stream.title,
-        });
-    }
-
-    let asset_path = PathBuf::from(&project.asset.path);
-    let cache_dir = PathBuf::from(&project.cache_dir);
-    let duration_us = project.asset.duration_us;
-    let embedded_text_total = project
-        .tracks
-        .iter()
-        .filter(|track| {
-            matches!(&track.source_type, SubtitleSourceType::Embedded)
-                && track.source_path.is_none()
-                && is_text_subtitle_codec(&track.codec)
+            codec: stream.codec_name.clone(),
+            language: stream.language.clone(),
+            title: stream.title.clone(),
         })
-        .count()
-        .max(1);
-    let mut embedded_text_index = 0usize;
-    for track in project.tracks.iter_mut().filter(|track| {
-        matches!(&track.source_type, SubtitleSourceType::Embedded)
-            && track.source_path.is_none()
-            && is_text_subtitle_codec(&track.codec)
-    }) {
-        let Some(stream_index) = track.stream_index else {
-            continue;
-        };
-        task.check_cancelled()?;
-        let current_index = embedded_text_index;
-        embedded_text_index += 1;
-        let subtitle_path = extract_embedded_subtitle(
-            &asset_path,
-            stream_index,
-            &track.codec,
-            &cache_dir,
-            &preferences,
-            Some(FfmpegProgressContext {
-                app: &app,
-                state: state.inner(),
-                task_id: &task_id,
-                cancel: task.cancel_token(),
-                base_progress: 0.78 + current_index as f64 * 0.2 / embedded_text_total as f64,
-                progress_span: 0.2 / embedded_text_total as f64,
-                duration_us,
-                cleanup_paths: Vec::new(),
-            }),
-        )
-        .await?;
-        track.source_path = Some(subtitle_path.to_string_lossy().into_owned());
-    }
+        .collect::<Vec<_>>();
 
     let subtitle_tracks = project
         .tracks
-        .iter()
-        .filter(|track| {
-            matches!(&track.source_type, SubtitleSourceType::Embedded)
-                && track.source_path.is_some()
+        .iter_mut()
+        .filter_map(|track| {
+            if matches!(&track.source_type, SubtitleSourceType::Embedded) {
+                track.source_path = None;
+                Some(track.clone())
+            } else {
+                None
+            }
         })
-        .cloned()
         .collect::<Vec<_>>();
     task.check_cancelled()?;
     state
@@ -705,6 +696,7 @@ pub(crate) async fn add_external_subtitles(
 #[tauri::command]
 pub(crate) async fn export_clips(
     asset_id: String,
+    track_asset_id: String,
     track_id: String,
     cue_ids: Vec<String>,
     options: ExportOptions,
@@ -717,7 +709,8 @@ pub(crate) async fn export_clips(
     let task = register_task(&task_id, state.inner())?;
     let preferences = preferences_clone(&state)?;
     let project = project_clone(&asset_id, &state)?;
-    let track_cues = project
+    let track_project = project_clone(&track_asset_id, &state)?;
+    let track_cues = track_project
         .cues
         .get(&track_id)
         .ok_or_else(|| "找不到当前字幕轨".to_string())?;
