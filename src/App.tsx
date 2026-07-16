@@ -4,7 +4,7 @@ import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 import { Loader2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { emitAppEvent, useAppEvent } from "./appEvents";
-import { ApplicationMenu } from "./components/ApplicationMenu";
+import { ApplicationMenu, type ApplicationMenuModel } from "./components/ApplicationMenu";
 import {
   DockLayout,
   type DockLayoutState,
@@ -161,6 +161,7 @@ const initialDockLayout: DockLayoutState<AppDockPanelId> = {
 
 export default function App() {
   const [activeWorkspace, setActiveWorkspace] = useState<AppWorkspace>("edit");
+  const [focusedPanelId, setFocusedPanelId] = useState<AppDockPanelId>("source");
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [historyNavigating, setHistoryNavigating] = useState(false);
   const [recentMediaPaths, setRecentMediaPaths] = useState(() =>
@@ -192,6 +193,10 @@ export default function App() {
     "media",
     (state) => state.clipboardItemCount,
   );
+  const visibleMediaItemCount = useMediaBinState.useInstance(
+    "media",
+    (state) => state.visibleItemCount,
+  );
   const projectOpened = useAppStore((state) => state.actions.projectOpened);
   const projectCreated = useAppStore((state) => state.actions.projectCreated);
   const projectSaved = useAppStore((state) => state.actions.projectSaved);
@@ -219,14 +224,19 @@ export default function App() {
         : [],
     [activeTrackId, activeVideoId, mediaItems, project, projects],
   );
-  const canSelectAllSubtitleCues = activeWorkspace === "edit" && activeTrackCues.length > 0;
-  const canClearSubtitleCueSelection = activeWorkspace === "edit" && selectedCueCount > 0;
-  const canUseMediaBinActions = activeWorkspace === "edit";
-  const canCopyMedia = canUseMediaBinActions && selectedMediaItemCount > 0;
-  const canPasteMedia = canUseMediaBinActions && !isMediaBinReadOnly && mediaClipboardItemCount > 0;
-  const canClearMedia = canUseMediaBinActions && !isMediaBinReadOnly && selectedMediaItemCount > 0;
-  const canDuplicateMedia =
-    canUseMediaBinActions && !isMediaBinReadOnly && selectedMediaItemCount > 0;
+  const editScope = activeWorkspace === "edit" ? focusedPanelId : null;
+  const mediaEditScopeActive = editScope === "media";
+  const subtitleEditScopeActive = editScope === "subtitles";
+  const canCopy = mediaEditScopeActive && selectedMediaItemCount > 0;
+  const canPaste = mediaEditScopeActive && !isMediaBinReadOnly && mediaClipboardItemCount > 0;
+  const canClear = mediaEditScopeActive && !isMediaBinReadOnly && selectedMediaItemCount > 0;
+  const canDuplicate = canClear;
+  const canSelectAll = mediaEditScopeActive
+    ? visibleMediaItemCount > 0
+    : subtitleEditScopeActive && activeTrackCues.length > 0;
+  const canClearSelection = mediaEditScopeActive
+    ? selectedMediaItemCount > 0
+    : subtitleEditScopeActive && selectedCueCount > 0;
   const activeStatusLabel =
     runningTasks.length === 1 ? runningTasks[0].label : `正在执行 ${runningTasks.length} 项操作...`;
 
@@ -527,12 +537,44 @@ export default function App() {
     }
   }
 
-  function selectAllSubtitleCues() {
-    emitAppEvent("subtitle:select-all");
+  function copyInEditScope() {
+    if (editScope === "media") {
+      emitAppEvent("media:copy");
+    }
   }
 
-  function clearSubtitleCueSelection() {
-    emitAppEvent("subtitle:clear-selection");
+  function pasteInEditScope() {
+    if (editScope === "media") {
+      emitAppEvent("media:paste");
+    }
+  }
+
+  function clearInEditScope() {
+    if (editScope === "media") {
+      emitAppEvent("media:clear");
+    }
+  }
+
+  function duplicateInEditScope() {
+    if (editScope === "media") {
+      emitAppEvent("media:duplicate");
+    }
+  }
+
+  function selectAllInEditScope() {
+    if (editScope === "media") {
+      emitAppEvent("media:select-all");
+    } else if (editScope === "subtitles") {
+      emitAppEvent("subtitle:select-all");
+    }
+  }
+
+  function clearSelectionInEditScope() {
+    if (editScope === "media") {
+      emitAppEvent("media:clear-selection");
+    } else if (editScope === "subtitles") {
+      emitAppEvent("subtitle:clear-selection");
+    }
   }
 
   function rememberImportedMedia(paths: string[]) {
@@ -659,10 +701,29 @@ export default function App() {
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
-      if (!event.ctrlKey || event.repeat) {
+      if (event.repeat) {
         return;
       }
+      const primaryModifier = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
+
+      if (!primaryModifier) {
+        if (
+          !event.altKey &&
+          !event.shiftKey &&
+          !isEditableKeyboardTarget(event.target) &&
+          (event.key === "Backspace" || event.key === "Delete")
+        ) {
+          if (activeWorkspace === "edit") {
+            event.preventDefault();
+          }
+          if (!isBusy && canClear) {
+            clearInEditScope();
+          }
+        }
+        return;
+      }
+
       if (key === "q" && !event.shiftKey && !event.altKey) {
         event.preventDefault();
         void exitApplication();
@@ -685,22 +746,37 @@ export default function App() {
         }
         return;
       }
-      if (isBusy) {
-        return;
+      if (!event.altKey && !isEditableKeyboardTarget(event.target)) {
+        if (key === "c" && !event.shiftKey) {
+          event.preventDefault();
+          if (!isBusy && canCopy) copyInEditScope();
+          return;
+        }
+        if (key === "v" && !event.shiftKey) {
+          event.preventDefault();
+          if (!isBusy && canPaste) pasteInEditScope();
+          return;
+        }
+        if (key === "a") {
+          event.preventDefault();
+          if (isBusy) {
+            return;
+          }
+          if (event.shiftKey) {
+            if (canClearSelection) clearSelectionInEditScope();
+          } else if (canSelectAll) {
+            selectAllInEditScope();
+          }
+          return;
+        }
       }
-      if (key === "a" && event.target instanceof HTMLInputElement) {
+      if (isBusy) {
         return;
       }
       let action: (() => void | Promise<void>) | undefined;
       if (key === "n" && !event.shiftKey && !event.altKey) action = newProject;
       if (key === "o" && !event.shiftKey && !event.altKey) action = openProject;
       if (key === "i" && !event.shiftKey && !event.altKey) action = importMedia;
-      if (key === "a" && !event.shiftKey && !event.altKey && canSelectAllSubtitleCues) {
-        action = selectAllSubtitleCues;
-      }
-      if (key === "a" && event.shiftKey && !event.altKey && canClearSubtitleCueSelection) {
-        action = clearSubtitleCueSelection;
-      }
       if (key === "w" && event.shiftKey && !event.altKey && hasProject) action = closeProject;
       if (key === "s" && !event.shiftKey && !event.altKey && hasProject) action = saveProject;
       if (key === "s" && event.shiftKey && !event.altKey && hasProject) {
@@ -709,6 +785,7 @@ export default function App() {
       if (key === "s" && !event.shiftKey && event.altKey && hasProject) {
         action = () => saveProjectAs(false);
       }
+
       if (!action) {
         return;
       }
@@ -763,43 +840,79 @@ export default function App() {
 
   const workspaceContent: Record<AppWorkspace, ReactNode> = {
     import: <ImportWorkspace onImportCompleted={() => setActiveWorkspace("edit")} />,
-    edit: <DockLayout panels={dockPanels} initialLayout={initialDockLayout} />,
+    edit: (
+      <DockLayout
+        panels={dockPanels}
+        initialLayout={initialDockLayout}
+        onFocusedPanelChange={setFocusedPanelId}
+      />
+    ),
+  };
+
+  const applicationMenuModel: ApplicationMenuModel = {
+    file: {
+      newProject: { enabled: !isBusy, execute: newProject },
+      openProject: { enabled: !isBusy, execute: openProject },
+      recentProjects: {
+        enabled: recentProjectPaths.length > 0 && !isBusy,
+        items: recentProjectPaths.map((path) => ({
+          id: path,
+          label: fileName(path),
+          title: path,
+          execute: () => openProject(path),
+        })),
+      },
+      closeProject: { enabled: hasProject && !isBusy, execute: closeProject },
+      saveProject: {
+        enabled: hasProject && projectDirty && !isBusy,
+        execute: saveProject,
+      },
+      saveProjectAs: {
+        enabled: hasProject && !isBusy,
+        execute: () => saveProjectAs(true),
+      },
+      saveProjectCopy: {
+        enabled: hasProject && !isBusy,
+        execute: () => saveProjectAs(false),
+      },
+      importMedia: {
+        enabled: !isMediaBinReadOnly && !isBusy,
+        execute: importMedia,
+      },
+      recentMedia: {
+        enabled: recentMediaPaths.length > 0 && !isMediaBinReadOnly && !isBusy,
+        items: recentMediaPaths.map((path) => ({
+          id: path,
+          label: fileName(path),
+          title: path,
+          execute: () => importMedia([path]),
+        })),
+      },
+      exit: { enabled: true, execute: exitApplication },
+    },
+    edit: {
+      undo: { enabled: canUndo && !isBusy, execute: undoProjectOperation },
+      redo: { enabled: canRedo && !isBusy, execute: redoProjectOperation },
+      copy: { enabled: canCopy && !isBusy, execute: copyInEditScope },
+      paste: { enabled: canPaste && !isBusy, execute: pasteInEditScope },
+      clear: { enabled: canClear && !isBusy, execute: clearInEditScope },
+      duplicate: { enabled: canDuplicate && !isBusy, execute: duplicateInEditScope },
+      selectAll: { enabled: canSelectAll && !isBusy, execute: selectAllInEditScope },
+      clearSelection: {
+        enabled: canClearSelection && !isBusy,
+        execute: clearSelectionInEditScope,
+      },
+      preferences: {
+        enabled: !isBusy,
+        execute: () => setPreferencesOpen(true),
+      },
+    },
   };
 
   return (
     <div className="app-shell">
       <header className="application-menubar">
-        <ApplicationMenu
-          hasProject={hasProject}
-          isDirty={projectDirty}
-          isBusy={isBusy}
-          isMediaBinReadOnly={isMediaBinReadOnly}
-          onNewProject={newProject}
-          onOpenProject={openProject}
-          onCloseProject={closeProject}
-          onSaveProject={saveProject}
-          onSaveProjectAs={() => saveProjectAs(true)}
-          onSaveProjectCopy={() => saveProjectAs(false)}
-          recentProjectPaths={recentProjectPaths}
-          onOpenRecentProject={(path) => openProject(path)}
-          onImportMedia={importMedia}
-          recentMediaPaths={recentMediaPaths}
-          onImportRecentMedia={(path) => importMedia([path])}
-          canUndo={canUndo}
-          canRedo={canRedo}
-          onUndo={undoProjectOperation}
-          onRedo={redoProjectOperation}
-          canCopyMedia={canCopyMedia}
-          canPasteMedia={canPasteMedia}
-          canClearMedia={canClearMedia}
-          canDuplicateMedia={canDuplicateMedia}
-          canSelectAllSubtitleCues={canSelectAllSubtitleCues}
-          canClearSubtitleCueSelection={canClearSubtitleCueSelection}
-          onSelectAllSubtitleCues={selectAllSubtitleCues}
-          onClearSubtitleCueSelection={clearSubtitleCueSelection}
-          onOpenPreferences={() => setPreferencesOpen(true)}
-          onExit={exitApplication}
-        />
+        <ApplicationMenu model={applicationMenuModel} />
       </header>
 
       <SecondaryTopbar

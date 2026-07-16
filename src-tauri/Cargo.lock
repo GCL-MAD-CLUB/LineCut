@@ -1676,7 +1676,7 @@ dependencies = [
 
 [[package]]
 name = "linecut"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "bincode",
  "encoding_rs",
@@ -1690,6 +1690,8 @@ dependencies = [
  "time",
  "tokio",
  "uuid",
+ "windows",
+ "windows-core 0.61.2",
 ]
 
 [[package]]

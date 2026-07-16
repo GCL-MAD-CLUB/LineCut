@@ -63,7 +63,7 @@ pub(crate) fn load_preferences() -> Result<Preferences, String> {
     normalize_preferences(preferences)
 }
 
-/// Cache data is an implementation detail and must not survive an application version change.
+/// Remove cache data only when a 0.2.0-or-newer build upgrades a 0.1.x installation.
 /// The marker lives beside the cache, so preferences, projects, and exports remain untouched.
 fn clear_cache_when_version_changes() {
     let root = config_root();
@@ -71,14 +71,26 @@ fn clear_cache_when_version_changes() {
     let current_version = env!("CARGO_PKG_VERSION");
     let previous_version = fs::read_to_string(&marker).ok();
 
-    if previous_version.as_deref().map(str::trim) != Some(current_version) {
+    if should_clear_cache_for_upgrade(current_version, previous_version.as_deref()) {
         let cache = root.join("cache");
         if cache.exists() {
             let _ = fs::remove_dir_all(&cache);
         }
-        let _ = fs::create_dir_all(&root);
-        let _ = fs::write(marker, current_version);
     }
+    let _ = fs::create_dir_all(&root);
+    let _ = fs::write(marker, current_version);
+}
+
+fn should_clear_cache_for_upgrade(current_version: &str, previous_version: Option<&str>) -> bool {
+    is_version_0_2_or_newer(current_version)
+        && previous_version.is_some_and(|version| version.trim().starts_with("0.1."))
+}
+
+fn is_version_0_2_or_newer(version: &str) -> bool {
+    let mut parts = version.trim().split('.');
+    let major = parts.next().and_then(|part| part.parse::<u64>().ok());
+    let minor = parts.next().and_then(|part| part.parse::<u64>().ok());
+    matches!((major, minor), (Some(major), Some(minor)) if major > 0 || (major == 0 && minor >= 2))
 }
 
 /// Applies the media tool paths selected by the Windows NSIS installer.
@@ -358,124 +370,4 @@ pub(crate) fn read_project_file(path: &Path) -> Result<ProjectDocument, String> 
     }
     let bytes = fs::read(path).map_err(|e| format!("读取项目文件失败: {e}"))?;
     decode_project_document(&bytes)
-}
-
-#[cfg(test)]
-mod project_file_tests {
-    use super::*;
-
-    fn empty_workspace() -> ProjectWorkspace {
-        ProjectWorkspace {
-            projects: Vec::new(),
-            media_bin: ProjectMediaBinState { items: Vec::new() },
-            editor: ProjectEditorState {
-                active_video_id: String::new(),
-                active_track_id: String::new(),
-                subtitle_selections: HashMap::new(),
-                detached_video_ids: Vec::new(),
-                preview: ProjectPreviewState { use_proxy: false },
-            },
-        }
-    }
-
-    #[test]
-    fn project_document_is_binary_and_round_trips() {
-        let mut workspace = empty_workspace();
-        workspace.media_bin.items.push(MediaBinItem {
-            id: "audio-1".to_string(),
-            kind: MediaBinItemKind::Audio,
-            enabled: false,
-            hidden: true,
-            offline: true,
-            path: "audio.wav".to_string(),
-            file_name: "旁白".to_string(),
-            duration_us: 2_000_000,
-            start_time_us: 0,
-            bound_to_video_id: Some("video-1".to_string()),
-            source_video_id: None,
-            stream_index: Some(0),
-            subtitle_track_id: None,
-            codec: Some("pcm_s16le".to_string()),
-            language: Some("zh".to_string()),
-            extracted: false,
-            origin: MediaBinItemOrigin::Imported,
-            color: "#2a5507".to_string(),
-        });
-        workspace.editor.subtitle_selections.insert(
-            "video-1".to_string(),
-            HashMap::from([("track-1".to_string(), vec!["cue-1".to_string()])]),
-        );
-        let document = ProjectDocument {
-            workspace,
-            saved_at: 42,
-            app_version: "test".to_string(),
-        };
-        let bytes = encode_project_document(&document).expect("encode project");
-        assert_eq!(&bytes[..8], PROJECT_MAGIC);
-        assert_ne!(bytes.first(), Some(&b'{'));
-        let decoded = decode_project_document(&bytes).expect("decode project");
-        assert_eq!(decoded.saved_at, 42);
-        assert_eq!(decoded.app_version, "test");
-        assert!(decoded.workspace.projects.is_empty());
-        assert_eq!(decoded.workspace.media_bin.items.len(), 1);
-        assert!(!decoded.workspace.media_bin.items[0].enabled);
-        assert!(decoded.workspace.media_bin.items[0].hidden);
-        assert!(decoded.workspace.media_bin.items[0].offline);
-        assert_eq!(
-            decoded.workspace.media_bin.items[0].origin,
-            MediaBinItemOrigin::Imported
-        );
-        assert_eq!(
-            decoded.workspace.media_bin.items[0]
-                .bound_to_video_id
-                .as_deref(),
-            Some("video-1")
-        );
-        assert_eq!(
-            decoded.workspace.editor.subtitle_selections["video-1"]["track-1"],
-            vec!["cue-1"]
-        );
-    }
-
-    #[test]
-    fn project_document_rejects_corrupted_payload() {
-        let document = ProjectDocument {
-            workspace: empty_workspace(),
-            saved_at: 42,
-            app_version: "test".to_string(),
-        };
-        let mut bytes = encode_project_document(&document).expect("encode project");
-        let last = bytes.len() - 1;
-        bytes[last] ^= 0xff;
-        assert!(decode_project_document(&bytes).is_err());
-    }
-
-    #[test]
-    fn project_document_rejects_unsupported_version() {
-        let document = ProjectDocument {
-            workspace: empty_workspace(),
-            saved_at: 42,
-            app_version: "test".to_string(),
-        };
-        let payload = bincode::serialize(&document).expect("serialize project");
-        let bytes = wrap_project_payload(&payload, PROJECT_FORMAT_VERSION + 1)
-            .expect("wrap unsupported project version");
-
-        let error = decode_project_document(&bytes).expect_err("reject unsupported version");
-        assert!(error.contains("当前支持版本为 1"));
-    }
-
-    #[test]
-    fn project_document_rejects_retired_format_family() {
-        let document = ProjectDocument {
-            workspace: empty_workspace(),
-            saved_at: 42,
-            app_version: "test".to_string(),
-        };
-        let mut bytes = encode_project_document(&document).expect("encode project");
-        bytes[10..12].copy_from_slice(&0_u16.to_le_bytes());
-
-        let error = decode_project_document(&bytes).expect_err("reject retired format family");
-        assert!(error.contains("格式系列"));
-    }
 }

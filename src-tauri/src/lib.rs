@@ -532,6 +532,7 @@ pub fn run() {
             #[cfg(windows)]
             if let Some(window) = app.get_webview_window("main") {
                 window.set_theme(Some(tauri::Theme::Light))?;
+                install_system_file_drop(app.handle().clone(), window.hwnd()?)?;
             }
             Ok(())
         })
@@ -552,6 +553,7 @@ pub fn run() {
             sync_project_workspace,
             close_project,
             path_is_file,
+            set_media_import_drop_region,
             reveal_in_file_manager,
             cancel_task,
             export_clips

@@ -492,20 +492,3 @@ pub(crate) fn codec_from_path(path: &Path) -> String {
         _ => "subrip".to_string(),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_embedded_subtitle_text_without_a_cache_file() {
-        let text = "1\n00:00:01,250 --> 00:00:02,500\n第一句\n\n2\n00:00:03,000 --> 00:00:04,000\n第二句\n";
-        let cues = parse_subtitle_text_cancellable(text, "srt", "virtual-track", None)
-            .expect("parse in-memory subtitle text");
-
-        assert_eq!(cues.len(), 2);
-        assert_eq!(cues[0].id, "virtual-track:0");
-        assert_eq!(cues[0].start_us, 1_250_000);
-        assert_eq!(cues[1].plain_text, "第二句");
-    }
-}

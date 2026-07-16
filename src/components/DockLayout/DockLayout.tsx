@@ -40,6 +40,7 @@ interface DockOverflowMenu<PanelId extends string> {
 interface DockLayoutProps<PanelId extends string> {
   panels: Array<DockPanelDefinition<PanelId>>;
   initialLayout: DockLayoutState<PanelId>;
+  onFocusedPanelChange?: (panelId: PanelId) => void;
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -73,6 +74,7 @@ function dockAreaFromPoint(clientX: number, clientY: number): DockAreaId | null 
 export function DockLayout<PanelId extends string>({
   panels,
   initialLayout,
+  onFocusedPanelChange,
 }: DockLayoutProps<PanelId>) {
   const workspaceRef = useRef<HTMLElement | null>(null);
   const leftPaneRef = useRef<HTMLElement | null>(null);
@@ -215,6 +217,7 @@ export function DockLayout<PanelId extends string>({
   }
 
   function setActivePanel(areaId: DockAreaId, panelId: PanelId) {
+    onFocusedPanelChange?.(panelId);
     setLayout((current) => ({
       areas: {
         ...current.areas,
@@ -229,20 +232,21 @@ export function DockLayout<PanelId extends string>({
   }
 
   function cycleAreaPanel(areaId: DockAreaId, direction: -1 | 1) {
+    const area = normalizeArea(layout.areas[areaId]);
+    if (area.tabs.length <= 1 || !area.activePanelId) {
+      return;
+    }
+    const index = area.tabs.indexOf(area.activePanelId);
+    const nextIndex = (index + direction + area.tabs.length) % area.tabs.length;
+    const nextPanelId = area.tabs[nextIndex];
+    onFocusedPanelChange?.(nextPanelId);
+    revealTab(areaId, nextPanelId);
     setLayout((current) => {
-      const area = normalizeArea(current.areas[areaId]);
-      if (area.tabs.length <= 1 || !area.activePanelId) {
-        return current;
-      }
-      const index = area.tabs.indexOf(area.activePanelId);
-      const nextIndex = (index + direction + area.tabs.length) % area.tabs.length;
-      const nextPanelId = area.tabs[nextIndex];
-      revealTab(areaId, nextPanelId);
       return {
         areas: {
           ...current.areas,
           [areaId]: {
-            ...area,
+            ...current.areas[areaId],
             activePanelId: nextPanelId,
           },
         },
@@ -377,6 +381,7 @@ export function DockLayout<PanelId extends string>({
     if (event.button !== 0) {
       return;
     }
+    onFocusedPanelChange?.(panelId);
     event.preventDefault();
     event.stopPropagation();
     clearDockDragTimer();
@@ -527,6 +532,8 @@ export function DockLayout<PanelId extends string>({
               <div
                 key={panelId}
                 className={`dock-panel-surface ${panelId === area.activePanelId ? "active" : ""}`}
+                onPointerDownCapture={() => onFocusedPanelChange?.(panelId)}
+                onFocusCapture={() => onFocusedPanelChange?.(panelId)}
               >
                 <PanelInstanceProvider instanceId={panelId}>{panel.render()}</PanelInstanceProvider>
               </div>

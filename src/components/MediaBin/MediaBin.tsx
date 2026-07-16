@@ -21,7 +21,6 @@ import {
   useState,
   type CSSProperties,
   type DragEvent,
-  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { createPortal } from "react-dom";
@@ -190,6 +189,7 @@ export function MediaBin() {
   const bindingVideoId = useMediaBinState((state) => state.bindingVideoId);
   const setQuery = useMediaBinState((state) => state.setQuery);
   const setClipboardItemCount = useMediaBinState((state) => state.setClipboardItemCount);
+  const setVisibleItemCount = useMediaBinState((state) => state.setVisibleItemCount);
   const selectOnly = useMediaBinState((state) => state.selectOnly);
   const toggleSelected = useMediaBinState((state) => state.toggleSelected);
   const selectItems = useMediaBinState((state) => state.selectItems);
@@ -334,6 +334,10 @@ export function MediaBin() {
     }
     return result;
   }, [mediaItems, query, showHidden]);
+
+  useEffect(() => {
+    setVisibleItemCount(rows.length);
+  }, [rows.length, setVisibleItemCount]);
 
   useEffect(() => {
     if (isReadOnly && bindingPopoverOpen) {
@@ -634,6 +638,10 @@ export function MediaBin() {
     void removeSelection();
   });
   useAppEvent("media:duplicate", duplicateSelection);
+  useAppEvent("media:select-all", () => {
+    selectItems(rows.map((row) => row.item.id));
+  });
+  useAppEvent("media:clear-selection", clearSelection);
 
   function setSelectionEnabled(enabled: boolean) {
     if (isReadOnly || selectedItems.length === 0) {
@@ -817,44 +825,9 @@ export function MediaBin() {
     });
   }
 
-  function handleMediaKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
-    if (event.repeat || isEditableTarget(event.target)) {
-      return;
-    }
-    const key = event.key.toLocaleLowerCase();
-    if ((event.ctrlKey || event.metaKey) && !event.altKey && key === "c") {
-      if (selectedItems.length > 0) {
-        event.preventDefault();
-        copySelection();
-      }
-      return;
-    }
-    if ((event.ctrlKey || event.metaKey) && !event.altKey && key === "v") {
-      if (!isReadOnly && mediaBinClipboard.length > 0) {
-        event.preventDefault();
-        pasteClipboard();
-      }
-      return;
-    }
-    if (
-      (event.key === "Backspace" || event.key === "Delete") &&
-      !isReadOnly &&
-      selectedItems.length > 0 &&
-      !isBusy
-    ) {
-      event.preventDefault();
-      void removeSelection();
-    }
-  }
-
   return (
     <>
-      <section
-        ref={panelRef}
-        className="media-bin-panel"
-        tabIndex={-1}
-        onKeyDown={handleMediaKeyDown}
-      >
+      <section ref={panelRef} className="media-bin-panel" tabIndex={-1}>
         <div className="media-bin-project-row">
           <PanelTopOpen aria-hidden="true" />
           <span>项目媒体</span>
@@ -900,6 +873,7 @@ export function MediaBin() {
             canImport={!isReadOnly && !isBusy}
             onSelectOnly={selectOnly}
             onToggleSelected={toggleSelected}
+            onSelectItems={selectItems}
             onRenameItem={mediaItemRenamed}
             onSetItemsEnabled={(itemIds, enabled) => mediaItemsEnabledChanged(itemIds, enabled)}
             onSetItemsHidden={setItemsHidden}

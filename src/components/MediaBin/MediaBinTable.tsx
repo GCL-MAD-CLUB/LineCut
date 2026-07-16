@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Captions, Film, Link2, Music2, SplitSquareVertical } from "lucide-react";
 import {
@@ -7,6 +8,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type UIEvent,
 } from "react";
@@ -39,6 +41,7 @@ interface MediaBinTableProps {
   canImport: boolean;
   onSelectOnly: (itemId: string) => void;
   onToggleSelected: (itemId: string) => void;
+  onSelectItems: (itemIds: string[]) => void;
   onRenameItem: (itemId: string, fileName: string) => void;
   onSetItemsEnabled: (itemIds: string[], enabled: boolean) => void;
   onSetItemsHidden: (itemIds: string[], hidden: boolean) => void;
@@ -91,6 +94,15 @@ interface GridVideoHover {
   progress: number;
 }
 
+interface MarqueeSelection {
+  startX: number;
+  startY: number;
+  currentX: number;
+  currentY: number;
+}
+
+const marqueeDragThreshold = 4;
+
 const initialColumnWidths: ResizableColumnWidths = {
   title: 300,
   frameRate: 112,
@@ -141,6 +153,16 @@ const tableHeaders: Array<{
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+function isEditableKeyboardTarget(target: EventTarget | null) {
+  const element = target as HTMLElement | null;
+  return (
+    element?.tagName === "INPUT" ||
+    element?.tagName === "TEXTAREA" ||
+    element?.tagName === "SELECT" ||
+    Boolean(element?.isContentEditable)
+  );
 }
 
 function itemIcon(item: MediaBinItem, project?: Project, isDetachedVideo = false) {
@@ -459,6 +481,7 @@ export function MediaBinTable({
   canImport,
   onSelectOnly,
   onToggleSelected,
+  onSelectItems,
   onRenameItem,
   onSetItemsEnabled,
   onSetItemsHidden,
@@ -486,10 +509,15 @@ export function MediaBinTable({
   const [renameValue, setRenameValue] = useState("");
   const [systemFileDragOver, setSystemFileDragOver] = useState(false);
   const [systemFileDragActive, setSystemFileDragActive] = useState(false);
+  const [marqueeSelection, setMarqueeSelection] = useState<MarqueeSelection | null>(null);
   const headerRef = useRef<HTMLDivElement | null>(null);
   const gridRef = useRef<HTMLDivElement | null>(null);
+  const selectionRootRef = useRef<HTMLDivElement | null>(null);
   const tableScrollRef = useRef<HTMLDivElement | null>(null);
   const onImportPathsRef = useRef(onImportPaths);
+  const selectionAnchorRef = useRef<string | null>(null);
+  const selectionFocusRef = useRef<string | null>(null);
+  const marqueeCleanupRef = useRef<(() => void) | null>(null);
   const pendingTitleRenameRef = useRef<number | null>(null);
   const columnResizeRef = useRef<{
     columnId: ResizableColumnId;
@@ -522,6 +550,285 @@ export function MediaBinTable({
   const sortedRows = useMemo(() => sortMediaRows(rows, sort, projects), [projects, rows, sort]);
 
   onImportPathsRef.current = onImportPaths;
+
+  function selectItem(event: ReactMouseEvent<HTMLElement>, itemId: string) {
+    const additive = event.ctrlKey || event.metaKey;
+    selectionFocusRef.current = itemId;
+    if (!event.shiftKey) {
+      selectionAnchorRef.current = itemId;
+      if (additive) {
+        onToggleSelected(itemId);
+      } else {
+        onSelectOnly(itemId);
+      }
+      return;
+    }
+
+    const targetIndex = sortedRows.findIndex((row) => row.item.id === itemId);
+    if (targetIndex < 0) {
+      return;
+    }
+    const anchorId = selectionAnchorRef.current;
+    const anchorIndex = anchorId
+      ? sortedRows.findIndex((row) => row.item.id === anchorId)
+      : sortedRows.findIndex((row) => selectedIds.has(row.item.id));
+    const resolvedAnchorIndex = anchorIndex >= 0 ? anchorIndex : targetIndex;
+    const start = Math.min(resolvedAnchorIndex, targetIndex);
+    const end = Math.max(resolvedAnchorIndex, targetIndex);
+    const nextSelection = additive ? new Set(selectedIds) : new Set<string>();
+    for (const row of sortedRows.slice(start, end + 1)) {
+      nextSelection.add(row.item.id);
+    }
+    selectionAnchorRef.current = sortedRows[resolvedAnchorIndex].item.id;
+    onSelectItems(Array.from(nextSelection));
+  }
+
+  useEffect(() => {
+    const visibleSelectedIds = sortedRows
+      .map((row) => row.item.id)
+      .filter((itemId) => selectedIds.has(itemId));
+    if (visibleSelectedIds.length === 0) {
+      selectionAnchorRef.current = null;
+      selectionFocusRef.current = null;
+      return;
+    }
+    if (!selectionFocusRef.current || !visibleSelectedIds.includes(selectionFocusRef.current)) {
+      const fallbackId = visibleSelectedIds.at(-1)!;
+      selectionFocusRef.current = fallbackId;
+      selectionAnchorRef.current = fallbackId;
+    }
+  }, [selectedIds, sortedRows]);
+
+  useEffect(() => {
+    const panel = selectionRootRef.current?.closest<HTMLElement>(".media-bin-panel");
+    if (!panel) {
+      return;
+    }
+
+    const scrollItemIntoView = (itemId: string) => {
+      requestAnimationFrame(() => {
+        const root = selectionRootRef.current;
+        const item = root
+          ? Array.from(root.querySelectorAll<HTMLElement>("[data-media-item-id]")).find(
+              (element) => element.dataset.mediaItemId === itemId,
+            )
+          : null;
+        item?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      });
+    };
+
+    const handleSelectionKeyDown = (event: KeyboardEvent) => {
+      if (event.altKey || isEditableKeyboardTarget(event.target) || sortedRows.length === 0) {
+        return;
+      }
+      const target = event.target as HTMLElement | null;
+      if (target !== panel && !target?.closest("[data-media-item-id]")) {
+        return;
+      }
+      const direction =
+        event.key === "ArrowUp" || event.key === "ArrowLeft"
+          ? -1
+          : event.key === "ArrowDown" || event.key === "ArrowRight"
+            ? 1
+            : 0;
+      if (direction === 0 || (!event.shiftKey && (event.ctrlKey || event.metaKey))) {
+        return;
+      }
+
+      event.preventDefault();
+      const focusedIndex = selectionFocusRef.current
+        ? sortedRows.findIndex((row) => row.item.id === selectionFocusRef.current)
+        : -1;
+      const selectedIndex = sortedRows.findIndex((row) => selectedIds.has(row.item.id));
+      const currentIndex = focusedIndex >= 0 ? focusedIndex : selectedIndex;
+      const step =
+        viewMode === "grid" && (event.key === "ArrowUp" || event.key === "ArrowDown")
+          ? Math.max(1, gridLayout.columns)
+          : 1;
+      const targetIndex =
+        currentIndex < 0
+          ? direction > 0
+            ? 0
+            : sortedRows.length - 1
+          : clamp(currentIndex + direction * step, 0, sortedRows.length - 1);
+      const targetId = sortedRows[targetIndex].item.id;
+      selectionFocusRef.current = targetId;
+
+      if (!event.shiftKey) {
+        selectionAnchorRef.current = targetId;
+        onSelectOnly(targetId);
+        scrollItemIntoView(targetId);
+        return;
+      }
+
+      const anchorIndex = selectionAnchorRef.current
+        ? sortedRows.findIndex((row) => row.item.id === selectionAnchorRef.current)
+        : -1;
+      const resolvedAnchorIndex =
+        anchorIndex >= 0 ? anchorIndex : Math.max(currentIndex, targetIndex);
+      selectionAnchorRef.current = sortedRows[resolvedAnchorIndex].item.id;
+      const start = Math.min(resolvedAnchorIndex, targetIndex);
+      const end = Math.max(resolvedAnchorIndex, targetIndex);
+      const nextSelection =
+        event.ctrlKey || event.metaKey ? new Set(selectedIds) : new Set<string>();
+      for (const row of sortedRows.slice(start, end + 1)) {
+        nextSelection.add(row.item.id);
+      }
+      onSelectItems(Array.from(nextSelection));
+      scrollItemIntoView(targetId);
+    };
+
+    panel.addEventListener("keydown", handleSelectionKeyDown);
+    return () => panel.removeEventListener("keydown", handleSelectionKeyDown);
+  }, [gridLayout.columns, onSelectItems, onSelectOnly, selectedIds, sortedRows, viewMode]);
+
+  function startMarqueeSelection(event: ReactPointerEvent<HTMLDivElement>) {
+    const surface = event.currentTarget;
+    const surfaceBounds = surface.getBoundingClientRect();
+    const pointsAtScrollbar =
+      surface === tableScrollRef.current &&
+      (event.clientX >= surfaceBounds.left + surface.clientWidth ||
+        event.clientY >= surfaceBounds.top + surface.clientHeight);
+    if (
+      event.button !== 0 ||
+      sortedRows.length === 0 ||
+      pointsAtScrollbar ||
+      (event.target as HTMLElement | null)?.closest("[data-media-item-id]")
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    cancelPendingTitleRename();
+    setActiveCell(null);
+    marqueeCleanupRef.current?.();
+
+    const pointerId = event.pointerId;
+    const initialSelection = new Set(selectedIds);
+    const togglesSelection = event.ctrlKey || event.metaKey;
+    const addsSelection = event.shiftKey && !togglesSelection;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    let dragging = false;
+    let lastSelection = new Set(selectedIds);
+
+    const selectionsMatch = (left: Set<string>, right: Set<string>) =>
+      left.size === right.size && Array.from(left).every((itemId) => right.has(itemId));
+
+    const updateSelection = (currentX: number, currentY: number) => {
+      const left = Math.min(startX, currentX);
+      const right = Math.max(startX, currentX);
+      const top = Math.min(startY, currentY);
+      const bottom = Math.max(startY, currentY);
+      const hitIds = new Set(
+        Array.from(surface.querySelectorAll<HTMLElement>("[data-media-item-id]"))
+          .filter((element) => {
+            const bounds = element.getBoundingClientRect();
+            return (
+              bounds.right >= left &&
+              bounds.left <= right &&
+              bounds.bottom >= top &&
+              bounds.top <= bottom
+            );
+          })
+          .map((element) => element.dataset.mediaItemId)
+          .filter((itemId): itemId is string => Boolean(itemId)),
+      );
+      const nextSelection =
+        togglesSelection || addsSelection ? new Set(initialSelection) : new Set<string>();
+      if (togglesSelection) {
+        for (const itemId of hitIds) {
+          if (initialSelection.has(itemId)) {
+            nextSelection.delete(itemId);
+          } else {
+            nextSelection.add(itemId);
+          }
+        }
+      } else {
+        for (const itemId of hitIds) {
+          nextSelection.add(itemId);
+        }
+      }
+
+      if (!selectionsMatch(lastSelection, nextSelection)) {
+        lastSelection = nextSelection;
+        onSelectItems(Array.from(nextSelection));
+      }
+      let lastHitId: string | undefined;
+      for (const row of sortedRows) {
+        if (hitIds.has(row.item.id)) {
+          lastHitId = row.item.id;
+        }
+      }
+      if (lastHitId && nextSelection.has(lastHitId)) {
+        selectionAnchorRef.current = lastHitId;
+        selectionFocusRef.current = lastHitId;
+      } else if (nextSelection.size === 0) {
+        selectionAnchorRef.current = null;
+        selectionFocusRef.current = null;
+      }
+    };
+
+    const cleanup = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      document.body.classList.remove("is-marquee-selecting");
+      setMarqueeSelection(null);
+      if (marqueeCleanupRef.current === cleanup) {
+        marqueeCleanupRef.current = null;
+      }
+    };
+    const finish = (finishEvent: globalThis.PointerEvent, cancelled: boolean) => {
+      if (finishEvent.pointerId !== pointerId) {
+        return;
+      }
+      if (!cancelled && !dragging && !togglesSelection && !addsSelection) {
+        onSelectItems([]);
+        selectionAnchorRef.current = null;
+        selectionFocusRef.current = null;
+      }
+      cleanup();
+    };
+    const onMove = (moveEvent: globalThis.PointerEvent) => {
+      if (moveEvent.pointerId !== pointerId) {
+        return;
+      }
+      if (
+        !dragging &&
+        Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) < marqueeDragThreshold
+      ) {
+        return;
+      }
+      if (!dragging) {
+        dragging = true;
+        document.body.classList.add("is-marquee-selecting");
+      }
+      moveEvent.preventDefault();
+      const nextMarquee = {
+        startX,
+        startY,
+        currentX: moveEvent.clientX,
+        currentY: moveEvent.clientY,
+      };
+      setMarqueeSelection(nextMarquee);
+      updateSelection(nextMarquee.currentX, nextMarquee.currentY);
+    };
+    const onUp = (upEvent: globalThis.PointerEvent) => finish(upEvent, false);
+    const onCancel = (cancelEvent: globalThis.PointerEvent) => finish(cancelEvent, true);
+
+    marqueeCleanupRef.current = cleanup;
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+  }
+
+  useEffect(
+    () => () => {
+      marqueeCleanupRef.current?.();
+    },
+    [],
+  );
 
   useEffect(() => {
     document.body.classList.toggle("system-file-drag-active", systemFileDragActive);
@@ -559,6 +866,55 @@ export function MediaBinTable({
     if (!isTauriRuntime() || viewMode !== "list" || !canImport) {
       setSystemFileDragOver(false);
       setSystemFileDragActive(false);
+      if (isTauriRuntime()) {
+        void invoke("set_media_import_drop_region", { region: null });
+      }
+      return;
+    }
+
+    const tableScroll = tableScrollRef.current;
+    if (!tableScroll) {
+      return;
+    }
+    let frameId: number | null = null;
+    const updateDropRegion = () => {
+      const scaleFactor = window.devicePixelRatio || 1;
+      const bounds = tableScroll.getBoundingClientRect();
+      void invoke("set_media_import_drop_region", {
+        region: {
+          left: Math.floor(bounds.left * scaleFactor),
+          top: Math.floor(bounds.top * scaleFactor),
+          right: Math.ceil(bounds.right * scaleFactor),
+          bottom: Math.ceil(bounds.bottom * scaleFactor),
+        },
+      });
+    };
+    const scheduleDropRegionUpdate = () => {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+      }
+      frameId = window.requestAnimationFrame(() => {
+        frameId = null;
+        updateDropRegion();
+      });
+    };
+    const resizeObserver = new ResizeObserver(scheduleDropRegionUpdate);
+    resizeObserver.observe(tableScroll);
+    window.addEventListener("resize", scheduleDropRegionUpdate);
+    updateDropRegion();
+
+    return () => {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+      }
+      resizeObserver.disconnect();
+      window.removeEventListener("resize", scheduleDropRegionUpdate);
+      void invoke("set_media_import_drop_region", { region: null });
+    };
+  }, [canImport, viewMode]);
+
+  useEffect(() => {
+    if (!isTauriRuntime() || viewMode !== "list" || !canImport) {
       return;
     }
 
@@ -920,6 +1276,24 @@ export function MediaBinTable({
     }
   }
 
+  function renderMarqueeOverlay() {
+    if (!marqueeSelection) {
+      return null;
+    }
+    const left = Math.min(marqueeSelection.startX, marqueeSelection.currentX);
+    const top = Math.min(marqueeSelection.startY, marqueeSelection.currentY);
+    const width = Math.abs(marqueeSelection.currentX - marqueeSelection.startX);
+    const height = Math.abs(marqueeSelection.currentY - marqueeSelection.startY);
+    return createPortal(
+      <div
+        className="media-bin-marquee-selection"
+        style={{ left, top, width, height }}
+        aria-hidden="true"
+      />,
+      document.body,
+    );
+  }
+
   if (viewMode === "grid") {
     if (sortedRows.length === 0) {
       return (
@@ -931,133 +1305,151 @@ export function MediaBinTable({
       );
     }
     return (
-      <div ref={gridRef} className="media-bin-grid" role="list" style={gridStyle}>
-        {sortedRows.map(({ item }) => {
-          const project = mediaItemProject(item, projects, mediaItems);
-          const isVideoHovered = gridVideoHover?.itemId === item.id;
-          const isSelected = selectedIds.has(item.id);
-          const previewProgress = isVideoHovered
-            ? gridVideoHover.progress
-            : isSelected
-              ? (gridVideoPersistedProgress[item.id] ?? null)
-              : null;
-          const isDetachedVideo = isMediaVideoDetached(item, detachedVideoIds);
-          const hasSourceAudio =
-            item.kind === "video" && !isDetachedVideo && project?.asset.audio_stream_index != null;
-          const hasSubtitleTrack =
-            item.kind === "video" &&
-            Boolean(
-              project && visibleSubtitleTracks(project, mediaItems, item.id, projects).length > 0,
-            );
-          return (
-            <button
-              type="button"
-              role="listitem"
-              key={item.id}
-              data-media-item-id={item.id}
-              className={`media-bin-card ${isSelected ? "selected" : ""} ${
-                isMediaItemEnabled(item) ? "" : "is-disabled"
-              } ${isMediaItemOffline(item) ? "is-offline" : ""}`}
-              draggable={false}
-              onPointerDown={(event) => startPointerMediaDrag(event, item, false)}
-              onClick={(event) =>
-                event.ctrlKey || event.metaKey ? onToggleSelected(item.id) : onSelectOnly(item.id)
-              }
-              onDoubleClick={() =>
-                item.kind === "video" &&
-                isMediaItemEnabled(item) &&
-                (!isMediaItemOffline(item) || Boolean(project?.proxy_path)) &&
-                onPreviewVideo(item.id)
-              }
-            >
-              <span className="media-bin-card-preview-shell">
-                <span
-                  className={`media-bin-card-preview ${item.kind}`}
-                  onPointerMove={
-                    item.kind === "video" &&
-                    project &&
-                    (!isMediaItemOffline(item) || Boolean(project.proxy_path))
-                      ? (event) => updateGridVideoHover(event, item.id)
-                      : undefined
-                  }
-                  onPointerLeave={
-                    item.kind === "video" &&
-                    project &&
-                    (!isMediaItemOffline(item) || Boolean(project.proxy_path))
-                      ? () => finishGridVideoHover(item.id)
-                      : undefined
-                  }
-                >
-                  {item.kind === "video" &&
-                  project &&
-                  (!isMediaItemOffline(item) || Boolean(project.proxy_path)) ? (
-                    <>
-                      <MediaBinVideoThumbnail
-                        item={item}
-                        project={project}
-                        hoverProgress={previewProgress}
-                      />
-                      <span className="media-bin-card-type-badges" aria-hidden="true">
-                        <span className="media-bin-card-type-badge video">
-                          <Film />
-                        </span>
-                        {hasSourceAudio && (
-                          <span className="media-bin-card-type-badge audio">
-                            <Music2 />
-                          </span>
-                        )}
-                        {hasSubtitleTrack && (
-                          <span className="media-bin-card-type-badge subtitle">
-                            <SubtitleBadgeIcon />
-                          </span>
-                        )}
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      {itemIcon(item, project, isDetachedVideo)}
-                      <span className="media-bin-card-type-badges" aria-hidden="true">
-                        <span className={`media-bin-card-type-badge ${item.kind}`}>
-                          {item.kind === "audio" ? <Music2 /> : <SubtitleBadgeIcon />}
-                        </span>
-                      </span>
-                    </>
-                  )}
-                  {isMediaItemOffline(item) && (
-                    <span className="media-bin-card-offline">媒体脱机</span>
-                  )}
-                </span>
-                {previewProgress !== null && (
+      <>
+        <div
+          ref={(node) => {
+            gridRef.current = node;
+            selectionRootRef.current = node;
+          }}
+          className="media-bin-grid"
+          role="list"
+          style={gridStyle}
+          onPointerDown={startMarqueeSelection}
+        >
+          {sortedRows.map(({ item }) => {
+            const project = mediaItemProject(item, projects, mediaItems);
+            const isVideoHovered = gridVideoHover?.itemId === item.id;
+            const isSelected = selectedIds.has(item.id);
+            const previewProgress = isVideoHovered
+              ? gridVideoHover.progress
+              : isSelected
+                ? (gridVideoPersistedProgress[item.id] ?? null)
+                : null;
+            const isDetachedVideo = isMediaVideoDetached(item, detachedVideoIds);
+            const hasSourceAudio =
+              item.kind === "video" &&
+              !isDetachedVideo &&
+              project?.asset.audio_stream_index != null;
+            const hasSubtitleTrack =
+              item.kind === "video" &&
+              Boolean(
+                project && visibleSubtitleTracks(project, mediaItems, item.id, projects).length > 0,
+              );
+            return (
+              <button
+                type="button"
+                role="listitem"
+                key={item.id}
+                data-media-item-id={item.id}
+                className={`media-bin-card ${isSelected ? "selected" : ""} ${
+                  isMediaItemEnabled(item) ? "" : "is-disabled"
+                } ${isMediaItemOffline(item) ? "is-offline" : ""}`}
+                draggable={false}
+                onPointerDown={(event) => startPointerMediaDrag(event, item, false)}
+                onClick={(event) => selectItem(event, item.id)}
+                onDoubleClick={() =>
+                  item.kind === "video" &&
+                  isMediaItemEnabled(item) &&
+                  (!isMediaItemOffline(item) || Boolean(project?.proxy_path)) &&
+                  onPreviewVideo(item.id)
+                }
+              >
+                <span className="media-bin-card-preview-shell">
                   <span
-                    className={`media-bin-card-hover-progress ${isSelected ? "is-selected" : ""}`}
-                    aria-hidden="true"
+                    className={`media-bin-card-preview ${item.kind}`}
+                    onPointerMove={
+                      item.kind === "video" &&
+                      project &&
+                      (!isMediaItemOffline(item) || Boolean(project.proxy_path))
+                        ? (event) => updateGridVideoHover(event, item.id)
+                        : undefined
+                    }
+                    onPointerLeave={
+                      item.kind === "video" &&
+                      project &&
+                      (!isMediaItemOffline(item) || Boolean(project.proxy_path))
+                        ? () => finishGridVideoHover(item.id)
+                        : undefined
+                    }
                   >
-                    <span style={{ width: `${previewProgress * 100}%` }} />
+                    {item.kind === "video" &&
+                    project &&
+                    (!isMediaItemOffline(item) || Boolean(project.proxy_path)) ? (
+                      <>
+                        <MediaBinVideoThumbnail
+                          item={item}
+                          project={project}
+                          hoverProgress={previewProgress}
+                        />
+                        <span className="media-bin-card-type-badges" aria-hidden="true">
+                          <span className="media-bin-card-type-badge video">
+                            <Film />
+                          </span>
+                          {hasSourceAudio && (
+                            <span className="media-bin-card-type-badge audio">
+                              <Music2 />
+                            </span>
+                          )}
+                          {hasSubtitleTrack && (
+                            <span className="media-bin-card-type-badge subtitle">
+                              <SubtitleBadgeIcon />
+                            </span>
+                          )}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        {itemIcon(item, project, isDetachedVideo)}
+                        <span className="media-bin-card-type-badges" aria-hidden="true">
+                          <span className={`media-bin-card-type-badge ${item.kind}`}>
+                            {item.kind === "audio" ? <Music2 /> : <SubtitleBadgeIcon />}
+                          </span>
+                        </span>
+                      </>
+                    )}
+                    {isMediaItemOffline(item) && (
+                      <span className="media-bin-card-offline">媒体脱机</span>
+                    )}
                   </span>
-                )}
-              </span>
-              <span className="media-bin-card-meta">
-                <span className="media-bin-card-name">{item.file_name}</span>
-                {item.kind !== "subtitle" && (
-                  <span className="media-bin-card-duration">
-                    {formatGridItemDuration(item, project)}
-                  </span>
-                )}
-              </span>
-              {item.bound_to_video_id && (
-                <span className="media-bin-card-bound" title="已绑定">
-                  <Link2 aria-hidden="true" />
+                  {previewProgress !== null && (
+                    <span
+                      className={`media-bin-card-hover-progress ${isSelected ? "is-selected" : ""}`}
+                      aria-hidden="true"
+                    >
+                      <span style={{ width: `${previewProgress * 100}%` }} />
+                    </span>
+                  )}
                 </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
+                <span className="media-bin-card-meta">
+                  <span className="media-bin-card-name">{item.file_name}</span>
+                  {item.kind !== "subtitle" && (
+                    <span className="media-bin-card-duration">
+                      {formatGridItemDuration(item, project)}
+                    </span>
+                  )}
+                </span>
+                {item.bound_to_video_id && (
+                  <span className="media-bin-card-bound" title="已绑定">
+                    <Link2 aria-hidden="true" />
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+        {renderMarqueeOverlay()}
+      </>
     );
   }
 
   return (
-    <div className="media-bin-table" role="table" aria-label="媒体列表" style={tableStyle}>
+    <div
+      ref={selectionRootRef}
+      className="media-bin-table"
+      role="table"
+      aria-label="媒体列表"
+      style={tableStyle}
+    >
       <div className="media-bin-table-frame">
         <div className="media-bin-table-header-viewport">
           <div ref={headerRef} className="media-bin-table-header" role="row">
@@ -1121,6 +1513,7 @@ export function MediaBinTable({
           ref={tableScrollRef}
           className={`media-bin-table-scroll ${systemFileDragOver ? "system-file-drop-target" : ""}`}
           onScroll={syncHeaderScroll}
+          onPointerDown={startMarqueeSelection}
         >
           {sortedRows.length === 0 ? (
             <div className="media-bin-table-empty-content">
@@ -1161,11 +1554,7 @@ export function MediaBinTable({
                         event.preventDefault();
                         return;
                       }
-                      if (event.ctrlKey || event.metaKey) {
-                        onToggleSelected(item.id);
-                      } else {
-                        onSelectOnly(item.id);
-                      }
+                      selectItem(event, item.id);
                     }}
                     onDoubleClick={() => {
                       cancelPendingTitleRename();
@@ -1202,7 +1591,7 @@ export function MediaBinTable({
                           return;
                         }
                         activateCell(item.id, "title");
-                        if (selected && !event.ctrlKey && !event.metaKey) {
+                        if (selected && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
                           if (!isReadOnly && event.detail === 1) {
                             scheduleTitleRename(item);
                           } else {
@@ -1358,6 +1747,7 @@ export function MediaBinTable({
           </div>,
           document.body,
         )}
+      {renderMarqueeOverlay()}
     </div>
   );
 }

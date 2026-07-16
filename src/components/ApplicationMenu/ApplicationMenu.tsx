@@ -1,75 +1,58 @@
 import { useEffect, useRef, useState } from "react";
-import { emitAppEvent } from "../../appEvents";
 import { PopupMenu, PopupMenuItem, PopupMenuSeparator, PopupMenuSubmenu } from "../PopupMenu";
 import "./ApplicationMenu.css";
 
+type ApplicationMenuHandler = () => void | Promise<void>;
+
+interface ApplicationMenuCommand {
+  enabled: boolean;
+  execute: ApplicationMenuHandler;
+}
+
+interface ApplicationMenuRecentItem {
+  id: string;
+  label: string;
+  title: string;
+  execute: ApplicationMenuHandler;
+}
+
+interface ApplicationMenuRecentGroup {
+  enabled: boolean;
+  items: ApplicationMenuRecentItem[];
+}
+
+export interface ApplicationMenuModel {
+  file: {
+    newProject: ApplicationMenuCommand;
+    openProject: ApplicationMenuCommand;
+    recentProjects: ApplicationMenuRecentGroup;
+    closeProject: ApplicationMenuCommand;
+    saveProject: ApplicationMenuCommand;
+    saveProjectAs: ApplicationMenuCommand;
+    saveProjectCopy: ApplicationMenuCommand;
+    importMedia: ApplicationMenuCommand;
+    recentMedia: ApplicationMenuRecentGroup;
+    exit: ApplicationMenuCommand;
+  };
+  edit: {
+    undo: ApplicationMenuCommand;
+    redo: ApplicationMenuCommand;
+    copy: ApplicationMenuCommand;
+    paste: ApplicationMenuCommand;
+    clear: ApplicationMenuCommand;
+    duplicate: ApplicationMenuCommand;
+    selectAll: ApplicationMenuCommand;
+    clearSelection: ApplicationMenuCommand;
+    preferences: ApplicationMenuCommand;
+  };
+}
+
 interface ApplicationMenuProps {
-  hasProject: boolean;
-  isDirty: boolean;
-  isBusy: boolean;
-  isMediaBinReadOnly: boolean;
-  onNewProject: () => void | Promise<void>;
-  onOpenProject: () => void | Promise<void>;
-  onCloseProject: () => void | Promise<void>;
-  onSaveProject: () => void | Promise<void>;
-  onSaveProjectAs: () => void | Promise<void>;
-  onSaveProjectCopy: () => void | Promise<void>;
-  recentProjectPaths: string[];
-  onOpenRecentProject: (path: string) => void | Promise<void>;
-  onImportMedia: () => void | Promise<void>;
-  recentMediaPaths: string[];
-  onImportRecentMedia: (path: string) => void | Promise<void>;
-  canUndo: boolean;
-  canRedo: boolean;
-  onUndo: () => void | Promise<void>;
-  onRedo: () => void | Promise<void>;
-  canCopyMedia: boolean;
-  canPasteMedia: boolean;
-  canClearMedia: boolean;
-  canDuplicateMedia: boolean;
-  canSelectAllSubtitleCues: boolean;
-  canClearSubtitleCueSelection: boolean;
-  onSelectAllSubtitleCues: () => void;
-  onClearSubtitleCueSelection: () => void;
-  onOpenPreferences: () => void;
-  onExit: () => void | Promise<void>;
+  model: ApplicationMenuModel;
 }
 
-function fileName(path: string) {
-  return path.split(/[\\/]/).pop() ?? path;
-}
-
-export function ApplicationMenu({
-  hasProject,
-  isDirty,
-  isBusy,
-  isMediaBinReadOnly,
-  onNewProject,
-  onOpenProject,
-  onCloseProject,
-  onSaveProject,
-  onSaveProjectAs,
-  onSaveProjectCopy,
-  recentProjectPaths,
-  onOpenRecentProject,
-  onImportMedia,
-  recentMediaPaths,
-  onImportRecentMedia,
-  canUndo,
-  canRedo,
-  onUndo,
-  onRedo,
-  canCopyMedia,
-  canPasteMedia,
-  canClearMedia,
-  canDuplicateMedia,
-  canSelectAllSubtitleCues,
-  canClearSubtitleCueSelection,
-  onSelectAllSubtitleCues,
-  onClearSubtitleCueSelection,
-  onOpenPreferences,
-  onExit,
-}: ApplicationMenuProps) {
+export function ApplicationMenu({ model }: ApplicationMenuProps) {
+  const { file, edit } = model;
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const [editMenuOpen, setEditMenuOpen] = useState(false);
   const [recentProjectMenuOpen, setRecentProjectMenuOpen] = useState(false);
@@ -134,16 +117,16 @@ export function ApplicationMenu({
             <PopupMenuItem
               mnemonic="N"
               shortcut="Ctrl+N"
-              disabled={isBusy}
-              onSelect={select(onNewProject)}
+              disabled={!file.newProject.enabled}
+              onSelect={select(file.newProject.execute)}
             >
               新建项目(N)...
             </PopupMenuItem>
             <PopupMenuItem
               mnemonic="O"
               shortcut="Ctrl+O"
-              disabled={isBusy}
-              onSelect={select(onOpenProject)}
+              disabled={!file.openProject.enabled}
+              onSelect={select(file.openProject.execute)}
             >
               打开项目(O)...
             </PopupMenuItem>
@@ -151,7 +134,7 @@ export function ApplicationMenu({
               label="打开最近使用的内容(E)"
               mnemonic="E"
               open={recentProjectMenuOpen}
-              disabled={recentProjectPaths.length === 0 || isBusy}
+              disabled={!file.recentProjects.enabled}
               onOpenChange={(open) => {
                 setRecentProjectMenuOpen(open);
                 if (open) {
@@ -159,14 +142,14 @@ export function ApplicationMenu({
                 }
               }}
             >
-              {recentProjectPaths.map((path) => (
+              {file.recentProjects.items.map((item) => (
                 <PopupMenuItem
-                  key={path}
-                  title={path}
-                  disabled={isBusy}
-                  onSelect={select(() => onOpenRecentProject(path))}
+                  key={item.id}
+                  title={item.title}
+                  disabled={!file.recentProjects.enabled}
+                  onSelect={select(item.execute)}
                 >
-                  {fileName(path)}
+                  {item.label}
                 </PopupMenuItem>
               ))}
             </PopupMenuSubmenu>
@@ -174,32 +157,32 @@ export function ApplicationMenu({
             <PopupMenuItem
               mnemonic="P"
               shortcut="Ctrl+Shift+W"
-              disabled={!hasProject || isBusy}
-              onSelect={select(onCloseProject)}
+              disabled={!file.closeProject.enabled}
+              onSelect={select(file.closeProject.execute)}
             >
               关闭项目(P)
             </PopupMenuItem>
             <PopupMenuItem
               mnemonic="S"
               shortcut="Ctrl+S"
-              disabled={!hasProject || !isDirty || isBusy}
-              onSelect={select(onSaveProject)}
+              disabled={!file.saveProject.enabled}
+              onSelect={select(file.saveProject.execute)}
             >
               保存(S)
             </PopupMenuItem>
             <PopupMenuItem
               mnemonic="A"
               shortcut="Ctrl+Shift+S"
-              disabled={!hasProject || isBusy}
-              onSelect={select(onSaveProjectAs)}
+              disabled={!file.saveProjectAs.enabled}
+              onSelect={select(file.saveProjectAs.execute)}
             >
               另存为(A)...
             </PopupMenuItem>
             <PopupMenuItem
               mnemonic="Y"
               shortcut="Ctrl+Alt+S"
-              disabled={!hasProject || isBusy}
-              onSelect={select(onSaveProjectCopy)}
+              disabled={!file.saveProjectCopy.enabled}
+              onSelect={select(file.saveProjectCopy.execute)}
             >
               保存副本(Y)...
             </PopupMenuItem>
@@ -207,8 +190,8 @@ export function ApplicationMenu({
             <PopupMenuItem
               mnemonic="I"
               shortcut="Ctrl+I"
-              disabled={isMediaBinReadOnly || isBusy}
-              onSelect={select(onImportMedia)}
+              disabled={!file.importMedia.enabled}
+              onSelect={select(file.importMedia.execute)}
             >
               导入(I)...
             </PopupMenuItem>
@@ -216,7 +199,7 @@ export function ApplicationMenu({
               label="导入最近使用的文件(F)"
               mnemonic="F"
               open={recentImportMenuOpen}
-              disabled={recentMediaPaths.length === 0 || isMediaBinReadOnly || isBusy}
+              disabled={!file.recentMedia.enabled}
               onOpenChange={(open) => {
                 setRecentImportMenuOpen(open);
                 if (open) {
@@ -224,19 +207,24 @@ export function ApplicationMenu({
                 }
               }}
             >
-              {recentMediaPaths.map((path) => (
+              {file.recentMedia.items.map((item) => (
                 <PopupMenuItem
-                  key={path}
-                  title={path}
-                  disabled={isMediaBinReadOnly || isBusy}
-                  onSelect={select(() => onImportRecentMedia(path))}
+                  key={item.id}
+                  title={item.title}
+                  disabled={!file.recentMedia.enabled}
+                  onSelect={select(item.execute)}
                 >
-                  {fileName(path)}
+                  {item.label}
                 </PopupMenuItem>
               ))}
             </PopupMenuSubmenu>
             <PopupMenuSeparator />
-            <PopupMenuItem mnemonic="X" shortcut="Ctrl+Q" onSelect={select(onExit)}>
+            <PopupMenuItem
+              mnemonic="X"
+              shortcut="Ctrl+Q"
+              disabled={!file.exit.enabled}
+              onSelect={select(file.exit.execute)}
+            >
               退出(X)
             </PopupMenuItem>
           </PopupMenu>
@@ -260,16 +248,16 @@ export function ApplicationMenu({
             <PopupMenuItem
               mnemonic="U"
               shortcut="Ctrl+Z"
-              disabled={!canUndo || isBusy}
-              onSelect={select(onUndo)}
+              disabled={!edit.undo.enabled}
+              onSelect={select(edit.undo.execute)}
             >
               撤销(U)
             </PopupMenuItem>
             <PopupMenuItem
               mnemonic="R"
               shortcut="Ctrl+Shift+Z"
-              disabled={!canRedo || isBusy}
-              onSelect={select(onRedo)}
+              disabled={!edit.redo.enabled}
+              onSelect={select(edit.redo.execute)}
             >
               重做(R)
             </PopupMenuItem>
@@ -277,53 +265,56 @@ export function ApplicationMenu({
             <PopupMenuItem
               mnemonic="Y"
               shortcut="Ctrl+C"
-              disabled={!canCopyMedia || isBusy}
-              onSelect={select(() => emitAppEvent("media:copy"))}
+              disabled={!edit.copy.enabled}
+              onSelect={select(edit.copy.execute)}
             >
               复制(Y)
             </PopupMenuItem>
             <PopupMenuItem
               mnemonic="P"
               shortcut="Ctrl+V"
-              disabled={!canPasteMedia || isBusy}
-              onSelect={select(() => emitAppEvent("media:paste"))}
+              disabled={!edit.paste.enabled}
+              onSelect={select(edit.paste.execute)}
             >
               粘贴(P)
             </PopupMenuItem>
             <PopupMenuItem
               mnemonic="E"
               shortcut="Backspace / Del"
-              disabled={!canClearMedia || isBusy}
-              onSelect={select(() => emitAppEvent("media:clear"))}
+              disabled={!edit.clear.enabled}
+              onSelect={select(edit.clear.execute)}
             >
               清除(E)
             </PopupMenuItem>
             <PopupMenuSeparator />
             <PopupMenuItem
               mnemonic="C"
-              disabled={!canDuplicateMedia || isBusy}
-              onSelect={select(() => emitAppEvent("media:duplicate"))}
+              disabled={!edit.duplicate.enabled}
+              onSelect={select(edit.duplicate.execute)}
             >
               重复(C)
             </PopupMenuItem>
             <PopupMenuItem
               mnemonic="A"
               shortcut="Ctrl+A"
-              disabled={!canSelectAllSubtitleCues || isBusy}
-              onSelect={select(onSelectAllSubtitleCues)}
+              disabled={!edit.selectAll.enabled}
+              onSelect={select(edit.selectAll.execute)}
             >
               全选(A)
             </PopupMenuItem>
             <PopupMenuItem
               mnemonic="D"
               shortcut="Ctrl+Shift+A"
-              disabled={!canClearSubtitleCueSelection || isBusy}
-              onSelect={select(onClearSubtitleCueSelection)}
+              disabled={!edit.clearSelection.enabled}
+              onSelect={select(edit.clearSelection.execute)}
             >
               取消全选(D)
             </PopupMenuItem>
             <PopupMenuSeparator />
-            <PopupMenuItem disabled={isBusy} onSelect={select(onOpenPreferences)}>
+            <PopupMenuItem
+              disabled={!edit.preferences.enabled}
+              onSelect={select(edit.preferences.execute)}
+            >
               首选项...
             </PopupMenuItem>
           </PopupMenu>

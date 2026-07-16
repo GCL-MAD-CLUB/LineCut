@@ -6,6 +6,8 @@ interface AppEventMap {
   "media:paste": undefined;
   "media:clear": undefined;
   "media:duplicate": undefined;
+  "media:select-all": undefined;
+  "media:clear-selection": undefined;
   "monitor:seek": { timeUs: number; focusEndUs?: number; play?: boolean };
   "subtitle:select-all": undefined;
   "subtitle:clear-selection": undefined;

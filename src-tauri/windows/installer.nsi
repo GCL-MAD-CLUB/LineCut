@@ -531,6 +531,17 @@ Function .onInit
 FunctionEnd
 
 
+; A 0.2.0-or-newer installer only removes caches created by the 0.1 release line.
+; SHCTX respects the selected per-user or per-machine installation context.
+Function ClearLegacyLineCutCache
+  ReadRegStr $R0 SHCTX "${UNINSTKEY}" "DisplayVersion"
+  StrCpy $R1 $R0 4
+  ${If} $R1 == "0.1."
+    RmDir /r "$LOCALAPPDATA\LineCut\cache"
+  ${EndIf}
+FunctionEnd
+
+
 Section EarlyChecks
   ; Abort silent installer if downgrades is disabled
   !if "${ALLOWDOWNGRADES}" == "false"
@@ -650,6 +661,7 @@ Section Install
   !endif
 
   !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
+  Call ClearLegacyLineCutCache
 
   ; Copy main executable
   File "${MAINBINARYSRCPATH}"

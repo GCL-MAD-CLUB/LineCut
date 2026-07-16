@@ -202,7 +202,6 @@ export function VideoDisplay({
       className="source-video-stage"
       data-source-monitor-drop-target
       tabIndex={-1}
-      onPointerEnter={() => focusStage()}
       onPointerDown={() => focusStage()}
     >
       {videoSrc ? (
