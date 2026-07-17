@@ -599,6 +599,7 @@ export function DockLayout() {
       Boolean(draggedPanelId) &&
       dropTarget?.areaId === areaId &&
       dragRef.current?.sourceAreaId === areaId;
+    const showIntraAreaControls = isIntraAreaDrag && Boolean(dropTarget?.showDraggedTitle);
 
     return (
       <section
@@ -626,7 +627,7 @@ export function DockLayout() {
                           <div
                             ref={(node) => setTabElementRef(areaId, panelId, node)}
                             className={`dock-tab dock-tab-placeholder ${
-                              isIntraAreaDrag ? "active" : ""
+                              showIntraAreaControls ? "active" : ""
                             }`}
                             style={{ width: draggedTabWidthRef.current }}
                             aria-hidden="true"
@@ -634,13 +635,13 @@ export function DockLayout() {
                             {dropTarget?.showDraggedTitle && (
                               <span
                                 className={`dock-tab-label ${
-                                  isIntraAreaDrag ? "" : "dock-tab-drag-label"
+                                  showIntraAreaControls ? "" : "dock-tab-drag-label"
                                 }`}
                               >
                                 {title}
                               </span>
                             )}
-                            {isIntraAreaDrag && (
+                            {showIntraAreaControls && (
                               <span className="dock-tab-grip">
                                 <span />
                               </span>
