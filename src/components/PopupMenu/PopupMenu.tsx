@@ -319,10 +319,7 @@ interface PopupMenuSelectionGroupProps {
   onValueChange?: (value: string) => void;
 }
 
-/**
- * A self-contained radio group for popup menus. It always renders separators
- * above and below its items and owns the selected value internally.
- */
+/** A self-contained radio group for popup menus that owns the selected value internally. */
 export function PopupMenuSelectionGroup({
   children,
   defaultValue,
@@ -374,13 +371,9 @@ export function PopupMenuSelectionGroup({
   }
 
   return (
-    <>
-      <PopupMenuSeparator />
-      <PopupMenuSelectionGroupContext.Provider value={{ selectedValue, selectValue }}>
-        {children}
-      </PopupMenuSelectionGroupContext.Provider>
-      <PopupMenuSeparator />
-    </>
+    <PopupMenuSelectionGroupContext.Provider value={{ selectedValue, selectValue }}>
+      {children}
+    </PopupMenuSelectionGroupContext.Provider>
   );
 }
 

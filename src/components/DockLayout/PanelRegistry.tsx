@@ -248,7 +248,7 @@ function PanelMenuItemsContent({
   }
   return (
     <>
-      {items[0]?.type !== "selection" && <PopupMenuSeparator />}
+      <PopupMenuSeparator />
       {items.map((entry) => (
         <PanelMenuEntry key={entry.id} entry={entry} closeMenu={closeMenu} />
       ))}

@@ -11,8 +11,11 @@ import {
   PanelManagerProvider,
   PanelRegistryProvider,
   usePanelManagerState,
+  type DockAreaId,
+  type OpenPanelRequest,
 } from "./components/DockLayout";
-import { HistoryPanelServicesProvider } from "./components/HistoryPanel";
+import { exportPanelType } from "./components/ExportPanel";
+import { HistoryPanelServicesProvider, historyPanelType } from "./components/HistoryPanel";
 import { ImportWorkspace } from "./components/ImportWorkspace";
 import {
   useMediaBinClipboardItemCount,
@@ -22,12 +25,13 @@ import { mediaBinPanelType, type MediaBinPanelParams } from "./components/MediaB
 import { PreferencesDialog } from "./components/PreferencesDialog";
 import { ProxyCreationDialog } from "./components/ProxyCreationDialog";
 import { SecondaryTopbar } from "./components/SecondaryTopbar";
+import { sourcePanelType } from "./components/SourceMonitor";
 import { subtitlePanelType } from "./components/SubtitlePanel";
 import { cancelAllTaskProgress, getTaskProgressStatus } from "./components/TaskProgress";
 import { runMediaImportTask } from "./mediaImportTask";
 import { getProjectWorkspaceSnapshot, subtitleTrackCues, useAppStore } from "./store";
 import { isTauriRuntime } from "./tauriRuntime";
-import type { MediaBinItem, OpenProjectResult, Preferences } from "./types";
+import type { MediaBinFolder, MediaBinItem, OpenProjectResult, Preferences } from "./types";
 
 const projectFilters = [
   {
@@ -81,6 +85,36 @@ const warningDisplayDurationMs = 5000;
 
 function fileName(path: string) {
   return path.split(/[\\/]/).pop() ?? path;
+}
+
+function orderedMediaFolders(mediaFolders: MediaBinFolder[]) {
+  const foldersByParent = new Map<string | null, MediaBinFolder[]>();
+  for (const folder of mediaFolders) {
+    const siblings = foldersByParent.get(folder.parent_id) ?? [];
+    siblings.push(folder);
+    foldersByParent.set(folder.parent_id, siblings);
+  }
+  const result: Array<{ folder: MediaBinFolder; depth: number }> = [];
+  const visited = new Set<string>();
+  const appendChildren = (parentId: string | null, depth: number) => {
+    for (const folder of foldersByParent.get(parentId) ?? []) {
+      if (visited.has(folder.id)) {
+        continue;
+      }
+      visited.add(folder.id);
+      result.push({ folder, depth });
+      appendChildren(folder.id, depth + 1);
+    }
+  };
+  appendChildren(null, 0);
+  for (const folder of mediaFolders) {
+    if (!visited.has(folder.id)) {
+      visited.add(folder.id);
+      result.push({ folder, depth: 0 });
+      appendChildren(folder.id, 1);
+    }
+  }
+  return result;
 }
 
 function fileExtension(path: string) {
@@ -148,6 +182,7 @@ function AppContent() {
   const [activeWorkspace, setActiveWorkspace] = useState<AppWorkspace>("edit");
   const focusedPanelId = usePanelManagerState((state) => state.focusedPanelId);
   const panelInstances = usePanelManagerState((state) => state.instances);
+  const openPanel = usePanelManagerState((state) => state.openPanel);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [historyNavigating, setHistoryNavigating] = useState(false);
   const [recentMediaPaths, setRecentMediaPaths] = useState(() =>
@@ -838,6 +873,61 @@ function AppContent() {
     edit: <DockLayout />,
   };
 
+  function showPanel<Params>(request: OpenPanelRequest<Params>) {
+    setActiveWorkspace("edit");
+    openPanel(request);
+  }
+
+  function showSingletonPanel<Params>(
+    id: string,
+    type: string,
+    params: Params,
+    areaId: DockAreaId,
+  ) {
+    showPanel({ id, type, params, placement: { areaId } });
+  }
+
+  const mediaPanelIdsByFolder = new Map<string | null, string[]>();
+  for (const instance of Object.values(panelInstances)) {
+    if (instance.type !== mediaBinPanelType) {
+      continue;
+    }
+    const { rootFolderId } = instance.params as MediaBinPanelParams;
+    const panelIds = mediaPanelIdsByFolder.get(rootFolderId) ?? [];
+    panelIds.push(instance.id);
+    mediaPanelIdsByFolder.set(rootFolderId, panelIds);
+  }
+
+  function showMediaPanel(rootFolderId: string | null) {
+    const existingPanelId = mediaPanelIdsByFolder.get(rootFolderId)?.at(-1);
+    showPanel({
+      id: existingPanelId ?? (rootFolderId === null ? "media" : `window-media-bin:${rootFolderId}`),
+      type: mediaBinPanelType,
+      params: { rootFolderId },
+      placement: { areaId: "leftBottom" },
+    });
+  }
+
+  const projectPanelName = projectFilePath
+    ? fileName(projectFilePath).replace(/\.lcp$/i, "")
+    : "未命名项目";
+  const projectWindowItems = [
+    {
+      id: "media",
+      label: `项目：${projectPanelName}`,
+      checked: (mediaPanelIdsByFolder.get(null)?.length ?? 0) > 0,
+      enabled: true,
+      execute: () => showMediaPanel(null),
+    },
+    ...orderedMediaFolders(mediaFolders).map(({ folder, depth }) => ({
+      id: `media-folder:${folder.id}`,
+      label: `${"　".repeat(depth)}媒体箱：${folder.name}`,
+      checked: (mediaPanelIdsByFolder.get(folder.id)?.length ?? 0) > 0,
+      enabled: true,
+      execute: () => showMediaPanel(folder.id),
+    })),
+  ];
+
   const applicationMenuModel: ApplicationMenuModel = {
     file: {
       newProject: { enabled: !isBusy, execute: newProject },
@@ -894,6 +984,40 @@ function AppContent() {
       preferences: {
         enabled: !isBusy,
         execute: () => setPreferencesOpen(true),
+      },
+    },
+    window: {
+      source: {
+        id: "source",
+        label: "源播放器",
+        checked: Boolean(panelInstances.source),
+        enabled: true,
+        execute: () => showSingletonPanel("source", sourcePanelType, {}, "leftTop"),
+      },
+      project: {
+        enabled: projectWindowItems.length > 0,
+        items: projectWindowItems,
+      },
+      export: {
+        id: "export",
+        label: "导出设置",
+        checked: Boolean(panelInstances.export),
+        enabled: true,
+        execute: () => showSingletonPanel("export", exportPanelType, {}, "leftBottom"),
+      },
+      subtitles: {
+        id: "subtitles",
+        label: "字幕轨",
+        checked: Boolean(panelInstances.subtitles),
+        enabled: true,
+        execute: () => showSingletonPanel("subtitles", subtitlePanelType, {}, "right"),
+      },
+      history: {
+        id: "history",
+        label: "历史记录",
+        checked: Boolean(panelInstances.history),
+        enabled: true,
+        execute: () => showSingletonPanel("history", historyPanelType, {}, "right"),
       },
     },
   };

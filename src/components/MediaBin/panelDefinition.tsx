@@ -57,6 +57,7 @@ export const mediaBinPanelDefinition = definePanel<MediaBinPanelParams>({
           },
         ],
       },
+      { type: "separator", id: "media-bin-view-separator" },
       {
         id: "media-bin-show-hidden",
         label: "查看隐藏内容",

@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type PointerEvent, type WheelEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent,
+  type WheelEvent,
+} from "react";
 import "./DockLayout.css";
 import { PopupMenu, PopupMenuItem, PopupMenuSeparator } from "../PopupMenu";
 import { dockAreaOrder, normalizeArea, usePanelManagerState } from "./PanelManager";
@@ -409,9 +416,23 @@ export function DockLayout() {
     event.preventDefault();
     event.stopPropagation();
     const rect = event.currentTarget.getBoundingClientRect();
+    showPanelMenu(areaId, panelId, rect.left, rect.bottom);
+  }
+
+  function showPanelMenu(areaId: DockAreaId, panelId: string, x: number, y: number) {
     setActivePanel(areaId, panelId);
     setOverflowMenu(null);
-    setPanelMenu({ areaId, panelId, x: rect.left, y: rect.bottom });
+    setPanelMenu({ areaId, panelId, x, y });
+  }
+
+  function openPanelMenuFromTitleContext(
+    event: ReactMouseEvent<HTMLDivElement>,
+    areaId: DockAreaId,
+    panelId: string,
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    showPanelMenu(areaId, panelId, event.clientX, event.clientY);
   }
 
   function renderDockWindow(areaId: DockAreaId) {
@@ -449,6 +470,9 @@ export function DockLayout() {
                           className={`dock-tab ${isActive ? "active" : ""}`}
                           onClick={() => setActivePanel(areaId, panelId)}
                           onPointerDown={(event) => startDockDrag(event, areaId, panelId)}
+                          onContextMenu={(event) =>
+                            openPanelMenuFromTitleContext(event, areaId, panelId)
+                          }
                         >
                           <button type="button" className="dock-tab-label" title={title}>
                             {title}
@@ -599,23 +623,6 @@ export function DockLayout() {
           </PopupMenuItem>
           <PopupMenuItem disabled submenu>
             面板组设置
-          </PopupMenuItem>
-          <PopupMenuSeparator />
-          <PopupMenuItem
-            onSelect={() => {
-              closePanel(panelMenu.panelId);
-              setPanelMenu(null);
-            }}
-          >
-            关闭
-          </PopupMenuItem>
-          <PopupMenuItem
-            onSelect={() => {
-              closePanels(panelMenu.areaId, normalizeArea(layout.areas[panelMenu.areaId]).tabs);
-              setPanelMenu(null);
-            }}
-          >
-            全部关闭
           </PopupMenuItem>
           <PanelMenuItems instanceId={panelMenu.panelId} closeMenu={() => setPanelMenu(null)} />
         </PopupMenu>

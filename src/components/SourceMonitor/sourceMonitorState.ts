@@ -21,6 +21,7 @@ function resolveUpdate<Value>(current: Value, update: StateUpdate<Value>) {
 
 interface SourceMonitorState {
   mediaKey: string;
+  playbackHistoryVideoIds: string[];
   currentFrame: number;
   isPlaying: boolean;
   zoomLevel: MonitorZoomLevel;
@@ -28,6 +29,9 @@ interface SourceMonitorState {
   timelineStartFrame: number;
   timelineSpanFrames: number;
   cueRange: MonitorCueRange | null;
+  playedVideoRecorded: (videoId: string) => void;
+  playedVideoRemoved: (videoId: string) => void;
+  playbackHistoryCleared: () => void;
   syncMedia: (mediaKey: string, durationFrames: number) => void;
   setCurrentFrame: (update: StateUpdate<number>) => void;
   setIsPlaying: (isPlaying: boolean) => void;
@@ -42,6 +46,7 @@ const DEFAULT_TIMELINE_SPAN_FRAMES = DEFAULT_FRAME_RATE * 60;
 
 export const useSourceMonitorState = createPanelState<SourceMonitorState>(() => (set) => ({
   mediaKey: "",
+  playbackHistoryVideoIds: [],
   currentFrame: 0,
   isPlaying: false,
   zoomLevel: "fit",
@@ -49,6 +54,31 @@ export const useSourceMonitorState = createPanelState<SourceMonitorState>(() => 
   timelineStartFrame: 0,
   timelineSpanFrames: DEFAULT_TIMELINE_SPAN_FRAMES,
   cueRange: null,
+  playedVideoRecorded: (videoId) =>
+    set((state) => {
+      if (!videoId || state.playbackHistoryVideoIds.at(-1) === videoId) {
+        return state;
+      }
+      return {
+        playbackHistoryVideoIds: [
+          ...state.playbackHistoryVideoIds.filter((candidateId) => candidateId !== videoId),
+          videoId,
+        ],
+      };
+    }),
+  playedVideoRemoved: (videoId) =>
+    set((state) => {
+      const playbackHistoryVideoIds = state.playbackHistoryVideoIds.filter(
+        (candidateId) => candidateId !== videoId,
+      );
+      return playbackHistoryVideoIds.length === state.playbackHistoryVideoIds.length
+        ? state
+        : { playbackHistoryVideoIds };
+    }),
+  playbackHistoryCleared: () =>
+    set((state) =>
+      state.playbackHistoryVideoIds.length === 0 ? state : { playbackHistoryVideoIds: [] },
+    ),
   syncMedia: (mediaKey, durationFrames) =>
     set((state) =>
       state.mediaKey === mediaKey

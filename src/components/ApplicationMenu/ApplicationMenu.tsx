@@ -21,6 +21,20 @@ interface ApplicationMenuRecentGroup {
   items: ApplicationMenuRecentItem[];
 }
 
+interface ApplicationMenuWindowItem {
+  id: string;
+  label: string;
+  title?: string;
+  checked: boolean;
+  enabled: boolean;
+  execute: ApplicationMenuHandler;
+}
+
+interface ApplicationMenuWindowGroup {
+  enabled: boolean;
+  items: ApplicationMenuWindowItem[];
+}
+
 export interface ApplicationMenuModel {
   file: {
     newProject: ApplicationMenuCommand;
@@ -45,6 +59,13 @@ export interface ApplicationMenuModel {
     clearSelection: ApplicationMenuCommand;
     preferences: ApplicationMenuCommand;
   };
+  window: {
+    source: ApplicationMenuWindowItem;
+    project: ApplicationMenuWindowGroup;
+    export: ApplicationMenuWindowItem;
+    subtitles: ApplicationMenuWindowItem;
+    history: ApplicationMenuWindowItem;
+  };
 }
 
 interface ApplicationMenuProps {
@@ -52,15 +73,17 @@ interface ApplicationMenuProps {
 }
 
 export function ApplicationMenu({ model }: ApplicationMenuProps) {
-  const { file, edit } = model;
+  const { file, edit, window: windowMenu } = model;
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const [editMenuOpen, setEditMenuOpen] = useState(false);
+  const [windowMenuOpen, setWindowMenuOpen] = useState(false);
   const [recentProjectMenuOpen, setRecentProjectMenuOpen] = useState(false);
   const [recentImportMenuOpen, setRecentImportMenuOpen] = useState(false);
+  const [projectWindowMenuOpen, setProjectWindowMenuOpen] = useState(false);
   const menuRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    if (!fileMenuOpen && !editMenuOpen) {
+    if (!fileMenuOpen && !editMenuOpen && !windowMenuOpen) {
       return;
     }
 
@@ -68,12 +91,14 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
       if (!menuRef.current?.contains(event.target as Node)) {
         setFileMenuOpen(false);
         setEditMenuOpen(false);
+        setWindowMenuOpen(false);
       }
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setFileMenuOpen(false);
         setEditMenuOpen(false);
+        setWindowMenuOpen(false);
       }
     };
     window.addEventListener("pointerdown", closeMenu);
@@ -82,7 +107,7 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
       window.removeEventListener("pointerdown", closeMenu);
       window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [editMenuOpen, fileMenuOpen]);
+  }, [editMenuOpen, fileMenuOpen, windowMenuOpen]);
 
   useEffect(() => {
     if (!fileMenuOpen) {
@@ -91,9 +116,16 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
     }
   }, [fileMenuOpen]);
 
+  useEffect(() => {
+    if (!windowMenuOpen) {
+      setProjectWindowMenuOpen(false);
+    }
+  }, [windowMenuOpen]);
+
   const select = (handler: () => void | Promise<void>) => async () => {
     setFileMenuOpen(false);
     setEditMenuOpen(false);
+    setWindowMenuOpen(false);
     await handler();
   };
 
@@ -108,6 +140,7 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
           onClick={() => {
             setFileMenuOpen((open) => !open);
             setEditMenuOpen(false);
+            setWindowMenuOpen(false);
           }}
         >
           文件(F)
@@ -239,6 +272,7 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
           onClick={() => {
             setEditMenuOpen((open) => !open);
             setFileMenuOpen(false);
+            setWindowMenuOpen(false);
           }}
         >
           编辑(E)
@@ -320,21 +354,91 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
           </PopupMenu>
         )}
       </div>
-      {[
-        ["剪辑(C)", "剪辑菜单将在后续版本实现"],
-        ["窗口(W)", "窗口菜单将在后续版本实现"],
-        ["帮助(H)", "帮助菜单将在后续版本实现"],
-      ].map(([label, title]) => (
+      <button
+        type="button"
+        className="application-menu-trigger application-menu-placeholder"
+        aria-disabled="true"
+        title="剪辑菜单将在后续版本实现"
+      >
+        剪辑(C)
+      </button>
+      <div className="application-menu-root">
         <button
-          key={label}
           type="button"
-          className="application-menu-trigger application-menu-placeholder"
-          aria-disabled="true"
-          title={title}
+          className={`application-menu-trigger${windowMenuOpen ? " active" : ""}`}
+          aria-haspopup="menu"
+          aria-expanded={windowMenuOpen}
+          onClick={() => {
+            setWindowMenuOpen((open) => !open);
+            setFileMenuOpen(false);
+            setEditMenuOpen(false);
+          }}
         >
-          {label}
+          窗口(W)
         </button>
-      ))}
+        {windowMenuOpen && (
+          <PopupMenu enableMnemonics>
+            <PopupMenuItem
+              checked={windowMenu.source.checked}
+              disabled={!windowMenu.source.enabled}
+              title={windowMenu.source.title}
+              onSelect={select(windowMenu.source.execute)}
+            >
+              {windowMenu.source.label}
+            </PopupMenuItem>
+            <PopupMenuSubmenu
+              label="项目"
+              open={projectWindowMenuOpen}
+              disabled={!windowMenu.project.enabled}
+              onOpenChange={setProjectWindowMenuOpen}
+            >
+              {windowMenu.project.items.map((item) => (
+                <PopupMenuItem
+                  key={item.id}
+                  checked={item.checked}
+                  disabled={!item.enabled}
+                  title={item.title}
+                  onSelect={select(item.execute)}
+                >
+                  {item.label}
+                </PopupMenuItem>
+              ))}
+            </PopupMenuSubmenu>
+            <PopupMenuItem
+              checked={windowMenu.export.checked}
+              disabled={!windowMenu.export.enabled}
+              title={windowMenu.export.title}
+              onSelect={select(windowMenu.export.execute)}
+            >
+              {windowMenu.export.label}
+            </PopupMenuItem>
+            <PopupMenuItem
+              checked={windowMenu.subtitles.checked}
+              disabled={!windowMenu.subtitles.enabled}
+              title={windowMenu.subtitles.title}
+              onSelect={select(windowMenu.subtitles.execute)}
+            >
+              {windowMenu.subtitles.label}
+            </PopupMenuItem>
+            <PopupMenuItem
+              checked={windowMenu.history.checked}
+              disabled={!windowMenu.history.enabled}
+              title={windowMenu.history.title}
+              onSelect={select(windowMenu.history.execute)}
+            >
+              {windowMenu.history.label}
+            </PopupMenuItem>
+          </PopupMenu>
+        )}
+      </div>
+      <button
+        type="button"
+        className="application-menu-trigger application-menu-placeholder"
+        aria-disabled="true"
+        title="帮助菜单将在后续版本实现"
+      >
+        帮助(H)
+      </button>
     </nav>
   );
 }

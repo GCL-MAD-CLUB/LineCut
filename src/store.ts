@@ -80,6 +80,7 @@ interface AppActions {
   cueSelectionReplaced: (cueIds: string[]) => void;
   proxyDialogOpened: () => void;
   proxyDialogClosed: () => void;
+  sourcePreviewCleared: () => void;
   sourcePreviewSelected: () => void;
   proxyPreviewSelected: () => void;
   proxyGenerated: (path: string) => void;
@@ -1635,6 +1636,22 @@ const appStore = createStore<AppStore>()((set) => ({
       }),
     proxyDialogOpened: () => set({ proxyDialogOpen: true }),
     proxyDialogClosed: () => set({ proxyDialogOpen: false }),
+    sourcePreviewCleared: () =>
+      set((state) => {
+        if (!state.project && !state.activeVideoId && !state.activeTrackId) {
+          return state;
+        }
+        return {
+          project: null,
+          activeVideoId: "",
+          activeTrackId: "",
+          selectedCueIds: new Set<string>(),
+          proxyPath: null,
+          useProxy: false,
+          proxyDialogOpen: false,
+          exportResult: null,
+        };
+      }),
     sourcePreviewSelected: () =>
       set((state) => {
         const activeVideo = state.mediaItems.find((item) => item.id === state.activeVideoId);

@@ -157,6 +157,7 @@ export function SourceMonitor() {
   const cueRange = useSourceMonitorState((state) => state.cueRange);
   const setCueRange = useSourceMonitorState((state) => state.setCueRange);
   const storedMediaKey = useSourceMonitorState((state) => state.mediaKey);
+  const playedVideoRecorded = useSourceMonitorState((state) => state.playedVideoRecorded);
   const syncMedia = useSourceMonitorState((state) => state.syncMedia);
   const timelineStartFrameRef = useRef(timelineStartFrame);
   const timelineSpanFramesRef = useRef(timelineSpanFrames);
@@ -212,6 +213,12 @@ export function SourceMonitor() {
   const sourceAudioDetached = activeVideoItem
     ? isMediaVideoDetached(activeVideoItem, detachedVideoIds)
     : false;
+
+  useEffect(() => {
+    if (activeVideoItem?.kind === "video" && isMediaItemEnabled(activeVideoItem)) {
+      playedVideoRecorded(activeVideoItem.id);
+    }
+  }, [activeVideoItem, playedVideoRecorded]);
   const primaryVirtualAudioEnabled = Boolean(
     project &&
     boundAudioItems.some(
