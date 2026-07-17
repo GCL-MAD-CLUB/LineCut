@@ -5,23 +5,27 @@ const DEVELOPMENT_KEY_SOURCE: [u8; 32] = [
     0, 87, 223, 175, 225, 117, 69, 121, 189, 102, 69, 25, 165, 255, 167, 35, 98, 59, 156, 76, 67,
     239, 14, 79, 122, 44, 84, 81, 113, 53, 88, 6,
 ];
+const LOCAL_RELEASE_SECRET_FILE: &str = ".linecut-project-build-secret-v1.local";
 
 fn main() {
     println!("cargo:rerun-if-env-changed=LINECUT_PROJECT_BUILD_SECRET_V1");
+    println!("cargo:rerun-if-changed={LOCAL_RELEASE_SECRET_FILE}");
     generate_project_key_material();
     tauri_build::build()
 }
 
 fn generate_project_key_material() {
-    let configured_secret = env::var("LINECUT_PROJECT_BUILD_SECRET_V1").ok();
+    let configured_secret = env::var("LINECUT_PROJECT_BUILD_SECRET_V1")
+        .ok()
+        .or_else(read_local_release_secret);
     if let Some(secret) = configured_secret.as_deref() {
         assert!(
             secret.len() >= 32,
             "LINECUT_PROJECT_BUILD_SECRET_V1 must contain at least 32 bytes"
         );
     } else if env::var("PROFILE").as_deref() == Ok("release") {
-        println!(
-            "cargo:warning=release build is using the development project-file key; set LINECUT_PROJECT_BUILD_SECRET_V1 for official releases"
+        panic!(
+            "official release builds require LINECUT_PROJECT_BUILD_SECRET_V1 or {LOCAL_RELEASE_SECRET_FILE}"
         );
     }
 
@@ -39,6 +43,14 @@ fn generate_project_key_material() {
     let output = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR must be set"))
         .join("linecut_project_key.rs");
     fs::write(output, generated).expect("failed to write generated project key material");
+}
+
+fn read_local_release_secret() -> Option<String> {
+    let path = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR")?).join(LOCAL_RELEASE_SECRET_FILE);
+    fs::read_to_string(path)
+        .ok()
+        .map(|secret| secret.trim_end_matches(['\r', '\n']).to_string())
+        .filter(|secret| !secret.is_empty())
 }
 
 fn digest_with_context(context: &[u8], source: &[u8]) -> [u8; 32] {

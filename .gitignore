@@ -19,6 +19,9 @@ pnpm-debug.log*
 .env.local
 .env.*.local
 
+# Local release secrets
+src-tauri/.linecut-project-build-secret-v1.local
+
 # Editor / IDE
 .vscode/*
 !.vscode/extensions.json
