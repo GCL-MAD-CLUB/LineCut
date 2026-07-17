@@ -24,6 +24,7 @@ use tokio::process::Command;
 use uuid::Uuid;
 
 mod backend;
+mod project_file;
 
 use backend::*;
 
@@ -129,6 +130,18 @@ struct Preferences {
     default_export_dir: String,
     ffmpeg_path: String,
     ffprobe_path: String,
+    #[serde(default = "default_auto_save_interval_minutes")]
+    auto_save_interval_minutes: u32,
+    #[serde(default = "default_auto_save_max_snapshots")]
+    auto_save_max_snapshots: u32,
+}
+
+const fn default_auto_save_interval_minutes() -> u32 {
+    5
+}
+
+const fn default_auto_save_max_snapshots() -> u32 {
+    20
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -153,6 +166,8 @@ impl Default for Preferences {
             default_export_dir: default_export_root().to_string_lossy().into_owned(),
             ffmpeg_path: DEFAULT_FFMPEG_PROGRAM.to_string(),
             ffprobe_path: DEFAULT_FFPROBE_PROGRAM.to_string(),
+            auto_save_interval_minutes: default_auto_save_interval_minutes(),
+            auto_save_max_snapshots: default_auto_save_max_snapshots(),
         }
     }
 }
@@ -325,13 +340,6 @@ struct ProjectWorkspace {
     projects: Vec<Project>,
     media_bin: ProjectMediaBinState,
     editor: ProjectEditorState,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ProjectDocument {
-    workspace: ProjectWorkspace,
-    saved_at: u64,
-    app_version: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -565,6 +573,7 @@ pub fn run() {
             generate_proxy,
             add_external_subtitles,
             save_project_file,
+            auto_save_project_snapshot,
             open_project_file,
             sync_project_workspace,
             close_project,

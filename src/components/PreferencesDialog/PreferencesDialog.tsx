@@ -1,6 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { FileVideo, Folder, FolderOpen, HardDrive, Loader2, Save, X } from "lucide-react";
+import {
+  Clock3,
+  FileClock,
+  FileVideo,
+  Folder,
+  FolderOpen,
+  HardDrive,
+  Loader2,
+  Save,
+  X,
+} from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { createFfmpegTaskId } from "../../ffmpegProgress";
 import { defaultPreferences, useAppStore } from "../../store";
@@ -101,7 +111,7 @@ export function PreferencesDialog({ open: isOpen, onClose }: PreferencesDialogPr
         <div className="modal-header">
           <div>
             <span className="eyebrow">应用首选项</span>
-            <h2>路径与媒体工具</h2>
+            <h2>路径、自动备份与媒体工具</h2>
           </div>
           <button className="tool-button" onClick={onClose} title="关闭">
             <X size={16} />
@@ -117,6 +127,34 @@ export function PreferencesDialog({ open: isOpen, onClose }: PreferencesDialogPr
               setDraftPreferences((current) => ({ ...current, cache_dir: value }))
             }
             onBrowse={() => choosePreferenceDir("cache_dir")}
+          />
+          <NumberField
+            label="自动备份检测间隔"
+            value={draftPreferences.auto_save_interval_minutes}
+            min={1}
+            max={1440}
+            suffix="分钟"
+            icon={<Clock3 size={15} />}
+            onChange={(value) =>
+              setDraftPreferences((current) => ({
+                ...current,
+                auto_save_interval_minutes: value,
+              }))
+            }
+          />
+          <NumberField
+            label="最多保留自动备份快照"
+            value={draftPreferences.auto_save_max_snapshots}
+            min={1}
+            max={1000}
+            suffix="个"
+            icon={<FileClock size={15} />}
+            onChange={(value) =>
+              setDraftPreferences((current) => ({
+                ...current,
+                auto_save_max_snapshots: value,
+              }))
+            }
           />
           <PathField
             label="默认导出路径"
@@ -156,6 +194,8 @@ export function PreferencesDialog({ open: isOpen, onClose }: PreferencesDialogPr
                 ...defaults,
                 cache_dir: preferences.cache_dir,
                 default_export_dir: preferences.default_export_dir,
+                auto_save_interval_minutes: preferences.auto_save_interval_minutes,
+                auto_save_max_snapshots: preferences.auto_save_max_snapshots,
               });
             }}
           >
@@ -172,6 +212,36 @@ export function PreferencesDialog({ open: isOpen, onClose }: PreferencesDialogPr
         </div>
       </section>
     </div>
+  );
+}
+
+interface NumberFieldProps {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  suffix: string;
+  icon: ReactNode;
+  onChange: (value: number) => void;
+}
+
+function NumberField({ label, value, min, max, suffix, icon, onChange }: NumberFieldProps) {
+  return (
+    <label className="path-field">
+      <span>{label}</span>
+      <div className="number-input">
+        {icon}
+        <input
+          type="number"
+          min={min}
+          max={max}
+          step={1}
+          value={value}
+          onChange={(event) => onChange(Math.trunc(Number(event.currentTarget.value)))}
+        />
+        <span>{suffix}</span>
+      </div>
+    </label>
   );
 }
 

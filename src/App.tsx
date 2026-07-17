@@ -165,6 +165,9 @@ function AppContent() {
   const activeVideoId = useAppStore((state) => state.activeVideoId);
   const projectFilePath = useAppStore((state) => state.projectFilePath);
   const projectDirty = useAppStore((state) => state.projectDirty);
+  const autoSaveIntervalMinutes = useAppStore(
+    (state) => state.preferences.auto_save_interval_minutes,
+  );
   const activeTrackId = useAppStore((state) => state.activeTrackId);
   const selectedCueCount = useAppStore((state) => state.selectedCueIds.size);
   const message = useAppStore((state) => state.message);
@@ -199,6 +202,12 @@ function AppContent() {
   const projectHistoryFutureDiscarded = useAppStore(
     (state) => state.actions.projectHistoryFutureDiscarded,
   );
+  const autoSaveProjectName = projectFilePath
+    ? fileName(projectFilePath).replace(/\.lcp$/i, "")
+    : (project?.asset.file_name ?? mediaItems[0]?.file_name)?.replace(/\.[^.]+$/, "") ||
+      "未命名项目";
+  const autoSaveProjectNameRef = useRef(autoSaveProjectName);
+  autoSaveProjectNameRef.current = autoSaveProjectName;
   const { tasks: runningTasks } = getTaskProgressStatus();
   const isBusy = runningTasks.length > 0 || historyNavigating;
   const hasProject = Boolean(projectFilePath || mediaItems.length > 0 || mediaFolders.length > 0);
@@ -270,6 +279,32 @@ function AppContent() {
       })
       .catch((error) => messagePublished(error instanceof Error ? error.message : String(error)));
   }, []);
+
+  useEffect(() => {
+    if (!isTauriRuntime() || !hasProject) {
+      return;
+    }
+
+    let snapshotRunning = false;
+    const timer = window.setInterval(() => {
+      if (snapshotRunning) {
+        return;
+      }
+      snapshotRunning = true;
+      void invoke<string | null>("auto_save_project_snapshot", {
+        projectName: autoSaveProjectNameRef.current,
+        workspace: getProjectWorkspaceSnapshot(),
+      })
+        .catch((error) => {
+          console.warn("LineCut auto-save snapshot failed", error);
+        })
+        .finally(() => {
+          snapshotRunning = false;
+        });
+    }, autoSaveIntervalMinutes * 60_000);
+
+    return () => window.clearInterval(timer);
+  }, [autoSaveIntervalMinutes, hasProject]);
 
   useEffect(() => {
     if (!isTauriRuntime()) {

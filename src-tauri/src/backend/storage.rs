@@ -1,12 +1,5 @@
 use super::*;
 
-const PROJECT_EXTENSION: &str = "lcp";
-const PROJECT_MAGIC: &[u8; 8] = b"LINECUT\0";
-const PROJECT_FORMAT_FAMILY: u16 = 1;
-const PROJECT_FORMAT_VERSION: u16 = 1;
-const PROJECT_HEADER_LEN: usize = 8 + 2 + 2 + 8 + 32;
-const MAX_PROJECT_PAYLOAD_LEN: usize = 512 * 1024 * 1024;
-
 pub(crate) fn config_root() -> PathBuf {
     if let Some(value) = env::var_os("LINECUT_DATA_DIR") {
         return PathBuf::from(value);
@@ -120,6 +113,12 @@ fn installer_media_preferences(mut preferences: Preferences) -> Preferences {
 }
 
 pub(crate) fn normalize_preferences(preferences: Preferences) -> Result<Preferences, String> {
+    if !(1..=1_440).contains(&preferences.auto_save_interval_minutes) {
+        return Err("自动备份间隔必须在 1 到 1440 分钟之间".to_string());
+    }
+    if !(1..=1_000).contains(&preferences.auto_save_max_snapshots) {
+        return Err("自动备份保留数量必须在 1 到 1000 之间".to_string());
+    }
     let default_preferences = Preferences::default();
     let normalized = Preferences {
         cache_dir: if preferences.cache_dir.trim().is_empty() {
@@ -142,6 +141,8 @@ pub(crate) fn normalize_preferences(preferences: Preferences) -> Result<Preferen
         } else {
             preferences.ffprobe_path.trim().to_string()
         },
+        auto_save_interval_minutes: preferences.auto_save_interval_minutes,
+        auto_save_max_snapshots: preferences.auto_save_max_snapshots,
     };
 
     fs::create_dir_all(configured_cache_root(&normalized))
@@ -262,112 +263,23 @@ pub(crate) fn sidecar_target_triple() -> &'static str {
     }
 }
 
-pub(crate) fn normalize_project_path(path: &str) -> Result<PathBuf, String> {
-    let trimmed = path.trim();
-    if trimmed.is_empty() {
-        return Err("项目路径不能为空".to_string());
-    }
-    let mut path = PathBuf::from(trimmed);
-    if !path
-        .extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case(PROJECT_EXTENSION))
-    {
-        path.set_extension(PROJECT_EXTENSION);
-    }
-    Ok(path)
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-fn wrap_project_payload(payload: &[u8], version: u16) -> Result<Vec<u8>, String> {
-    if payload.len() > MAX_PROJECT_PAYLOAD_LEN {
-        return Err("项目数据过大，无法保存".to_string());
-    }
-    let checksum = Sha256::digest(payload);
-    let mut bytes = Vec::with_capacity(PROJECT_HEADER_LEN + payload.len());
-    bytes.extend_from_slice(PROJECT_MAGIC);
-    bytes.extend_from_slice(&version.to_le_bytes());
-    bytes.extend_from_slice(&PROJECT_FORMAT_FAMILY.to_le_bytes());
-    bytes.extend_from_slice(&(payload.len() as u64).to_le_bytes());
-    bytes.extend_from_slice(&checksum);
-    bytes.extend_from_slice(payload);
-    Ok(bytes)
-}
+    #[test]
+    fn old_preferences_receive_auto_save_defaults() {
+        let preferences: Preferences = serde_json::from_str(
+            r#"{
+                "cache_dir": "cache",
+                "default_export_dir": "exports",
+                "ffmpeg_path": "ffmpeg",
+                "ffprobe_path": "ffprobe"
+            }"#,
+        )
+        .unwrap();
 
-fn encode_project_document(document: &ProjectDocument) -> Result<Vec<u8>, String> {
-    let payload = bincode::serialize(document).map_err(|e| format!("序列化项目失败: {e}"))?;
-    wrap_project_payload(&payload, PROJECT_FORMAT_VERSION)
-}
-
-fn decode_project_document(bytes: &[u8]) -> Result<ProjectDocument, String> {
-    if bytes.len() < PROJECT_HEADER_LEN || &bytes[..8] != PROJECT_MAGIC {
-        return Err("不是有效的 LineCut 项目文件".to_string());
+        assert_eq!(preferences.auto_save_interval_minutes, 5);
+        assert_eq!(preferences.auto_save_max_snapshots, 20);
     }
-    let version = u16::from_le_bytes([bytes[8], bytes[9]]);
-    let format_family = u16::from_le_bytes([bytes[10], bytes[11]]);
-    if format_family != PROJECT_FORMAT_FAMILY {
-        return Err("不支持此项目文件格式系列".to_string());
-    }
-    if version != PROJECT_FORMAT_VERSION {
-        return Err(format!(
-            "不支持的项目文件版本 {version}，当前支持版本为 {PROJECT_FORMAT_VERSION}"
-        ));
-    }
-    let payload_len = u64::from_le_bytes(
-        bytes[12..20]
-            .try_into()
-            .map_err(|_| "项目文件头损坏".to_string())?,
-    );
-    if payload_len > MAX_PROJECT_PAYLOAD_LEN as u64
-        || payload_len as usize != bytes.len() - PROJECT_HEADER_LEN
-    {
-        return Err("项目文件长度校验失败".to_string());
-    }
-    let payload = &bytes[PROJECT_HEADER_LEN..];
-    if Sha256::digest(payload).as_slice() != &bytes[20..52] {
-        return Err("项目文件完整性校验失败".to_string());
-    }
-    bincode::deserialize(payload).map_err(|e| format!("解析项目文件失败: {e}"))
-}
-
-pub(crate) fn write_project_file(path: &Path, workspace: ProjectWorkspace) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent).map_err(|e| format!("创建项目目录失败: {e}"))?;
-    let document = ProjectDocument {
-        workspace,
-        saved_at: now_millis() as u64,
-        app_version: env!("CARGO_PKG_VERSION").to_string(),
-    };
-    let bytes = encode_project_document(&document)?;
-    let write_id = Uuid::new_v4();
-    let temporary_path = path.with_extension(format!("{PROJECT_EXTENSION}.{write_id}.tmp"));
-    fs::write(&temporary_path, bytes).map_err(|e| format!("写入项目文件失败: {e}"))?;
-
-    if path.exists() {
-        let backup_path = path.with_extension(format!("{PROJECT_EXTENSION}.{write_id}.bak"));
-        fs::rename(path, &backup_path).map_err(|e| {
-            let _ = fs::remove_file(&temporary_path);
-            format!("备份旧项目文件失败: {e}")
-        })?;
-        if let Err(error) = fs::rename(&temporary_path, path) {
-            let _ = fs::rename(&backup_path, path);
-            let _ = fs::remove_file(&temporary_path);
-            return Err(format!("完成项目文件保存失败: {error}"));
-        }
-        let _ = fs::remove_file(backup_path);
-        return Ok(());
-    }
-    fs::rename(&temporary_path, path).map_err(|e| {
-        let _ = fs::remove_file(&temporary_path);
-        format!("完成项目文件保存失败: {e}")
-    })
-}
-
-pub(crate) fn read_project_file(path: &Path) -> Result<ProjectDocument, String> {
-    if !path.is_file() {
-        return Err(format!("项目文件不存在: {}", path.to_string_lossy()));
-    }
-    let bytes = fs::read(path).map_err(|e| format!("读取项目文件失败: {e}"))?;
-    decode_project_document(&bytes)
 }

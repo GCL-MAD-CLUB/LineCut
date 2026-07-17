@@ -202,4 +202,6 @@ export interface Preferences {
   default_export_dir: string;
   ffmpeg_path: string;
   ffprobe_path: string;
+  auto_save_interval_minutes: number;
+  auto_save_max_snapshots: number;
 }

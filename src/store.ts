@@ -560,6 +560,8 @@ export function defaultPreferences(): Preferences {
     default_export_dir: "",
     ffmpeg_path: "ffmpeg",
     ffprobe_path: "ffprobe",
+    auto_save_interval_minutes: 5,
+    auto_save_max_snapshots: 20,
   };
 }
 

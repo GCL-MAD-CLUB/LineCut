@@ -586,6 +586,32 @@ select {
   box-shadow: none;
 }
 
+.number-input {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 10px 0 8px;
+  background: var(--color-surface-field);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+}
+
+.number-input svg {
+  color: var(--color-text);
+}
+
+.number-input input {
+  min-width: 0;
+  border: 0;
+  box-shadow: none;
+}
+
+.number-input > span {
+  color: var(--color-text-muted);
+}
+
 .modal-actions {
   justify-content: flex-end;
   gap: 8px;

@@ -1,4 +1,7 @@
 use super::*;
+use crate::project_file::{
+    normalize_project_path, read_project_file, write_auto_save_snapshot, write_project_file,
+};
 
 #[tauri::command]
 pub(crate) fn get_preferences(state: tauri::State<'_, AppState>) -> Result<Preferences, String> {
@@ -80,25 +83,49 @@ pub(crate) async fn save_project_file(
 }
 
 #[tauri::command]
+pub(crate) async fn auto_save_project_snapshot(
+    project_name: String,
+    workspace: ProjectWorkspace,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let (cache_root, max_snapshots) = {
+        let preferences = state
+            .preferences
+            .lock()
+            .map_err(|_| "首选项状态锁定失败".to_string())?;
+        (
+            configured_cache_root(&preferences),
+            preferences.auto_save_max_snapshots as usize,
+        )
+    };
+    tokio::task::spawn_blocking(move || {
+        write_auto_save_snapshot(&cache_root, &project_name, workspace, max_snapshots)
+            .map(|path| path.map(|path| path.to_string_lossy().into_owned()))
+    })
+    .await
+    .map_err(|error| format!("自动备份任务失败: {error}"))?
+}
+
+#[tauri::command]
 pub(crate) async fn open_project_file(
     path: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<OpenProjectResult, String> {
     let input_path = PathBuf::from(path);
     let read_path = input_path.clone();
-    let mut document = tokio::task::spawn_blocking(move || read_project_file(&read_path))
+    let mut workspace = tokio::task::spawn_blocking(move || read_project_file(&read_path))
         .await
         .map_err(|error| format!("打开项目任务失败: {error}"))??;
     let mut warnings = Vec::new();
 
-    for project in &mut document.workspace.projects {
+    for project in &mut workspace.projects {
         for track in &mut project.tracks {
             if matches!(&track.source_type, SubtitleSourceType::Embedded) {
                 track.source_path = None;
             }
         }
     }
-    for item in &mut document.workspace.media_bin.items {
+    for item in &mut workspace.media_bin.items {
         let is_virtual_reference = item.origin == MediaBinItemOrigin::Decomposed
             && item.source_video_id.is_some()
             && item.stream_index.is_some()
@@ -113,9 +140,9 @@ pub(crate) async fn open_project_file(
         }
     }
 
-    for project in &document.workspace.projects {
+    for project in &workspace.projects {
         let media_path = Path::new(&project.asset.path);
-        let was_set_offline = document.workspace.media_bin.items.iter().any(|item| {
+        let was_set_offline = workspace.media_bin.items.iter().any(|item| {
             item.offline
                 && (item.id == project.asset.id
                     || item.source_video_id.as_deref() == Some(project.asset.id.as_str()))
@@ -134,13 +161,12 @@ pub(crate) async fn open_project_file(
         }
     }
 
-    let project_paths = document
-        .workspace
+    let project_paths = workspace
         .projects
         .iter()
         .map(|project| project.asset.path.clone())
         .collect::<HashSet<_>>();
-    for item in &mut document.workspace.media_bin.items {
+    for item in &mut workspace.media_bin.items {
         if item.offline || item.path.is_empty() {
             continue;
         }
@@ -158,8 +184,7 @@ pub(crate) async fn open_project_file(
         .map_err(|_| "项目状态锁定失败".to_string())?;
     projects.clear();
     projects.extend(
-        document
-            .workspace
+        workspace
             .projects
             .iter()
             .map(|project| (project.asset.id.clone(), project.clone())),
@@ -168,7 +193,7 @@ pub(crate) async fn open_project_file(
 
     Ok(OpenProjectResult {
         path: input_path.to_string_lossy().into_owned(),
-        workspace: document.workspace,
+        workspace,
         warnings,
     })
 }
