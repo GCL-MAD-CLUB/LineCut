@@ -43,6 +43,7 @@ import {
   useAppStore,
 } from "../../store";
 import { isTauriRuntime } from "../../tauriRuntime";
+import { usePanelActive, usePanelInstanceId } from "../../panelState";
 import type {
   AddExternalSubtitlesResult,
   DemuxMediaResult,
@@ -58,7 +59,7 @@ import { createTaskProgress, getTaskProgressStatus } from "../TaskProgress";
 import "./MediaBin.css";
 import { MediaBinTable, type MediaBinTableRow } from "./MediaBinTable";
 import { activeMediaDragItemIds, markMediaDragHandled } from "./mediaDrag";
-import { useMediaBinState } from "./mediaBinState";
+import { setMediaBinClipboardItemCount, useMediaBinState } from "./mediaBinState";
 
 const mediaDragType = "application/x-linecut-media";
 interface MediaBinClipboard {
@@ -77,6 +78,11 @@ interface MediaBinContextMenuState {
   bindingSubmenuOpen: boolean;
   proxySubmenuOpen: boolean;
   moveSubmenuOpen: boolean;
+}
+
+interface MediaBinProps {
+  rootFolderId?: string | null;
+  onOpenFolder?: (folderId: string) => void;
 }
 
 interface MediaLinkDialogState {
@@ -184,7 +190,9 @@ function readDraggedMediaIds(event: DragEvent) {
   }
 }
 
-export function MediaBin() {
+export function MediaBin({ rootFolderId = null, onOpenFolder }: MediaBinProps) {
+  const panelInstanceId = usePanelInstanceId();
+  const panelActive = usePanelActive();
   const projects = useAppStore((state) => state.projects);
   const mediaFolders = useAppStore((state) => state.mediaFolders);
   const mediaItems = useAppStore((state) => state.mediaItems);
@@ -199,9 +207,6 @@ export function MediaBin() {
   const mediaEntriesMovedToFolder = useAppStore((state) => state.actions.mediaEntriesMovedToFolder);
   const mediaItemsMovedToFolder = useAppStore((state) => state.actions.mediaItemsMovedToFolder);
   const mediaItemsEnabledChanged = useAppStore((state) => state.actions.mediaItemsEnabledChanged);
-  const allMediaItemsEnabledChanged = useAppStore(
-    (state) => state.actions.allMediaItemsEnabledChanged,
-  );
   const mediaItemsHiddenChanged = useAppStore((state) => state.actions.mediaItemsHiddenChanged);
   const mediaItemsOfflineChanged = useAppStore((state) => state.actions.mediaItemsOfflineChanged);
   const mediaItemRelinked = useAppStore((state) => state.actions.mediaItemRelinked);
@@ -228,7 +233,6 @@ export function MediaBin() {
   const bindingPopoverOpen = useMediaBinState((state) => state.bindingPopoverOpen);
   const bindingVideoId = useMediaBinState((state) => state.bindingVideoId);
   const setQuery = useMediaBinState((state) => state.setQuery);
-  const setClipboardItemCount = useMediaBinState((state) => state.setClipboardItemCount);
   const setVisibleItemCount = useMediaBinState((state) => state.setVisibleItemCount);
   const selectOnly = useMediaBinState((state) => state.selectOnly);
   const toggleSelected = useMediaBinState((state) => state.toggleSelected);
@@ -251,7 +255,39 @@ export function MediaBin() {
   const [linkDialog, setLinkDialog] = useState<MediaLinkDialogState | null>(null);
   const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null);
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(new Set());
-  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
+  const [currentFolderId, setCurrentFolderId] = useState<string | null>(rootFolderId);
+  const rootFolder = rootFolderId
+    ? (mediaFolders.find((folder) => folder.id === rootFolderId) ?? null)
+    : null;
+  const rootFolderAvailable = rootFolderId === null || rootFolder !== null;
+  const scopedFolderIds = useMemo(() => {
+    if (rootFolderId === null) {
+      return new Set(mediaFolders.map((folder) => folder.id));
+    }
+    const folderIds = mediaFolderAndDescendantIds(mediaFolders, [rootFolderId]);
+    folderIds.delete(rootFolderId);
+    return folderIds;
+  }, [mediaFolders, rootFolderId]);
+  const scopedFolders = useMemo(
+    () => mediaFolders.filter((folder) => scopedFolderIds.has(folder.id)),
+    [mediaFolders, scopedFolderIds],
+  );
+  const scopedItems = useMemo(
+    () =>
+      rootFolderId === null
+        ? mediaItems
+        : mediaItems.filter(
+            (item) =>
+              item.bin_id === rootFolderId ||
+              Boolean(item.bin_id && scopedFolderIds.has(item.bin_id)),
+          ),
+    [mediaItems, rootFolderId, scopedFolderIds],
+  );
+  const scopedEntryIds = useMemo(
+    () =>
+      new Set([...scopedFolders.map((folder) => folder.id), ...scopedItems.map((item) => item.id)]),
+    [scopedFolders, scopedItems],
+  );
 
   const directlySelectedItems = useMemo(
     () => mediaItems.filter((item) => selectedIds.has(item.id)),
@@ -302,7 +338,7 @@ export function MediaBin() {
     Boolean(mediaItemProject(item, projects, mediaItems)?.proxy_path),
   );
   const selectedOfflineProjectVideos = selectedProjectVideos.filter(isMediaItemOffline);
-  const allItemsEnabled = mediaItems.every(isMediaItemEnabled);
+  const allItemsEnabled = scopedItems.every(isMediaItemEnabled);
   const selectedBindingVideoId =
     selectedVideos.length === 1
       ? selectedVideos[0].id
@@ -365,13 +401,16 @@ export function MediaBin() {
   } as CSSProperties;
 
   const rows = useMemo(() => {
+    if (!rootFolderAvailable) {
+      return [];
+    }
     const normalizedQuery = query.trim().toLocaleLowerCase();
     const displayedItems = showHidden
-      ? mediaItems
-      : mediaItems.filter((item) => !isMediaItemHidden(item));
+      ? scopedItems
+      : scopedItems.filter((item) => !isMediaItemHidden(item));
     const displayedFolders = showHidden
-      ? mediaFolders
-      : mediaFolders.filter((folder) => folder.hidden !== true);
+      ? scopedFolders
+      : scopedFolders.filter((folder) => folder.hidden !== true);
     const matches = (item: MediaBinItem) => {
       if (!normalizedQuery) {
         return true;
@@ -432,6 +471,17 @@ export function MediaBin() {
         }
       }
     };
+
+    if (viewMode === "grid") {
+      for (const folder of foldersByParent.get(rootFolderId) ?? []) {
+        if (!normalizedQuery || folder.name.toLocaleLowerCase().includes(normalizedQuery)) {
+          result.push({ type: "folder", folder, depth: 0 });
+        }
+      }
+      appendItems(itemsByFolder.get(rootFolderId) ?? [], 0, !normalizedQuery);
+      return result;
+    }
+
     const appendFolder = (folder: MediaBinFolder, depth: number, ancestorMatched: boolean) => {
       const matchesFolder = folder.name.toLocaleLowerCase().includes(normalizedQuery);
       if (normalizedQuery && !ancestorMatched && !folderHasMatch(folder)) {
@@ -447,12 +497,21 @@ export function MediaBin() {
       }
       appendItems(itemsByFolder.get(folder.id) ?? [], depth + 1, includeAll || !normalizedQuery);
     };
-    for (const folder of foldersByParent.get(null) ?? []) {
+    for (const folder of foldersByParent.get(rootFolderId) ?? []) {
       appendFolder(folder, 0, false);
     }
-    appendItems(itemsByFolder.get(null) ?? [], 0, !normalizedQuery);
+    appendItems(itemsByFolder.get(rootFolderId) ?? [], 0, !normalizedQuery);
     return result;
-  }, [expandedFolderIds, mediaFolders, mediaItems, query, showHidden]);
+  }, [
+    expandedFolderIds,
+    query,
+    rootFolderAvailable,
+    rootFolderId,
+    scopedFolders,
+    scopedItems,
+    showHidden,
+    viewMode,
+  ]);
 
   useEffect(() => {
     setVisibleItemCount(rows.length);
@@ -487,34 +546,33 @@ export function MediaBin() {
   }, [contextMenu]);
 
   useEffect(() => {
-    const validIds = new Set([
-      ...mediaItems.map((item) => item.id),
-      ...mediaFolders.map((folder) => folder.id),
-    ]);
-    const nextSelection = Array.from(selectedIds).filter((itemId) => validIds.has(itemId));
+    const nextSelection = Array.from(selectedIds).filter((itemId) => scopedEntryIds.has(itemId));
     if (nextSelection.length !== selectedIds.size) {
       selectItems(nextSelection);
     }
-  }, [mediaFolders, mediaItems, selectItems, selectedIds]);
+  }, [scopedEntryIds, selectItems, selectedIds]);
 
   useEffect(() => {
-    if (currentFolderId && !mediaFolders.some((folder) => folder.id === currentFolderId)) {
-      setCurrentFolderId(null);
+    const validFolderTargets = new Set(scopedFolderIds).add(rootFolderId ?? "");
+    if (
+      currentFolderId !== rootFolderId &&
+      (!currentFolderId || !validFolderTargets.has(currentFolderId))
+    ) {
+      setCurrentFolderId(rootFolderId);
     }
     setExpandedFolderIds((current) => {
-      const validIds = new Set(mediaFolders.map((folder) => folder.id));
-      const next = new Set(Array.from(current).filter((folderId) => validIds.has(folderId)));
+      const next = new Set(Array.from(current).filter((folderId) => scopedFolderIds.has(folderId)));
       return next.size === current.size ? current : next;
     });
-  }, [currentFolderId, mediaFolders]);
+  }, [currentFolderId, rootFolderId, scopedFolderIds]);
 
   function focusMediaBinEntry(entryId: string) {
-    const folder = mediaFolders.find((candidate) => candidate.id === entryId);
+    const folder = scopedFolders.find((candidate) => candidate.id === entryId);
     if (folder) {
       setCurrentFolderId(folder.parent_id);
       return;
     }
-    const item = mediaItems.find((candidate) => candidate.id === entryId);
+    const item = scopedItems.find((candidate) => candidate.id === entryId);
     if (item) {
       setCurrentFolderId(item.bin_id);
     }
@@ -556,12 +614,12 @@ export function MediaBin() {
   }
 
   function createFolder(parentId: string | null = currentFolderId) {
-    if (isReadOnly || isBusy) {
+    if (isReadOnly || isBusy || !rootFolderAvailable) {
       return;
     }
     const folder = newMediaFolder(parentId);
     mediaFolderAdded(folder);
-    if (parentId) {
+    if (parentId && parentId !== rootFolderId) {
       setExpandedFolderIds((current) => new Set(current).add(parentId));
     }
     selectOnly(folder.id);
@@ -589,7 +647,7 @@ export function MediaBin() {
       return;
     }
     mediaEntriesMovedToFolder(itemIds, folderIds, folderId);
-    if (folderId) {
+    if (folderId && folderId !== rootFolderId) {
       setExpandedFolderIds((current) => new Set(current).add(folderId));
     }
     setCurrentFolderId(folderId);
@@ -717,7 +775,7 @@ export function MediaBin() {
   }
 
   function handleContentDrop(event: DragEvent<HTMLDivElement>) {
-    if (isReadOnly) {
+    if (isReadOnly || !rootFolderAvailable) {
       return;
     }
     const itemIds = readDraggedMediaIds(event);
@@ -726,7 +784,7 @@ export function MediaBin() {
     }
     event.preventDefault();
     markMediaDragHandled();
-    moveItemsToFolder(itemIds, null);
+    moveItemsToFolder(itemIds, rootFolderId);
   }
 
   async function demuxSelectedVideo() {
@@ -897,13 +955,13 @@ export function MediaBin() {
       return;
     }
     mediaBinClipboard = clipboard;
-    setClipboardItemCount(count);
+    setMediaBinClipboardItemCount(count);
     messagePublished(`已复制 ${count} 个项目条目`);
   }
 
   function pasteClipboard() {
     const clipboardCount = mediaBinClipboard.folders.length + mediaBinClipboard.items.length;
-    if (isReadOnly || clipboardCount === 0) {
+    if (isReadOnly || !rootFolderAvailable || clipboardCount === 0) {
       return;
     }
     const copies = copiedClipboardEntries(mediaBinClipboard, currentFolderId, false, false);
@@ -928,7 +986,7 @@ export function MediaBin() {
   }
 
   function createFolderFromSelection() {
-    if (isReadOnly || isBusy || selectedIds.size === 0) {
+    if (isReadOnly || isBusy || !rootFolderAvailable || selectedIds.size === 0) {
       return;
     }
     const clipboard = clipboardFromSelection();
@@ -943,7 +1001,7 @@ export function MediaBin() {
       copies.items,
       `通过选择项新建媒体箱：${folder.name}`,
     );
-    if (currentFolderId) {
+    if (currentFolderId && currentFolderId !== rootFolderId) {
       setExpandedFolderIds((current) => new Set(current).add(currentFolderId));
     }
     setExpandedFolderIds((current) => new Set(current).add(folder.id));
@@ -952,16 +1010,36 @@ export function MediaBin() {
     messagePublished(`已复制所选内容并创建媒体箱“${folder.name}”`);
   }
 
-  useAppEvent("media:copy", copySelection);
-  useAppEvent("media:paste", pasteClipboard);
-  useAppEvent("media:clear", () => {
-    void removeSelection();
+  useAppEvent("media:copy", ({ instanceId }) => {
+    if (instanceId === panelInstanceId) {
+      copySelection();
+    }
   });
-  useAppEvent("media:duplicate", duplicateSelection);
-  useAppEvent("media:select-all", () => {
-    selectItems(rows.map((row) => (row.type === "item" ? row.item.id : row.folder.id)));
+  useAppEvent("media:paste", ({ instanceId }) => {
+    if (instanceId === panelInstanceId) {
+      pasteClipboard();
+    }
   });
-  useAppEvent("media:clear-selection", clearSelection);
+  useAppEvent("media:clear", ({ instanceId }) => {
+    if (instanceId === panelInstanceId) {
+      void removeSelection();
+    }
+  });
+  useAppEvent("media:duplicate", ({ instanceId }) => {
+    if (instanceId === panelInstanceId) {
+      duplicateSelection();
+    }
+  });
+  useAppEvent("media:select-all", ({ instanceId }) => {
+    if (instanceId === panelInstanceId) {
+      selectItems(rows.map((row) => (row.type === "item" ? row.item.id : row.folder.id)));
+    }
+  });
+  useAppEvent("media:clear-selection", ({ instanceId }) => {
+    if (instanceId === panelInstanceId) {
+      clearSelection();
+    }
+  });
 
   function setSelectionEnabled(enabled: boolean) {
     if (isReadOnly || selectedItems.length === 0) {
@@ -1177,7 +1255,7 @@ export function MediaBin() {
       <section ref={panelRef} className="media-bin-panel" tabIndex={-1}>
         <div className="media-bin-project-row">
           <PanelTopOpen aria-hidden="true" />
-          <span>项目媒体</span>
+          <span>{rootFolder ? `媒体箱：${rootFolder.name}` : "项目媒体"}</span>
         </div>
 
         <div className="media-bin-search-row">
@@ -1191,7 +1269,7 @@ export function MediaBin() {
             />
           </label>
           <span>
-            {selectedIds.size} 项已选择，共 {mediaItems.length + mediaFolders.length} 项
+            {selectedIds.size} 项已选择，共 {scopedItems.length + scopedFolders.length} 项
           </span>
         </div>
 
@@ -1209,7 +1287,7 @@ export function MediaBin() {
         >
           <MediaBinTable
             rows={rows}
-            hasItems={mediaItems.length > 0 || mediaFolders.length > 0}
+            hasItems={scopedItems.length > 0 || scopedFolders.length > 0}
             mediaItems={mediaItems}
             projects={projects}
             detachedVideoIds={detachedVideoIds}
@@ -1217,15 +1295,17 @@ export function MediaBin() {
             listIconScale={listIconScale}
             selectedIds={selectedIds}
             expandedFolderIds={expandedFolderIds}
+            defaultFolderId={rootFolderId}
             renamingFolderId={renamingFolderId}
             viewMode={viewMode}
             isReadOnly={isReadOnly}
-            canImport={!isReadOnly && !isBusy}
+            canImport={!isReadOnly && !isBusy && rootFolderAvailable && panelActive}
             onSelectOnly={selectOnly}
             onToggleSelected={toggleSelected}
             onSelectItems={selectItems}
             onEntryFocused={focusMediaBinEntry}
             onToggleFolder={toggleFolder}
+            onOpenFolder={(folderId) => onOpenFolder?.(folderId)}
             onRenameFolder={mediaFolderRenamed}
             onFinishRenameFolder={() => setRenamingFolderId(null)}
             onMoveEntriesToFolder={moveEntriesToFolder}
@@ -1332,7 +1412,7 @@ export function MediaBin() {
             <button
               type="button"
               onClick={() => createFolder()}
-              disabled={isReadOnly || isBusy}
+              disabled={isReadOnly || isBusy || !rootFolderAvailable}
               title="新建媒体箱"
             >
               <FolderPlus aria-hidden="true" />
@@ -1344,7 +1424,7 @@ export function MediaBin() {
                   folderId: currentFolderId ?? undefined,
                 })
               }
-              disabled={isReadOnly || isBusy}
+              disabled={isReadOnly || isBusy || !rootFolderAvailable}
               title="导入媒体（视频、音频或字幕）"
             >
               {isImporting ? (
@@ -1538,7 +1618,6 @@ export function MediaBin() {
                             selectedFolders.map((item) => item.id),
                             folder.id,
                           );
-                          setExpandedFolderIds((current) => new Set(current).add(folder.id));
                           setContextMenu(null);
                         }}
                         disabled={
@@ -1649,7 +1728,7 @@ export function MediaBin() {
                     createFolder();
                     setContextMenu(null);
                   }}
-                  disabled={isReadOnly || isBusy}
+                  disabled={isReadOnly || isBusy || !rootFolderAvailable}
                 >
                   新建素材箱
                 </PopupMenuItem>
@@ -1658,7 +1737,7 @@ export function MediaBin() {
                     createFolderFromSelection();
                     setContextMenu(null);
                   }}
-                  disabled={isReadOnly || isBusy || selectedIds.size === 0}
+                  disabled={isReadOnly || isBusy || !rootFolderAvailable || selectedIds.size === 0}
                 >
                   通过选择项新建素材箱
                 </PopupMenuItem>
@@ -1669,7 +1748,7 @@ export function MediaBin() {
                     });
                     setContextMenu(null);
                   }}
-                  disabled={isReadOnly || isBusy}
+                  disabled={isReadOnly || isBusy || !rootFolderAvailable}
                 >
                   导入...
                 </PopupMenuItem>
@@ -1764,7 +1843,7 @@ export function MediaBin() {
                     createFolder();
                     setContextMenu(null);
                   }}
-                  disabled={isReadOnly || isBusy}
+                  disabled={isReadOnly || isBusy || !rootFolderAvailable}
                 >
                   新建素材箱
                 </PopupMenuItem>
@@ -1776,6 +1855,7 @@ export function MediaBin() {
                   }}
                   disabled={
                     isReadOnly ||
+                    !rootFolderAvailable ||
                     mediaBinClipboard.folders.length + mediaBinClipboard.items.length === 0
                   }
                 >
@@ -1787,7 +1867,7 @@ export function MediaBin() {
                     emitAppEvent("media:import", { folderId: currentFolderId ?? undefined });
                     setContextMenu(null);
                   }}
-                  disabled={isReadOnly || isBusy}
+                  disabled={isReadOnly || isBusy || !rootFolderAvailable}
                 >
                   导入
                 </PopupMenuItem>
@@ -1805,10 +1885,13 @@ export function MediaBin() {
                 <PopupMenuItem
                   checked={allItemsEnabled}
                   onSelect={() => {
-                    allMediaItemsEnabledChanged(!allItemsEnabled);
+                    mediaItemsEnabledChanged(
+                      scopedItems.map((item) => item.id),
+                      !allItemsEnabled,
+                    );
                     setContextMenu(null);
                   }}
-                  disabled={isReadOnly || mediaItems.length === 0}
+                  disabled={isReadOnly || scopedItems.length === 0}
                 >
                   全部启用
                 </PopupMenuItem>

@@ -1,11 +1,12 @@
 import { createPanelState } from "../../panelState";
+import { useStore } from "zustand";
+import { createStore } from "zustand/vanilla";
 
 export type MediaBinViewMode = "list" | "grid";
 
 interface MediaBinPanelState {
   query: string;
   selectedIds: Set<string>;
-  clipboardItemCount: number;
   visibleItemCount: number;
   viewMode: MediaBinViewMode;
   listSize: number;
@@ -14,7 +15,6 @@ interface MediaBinPanelState {
   bindingPopoverOpen: boolean;
   bindingVideoId: string;
   setQuery: (query: string) => void;
-  setClipboardItemCount: (count: number) => void;
   setVisibleItemCount: (count: number) => void;
   selectOnly: (itemId: string) => void;
   toggleSelected: (itemId: string) => void;
@@ -31,7 +31,6 @@ interface MediaBinPanelState {
 export const useMediaBinState = createPanelState<MediaBinPanelState>(() => (set) => ({
   query: "",
   selectedIds: new Set<string>(),
-  clipboardItemCount: 0,
   visibleItemCount: 0,
   viewMode: "list",
   listSize: 0,
@@ -40,7 +39,6 @@ export const useMediaBinState = createPanelState<MediaBinPanelState>(() => (set)
   bindingPopoverOpen: false,
   bindingVideoId: "",
   setQuery: (query) => set({ query }),
-  setClipboardItemCount: (clipboardItemCount) => set({ clipboardItemCount }),
   setVisibleItemCount: (visibleItemCount) => set({ visibleItemCount }),
   selectOnly: (itemId) => set({ selectedIds: new Set([itemId]) }),
   toggleSelected: (itemId) =>
@@ -62,3 +60,13 @@ export const useMediaBinState = createPanelState<MediaBinPanelState>(() => (set)
   setBindingPopoverOpen: (bindingPopoverOpen) => set({ bindingPopoverOpen }),
   setBindingVideoId: (bindingVideoId) => set({ bindingVideoId }),
 }));
+
+const mediaBinClipboardStore = createStore<{ itemCount: number }>()(() => ({ itemCount: 0 }));
+
+export function useMediaBinClipboardItemCount() {
+  return useStore(mediaBinClipboardStore, (state) => state.itemCount);
+}
+
+export function setMediaBinClipboardItemCount(itemCount: number) {
+  mediaBinClipboardStore.setState({ itemCount });
+}

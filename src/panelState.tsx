@@ -3,9 +3,11 @@ import { useStore } from "zustand";
 import { createStore, type StateCreator, type StoreApi } from "zustand/vanilla";
 
 const PanelInstanceContext = createContext<string | null>(null);
+const PanelActiveContext = createContext(true);
 
 interface PanelInstanceProviderProps {
   instanceId: string;
+  active?: boolean;
   children: ReactNode;
 }
 
@@ -14,10 +16,28 @@ interface PanelStateHook<State extends object> {
   useInstance: <Selection>(instanceId: string, selector: (state: State) => Selection) => Selection;
 }
 
-export function PanelInstanceProvider({ instanceId, children }: PanelInstanceProviderProps) {
+export function PanelInstanceProvider({
+  instanceId,
+  active = true,
+  children,
+}: PanelInstanceProviderProps) {
   return (
-    <PanelInstanceContext.Provider value={instanceId}>{children}</PanelInstanceContext.Provider>
+    <PanelInstanceContext.Provider value={instanceId}>
+      <PanelActiveContext.Provider value={active}>{children}</PanelActiveContext.Provider>
+    </PanelInstanceContext.Provider>
   );
+}
+
+export function usePanelInstanceId() {
+  const instanceId = useContext(PanelInstanceContext);
+  if (!instanceId) {
+    throw new Error("Panel instance ID must be used inside a DockLayout panel.");
+  }
+  return instanceId;
+}
+
+export function usePanelActive() {
+  return useContext(PanelActiveContext);
 }
 
 export function createPanelState<State extends object>(

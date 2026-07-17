@@ -51,6 +51,7 @@ interface MediaBinTableProps {
   listIconScale: number;
   selectedIds: Set<string>;
   expandedFolderIds: Set<string>;
+  defaultFolderId: string | null;
   renamingFolderId: string | null;
   viewMode: MediaBinViewMode;
   isReadOnly: boolean;
@@ -60,6 +61,7 @@ interface MediaBinTableProps {
   onSelectItems: (itemIds: string[]) => void;
   onEntryFocused: (entryId: string) => void;
   onToggleFolder: (folderId: string) => void;
+  onOpenFolder: (folderId: string) => void;
   onRenameFolder: (folderId: string, name: string) => void;
   onFinishRenameFolder: () => void;
   onMoveEntriesToFolder: (itemIds: string[], folderIds: string[], folderId: string | null) => void;
@@ -523,6 +525,7 @@ export function MediaBinTable({
   listIconScale,
   selectedIds,
   expandedFolderIds,
+  defaultFolderId,
   renamingFolderId,
   viewMode,
   isReadOnly,
@@ -532,6 +535,7 @@ export function MediaBinTable({
   onSelectItems,
   onEntryFocused,
   onToggleFolder,
+  onOpenFolder,
   onRenameFolder,
   onFinishRenameFolder,
   onMoveEntriesToFolder,
@@ -1399,7 +1403,7 @@ export function MediaBinTable({
         } else if (allowBinding && !isReadOnly && target.videoId) {
           void onBindItems(itemIds, target.videoId);
         } else if (!isReadOnly) {
-          onMoveEntriesToFolder(itemIds, folderIds, null);
+          onMoveEntriesToFolder(itemIds, folderIds, defaultFolderId);
         }
       }
       cleanup();
@@ -1466,7 +1470,7 @@ export function MediaBinTable({
         onMoveEntriesToFolder(
           itemIds,
           folderIds,
-          folderTargetFromPoint(finishEvent.clientX, finishEvent.clientY),
+          folderTargetFromPoint(finishEvent.clientX, finishEvent.clientY) ?? defaultFolderId,
         );
       }
       cleanup();
@@ -1527,7 +1531,6 @@ export function MediaBinTable({
           {sortedRows.map((row) => {
             if (row.type === "folder") {
               const { folder } = row;
-              const expanded = expandedFolderIds.has(folder.id);
               return (
                 <button
                   type="button"
@@ -1540,11 +1543,11 @@ export function MediaBinTable({
                   } ${dropTargetFolderId === folder.id ? "folder-drop-target" : ""}`}
                   onPointerDown={(event) => startPointerFolderDrag(event, folder)}
                   onClick={(event) => selectItem(event, folder.id)}
-                  onDoubleClick={() => onToggleFolder(folder.id)}
+                  onDoubleClick={() => onOpenFolder(folder.id)}
                 >
                   <span className="media-bin-card-preview-shell">
                     <span className="media-bin-card-preview folder">
-                      {expanded ? <FolderOpen aria-hidden="true" /> : <Folder aria-hidden="true" />}
+                      <Folder aria-hidden="true" />
                     </span>
                   </span>
                   <span className="media-bin-card-meta">
@@ -1786,6 +1789,12 @@ export function MediaBinTable({
                         }
                         selectItem(event, folder.id);
                       }}
+                      onDoubleClick={(event) => {
+                        cancelPendingTitleRename();
+                        if (!(event.target as HTMLElement).closest("input, button")) {
+                          onOpenFolder(folder.id);
+                        }
+                      }}
                     >
                       <span
                         className="media-bin-label-cell media-bin-folder-label-cell"
@@ -1836,7 +1845,6 @@ export function MediaBinTable({
                         onClick={(event) => handleTitleCellClick(event, folder, selected)}
                         onDoubleClick={() => {
                           cancelPendingTitleRename();
-                          beginTitleRename(folder);
                         }}
                       >
                         <span className="media-bin-kind-icon folder">

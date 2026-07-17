@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent, type WheelEvent } from "react";
 import "./DockLayout.css";
 import { PanelInstanceProvider } from "../../panelState";
-import type { DockAreaId, DockLayoutState, DockPanelDefinition } from "./types";
+import { PopupMenu, PopupMenuItem, PopupMenuSeparator } from "../PopupMenu";
+import type {
+  DockAreaId,
+  DockLayoutState,
+  DockPanelDefinition,
+  DockPanelOpenRequest,
+} from "./types";
 
 const dockAreaOrder: DockAreaId[] = ["leftTop", "leftBottom", "right"];
 const DOCK_DRAG_LONG_PRESS_MS = 220;
@@ -37,10 +43,19 @@ interface DockOverflowMenu<PanelId extends string> {
   width: number;
 }
 
+interface DockPanelMenu<PanelId extends string> {
+  areaId: DockAreaId;
+  panelId: PanelId;
+  x: number;
+  y: number;
+}
+
 interface DockLayoutProps<PanelId extends string> {
   panels: Array<DockPanelDefinition<PanelId>>;
   initialLayout: DockLayoutState<PanelId>;
+  panelOpenRequest?: DockPanelOpenRequest<PanelId> | null;
   onFocusedPanelChange?: (panelId: PanelId) => void;
+  onPanelClose?: (panelId: PanelId) => void;
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -74,12 +89,15 @@ function dockAreaFromPoint(clientX: number, clientY: number): DockAreaId | null 
 export function DockLayout<PanelId extends string>({
   panels,
   initialLayout,
+  panelOpenRequest,
   onFocusedPanelChange,
+  onPanelClose,
 }: DockLayoutProps<PanelId>) {
   const workspaceRef = useRef<HTMLElement | null>(null);
   const leftPaneRef = useRef<HTMLElement | null>(null);
   const dragRef = useRef<DockDragState<PanelId> | null>(null);
   const dropTargetAreaRef = useRef<DockAreaId | null>(null);
+  const handledPanelOpenRequestRef = useRef<DockPanelOpenRequest<PanelId> | null>(null);
   const tabViewportRefs = useRef<Record<DockAreaId, HTMLDivElement | null>>({
     leftTop: null,
     leftBottom: null,
@@ -102,10 +120,66 @@ export function DockLayout<PanelId extends string>({
     right: false,
   });
   const [overflowMenu, setOverflowMenu] = useState<DockOverflowMenu<PanelId> | null>(null);
+  const [panelMenu, setPanelMenu] = useState<DockPanelMenu<PanelId> | null>(null);
 
   const panelMap = useMemo(() => {
     return new Map(panels.map((panel) => [panel.id, panel]));
   }, [panels]);
+
+  useEffect(() => {
+    const validPanelIds = new Set(panelMap.keys());
+    setLayout((current) => {
+      let changed = false;
+      const areas = { ...current.areas };
+      for (const areaId of dockAreaOrder) {
+        const area = current.areas[areaId];
+        const tabs = area.tabs.filter((panelId) => validPanelIds.has(panelId));
+        if (tabs.length !== area.tabs.length) {
+          changed = true;
+          areas[areaId] = normalizeArea({ tabs, activePanelId: area.activePanelId });
+        }
+      }
+      return changed ? { areas } : current;
+    });
+  }, [panelMap]);
+
+  useEffect(() => {
+    if (
+      !panelOpenRequest ||
+      handledPanelOpenRequestRef.current === panelOpenRequest ||
+      !panelMap.has(panelOpenRequest.panelId)
+    ) {
+      return;
+    }
+    handledPanelOpenRequestRef.current = panelOpenRequest;
+    let targetAreaId: DockAreaId | null = null;
+    setLayout((current) => {
+      targetAreaId =
+        dockAreaOrder.find((areaId) =>
+          current.areas[areaId].tabs.includes(panelOpenRequest.sourcePanelId),
+        ) ?? null;
+      if (!targetAreaId) {
+        return current;
+      }
+      const areas = { ...current.areas };
+      for (const areaId of dockAreaOrder) {
+        const area = current.areas[areaId];
+        const tabs = area.tabs.filter((panelId) => panelId !== panelOpenRequest.panelId);
+        areas[areaId] = normalizeArea({ tabs, activePanelId: area.activePanelId });
+      }
+      areas[targetAreaId] = {
+        tabs: [...areas[targetAreaId].tabs, panelOpenRequest.panelId],
+        activePanelId: panelOpenRequest.panelId,
+      };
+      return { areas };
+    });
+    onFocusedPanelChange?.(panelOpenRequest.panelId);
+    requestAnimationFrame(() => {
+      if (targetAreaId) {
+        revealTabNow(targetAreaId, panelOpenRequest.panelId);
+      }
+    });
+  }, [panelMap, panelOpenRequest]);
 
   function revealTabNow(areaId: DockAreaId, panelId: PanelId) {
     const viewport = tabViewportRefs.current[areaId];
@@ -192,20 +266,23 @@ export function DockLayout<PanelId extends string>({
   }, [layout, panels, leftPaneWidth, previewPaneHeight, tabsOverflow]);
 
   useEffect(() => {
-    if (!overflowMenu) {
+    if (!overflowMenu && !panelMenu) {
       return;
     }
 
-    const closeOverflowMenu = () => setOverflowMenu(null);
-    window.addEventListener("pointerdown", closeOverflowMenu);
-    window.addEventListener("keydown", closeOverflowMenu);
-    window.addEventListener("resize", closeOverflowMenu);
-    return () => {
-      window.removeEventListener("pointerdown", closeOverflowMenu);
-      window.removeEventListener("keydown", closeOverflowMenu);
-      window.removeEventListener("resize", closeOverflowMenu);
+    const closeMenus = () => {
+      setOverflowMenu(null);
+      setPanelMenu(null);
     };
-  }, [overflowMenu]);
+    window.addEventListener("pointerdown", closeMenus);
+    window.addEventListener("keydown", closeMenus);
+    window.addEventListener("resize", closeMenus);
+    return () => {
+      window.removeEventListener("pointerdown", closeMenus);
+      window.removeEventListener("keydown", closeMenus);
+      window.removeEventListener("resize", closeMenus);
+    };
+  }, [overflowMenu, panelMenu]);
 
   function setTabElementRef(areaId: DockAreaId, panelId: PanelId, element: HTMLDivElement | null) {
     const refs = tabElementRefs.current[areaId];
@@ -229,6 +306,38 @@ export function DockLayout<PanelId extends string>({
     }));
     setOverflowMenu(null);
     revealTab(areaId, panelId);
+  }
+
+  function closePanels(areaId: DockAreaId, panelIds: Iterable<PanelId>) {
+    const area = normalizeArea(layout.areas[areaId]);
+    const closedPanelIds = new Set(panelIds);
+    if (closedPanelIds.size === 0) {
+      return;
+    }
+    const activeIndex = area.activePanelId ? area.tabs.indexOf(area.activePanelId) : 0;
+    const tabs = area.tabs.filter((tabPanelId) => !closedPanelIds.has(tabPanelId));
+    const activePanelId =
+      area.activePanelId && closedPanelIds.has(area.activePanelId)
+        ? (tabs[Math.min(Math.max(activeIndex, 0), tabs.length - 1)] ?? null)
+        : area.activePanelId;
+    setLayout((current) => ({
+      areas: {
+        ...current.areas,
+        [areaId]: { tabs, activePanelId },
+      },
+    }));
+    if (activePanelId) {
+      onFocusedPanelChange?.(activePanelId);
+      revealTab(areaId, activePanelId);
+    }
+    for (const panelId of closedPanelIds) {
+      onPanelClose?.(panelId);
+    }
+    setPanelMenu(null);
+  }
+
+  function closePanel(areaId: DockAreaId, panelId: PanelId) {
+    closePanels(areaId, [panelId]);
   }
 
   function cycleAreaPanel(areaId: DockAreaId, direction: -1 | 1) {
@@ -454,6 +563,19 @@ export function DockLayout<PanelId extends string>({
     );
   }
 
+  function openPanelMenu(
+    event: PointerEvent<HTMLButtonElement>,
+    areaId: DockAreaId,
+    panelId: PanelId,
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = event.currentTarget.getBoundingClientRect();
+    setActivePanel(areaId, panelId);
+    setOverflowMenu(null);
+    setPanelMenu({ areaId, panelId, x: rect.left, y: rect.bottom });
+  }
+
   function renderDockWindow(areaId: DockAreaId) {
     const area = normalizeArea(layout.areas[areaId]);
     const activePanel = area.activePanelId ? panelMap.get(area.activePanelId) : null;
@@ -496,8 +618,9 @@ export function DockLayout<PanelId extends string>({
                       <button
                         type="button"
                         className="dock-tab-grip"
-                        title="长按拖动面板"
-                        aria-label={`拖动 ${panel.title}`}
+                        title="面板菜单"
+                        aria-label={`${panel.title} 面板菜单`}
+                        onPointerDown={(event) => openPanelMenu(event, areaId, panelId)}
                       >
                         <span />
                       </button>
@@ -535,7 +658,9 @@ export function DockLayout<PanelId extends string>({
                 onPointerDownCapture={() => onFocusedPanelChange?.(panelId)}
                 onFocusCapture={() => onFocusedPanelChange?.(panelId)}
               >
-                <PanelInstanceProvider instanceId={panelId}>{panel.render()}</PanelInstanceProvider>
+                <PanelInstanceProvider instanceId={panelId} active={panelId === area.activePanelId}>
+                  {panel.render()}
+                </PanelInstanceProvider>
               </div>
             );
           })}
@@ -598,6 +723,48 @@ export function DockLayout<PanelId extends string>({
         >
           {panelMap.get(dragPreview.panelId)?.title ?? "面板"}
         </div>
+      )}
+
+      {panelMenu && (
+        <PopupMenu
+          className="dock-panel-menu"
+          contextMenuAnchor={panelMenu}
+          style={{ position: "fixed", left: panelMenu.x, top: panelMenu.y }}
+          onPointerDown={(event) => event.stopPropagation()}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <PopupMenuItem onSelect={() => closePanel(panelMenu.areaId, panelMenu.panelId)}>
+            关闭面板
+          </PopupMenuItem>
+          <PopupMenuItem disabled>浮动面板</PopupMenuItem>
+          <PopupMenuItem
+            onSelect={() =>
+              closePanels(
+                panelMenu.areaId,
+                normalizeArea(layout.areas[panelMenu.areaId]).tabs.filter(
+                  (panelId) => panelId !== panelMenu.panelId,
+                ),
+              )
+            }
+            disabled={normalizeArea(layout.areas[panelMenu.areaId]).tabs.length <= 1}
+          >
+            关闭组中的其他面板
+          </PopupMenuItem>
+          <PopupMenuItem disabled submenu>
+            面板组设置
+          </PopupMenuItem>
+          <PopupMenuSeparator />
+          <PopupMenuItem onSelect={() => closePanel(panelMenu.areaId, panelMenu.panelId)}>
+            关闭
+          </PopupMenuItem>
+          <PopupMenuItem
+            onSelect={() =>
+              closePanels(panelMenu.areaId, normalizeArea(layout.areas[panelMenu.areaId]).tabs)
+            }
+          >
+            全部关闭
+          </PopupMenuItem>
+        </PopupMenu>
       )}
 
       {overflowMenu && (

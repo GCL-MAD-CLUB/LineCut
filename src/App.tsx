@@ -2,11 +2,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 import { Loader2 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { emitAppEvent, useAppEvent } from "./appEvents";
 import { ApplicationMenu, type ApplicationMenuModel } from "./components/ApplicationMenu";
 import {
   DockLayout,
+  type DockPanelOpenRequest,
   type DockLayoutState,
   type DockPanelDefinition,
 } from "./components/DockLayout";
@@ -14,7 +15,10 @@ import { ExportPanel } from "./components/ExportPanel";
 import { HistoryPanel } from "./components/HistoryPanel";
 import { ImportWorkspace } from "./components/ImportWorkspace";
 import { MediaBin } from "./components/MediaBin";
-import { useMediaBinState } from "./components/MediaBin/mediaBinState";
+import {
+  useMediaBinClipboardItemCount,
+  useMediaBinState,
+} from "./components/MediaBin/mediaBinState";
 import { PreferencesDialog } from "./components/PreferencesDialog";
 import { ProxyCreationDialog } from "./components/ProxyCreationDialog";
 import { SecondaryTopbar } from "./components/SecondaryTopbar";
@@ -134,7 +138,23 @@ function standaloneSubtitleItem(path: string, index: number): MediaBinItem {
   };
 }
 
-type AppDockPanelId = "source" | "media" | "export" | "subtitles" | "history";
+type StaticAppDockPanelId = "source" | "media" | "export" | "subtitles" | "history";
+type MediaFolderDockPanelId = `media-folder-panel:${string}`;
+type AppDockPanelId = StaticAppDockPanelId | MediaFolderDockPanelId;
+
+interface MediaFolderDockPanel {
+  id: MediaFolderDockPanelId;
+  folderId: string;
+}
+
+function isMediaDockPanelId(panelId: AppDockPanelId): boolean {
+  return panelId === "media" || panelId.startsWith("media-folder-panel:");
+}
+
+function newMediaFolderDockPanelId(): MediaFolderDockPanelId {
+  const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+  return `media-folder-panel:${random}`;
+}
 
 const appWorkspaces = [
   { id: "import", label: "导入" },
@@ -163,6 +183,9 @@ const initialDockLayout: DockLayoutState<AppDockPanelId> = {
 export default function App() {
   const [activeWorkspace, setActiveWorkspace] = useState<AppWorkspace>("edit");
   const [focusedPanelId, setFocusedPanelId] = useState<AppDockPanelId>("source");
+  const [mediaFolderDockPanels, setMediaFolderDockPanels] = useState<MediaFolderDockPanel[]>([]);
+  const [dockPanelOpenRequest, setDockPanelOpenRequest] =
+    useState<DockPanelOpenRequest<AppDockPanelId> | null>(null);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [historyNavigating, setHistoryNavigating] = useState(false);
   const [recentMediaPaths, setRecentMediaPaths] = useState(() =>
@@ -187,16 +210,14 @@ export default function App() {
   const exportResult = useAppStore((state) => state.exportResult);
   const isMediaBinReadOnly = useAppStore((state) => state.mediaBinReadOnly);
   const projectHistory = useAppStore((state) => state.projectHistory);
+  const focusedMediaPanelId = isMediaDockPanelId(focusedPanelId) ? focusedPanelId : "media";
   const selectedMediaItemCount = useMediaBinState.useInstance(
-    "media",
+    focusedMediaPanelId,
     (state) => state.selectedIds.size,
   );
-  const mediaClipboardItemCount = useMediaBinState.useInstance(
-    "media",
-    (state) => state.clipboardItemCount,
-  );
+  const mediaClipboardItemCount = useMediaBinClipboardItemCount();
   const visibleMediaItemCount = useMediaBinState.useInstance(
-    "media",
+    focusedMediaPanelId,
     (state) => state.visibleItemCount,
   );
   const projectOpened = useAppStore((state) => state.actions.projectOpened);
@@ -228,7 +249,10 @@ export default function App() {
     [activeTrackId, activeVideoId, mediaItems, project, projects],
   );
   const editScope = activeWorkspace === "edit" ? focusedPanelId : null;
-  const mediaEditScopeActive = editScope === "media";
+  const mediaEditScopeActive = editScope !== null && isMediaDockPanelId(editScope);
+  const focusedMediaFolderId = mediaEditScopeActive
+    ? (mediaFolderDockPanels.find((panel) => panel.id === focusedMediaPanelId)?.folderId ?? null)
+    : null;
   const subtitleEditScopeActive = editScope === "subtitles";
   const canCopy = mediaEditScopeActive && selectedMediaItemCount > 0;
   const canPaste = mediaEditScopeActive && !isMediaBinReadOnly && mediaClipboardItemCount > 0;
@@ -541,40 +565,40 @@ export default function App() {
   }
 
   function copyInEditScope() {
-    if (editScope === "media") {
-      emitAppEvent("media:copy");
+    if (mediaEditScopeActive) {
+      emitAppEvent("media:copy", { instanceId: focusedMediaPanelId });
     }
   }
 
   function pasteInEditScope() {
-    if (editScope === "media") {
-      emitAppEvent("media:paste");
+    if (mediaEditScopeActive) {
+      emitAppEvent("media:paste", { instanceId: focusedMediaPanelId });
     }
   }
 
   function clearInEditScope() {
-    if (editScope === "media") {
-      emitAppEvent("media:clear");
+    if (mediaEditScopeActive) {
+      emitAppEvent("media:clear", { instanceId: focusedMediaPanelId });
     }
   }
 
   function duplicateInEditScope() {
-    if (editScope === "media") {
-      emitAppEvent("media:duplicate");
+    if (mediaEditScopeActive) {
+      emitAppEvent("media:duplicate", { instanceId: focusedMediaPanelId });
     }
   }
 
   function selectAllInEditScope() {
-    if (editScope === "media") {
-      emitAppEvent("media:select-all");
+    if (mediaEditScopeActive) {
+      emitAppEvent("media:select-all", { instanceId: focusedMediaPanelId });
     } else if (editScope === "subtitles") {
       emitAppEvent("subtitle:select-all");
     }
   }
 
   function clearSelectionInEditScope() {
-    if (editScope === "media") {
-      emitAppEvent("media:clear-selection");
+    if (mediaEditScopeActive) {
+      emitAppEvent("media:clear-selection", { instanceId: focusedMediaPanelId });
     } else if (editScope === "subtitles") {
       emitAppEvent("subtitle:clear-selection");
     }
@@ -789,7 +813,9 @@ export default function App() {
       let action: (() => void | Promise<void>) | undefined;
       if (key === "n" && !event.shiftKey && !event.altKey) action = newProject;
       if (key === "o" && !event.shiftKey && !event.altKey) action = openProject;
-      if (key === "i" && !event.shiftKey && !event.altKey) action = importMedia;
+      if (key === "i" && !event.shiftKey && !event.altKey) {
+        action = () => importMedia(undefined, focusedMediaFolderId);
+      }
       if (key === "w" && event.shiftKey && !event.altKey && hasProject) action = closeProject;
       if (key === "s" && !event.shiftKey && !event.altKey && hasProject) action = saveProject;
       if (key === "s" && event.shiftKey && !event.altKey && hasProject) {
@@ -809,6 +835,39 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleShortcut);
   });
 
+  const openMediaFolderPanel = useCallback((folderId: string, sourcePanelId: AppDockPanelId) => {
+    const panel: MediaFolderDockPanel = {
+      id: newMediaFolderDockPanelId(),
+      folderId,
+    };
+    setMediaFolderDockPanels((current) => [...current, panel]);
+    setDockPanelOpenRequest({ panelId: panel.id, sourcePanelId });
+  }, []);
+
+  const closeDockPanel = useCallback((panelId: AppDockPanelId) => {
+    if (!panelId.startsWith("media-folder-panel:")) {
+      return;
+    }
+    setMediaFolderDockPanels((current) => current.filter((panel) => panel.id !== panelId));
+  }, []);
+
+  useEffect(() => {
+    const validFolderIds = new Set(mediaFolders.map((folder) => folder.id));
+    setMediaFolderDockPanels((current) => {
+      const next = current.filter((panel) => validFolderIds.has(panel.folderId));
+      return next.length === current.length ? current : next;
+    });
+  }, [mediaFolders]);
+
+  useEffect(() => {
+    if (
+      focusedPanelId.startsWith("media-folder-panel:") &&
+      !mediaFolderDockPanels.some((panel) => panel.id === focusedPanelId)
+    ) {
+      setFocusedPanelId("media");
+    }
+  }, [focusedPanelId, mediaFolderDockPanels]);
+
   const dockPanels = useMemo<Array<DockPanelDefinition<AppDockPanelId>>>(
     () => [
       {
@@ -824,7 +883,9 @@ export default function App() {
             .pop()
             ?.replace(/\.lcp$/i, "") ?? "未命名项目"
         }`,
-        render: () => <MediaBin />,
+        render: () => (
+          <MediaBin onOpenFolder={(folderId) => openMediaFolderPanel(folderId, "media")} />
+        ),
       },
       {
         id: "export",
@@ -847,8 +908,34 @@ export default function App() {
           />
         ),
       },
+      ...mediaFolderDockPanels.flatMap((folderPanel) => {
+        const folder = mediaFolders.find((candidate) => candidate.id === folderPanel.folderId);
+        return folder
+          ? [
+              {
+                id: folderPanel.id,
+                title: `媒体箱：${folder.name}`,
+                render: () => (
+                  <MediaBin
+                    rootFolderId={folder.id}
+                    onOpenFolder={(folderId) => openMediaFolderPanel(folderId, folderPanel.id)}
+                  />
+                ),
+              } satisfies DockPanelDefinition<AppDockPanelId>,
+            ]
+          : [];
+      }),
     ],
-    [isBusy, projectFilePath, projectHistory, projectHistoryFutureDiscarded],
+    [
+      isBusy,
+      mediaFolderDockPanels,
+      mediaFolders,
+      openMediaFolderPanel,
+      project,
+      projectFilePath,
+      projectHistory,
+      projectHistoryFutureDiscarded,
+    ],
   );
 
   const workspaceContent: Record<AppWorkspace, ReactNode> = {
@@ -857,7 +944,9 @@ export default function App() {
       <DockLayout
         panels={dockPanels}
         initialLayout={initialDockLayout}
+        panelOpenRequest={dockPanelOpenRequest}
         onFocusedPanelChange={setFocusedPanelId}
+        onPanelClose={closeDockPanel}
       />
     ),
   };
@@ -890,7 +979,7 @@ export default function App() {
       },
       importMedia: {
         enabled: !isMediaBinReadOnly && !isBusy,
-        execute: importMedia,
+        execute: () => importMedia(undefined, focusedMediaFolderId),
       },
       recentMedia: {
         enabled: recentMediaPaths.length > 0 && !isMediaBinReadOnly && !isBusy,
@@ -898,7 +987,7 @@ export default function App() {
           id: path,
           label: fileName(path),
           title: path,
-          execute: () => importMedia([path]),
+          execute: () => importMedia([path], focusedMediaFolderId),
         })),
       },
       exit: { enabled: true, execute: exitApplication },

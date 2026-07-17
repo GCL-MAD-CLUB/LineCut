@@ -17,3 +17,8 @@ export interface DockPanelDefinition<PanelId extends string> {
   actions?: ReactNode;
   render: () => ReactNode;
 }
+
+export interface DockPanelOpenRequest<PanelId extends string> {
+  panelId: PanelId;
+  sourcePanelId: PanelId;
+}

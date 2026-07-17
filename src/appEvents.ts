@@ -2,12 +2,12 @@ import { useEffect, useRef } from "react";
 
 interface AppEventMap {
   "media:import": { paths?: string[]; folderId?: string };
-  "media:copy": undefined;
-  "media:paste": undefined;
-  "media:clear": undefined;
-  "media:duplicate": undefined;
-  "media:select-all": undefined;
-  "media:clear-selection": undefined;
+  "media:copy": { instanceId: string };
+  "media:paste": { instanceId: string };
+  "media:clear": { instanceId: string };
+  "media:duplicate": { instanceId: string };
+  "media:select-all": { instanceId: string };
+  "media:clear-selection": { instanceId: string };
   "monitor:seek": { timeUs: number; focusEndUs?: number; play?: boolean };
   "subtitle:select-all": undefined;
   "subtitle:clear-selection": undefined;
