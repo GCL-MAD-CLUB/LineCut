@@ -15,15 +15,22 @@ fn main() {
 }
 
 fn generate_project_key_material() {
-    let configured_secret = env::var("LINECUT_PROJECT_BUILD_SECRET_V1")
-        .ok()
-        .or_else(read_local_release_secret);
+    let is_release_build = env::var("PROFILE").as_deref() == Ok("release");
+    // Development builds intentionally keep using the stable development key so they can open
+    // existing development project files. Only release builds may use the release key.
+    let configured_secret = if is_release_build {
+        env::var("LINECUT_PROJECT_BUILD_SECRET_V1")
+            .ok()
+            .or_else(read_local_release_secret)
+    } else {
+        None
+    };
     if let Some(secret) = configured_secret.as_deref() {
         assert!(
             secret.len() >= 32,
             "LINECUT_PROJECT_BUILD_SECRET_V1 must contain at least 32 bytes"
         );
-    } else if env::var("PROFILE").as_deref() == Ok("release") {
+    } else if is_release_build {
         panic!(
             "official release builds require LINECUT_PROJECT_BUILD_SECRET_V1 or {LOCAL_RELEASE_SECRET_FILE}"
         );

@@ -17,6 +17,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type UIEvent,
@@ -188,6 +189,12 @@ function isEditableKeyboardTarget(target: EventTarget | null) {
     element?.tagName === "TEXTAREA" ||
     element?.tagName === "SELECT" ||
     Boolean(element?.isContentEditable)
+  );
+}
+
+function isMediaEntryNameTarget(target: EventTarget | null) {
+  return Boolean(
+    (target as HTMLElement | null)?.closest(".media-bin-card-name, .media-bin-name-copy"),
   );
 }
 
@@ -1233,6 +1240,16 @@ export function MediaBinTable({
     }
   }
 
+  function handleGridCardKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (isEditableKeyboardTarget(event.target)) {
+      return;
+    }
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      event.currentTarget.click();
+    }
+  }
+
   function finishTitleRename(item: MediaBinItem, commit: boolean) {
     cancelPendingTitleRename();
     if (editingItemId !== item.id) {
@@ -1532,9 +1549,9 @@ export function MediaBinTable({
             if (row.type === "folder") {
               const { folder } = row;
               return (
-                <button
-                  type="button"
+                <div
                   role="listitem"
+                  tabIndex={0}
                   key={folder.id}
                   data-media-folder-id={folder.id}
                   data-media-entry-id={folder.id}
@@ -1543,7 +1560,12 @@ export function MediaBinTable({
                   } ${dropTargetFolderId === folder.id ? "folder-drop-target" : ""}`}
                   onPointerDown={(event) => startPointerFolderDrag(event, folder)}
                   onClick={(event) => selectItem(event, folder.id)}
-                  onDoubleClick={() => onOpenFolder(folder.id)}
+                  onKeyDown={handleGridCardKeyDown}
+                  onDoubleClick={(event) => {
+                    if (!isMediaEntryNameTarget(event.target)) {
+                      onOpenFolder(folder.id);
+                    }
+                  }}
                 >
                   <span className="media-bin-card-preview-shell">
                     <span className="media-bin-card-preview folder">
@@ -1551,10 +1573,44 @@ export function MediaBinTable({
                     </span>
                   </span>
                   <span className="media-bin-card-meta">
-                    <span className="media-bin-card-name">{folder.name}</span>
+                    {editingFolderId === folder.id ? (
+                      <input
+                        className="media-bin-title-editor"
+                        value={renameValue}
+                        aria-label="重命名媒体箱"
+                        autoFocus
+                        onFocus={(event) => event.currentTarget.select()}
+                        onChange={(event) => setRenameValue(event.currentTarget.value)}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => event.stopPropagation()}
+                        onDoubleClick={(event) => event.stopPropagation()}
+                        onBlur={() => finishFolderRename(folder, true)}
+                        onKeyDown={(event) => {
+                          event.stopPropagation();
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            event.currentTarget.blur();
+                          } else if (event.key === "Escape") {
+                            event.preventDefault();
+                            finishFolderRename(folder, false);
+                          }
+                        }}
+                      />
+                    ) : (
+                      <span
+                        className="media-bin-card-name"
+                        title={folder.name}
+                        onDoubleClick={(event) => {
+                          event.stopPropagation();
+                          beginTitleRename(folder);
+                        }}
+                      >
+                        {folder.name}
+                      </span>
+                    )}
                     <span className="media-bin-card-duration">媒体箱</span>
                   </span>
-                </button>
+                </div>
               );
             }
             const { item } = row;
@@ -1577,9 +1633,9 @@ export function MediaBinTable({
                 project && visibleSubtitleTracks(project, mediaItems, item.id, projects).length > 0,
               );
             return (
-              <button
-                type="button"
+              <div
                 role="listitem"
+                tabIndex={0}
                 key={item.id}
                 data-media-item-id={item.id}
                 data-media-entry-id={item.id}
@@ -1589,12 +1645,17 @@ export function MediaBinTable({
                 draggable={false}
                 onPointerDown={(event) => startPointerMediaDrag(event, item, false)}
                 onClick={(event) => selectItem(event, item.id)}
-                onDoubleClick={() =>
-                  item.kind === "video" &&
-                  isMediaItemEnabled(item) &&
-                  (!isMediaItemOffline(item) || Boolean(project?.proxy_path)) &&
-                  onPreviewVideo(item.id)
-                }
+                onKeyDown={handleGridCardKeyDown}
+                onDoubleClick={(event) => {
+                  if (
+                    !isMediaEntryNameTarget(event.target) &&
+                    item.kind === "video" &&
+                    isMediaItemEnabled(item) &&
+                    (!isMediaItemOffline(item) || Boolean(project?.proxy_path))
+                  ) {
+                    onPreviewVideo(item.id);
+                  }
+                }}
               >
                 <span className="media-bin-card-preview-shell">
                   <span
@@ -1663,7 +1724,41 @@ export function MediaBinTable({
                   )}
                 </span>
                 <span className="media-bin-card-meta">
-                  <span className="media-bin-card-name">{item.file_name}</span>
+                  {editingItemId === item.id ? (
+                    <input
+                      className="media-bin-title-editor"
+                      value={renameValue}
+                      aria-label="重命名媒体"
+                      autoFocus
+                      onFocus={(event) => event.currentTarget.select()}
+                      onChange={(event) => setRenameValue(event.currentTarget.value)}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onClick={(event) => event.stopPropagation()}
+                      onDoubleClick={(event) => event.stopPropagation()}
+                      onBlur={() => finishTitleRename(item, true)}
+                      onKeyDown={(event) => {
+                        event.stopPropagation();
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          event.currentTarget.blur();
+                        } else if (event.key === "Escape") {
+                          event.preventDefault();
+                          finishTitleRename(item, false);
+                        }
+                      }}
+                    />
+                  ) : (
+                    <span
+                      className="media-bin-card-name"
+                      title={item.file_name}
+                      onDoubleClick={(event) => {
+                        event.stopPropagation();
+                        beginTitleRename(item);
+                      }}
+                    >
+                      {item.file_name}
+                    </span>
+                  )}
                   {item.kind !== "subtitle" && (
                     <span className="media-bin-card-duration">
                       {formatGridItemDuration(item, project)}
@@ -1675,7 +1770,7 @@ export function MediaBinTable({
                     <Link2 aria-hidden="true" />
                   </span>
                 )}
-              </button>
+              </div>
             );
           })}
         </div>
@@ -1791,7 +1886,10 @@ export function MediaBinTable({
                       }}
                       onDoubleClick={(event) => {
                         cancelPendingTitleRename();
-                        if (!(event.target as HTMLElement).closest("input, button")) {
+                        if (
+                          !(event.target as HTMLElement).closest("input, button") &&
+                          !isMediaEntryNameTarget(event.target)
+                        ) {
                           onOpenFolder(folder.id);
                         }
                       }}
@@ -1843,9 +1941,6 @@ export function MediaBinTable({
                           }
                         }}
                         onClick={(event) => handleTitleCellClick(event, folder, selected)}
-                        onDoubleClick={() => {
-                          cancelPendingTitleRename();
-                        }}
                       >
                         <span className="media-bin-kind-icon folder">
                           {expanded ? (
@@ -1878,7 +1973,14 @@ export function MediaBinTable({
                             }}
                           />
                         ) : (
-                          <span className="media-bin-name-copy" title={folder.name}>
+                          <span
+                            className="media-bin-name-copy"
+                            title={folder.name}
+                            onDoubleClick={(event) => {
+                              event.stopPropagation();
+                              beginTitleRename(folder);
+                            }}
+                          >
                             {folder.name}
                           </span>
                         )}
@@ -1991,12 +2093,6 @@ export function MediaBinTable({
                         }
                       }}
                       onClick={(event) => handleTitleCellClick(event, item, selected)}
-                      onDoubleClick={() => {
-                        cancelPendingTitleRename();
-                        if (!isReadOnly && item.kind !== "video") {
-                          beginTitleRename(item);
-                        }
-                      }}
                     >
                       {boundChild && <span className="media-bin-bind-branch" aria-hidden="true" />}
                       <span className={`media-bin-kind-icon ${item.kind}`}>
@@ -2027,7 +2123,14 @@ export function MediaBinTable({
                         />
                       ) : (
                         <>
-                          <span className="media-bin-name-copy" title={item.file_name}>
+                          <span
+                            className="media-bin-name-copy"
+                            title={item.file_name}
+                            onDoubleClick={(event) => {
+                              event.stopPropagation();
+                              beginTitleRename(item);
+                            }}
+                          >
                             {item.file_name}
                           </span>
                           {item.bound_to_video_id && (
