@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
@@ -35,6 +36,12 @@ interface DockDragPreview {
   panelId: string;
   x: number;
   y: number;
+}
+
+interface DockDropTarget {
+  areaId: DockAreaId;
+  insertionIndex: number;
+  showDraggedTitle: boolean;
 }
 
 interface DockOverflowMenu {
@@ -76,7 +83,10 @@ export function DockLayout() {
   const workspaceRef = useRef<HTMLElement | null>(null);
   const leftPaneRef = useRef<HTMLElement | null>(null);
   const dragRef = useRef<DockDragState | null>(null);
-  const dropTargetAreaRef = useRef<DockAreaId | null>(null);
+  const dropTargetRef = useRef<DockDropTarget | null>(null);
+  const draggedTabWidthRef = useRef(0);
+  const pendingTabPositionsRef = useRef<Map<string, DOMRect> | null>(null);
+  const tabAnimationFrameRef = useRef<number | null>(null);
   const tabViewportRefs = useRef<Record<DockAreaId, HTMLDivElement | null>>({
     leftTop: null,
     leftBottom: null,
@@ -91,7 +101,7 @@ export function DockLayout() {
   const [previewPaneHeight, setPreviewPaneHeight] = useState(48);
   const [resizerSize] = useState(() => readCssPixelVariable(RESIZER_SIZE_CSS_VAR, 6));
   const [dragPreview, setDragPreview] = useState<DockDragPreview | null>(null);
-  const [dropTargetAreaId, setDropTargetAreaId] = useState<DockAreaId | null>(null);
+  const [dropTarget, setDropTarget] = useState<DockDropTarget | null>(null);
   const [tabsOverflow, setTabsOverflow] = useState<Record<DockAreaId, boolean>>({
     leftTop: false,
     leftBottom: false,
@@ -219,6 +229,95 @@ export function DockLayout() {
     }
   }
 
+  function captureTabPositions() {
+    const positions = new Map<string, DOMRect>();
+    for (const areaId of dockAreaOrder) {
+      for (const [panelId, element] of tabElementRefs.current[areaId]) {
+        positions.set(panelId, element.getBoundingClientRect());
+      }
+    }
+    pendingTabPositionsRef.current = positions;
+  }
+
+  function clearTabAnimations() {
+    if (tabAnimationFrameRef.current !== null) {
+      cancelAnimationFrame(tabAnimationFrameRef.current);
+      tabAnimationFrameRef.current = null;
+    }
+    const tabs = dockAreaOrder.flatMap((areaId) =>
+      Array.from(tabElementRefs.current[areaId].values()),
+    );
+    for (const tab of tabs) {
+      tab.style.transition = "none";
+      tab.style.transform = "";
+    }
+    document.body.getBoundingClientRect();
+    for (const tab of tabs) {
+      tab.style.transition = "";
+    }
+  }
+
+  function setDockDropTarget(nextTarget: DockDropTarget | null) {
+    const currentTarget = dropTargetRef.current;
+    if (
+      currentTarget?.areaId === nextTarget?.areaId &&
+      currentTarget?.insertionIndex === nextTarget?.insertionIndex &&
+      currentTarget?.showDraggedTitle === nextTarget?.showDraggedTitle
+    ) {
+      return;
+    }
+    captureTabPositions();
+    clearTabAnimations();
+    dropTargetRef.current = nextTarget;
+    setDropTarget(nextTarget);
+  }
+
+  useLayoutEffect(() => {
+    const previousPositions = pendingTabPositionsRef.current;
+    pendingTabPositionsRef.current = null;
+    if (!previousPositions || !dragRef.current?.dragging) {
+      return;
+    }
+
+    const movedTabs: HTMLDivElement[] = [];
+    for (const areaId of dockAreaOrder) {
+      for (const [panelId, element] of tabElementRefs.current[areaId]) {
+        const previousPosition = previousPositions.get(panelId);
+        if (!previousPosition) {
+          continue;
+        }
+        const nextPosition = element.getBoundingClientRect();
+        const offsetX = previousPosition.left - nextPosition.left;
+        const offsetY = previousPosition.top - nextPosition.top;
+        if (Math.abs(offsetX) < 1 && Math.abs(offsetY) < 1) {
+          continue;
+        }
+        element.style.transition = "none";
+        element.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
+        movedTabs.push(element);
+      }
+    }
+    if (movedTabs.length === 0) {
+      return;
+    }
+
+    document.body.getBoundingClientRect();
+    tabAnimationFrameRef.current = requestAnimationFrame(() => {
+      for (const element of movedTabs) {
+        element.style.transition = "";
+        element.style.transform = "";
+      }
+      tabAnimationFrameRef.current = null;
+    });
+  }, [dropTarget]);
+
+  useEffect(
+    () => () => {
+      clearTabAnimations();
+    },
+    [],
+  );
+
   function setActivePanel(areaId: DockAreaId, panelId: string) {
     activatePanel(areaId, panelId);
     setOverflowMenu(null);
@@ -302,14 +401,13 @@ export function DockLayout() {
   function finishDockDrag() {
     const state = dragRef.current;
     clearDockDragTimer(state);
-    const targetAreaId = dropTargetAreaRef.current;
-    if (state?.dragging && targetAreaId) {
-      movePanel(state.panelId, targetAreaId);
+    const target = dropTargetRef.current;
+    if (state?.dragging && target) {
+      movePanel(state.panelId, target.areaId, target.insertionIndex);
     }
     dragRef.current = null;
     setDragPreview(null);
-    setDropTargetAreaId(null);
-    dropTargetAreaRef.current = null;
+    setDockDropTarget(null);
     document.body.classList.remove("is-docking-panel");
     window.removeEventListener("pointermove", updateDockDrag);
     window.removeEventListener("pointerup", finishDockDrag);
@@ -326,9 +424,50 @@ export function DockLayout() {
     }
     event.preventDefault();
     setDragPreview({ panelId: state.panelId, x: event.clientX, y: event.clientY });
-    const nextDropTarget = dockAreaFromPoint(event.clientX, event.clientY);
-    dropTargetAreaRef.current = nextDropTarget;
-    setDropTargetAreaId(nextDropTarget);
+    const targetAreaId = dockAreaFromPoint(event.clientX, event.clientY);
+    setDockDropTarget(
+      targetAreaId
+        ? {
+            areaId: targetAreaId,
+            insertionIndex: dockInsertionIndex(
+              targetAreaId,
+              state.panelId,
+              event.clientX,
+              event.clientY,
+            ),
+            showDraggedTitle: isOverDockTabbar(targetAreaId, event.clientY),
+          }
+        : null,
+    );
+  }
+
+  function isOverDockTabbar(areaId: DockAreaId, clientY: number) {
+    const viewportRect = tabViewportRefs.current[areaId]?.getBoundingClientRect();
+    return Boolean(viewportRect && clientY >= viewportRect.top && clientY <= viewportRect.bottom);
+  }
+
+  function dockInsertionIndex(
+    areaId: DockAreaId,
+    draggedPanelId: string,
+    clientX: number,
+    clientY: number,
+  ) {
+    const tabs = normalizeArea(layout.areas[areaId]).tabs.filter(
+      (panelId) => panelId !== draggedPanelId,
+    );
+    if (!isOverDockTabbar(areaId, clientY)) {
+      return tabs.length;
+    }
+    for (let index = 0; index < tabs.length; index += 1) {
+      const tab = tabElementRefs.current[areaId].get(tabs[index]);
+      if (tab) {
+        const rect = tab.getBoundingClientRect();
+        if (clientX < rect.left + rect.width / 2) {
+          return index;
+        }
+      }
+    }
+    return tabs.length;
   }
 
   function startDockDrag(event: PointerEvent<HTMLDivElement>, areaId: DockAreaId, panelId: string) {
@@ -356,9 +495,14 @@ export function DockLayout() {
       document.body.classList.add("is-docking-panel");
       setActivePanel(areaId, panelId);
       setDragPreview({ panelId, x: event.clientX, y: event.clientY });
-      const nextDropTarget = dockAreaFromPoint(event.clientX, event.clientY) ?? state.sourceAreaId;
-      dropTargetAreaRef.current = nextDropTarget;
-      setDropTargetAreaId(nextDropTarget);
+      draggedTabWidthRef.current =
+        tabElementRefs.current[areaId].get(panelId)?.getBoundingClientRect().width ?? 0;
+      const sourceTabs = normalizeArea(layout.areas[areaId]).tabs;
+      setDockDropTarget({
+        areaId: dockAreaFromPoint(event.clientX, event.clientY) ?? state.sourceAreaId,
+        insertionIndex: sourceTabs.indexOf(panelId),
+        showDraggedTitle: true,
+      });
     }, DOCK_DRAG_LONG_PRESS_MS);
 
     window.addEventListener("pointermove", updateDockDrag);
@@ -438,11 +582,28 @@ export function DockLayout() {
   function renderDockWindow(areaId: DockAreaId) {
     const area = normalizeArea(layout.areas[areaId]);
     const activePanel = area.activePanelId ? instances[area.activePanelId] : null;
+    const draggedPanelId = dragPreview?.panelId;
+    const areaTabs = area.tabs.filter((panelId) => Boolean(instances[panelId]));
+    const tabsWithoutDragged = draggedPanelId
+      ? areaTabs.filter((panelId) => panelId !== draggedPanelId)
+      : areaTabs;
+    const displayedTabs =
+      draggedPanelId && dropTarget?.areaId === areaId
+        ? [
+            ...tabsWithoutDragged.slice(0, dropTarget.insertionIndex),
+            draggedPanelId,
+            ...tabsWithoutDragged.slice(dropTarget.insertionIndex),
+          ]
+        : tabsWithoutDragged;
+    const isIntraAreaDrag =
+      Boolean(draggedPanelId) &&
+      dropTarget?.areaId === areaId &&
+      dragRef.current?.sourceAreaId === areaId;
 
     return (
       <section
-        className={`dock-window ${area.tabs.length > 1 ? "has-multiple-tabs" : "has-single-tab"} ${
-          dropTargetAreaId === areaId ? "drop-target" : ""
+        className={`dock-window ${displayedTabs.length > 1 ? "has-multiple-tabs" : "has-single-tab"} ${
+          dropTarget?.areaId === areaId ? "drop-target" : ""
         }`}
         data-dock-area={areaId}
       >
@@ -454,12 +615,40 @@ export function DockLayout() {
             className="dock-tabs-viewport"
           >
             <div className="dock-tabs">
-              {area.tabs.length === 0 ? (
+              {displayedTabs.length === 0 ? (
                 <div className="dock-empty-tab">拖入面板</div>
               ) : (
-                area.tabs.map((panelId) => {
-                  if (!instances[panelId]) {
-                    return null;
+                displayedTabs.map((panelId) => {
+                  if (panelId === draggedPanelId) {
+                    return (
+                      <PanelTitle key={panelId} instanceId={panelId}>
+                        {(title) => (
+                          <div
+                            ref={(node) => setTabElementRef(areaId, panelId, node)}
+                            className={`dock-tab dock-tab-placeholder ${
+                              isIntraAreaDrag ? "active" : ""
+                            }`}
+                            style={{ width: draggedTabWidthRef.current }}
+                            aria-hidden="true"
+                          >
+                            {dropTarget?.showDraggedTitle && (
+                              <span
+                                className={`dock-tab-label ${
+                                  isIntraAreaDrag ? "" : "dock-tab-drag-label"
+                                }`}
+                              >
+                                {title}
+                              </span>
+                            )}
+                            {isIntraAreaDrag && (
+                              <span className="dock-tab-grip">
+                                <span />
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </PanelTitle>
+                    );
                   }
                   const isActive = panelId === area.activePanelId;
                   return (
@@ -579,7 +768,7 @@ export function DockLayout() {
         {renderDockWindow("right")}
       </main>
 
-      {dragPreview && (
+      {dragPreview && !dropTarget?.showDraggedTitle && (
         <div
           className="dock-drag-preview"
           style={{

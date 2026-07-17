@@ -56,6 +56,17 @@
   min-width: 0;
   max-width: none;
   color: #d0d0d0;
+  transition: transform 160ms ease;
+}
+
+.dock-tab-placeholder {
+  min-width: 28px;
+  pointer-events: none;
+}
+
+.dock-tab-drag-label {
+  grid-column: 1 / -1;
+  padding-right: 8px;
 }
 
 .dock-tab.active {

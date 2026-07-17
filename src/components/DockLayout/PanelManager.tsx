@@ -42,7 +42,7 @@ export interface PanelManagerState {
   openPanel: <Params>(request: OpenPanelRequest<Params>) => string;
   activatePanel: (areaId: DockAreaId, panelId: string) => void;
   focusPanel: (panelId: string) => void;
-  movePanel: (panelId: string, targetAreaId: DockAreaId) => void;
+  movePanel: (panelId: string, targetAreaId: DockAreaId, targetIndex?: number) => void;
   closePanel: (panelId: string) => void;
   closePanels: (areaId: DockAreaId, panelIds: Iterable<string>) => void;
 }
@@ -116,7 +116,7 @@ function createPanelManagerStore(initialState: PanelManagerInitialState) {
       }
     },
 
-    movePanel: (panelId, targetAreaId) => {
+    movePanel: (panelId, targetAreaId, targetIndex) => {
       set((state) => {
         if (!state.instances[panelId]) {
           return state;
@@ -130,8 +130,17 @@ function createPanelManagerStore(initialState: PanelManagerInitialState) {
             activePanelId: area.activePanelId === panelId ? (tabs[0] ?? null) : area.activePanelId,
           });
         }
+        const targetTabs = areas[targetAreaId].tabs;
+        const insertionIndex = Math.min(
+          Math.max(targetIndex ?? targetTabs.length, 0),
+          targetTabs.length,
+        );
         areas[targetAreaId] = {
-          tabs: [...areas[targetAreaId].tabs, panelId],
+          tabs: [
+            ...targetTabs.slice(0, insertionIndex),
+            panelId,
+            ...targetTabs.slice(insertionIndex),
+          ],
           activePanelId: panelId,
         };
         return { layout: { areas }, focusedPanelId: panelId };
