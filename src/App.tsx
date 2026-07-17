@@ -113,6 +113,7 @@ function standaloneSubtitleItem(path: string, index: number): MediaBinItem {
   const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${index}`;
   return {
     id: `external-subtitle:${random}:${path.length}`,
+    bin_id: null,
     kind: "subtitle",
     enabled: true,
     hidden: false,
@@ -174,6 +175,7 @@ export default function App() {
 
   const project = useAppStore((state) => state.project);
   const projects = useAppStore((state) => state.projects);
+  const mediaFolders = useAppStore((state) => state.mediaFolders);
   const mediaItems = useAppStore((state) => state.mediaItems);
   const activeVideoId = useAppStore((state) => state.activeVideoId);
   const projectFilePath = useAppStore((state) => state.projectFilePath);
@@ -203,6 +205,7 @@ export default function App() {
   const projectClosed = useAppStore((state) => state.actions.projectClosed);
   const mediaProjectsAdded = useAppStore((state) => state.actions.mediaProjectsAdded);
   const mediaItemsAdded = useAppStore((state) => state.actions.mediaItemsAdded);
+  const mediaItemsMovedToFolder = useAppStore((state) => state.actions.mediaItemsMovedToFolder);
   const preferencesLoaded = useAppStore((state) => state.actions.preferencesLoaded);
   const messagePublished = useAppStore((state) => state.actions.messagePublished);
   const warningsReplaced = useAppStore((state) => state.actions.warningsReplaced);
@@ -214,7 +217,7 @@ export default function App() {
   );
   const { tasks: runningTasks } = getTaskProgressStatus();
   const isBusy = runningTasks.length > 0 || historyNavigating;
-  const hasProject = Boolean(projectFilePath || mediaItems.length > 0);
+  const hasProject = Boolean(projectFilePath || mediaItems.length > 0 || mediaFolders.length > 0);
   const canUndo = projectHistory.active && projectHistory.cursor > 0;
   const canRedo = projectHistory.active && projectHistory.cursor < projectHistory.entries.length;
   const activeTrackCues = useMemo(
@@ -586,7 +589,7 @@ export default function App() {
     );
   }
 
-  async function importMedia(pathsToImport?: string[]) {
+  async function importMedia(pathsToImport?: string[], folderId: string | null = null) {
     if (isMediaBinReadOnly || isBusy) {
       return;
     }
@@ -606,7 +609,14 @@ export default function App() {
     const probePaths = paths.filter((path) => !subtitleExtensions.has(fileExtension(path)));
     exportResultChanged(null);
     if (subtitlePaths.length > 0) {
-      mediaItemsAdded(subtitlePaths.map(standaloneSubtitleItem));
+      const subtitleItems = subtitlePaths.map(standaloneSubtitleItem);
+      mediaItemsAdded(subtitleItems);
+      if (folderId) {
+        mediaItemsMovedToFolder(
+          subtitleItems.map((item) => item.id),
+          folderId,
+        );
+      }
       rememberImportedMedia(subtitlePaths);
     }
 
@@ -618,6 +628,9 @@ export default function App() {
           taskIdPrefix: "media-import",
           onSuccess: (result) => {
             mediaProjectsAdded([result.project]);
+            if (folderId) {
+              mediaItemsMovedToFolder([result.project.asset.id], folderId);
+            }
             warningsAppended(result.warnings);
             rememberImportedMedia([result.project.asset.path]);
           },
@@ -695,8 +708,8 @@ export default function App() {
     messagePublished(`已删除当前事件及其后的 ${removedCount} 条历史记录`);
   }
 
-  useAppEvent("media:import", ({ paths }) => {
-    void importMedia(paths);
+  useAppEvent("media:import", ({ paths, folderId }) => {
+    void importMedia(paths, folderId ?? null);
   });
 
   useEffect(() => {

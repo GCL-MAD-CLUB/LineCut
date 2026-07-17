@@ -108,6 +108,7 @@ function standaloneSubtitleItem(path: string, index: number): MediaBinItem {
   const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${index}`;
   return {
     id: `external-subtitle:${random}:${path.length}`,
+    bin_id: null,
     kind: "subtitle",
     enabled: true,
     hidden: false,

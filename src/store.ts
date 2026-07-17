@@ -16,6 +16,7 @@ import {
 import type {
   DemuxMediaResult,
   ExportResult,
+  MediaBinFolder,
   MediaBinItem,
   Preferences,
   Project,
@@ -32,6 +33,23 @@ interface AppActions {
   projectClosed: () => void;
   mediaProjectsAdded: (projects: Project[]) => void;
   mediaItemsAdded: (items: MediaBinItem[], historyLabel?: string) => void;
+  mediaBinEntriesAdded: (
+    folders: MediaBinFolder[],
+    items: MediaBinItem[],
+    historyLabel: string,
+  ) => void;
+  mediaBinEntriesRemoved: (folderIds: string[], itemIds: string[]) => void;
+  mediaFolderAdded: (folder: MediaBinFolder) => void;
+  mediaFolderRenamed: (folderId: string, name: string) => void;
+  mediaFolderMoved: (folderId: string, parentId: string | null) => void;
+  mediaFoldersRemoved: (folderIds: string[]) => void;
+  mediaFoldersHiddenChanged: (folderIds: string[], hidden: boolean) => void;
+  mediaEntriesMovedToFolder: (
+    itemIds: string[],
+    folderIds: string[],
+    targetFolderId: string | null,
+  ) => void;
+  mediaItemsMovedToFolder: (itemIds: string[], folderId: string | null) => void;
   mediaItemRenamed: (itemId: string, fileName: string) => void;
   mediaItemsEnabledChanged: (itemIds: string[], enabled: boolean) => void;
   allMediaItemsEnabledChanged: (enabled: boolean) => void;
@@ -78,6 +96,7 @@ interface AppActions {
 interface AppStore {
   project: Project | null;
   projects: Record<string, Project>;
+  mediaFolders: MediaBinFolder[];
   mediaItems: MediaBinItem[];
   activeVideoId: string;
   detachedVideoIds: Set<string>;
@@ -104,6 +123,8 @@ const mediaLabelColors = {
   audio: "#2a5507",
   subtitle: "#893a04",
 } as const;
+
+export const defaultMediaBinFolderColor = "#596b91";
 
 function fileName(path: string) {
   return path.split(/[\\/]/).pop() ?? path;
@@ -167,6 +188,7 @@ function projectMediaItem(project: Project): MediaBinItem {
   );
   return {
     id: project.asset.id,
+    bin_id: null,
     kind: isVideo ? "video" : "audio",
     enabled: true,
     hidden: false,
@@ -196,6 +218,7 @@ function externalSubtitleItems(project: Project): MediaBinItem[] {
     .filter((track) => track.source_type === "external" && track.source_path)
     .map((track, index) => ({
       id: `subtitle:${track.id}`,
+      bin_id: null,
       kind: "subtitle" as const,
       enabled: true,
       hidden: false,
@@ -392,6 +415,7 @@ function initialProjectState(project: Project | null) {
     return {
       project: null,
       projects: {},
+      mediaFolders: [],
       mediaItems: [],
       activeVideoId: "",
       detachedVideoIds: new Set<string>(),
@@ -405,6 +429,7 @@ function initialProjectState(project: Project | null) {
   return {
     project,
     projects: { [project.asset.id]: project },
+    mediaFolders: [],
     mediaItems,
     activeVideoId: project.asset.id,
     detachedVideoIds: new Set<string>(),
@@ -420,12 +445,58 @@ function initialProjectState(project: Project | null) {
   };
 }
 
+function normalizedMediaFolders(folders: MediaBinFolder[] | undefined) {
+  const seen = new Set<string>();
+  const normalized = (folders ?? []).flatMap((folder) => {
+    const id = folder.id?.trim();
+    const name = folder.name?.trim();
+    if (!id || !name || seen.has(id)) {
+      return [];
+    }
+    seen.add(id);
+    return [
+      {
+        id,
+        name,
+        parent_id: folder.parent_id ?? null,
+        color: folder.color?.trim() || defaultMediaBinFolderColor,
+        hidden: folder.hidden === true,
+      },
+    ];
+  });
+  const folderIds = new Set(normalized.map((folder) => folder.id));
+  const parentById = new Map(
+    normalized.map((folder) => [
+      folder.id,
+      folder.parent_id && folderIds.has(folder.parent_id) && folder.parent_id !== folder.id
+        ? folder.parent_id
+        : null,
+    ]),
+  );
+  for (const folder of normalized) {
+    const ancestors = new Set([folder.id]);
+    let parentId = parentById.get(folder.id) ?? null;
+    while (parentId) {
+      if (ancestors.has(parentId)) {
+        parentById.set(folder.id, null);
+        break;
+      }
+      ancestors.add(parentId);
+      parentId = parentById.get(parentId) ?? null;
+    }
+  }
+  return normalized.map((folder) => ({ ...folder, parent_id: parentById.get(folder.id) ?? null }));
+}
+
 function openedProjectState(workspace: ProjectWorkspace) {
   const projects = Object.fromEntries(
     workspace.projects.map((project) => [project.asset.id, project]),
   );
+  const mediaFolders = normalizedMediaFolders(workspace.media_bin.folders);
+  const folderIds = new Set(mediaFolders.map((folder) => folder.id));
   const mediaItems = workspace.media_bin.items.map((item) => ({
     ...item,
+    bin_id: item.bin_id && folderIds.has(item.bin_id) ? item.bin_id : null,
     enabled: item.enabled !== false,
     hidden: item.hidden === true,
     offline: isVirtualMediaItem(item) ? false : item.offline === true,
@@ -465,6 +536,7 @@ function openedProjectState(workspace: ProjectWorkspace) {
   return {
     project,
     projects,
+    mediaFolders,
     mediaItems,
     activeVideoId,
     detachedVideoIds: new Set(
@@ -494,6 +566,7 @@ export function defaultPreferences(): Preferences {
 function projectFileStateFromStore(state: AppStore): ProjectFileState {
   return {
     projects: state.projects,
+    mediaFolders: state.mediaFolders,
     mediaItems: state.mediaItems,
     activeVideoId: state.activeVideoId,
     activeTrackId: state.activeTrackId,
@@ -523,6 +596,204 @@ function reconciledProjectFileState(projectFileState: ProjectFileState): Partial
     proxyPath: project?.proxy_path ?? null,
     proxyDialogOpen: false,
     exportResult: null,
+  };
+}
+
+function removedMediaItemsState(state: AppStore, removed: Set<string>): Partial<AppStore> {
+  const removedVideoIds = new Set(
+    state.mediaItems
+      .filter((item) => removed.has(item.id) && item.kind === "video")
+      .map((item) => item.id),
+  );
+  const mediaItems = state.mediaItems
+    .filter((item) => !removed.has(item.id))
+    .map((item) =>
+      item.bound_to_video_id && removedVideoIds.has(item.bound_to_video_id)
+        ? { ...item, bound_to_video_id: null }
+        : item,
+    );
+  const projects = { ...state.projects };
+  for (const projectId of Object.keys(projects)) {
+    const isStillReferenced = mediaItems.some(
+      (item) => item.id === projectId || item.source_video_id === projectId,
+    );
+    if (!isStillReferenced) {
+      delete projects[projectId];
+    }
+  }
+  const nextVideo = removedVideoIds.has(state.activeVideoId)
+    ? mediaItems.find(
+        (item) =>
+          item.kind === "video" &&
+          isMediaItemEnabled(item) &&
+          mediaItemProject(item, projects, mediaItems),
+      )
+    : mediaItems.find((item) => item.id === state.activeVideoId);
+  const nextVideoId = nextVideo?.id ?? "";
+  const project = nextVideo ? (mediaItemProject(nextVideo, projects, mediaItems) ?? null) : null;
+  const detachedVideoIds = new Set(state.detachedVideoIds);
+  for (const videoId of removedVideoIds) {
+    detachedVideoIds.delete(videoId);
+  }
+  const activeTrackVisible = visibleSubtitleTracks(project, mediaItems, nextVideoId, projects).some(
+    (track) => track.id === state.activeTrackId,
+  );
+  const activeTrackId = activeTrackVisible
+    ? state.activeTrackId
+    : preferredTrackId(project, projects, mediaItems, nextVideoId);
+  const subtitleSelections = { ...state.subtitleSelections };
+  for (const videoId of removedVideoIds) {
+    delete subtitleSelections[videoId];
+  }
+  return {
+    projects,
+    mediaItems,
+    detachedVideoIds,
+    project,
+    subtitleSelections,
+    ...subtitleContextState(subtitleSelections, nextVideoId, activeTrackId),
+    proxyPath: project?.proxy_path ?? null,
+    useProxy: Boolean(nextVideo && isMediaItemOffline(nextVideo) && project?.proxy_path),
+    projectDirty: true,
+  };
+}
+
+function folderAndDescendantIds(mediaFolders: MediaBinFolder[], folderIds: Iterable<string>) {
+  const validIds = new Set(mediaFolders.map((folder) => folder.id));
+  const result = new Set(Array.from(folderIds).filter((folderId) => validIds.has(folderId)));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const folder of mediaFolders) {
+      if (folder.parent_id && result.has(folder.parent_id) && !result.has(folder.id)) {
+        result.add(folder.id);
+        changed = true;
+      }
+    }
+  }
+  return result;
+}
+
+function removedMediaBinEntriesState(
+  state: AppStore,
+  folderIds: Iterable<string>,
+  itemIds: Iterable<string>,
+): Partial<AppStore> {
+  const removedFolders = folderAndDescendantIds(state.mediaFolders, folderIds);
+  const removedItems = new Set(itemIds);
+  for (const item of state.mediaItems) {
+    if (item.bin_id && removedFolders.has(item.bin_id)) {
+      removedItems.add(item.id);
+    }
+  }
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const item of state.mediaItems) {
+      if (
+        item.bound_to_video_id &&
+        removedItems.has(item.bound_to_video_id) &&
+        !removedItems.has(item.id)
+      ) {
+        removedItems.add(item.id);
+        changed = true;
+      }
+    }
+  }
+  return {
+    ...removedMediaItemsState(state, removedItems),
+    mediaFolders: state.mediaFolders.filter((folder) => !removedFolders.has(folder.id)),
+    projectDirty: true,
+  };
+}
+
+function movedMediaBinEntriesState(
+  state: AppStore,
+  itemIds: Iterable<string>,
+  folderIds: Iterable<string>,
+  targetFolderId: string | null,
+): Partial<AppStore> | AppStore {
+  if (targetFolderId && !state.mediaFolders.some((folder) => folder.id === targetFolderId)) {
+    return state;
+  }
+  const requestedFolderIds = new Set(folderIds);
+  const movedFolderIds = new Set(
+    state.mediaFolders
+      .filter((folder) => requestedFolderIds.has(folder.id))
+      .filter((folder) => {
+        let parentId = folder.parent_id;
+        while (parentId) {
+          if (requestedFolderIds.has(parentId)) {
+            return false;
+          }
+          parentId =
+            state.mediaFolders.find((candidate) => candidate.id === parentId)?.parent_id ?? null;
+        }
+        return true;
+      })
+      .map((folder) => folder.id),
+  );
+  for (const folderId of movedFolderIds) {
+    if (
+      targetFolderId &&
+      folderAndDescendantIds(state.mediaFolders, [folderId]).has(targetFolderId)
+    ) {
+      return state;
+    }
+  }
+  const movedIds = new Set(itemIds);
+  const locationIds = new Set(movedIds);
+  for (const item of state.mediaItems) {
+    if (item.bound_to_video_id && movedIds.has(item.bound_to_video_id)) {
+      locationIds.add(item.id);
+    }
+  }
+  const mediaItems = state.mediaItems.map((item) => {
+    if (!locationIds.has(item.id)) {
+      return item;
+    }
+    const bindingMovesTogether = Boolean(
+      item.bound_to_video_id && locationIds.has(item.bound_to_video_id),
+    );
+    const shouldUnbind =
+      movedIds.has(item.id) &&
+      item.kind !== "video" &&
+      item.bound_to_video_id !== null &&
+      !bindingMovesTogether;
+    if (item.bin_id === targetFolderId && !shouldUnbind) {
+      return item;
+    }
+    return {
+      ...item,
+      bin_id: targetFolderId,
+      bound_to_video_id: shouldUnbind ? null : item.bound_to_video_id,
+    };
+  });
+  const mediaFolders = state.mediaFolders.map((folder) =>
+    movedFolderIds.has(folder.id) && folder.parent_id !== targetFolderId
+      ? { ...folder, parent_id: targetFolderId }
+      : folder,
+  );
+  if (
+    mediaItems.every((item, index) => item === state.mediaItems[index]) &&
+    mediaFolders.every((folder, index) => folder === state.mediaFolders[index])
+  ) {
+    return state;
+  }
+  const activeTrackVisible = visibleSubtitleTracks(
+    state.project,
+    mediaItems,
+    state.activeVideoId,
+    state.projects,
+  ).some((track) => track.id === state.activeTrackId);
+  const activeTrackId = activeTrackVisible
+    ? state.activeTrackId
+    : preferredTrackId(state.project, state.projects, mediaItems, state.activeVideoId);
+  return {
+    mediaItems,
+    mediaFolders,
+    projectDirty: true,
+    ...subtitleContextState(state.subtitleSelections, state.activeVideoId, activeTrackId),
   };
 }
 
@@ -677,6 +948,135 @@ const appStore = createStore<AppStore>()((set) => ({
             ? state
             : { mediaItems: [...state.mediaItems, ...additions], projectDirty: true };
         },
+      ),
+    mediaBinEntriesAdded: (folders, items, historyLabel) =>
+      commitProjectEvent(set, historyLabel, "paste", (state) => {
+        const knownFolderIds = new Set(state.mediaFolders.map((folder) => folder.id));
+        const folderAdditions: MediaBinFolder[] = [];
+        for (const folder of folders) {
+          if (
+            !folder.id ||
+            !folder.name.trim() ||
+            knownFolderIds.has(folder.id) ||
+            (folder.parent_id && !knownFolderIds.has(folder.parent_id))
+          ) {
+            continue;
+          }
+          knownFolderIds.add(folder.id);
+          folderAdditions.push({
+            ...folder,
+            name: folder.name.trim(),
+            color: folder.color?.trim() || defaultMediaBinFolderColor,
+            hidden: folder.hidden === true,
+          });
+        }
+        const knownItemIds = new Set(state.mediaItems.map((item) => item.id));
+        const itemAdditions = items
+          .filter((item) => !knownItemIds.has(item.id))
+          .map((item) => ({
+            ...item,
+            bin_id: item.bin_id && knownFolderIds.has(item.bin_id) ? item.bin_id : null,
+          }));
+        if (folderAdditions.length === 0 && itemAdditions.length === 0) {
+          return state;
+        }
+        return {
+          mediaFolders: [...state.mediaFolders, ...folderAdditions],
+          mediaItems: [...state.mediaItems, ...itemAdditions],
+          projectDirty: true,
+        };
+      }),
+    mediaBinEntriesRemoved: (folderIds, itemIds) =>
+      commitProjectEvent(
+        set,
+        `清除 ${folderIds.length + itemIds.length} 个项目条目`,
+        "delete",
+        (state) => removedMediaBinEntriesState(state, folderIds, itemIds),
+      ),
+    mediaFolderAdded: (folder) =>
+      commitProjectEvent(set, `新建媒体箱：${folder.name}`, "folder", (state) => {
+        if (
+          !folder.id ||
+          !folder.name.trim() ||
+          state.mediaFolders.some((candidate) => candidate.id === folder.id) ||
+          (folder.parent_id &&
+            !state.mediaFolders.some((candidate) => candidate.id === folder.parent_id))
+        ) {
+          return state;
+        }
+        return {
+          mediaFolders: [
+            ...state.mediaFolders,
+            {
+              ...folder,
+              name: folder.name.trim(),
+              color: folder.color?.trim() || defaultMediaBinFolderColor,
+              hidden: folder.hidden === true,
+            },
+          ],
+          projectDirty: true,
+        };
+      }),
+    mediaFolderRenamed: (folderId, name) =>
+      commitProjectEvent(set, `重命名媒体箱：${name.trim()}`, "rename", (state) => {
+        const nextName = name.trim();
+        const folder = state.mediaFolders.find((candidate) => candidate.id === folderId);
+        if (!folder || !nextName || folder.name === nextName) {
+          return state;
+        }
+        return {
+          mediaFolders: state.mediaFolders.map((candidate) =>
+            candidate.id === folderId ? { ...candidate, name: nextName } : candidate,
+          ),
+          projectDirty: true,
+        };
+      }),
+    mediaFolderMoved: (folderId, parentId) =>
+      commitProjectEvent(set, "移动媒体箱", "move", (state) => {
+        const folder = state.mediaFolders.find((candidate) => candidate.id === folderId);
+        if (!folder || folder.parent_id === parentId) {
+          return state;
+        }
+        if (
+          parentId &&
+          (!state.mediaFolders.some((candidate) => candidate.id === parentId) ||
+            folderAndDescendantIds(state.mediaFolders, [folderId]).has(parentId))
+        ) {
+          return state;
+        }
+        return {
+          mediaFolders: state.mediaFolders.map((candidate) =>
+            candidate.id === folderId ? { ...candidate, parent_id: parentId } : candidate,
+          ),
+          projectDirty: true,
+        };
+      }),
+    mediaFoldersRemoved: (folderIds) =>
+      commitProjectEvent(set, `删除 ${folderIds.length} 个媒体箱`, "delete", (state) =>
+        removedMediaBinEntriesState(state, folderIds, []),
+      ),
+    mediaFoldersHiddenChanged: (folderIds, hidden) =>
+      commitProjectEvent(
+        set,
+        `${hidden ? "隐藏" : "显示"} ${folderIds.length} 个媒体箱`,
+        hidden ? "hide" : "show",
+        (state) => {
+          const changedIds = new Set(folderIds);
+          const mediaFolders = state.mediaFolders.map((folder) =>
+            changedIds.has(folder.id) && folder.hidden !== hidden ? { ...folder, hidden } : folder,
+          );
+          return mediaFolders.every((folder, index) => folder === state.mediaFolders[index])
+            ? state
+            : { mediaFolders, projectDirty: true };
+        },
+      ),
+    mediaEntriesMovedToFolder: (itemIds, folderIds, targetFolderId) =>
+      commitProjectEvent(set, "移动项目条目", "move", (state) =>
+        movedMediaBinEntriesState(state, itemIds, folderIds, targetFolderId),
+      ),
+    mediaItemsMovedToFolder: (itemIds, folderId) =>
+      commitProjectEvent(set, "移动项目媒体", "move", (state) =>
+        movedMediaBinEntriesState(state, itemIds, [], folderId),
       ),
     mediaItemRenamed: (itemId, fileName) =>
       commitProjectEvent(set, `重命名媒体：${fileName}`, "rename", (state) => {
@@ -947,9 +1347,12 @@ const appStore = createStore<AppStore>()((set) => ({
     mediaItemsBound: (itemIds, videoId) =>
       commitProjectEvent(set, `绑定 ${itemIds.length} 个媒体`, "bind", (state) => {
         const selected = new Set(itemIds);
+        const targetBinId =
+          state.mediaItems.find((item) => item.id === videoId && item.kind === "video")?.bin_id ??
+          null;
         const mediaItems = state.mediaItems.map((item) =>
           selected.has(item.id) && item.kind !== "video"
-            ? { ...item, bound_to_video_id: videoId }
+            ? { ...item, bin_id: targetBinId, bound_to_video_id: videoId }
             : item,
         );
         const activeProject = state.project;
@@ -992,82 +1395,22 @@ const appStore = createStore<AppStore>()((set) => ({
         };
       }),
     mediaItemsRemoved: (itemIds) =>
-      commitProjectEvent(set, `移除 ${itemIds.length} 个媒体`, "delete", (state) => {
-        const removed = new Set(itemIds);
-        const removedVideoIds = new Set(
-          state.mediaItems
-            .filter((item) => removed.has(item.id) && item.kind === "video")
-            .map((item) => item.id),
-        );
-        const mediaItems = state.mediaItems
-          .filter((item) => !removed.has(item.id))
-          .map((item) =>
-            item.bound_to_video_id && removedVideoIds.has(item.bound_to_video_id)
-              ? { ...item, bound_to_video_id: null }
-              : item,
-          );
-        const projects = { ...state.projects };
-        for (const projectId of Object.keys(projects)) {
-          const isStillReferenced = mediaItems.some(
-            (item) => item.id === projectId || item.source_video_id === projectId,
-          );
-          if (!isStillReferenced) {
-            delete projects[projectId];
-          }
-        }
-        const nextVideo = removedVideoIds.has(state.activeVideoId)
-          ? mediaItems.find(
-              (item) =>
-                item.kind === "video" &&
-                isMediaItemEnabled(item) &&
-                mediaItemProject(item, projects, mediaItems),
-            )
-          : mediaItems.find((item) => item.id === state.activeVideoId);
-        const nextVideoId = nextVideo?.id ?? "";
-        const project = nextVideo
-          ? (mediaItemProject(nextVideo, projects, mediaItems) ?? null)
-          : null;
-        const detachedVideoIds = new Set(state.detachedVideoIds);
-        for (const videoId of removedVideoIds) {
-          detachedVideoIds.delete(videoId);
-        }
-        const activeTrackVisible = visibleSubtitleTracks(
-          project,
-          mediaItems,
-          nextVideoId,
-          projects,
-        ).some((track) => track.id === state.activeTrackId);
-        const activeTrackId = activeTrackVisible
-          ? state.activeTrackId
-          : preferredTrackId(project, projects, mediaItems, nextVideoId);
-        const subtitleSelections = { ...state.subtitleSelections };
-        for (const videoId of removedVideoIds) {
-          delete subtitleSelections[videoId];
-        }
-        return {
-          projects,
-          mediaItems,
-          detachedVideoIds,
-          project,
-          subtitleSelections,
-          ...subtitleContextState(subtitleSelections, nextVideoId, activeTrackId),
-          proxyPath: project?.proxy_path ?? null,
-          useProxy: Boolean(nextVideo && isMediaItemOffline(nextVideo) && project?.proxy_path),
-          projectDirty: true,
-        };
-      }),
+      commitProjectEvent(set, `移除 ${itemIds.length} 个媒体`, "delete", (state) =>
+        removedMediaItemsState(state, new Set(itemIds)),
+      ),
     mediaDemuxed: (videoId, result) =>
       commitProjectEvent(set, "分解媒体轨道", "demux", (state) => {
         const video = state.mediaItems.find((item) => item.id === videoId);
         const project = video
           ? mediaItemProject(video, state.projects, state.mediaItems)
           : undefined;
-        if (!project) {
+        if (!project || !video) {
           return state;
         }
         const additions: MediaBinItem[] = [
           ...result.audio_tracks.map((track, index) => ({
             id: `demux-audio:${videoId}:${track.stream_index}`,
+            bin_id: video.bin_id,
             kind: "audio" as const,
             enabled: true,
             hidden: false,
@@ -1088,6 +1431,7 @@ const appStore = createStore<AppStore>()((set) => ({
           })),
           ...result.subtitle_tracks.map((track, index) => ({
             id: `demux-subtitle:${videoId}:${track.id}`,
+            bin_id: video.bin_id,
             kind: "subtitle" as const,
             enabled: true,
             hidden: false,
@@ -1166,6 +1510,7 @@ const appStore = createStore<AppStore>()((set) => ({
           .filter((track) => track.source_path)
           .map((track, index): MediaBinItem => ({
             id: `subtitle:${track.id}`,
+            bin_id: state.mediaItems.find((item) => item.id === videoId)?.bin_id ?? null,
             kind: "subtitle",
             enabled: true,
             hidden: false,
@@ -1216,6 +1561,7 @@ const appStore = createStore<AppStore>()((set) => ({
           return track
             ? {
                 ...item,
+                bin_id: video?.bin_id ?? null,
                 bound_to_video_id: videoId,
                 subtitle_track_id: track.id,
                 codec: track.codec,
@@ -1371,8 +1717,10 @@ export function getProjectWorkspaceSnapshot(): ProjectWorkspace {
   return {
     projects: Object.values(state.projects),
     media_bin: {
+      folders: state.mediaFolders,
       items: state.mediaItems.map((item) => ({
         ...item,
+        bin_id: item.bin_id ?? null,
         enabled: item.enabled !== false,
         hidden: item.hidden === true,
         offline: item.offline === true,

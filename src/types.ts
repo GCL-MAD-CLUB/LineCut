@@ -76,6 +76,7 @@ export type MediaBinItemOrigin = "imported" | "decomposed";
 
 export interface MediaBinItem {
   id: string;
+  bin_id: string | null;
   kind: MediaBinItemKind;
   enabled: boolean;
   hidden: boolean;
@@ -95,8 +96,17 @@ export interface MediaBinItem {
   color: string;
 }
 
+export interface MediaBinFolder {
+  id: string;
+  name: string;
+  parent_id: string | null;
+  color: string;
+  hidden: boolean;
+}
+
 export interface ProjectMediaBinState {
   items: MediaBinItem[];
+  folders: MediaBinFolder[];
 }
 
 export interface ProjectPreviewState {

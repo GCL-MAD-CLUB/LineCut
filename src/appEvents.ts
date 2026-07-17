@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 
 interface AppEventMap {
-  "media:import": { paths?: string[] };
+  "media:import": { paths?: string[]; folderId?: string };
   "media:copy": undefined;
   "media:paste": undefined;
   "media:clear": undefined;

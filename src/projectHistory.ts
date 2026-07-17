@@ -1,4 +1,4 @@
-import type { MediaBinItem, Project } from "./types";
+import type { MediaBinFolder, MediaBinItem, Project } from "./types";
 
 export const projectHistoryRowLimit = 40;
 
@@ -7,6 +7,8 @@ export type ProjectHistoryCategory =
   | "import"
   | "paste"
   | "rename"
+  | "folder"
+  | "move"
   | "enable"
   | "disable"
   | "show"
@@ -27,6 +29,7 @@ export type SubtitleSelections = Record<string, Record<string, Set<string>>>;
 
 export interface ProjectFileState {
   projects: Record<string, Project>;
+  mediaFolders: MediaBinFolder[];
   mediaItems: MediaBinItem[];
   activeVideoId: string;
   activeTrackId: string;
@@ -45,6 +48,13 @@ interface MediaItemSetOperation {
   type: "media-item.set";
   itemId: string;
   value: MediaBinItem | null;
+  index: number;
+}
+
+interface MediaFolderSetOperation {
+  type: "media-folder.set";
+  folderId: string;
+  value: MediaBinFolder | null;
   index: number;
 }
 
@@ -72,6 +82,7 @@ interface BooleanSetOperation {
 
 export type ProjectFileOperation =
   | ProjectSetOperation
+  | MediaFolderSetOperation
   | MediaItemSetOperation
   | StringSetOperation
   | StringSetSetOperation
@@ -209,6 +220,34 @@ export function createProjectHistoryEntry(
     });
   }
 
+  const previousFolders = new Map(
+    before.mediaFolders.map((folder, index) => [folder.id, { folder, index }] as const),
+  );
+  const nextFolders = new Map(
+    after.mediaFolders.map((folder, index) => [folder.id, { folder, index }] as const),
+  );
+  const folderIds = new Set([...previousFolders.keys(), ...nextFolders.keys()]);
+
+  for (const folderId of folderIds) {
+    const previous = previousFolders.get(folderId);
+    const next = nextFolders.get(folderId);
+    if (previous?.folder === next?.folder && previous?.index === next?.index) {
+      continue;
+    }
+    eventOperations.push({
+      type: "media-folder.set",
+      folderId,
+      value: next?.folder ?? null,
+      index: next?.index ?? previous?.index ?? 0,
+    });
+    inverseOperations.push({
+      type: "media-folder.set",
+      folderId,
+      value: previous?.folder ?? null,
+      index: previous?.index ?? next?.index ?? 0,
+    });
+  }
+
   addScalarOperation(
     eventOperations,
     inverseOperations,
@@ -295,6 +334,9 @@ export function applyProjectFileEvent(
   const mediaOperations = event.operations.filter(
     (operation): operation is MediaItemSetOperation => operation.type === "media-item.set",
   );
+  const folderOperations = event.operations.filter(
+    (operation): operation is MediaFolderSetOperation => operation.type === "media-folder.set",
+  );
 
   for (const operation of event.operations) {
     if (operation.type !== "project.set") {
@@ -318,9 +360,21 @@ export function applyProjectFileEvent(
     }
   }
 
+  let mediaFolders = current.mediaFolders;
+  if (folderOperations.length > 0) {
+    const changedIds = new Set(folderOperations.map((operation) => operation.folderId));
+    mediaFolders = current.mediaFolders.filter((folder) => !changedIds.has(folder.id));
+    for (const operation of folderOperations
+      .filter((candidate) => candidate.value)
+      .sort((left, right) => left.index - right.index)) {
+      mediaFolders.splice(Math.min(operation.index, mediaFolders.length), 0, operation.value!);
+    }
+  }
+
   const next: ProjectFileState = {
     ...current,
     projects,
+    mediaFolders,
     mediaItems,
     subtitleSelections: { ...current.subtitleSelections },
   };

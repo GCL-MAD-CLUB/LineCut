@@ -255,6 +255,10 @@ body.system-file-drag-active .media-bin-table-scroll.system-file-drop-target * {
   padding-left: 6.23px;
 }
 
+.media-bin-column-title .media-bin-column-sort-button {
+  padding-left: calc(8px + var(--media-title-leading-space, 0px));
+}
+
 .media-bin-sort-arrow {
   display: block;
   flex: 0 0 13px;
@@ -370,9 +374,10 @@ body.system-file-drag-active .media-bin-table-scroll.system-file-drop-target * {
 .media-bin-label-cell {
   display: flex;
   align-items: center;
+  justify-content: center;
   height: calc(var(--media-list-row-height, 24px) - 1px);
   min-height: calc(var(--media-list-row-height, 24px) - 1px);
-  padding: 0 0 0 6px !important;
+  padding: 0 !important;
 }
 
 .media-bin-title-cell {
@@ -387,6 +392,71 @@ body.system-file-drag-active .media-bin-table-scroll.system-file-drop-target * {
 
 .media-bin-title-cell:active {
   cursor: grabbing;
+}
+
+.media-bin-folder-row .media-bin-title-cell,
+.media-bin-folder-row .media-bin-title-cell:active {
+  cursor: grab;
+}
+
+.media-bin-folder-row .media-bin-title-cell:active {
+  cursor: grabbing;
+}
+
+.media-bin-folder-row.folder-drop-target,
+.media-bin-folder-card.folder-drop-target {
+  color: #f2f2f2;
+  background: #3a3a3a;
+  box-shadow: inset 0 0 0 1px #a7a7a7;
+}
+
+.media-bin-folder-title-cell {
+  gap: 6px;
+}
+
+.media-bin-row > span.media-bin-folder-label-cell {
+  overflow: visible;
+  padding: 0 !important;
+}
+
+.media-bin-folder-toggle {
+  position: absolute;
+  right: -1px;
+  z-index: 2;
+  display: grid;
+  flex: 0 0 14px;
+  width: 14px;
+  height: 18px;
+  min-height: 0;
+  padding: 0;
+  color: #a9a9a9;
+  background: transparent;
+  border-radius: 2px;
+  place-items: center;
+}
+
+.media-bin-folder-toggle:hover,
+.media-bin-folder-toggle:focus-visible {
+  color: #e0e0e0;
+  background: #424242;
+}
+
+.media-bin-folder-toggle svg {
+  width: 13px;
+  height: 13px;
+  transition: transform 100ms ease;
+}
+
+.media-bin-folder-toggle.expanded svg {
+  transform: rotate(90deg);
+}
+
+.media-bin-kind-icon.folder {
+  color: #b5b5b5;
+}
+
+.media-bin-folder-empty-cell {
+  pointer-events: none;
 }
 
 .media-bin-title-editor {
@@ -725,6 +795,15 @@ body.is-resizing-media-column {
 
 .media-bin-card-preview.audio {
   color: #17d99b;
+}
+
+.media-bin-card-preview.folder {
+  color: #b5b5b5;
+  background: #181818;
+}
+
+.media-bin-folder-card {
+  cursor: grab;
 }
 
 .media-bin-card-preview.audio svg {

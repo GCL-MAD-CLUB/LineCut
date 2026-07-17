@@ -1,6 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { Captions, Film, Link2, Music2, SplitSquareVertical } from "lucide-react";
+import {
+  Captions,
+  ChevronRight,
+  Film,
+  Folder,
+  FolderOpen,
+  Link2,
+  Music2,
+  SplitSquareVertical,
+} from "lucide-react";
 import {
   useEffect,
   useLayoutEffect,
@@ -24,34 +33,48 @@ import {
 import { isTauriRuntime } from "../../tauriRuntime";
 import { formatMonitorTime } from "../../time";
 import { normalizeFrameRate } from "../../timeline";
-import type { MediaBinItem, Project } from "../../types";
+import type { MediaBinFolder, MediaBinItem, Project } from "../../types";
 import type { MediaBinViewMode } from "./mediaBinState";
 import { MediaBinVideoThumbnail } from "./MediaBinVideoThumbnail";
 
+export type MediaBinTableRow =
+  | { type: "folder"; folder: MediaBinFolder; depth: number }
+  | { type: "item"; item: MediaBinItem; depth: number; boundChild: boolean };
+
 interface MediaBinTableProps {
-  rows: Array<{ item: MediaBinItem; depth: number }>;
+  rows: MediaBinTableRow[];
   hasItems: boolean;
   mediaItems: MediaBinItem[];
   projects: Record<string, Project>;
   detachedVideoIds: Set<string>;
   gridCardWidth: number;
+  listIconScale: number;
   selectedIds: Set<string>;
+  expandedFolderIds: Set<string>;
+  renamingFolderId: string | null;
   viewMode: MediaBinViewMode;
   isReadOnly: boolean;
   canImport: boolean;
   onSelectOnly: (itemId: string) => void;
   onToggleSelected: (itemId: string) => void;
   onSelectItems: (itemIds: string[]) => void;
+  onEntryFocused: (entryId: string) => void;
+  onToggleFolder: (folderId: string) => void;
+  onRenameFolder: (folderId: string, name: string) => void;
+  onFinishRenameFolder: () => void;
+  onMoveEntriesToFolder: (itemIds: string[], folderIds: string[], folderId: string | null) => void;
   onRenameItem: (itemId: string, fileName: string) => void;
   onSetItemsEnabled: (itemIds: string[], enabled: boolean) => void;
   onSetItemsHidden: (itemIds: string[], hidden: boolean) => void;
+  onSetFoldersHidden: (folderIds: string[], hidden: boolean) => void;
   onPreviewVideo: (videoId: string) => void;
   onBindItems: (itemIds: string[], videoId: string) => void | Promise<void>;
-  onUnbindItems: (itemIds: string[]) => void;
   onImportPaths: (paths: string[]) => void;
 }
 
-const labelColumnWidth = 42;
+const previousLabelColumnWidth = 42;
+const labelColumnWidth = 25;
+const titleColumnLeadingSpace = previousLabelColumnWidth - labelColumnWidth;
 const booleanColumnWidth = 62;
 const titleRenameDelayMs = 350;
 
@@ -73,7 +96,8 @@ const defaultMediaBinSort: MediaBinSort = {
 type ResizableColumnWidths = Record<ResizableColumnId, number>;
 
 interface PointerMediaDragPreview {
-  item: MediaBinItem;
+  item?: MediaBinItem;
+  folder?: MediaBinFolder;
   project?: Project;
   x: number;
   y: number;
@@ -104,7 +128,7 @@ interface MarqueeSelection {
 const marqueeDragThreshold = 4;
 
 const initialColumnWidths: ResizableColumnWidths = {
-  title: 300,
+  title: 300 + titleColumnLeadingSpace,
   frameRate: 112,
   mediaStart: 128,
   mediaEnd: 128,
@@ -114,7 +138,7 @@ const initialColumnWidths: ResizableColumnWidths = {
 };
 
 const minimumColumnWidths: ResizableColumnWidths = {
-  title: 38,
+  title: 38 + titleColumnLeadingSpace,
   frameRate: 21,
   mediaStart: 21,
   mediaEnd: 21,
@@ -124,7 +148,7 @@ const minimumColumnWidths: ResizableColumnWidths = {
 };
 
 const maximumColumnWidths: ResizableColumnWidths = {
-  title: 720,
+  title: 720 + titleColumnLeadingSpace,
   frameRate: 280,
   mediaStart: 300,
   mediaEnd: 300,
@@ -408,6 +432,16 @@ function itemSortValue(
   return normalizeFrameRate(stream?.avg_frame_rate, stream?.r_frame_rate);
 }
 
+function folderSortValue(folder: MediaBinFolder, columnId: SortableColumnId) {
+  if (columnId === "label") {
+    return folder.color;
+  }
+  if (columnId === "title") {
+    return folder.name;
+  }
+  return null;
+}
+
 function compareSortValues(left: string | number, right: string | number) {
   if (typeof left === "number" && typeof right === "number") {
     return left - right;
@@ -431,41 +465,52 @@ function sortMediaRows(
   }
 
   const direction = sort.direction === "ascending" ? 1 : -1;
-  const compareItems = (left: MediaBinItem, right: MediaBinItem) =>
-    compareSortValues(
-      itemSortValue(left, sort.columnId, projects),
-      itemSortValue(right, sort.columnId, projects),
-    ) * direction;
-  const groups: Array<MediaBinTableProps["rows"]> = [];
-
-  for (const row of rows) {
-    if (row.depth === 0 || groups.length === 0) {
-      groups.push([row]);
-    } else {
-      groups[groups.length - 1].push(row);
-    }
+  const rowSortValue = (row: MediaBinTableRow) =>
+    row.type === "folder"
+      ? folderSortValue(row.folder, sort.columnId)
+      : itemSortValue(row.item, sort.columnId, projects);
+  interface RowNode {
+    row: MediaBinTableRow;
+    children: RowNode[];
+    index: number;
   }
+  const roots: RowNode[] = [];
+  const stack: RowNode[] = [];
+  rows.forEach((row, index) => {
+    const node = { row, children: [], index };
+    stack.length = Math.min(stack.length, row.depth);
+    const parent = row.depth > 0 ? stack[row.depth - 1] : undefined;
+    (parent?.children ?? roots).push(node);
+    stack[row.depth] = node;
+    stack.length = row.depth + 1;
+  });
+  const compareNodes = (left: RowNode, right: RowNode) => {
+    const leftValue = rowSortValue(left.row);
+    const rightValue = rowSortValue(right.row);
+    if (leftValue !== null && rightValue !== null) {
+      return compareSortValues(leftValue, rightValue) * direction || left.index - right.index;
+    }
+    if (leftValue === null && rightValue !== null) {
+      return -1;
+    }
+    if (leftValue !== null && rightValue === null) {
+      return 1;
+    }
+    if (left.row.type === "folder" && right.row.type === "folder") {
+      return (
+        mediaNameCollator.compare(left.row.folder.name, right.row.folder.name) ||
+        left.index - right.index
+      );
+    }
+    return left.index - right.index;
+  };
+  const flatten = (nodes: RowNode[]): MediaBinTableRow[] =>
+    nodes.sort(compareNodes).flatMap((node) => [node.row, ...flatten(node.children)]);
+  return flatten(roots);
+}
 
-  return groups
-    .map((group, groupIndex) => ({
-      group: [
-        group[0],
-        ...group
-          .slice(1)
-          .map((row, rowIndex) => ({ row, rowIndex }))
-          .sort(
-            (left, right) =>
-              compareItems(left.row.item, right.row.item) || left.rowIndex - right.rowIndex,
-          )
-          .map(({ row }) => row),
-      ],
-      groupIndex,
-    }))
-    .sort(
-      (left, right) =>
-        compareItems(left.group[0].item, right.group[0].item) || left.groupIndex - right.groupIndex,
-    )
-    .flatMap(({ group }) => group);
+function mediaBinRowId(row: MediaBinTableRow) {
+  return row.type === "folder" ? row.folder.id : row.item.id;
 }
 
 export function MediaBinTable({
@@ -475,22 +520,31 @@ export function MediaBinTable({
   projects,
   detachedVideoIds,
   gridCardWidth,
+  listIconScale,
   selectedIds,
+  expandedFolderIds,
+  renamingFolderId,
   viewMode,
   isReadOnly,
   canImport,
   onSelectOnly,
   onToggleSelected,
   onSelectItems,
+  onEntryFocused,
+  onToggleFolder,
+  onRenameFolder,
+  onFinishRenameFolder,
+  onMoveEntriesToFolder,
   onRenameItem,
   onSetItemsEnabled,
   onSetItemsHidden,
+  onSetFoldersHidden,
   onPreviewVideo,
   onBindItems,
-  onUnbindItems,
   onImportPaths,
 }: MediaBinTableProps) {
   const [dropTargetVideoId, setDropTargetVideoId] = useState<string | null>(null);
+  const [dropTargetFolderId, setDropTargetFolderId] = useState<string | null>(null);
   const [pointerDragPreview, setPointerDragPreview] = useState<PointerMediaDragPreview | null>(
     null,
   );
@@ -498,6 +552,7 @@ export function MediaBinTable({
   const [sort, setSort] = useState<MediaBinSort>(defaultMediaBinSort);
   const [activeCell, setActiveCell] = useState<ActiveMediaCell | null>(null);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
+  const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
   const [gridLayout, setGridLayout] = useState<GridLayout>({
     columns: 1,
     cardWidth: gridCardWidth,
@@ -534,6 +589,7 @@ export function MediaBinTable({
   const tableStyle = {
     "--media-col-label": `${labelColumnWidth}px`,
     "--media-col-title": `${columnWidths.title}px`,
+    "--media-title-leading-space": `${titleColumnLeadingSpace}px`,
     "--media-col-frame-rate": `${columnWidths.frameRate}px`,
     "--media-col-start": `${columnWidths.mediaStart}px`,
     "--media-col-end": `${columnWidths.mediaEnd}px`,
@@ -551,8 +607,26 @@ export function MediaBinTable({
 
   onImportPathsRef.current = onImportPaths;
 
+  useEffect(() => {
+    if (!renamingFolderId) {
+      return;
+    }
+    const folderRow = sortedRows.find(
+      (row) => row.type === "folder" && row.folder.id === renamingFolderId,
+    );
+    if (folderRow?.type === "folder") {
+      if (tableScrollRef.current) {
+        tableScrollRef.current.scrollLeft = 0;
+      }
+      setRenameValue(folderRow.folder.name);
+      setEditingItemId(null);
+      setEditingFolderId(folderRow.folder.id);
+    }
+  }, [renamingFolderId, sortedRows]);
+
   function selectItem(event: ReactMouseEvent<HTMLElement>, itemId: string) {
     const additive = event.ctrlKey || event.metaKey;
+    onEntryFocused(itemId);
     selectionFocusRef.current = itemId;
     if (!event.shiftKey) {
       selectionAnchorRef.current = itemId;
@@ -564,28 +638,28 @@ export function MediaBinTable({
       return;
     }
 
-    const targetIndex = sortedRows.findIndex((row) => row.item.id === itemId);
+    const targetIndex = sortedRows.findIndex((row) => mediaBinRowId(row) === itemId);
     if (targetIndex < 0) {
       return;
     }
     const anchorId = selectionAnchorRef.current;
     const anchorIndex = anchorId
-      ? sortedRows.findIndex((row) => row.item.id === anchorId)
-      : sortedRows.findIndex((row) => selectedIds.has(row.item.id));
+      ? sortedRows.findIndex((row) => mediaBinRowId(row) === anchorId)
+      : sortedRows.findIndex((row) => selectedIds.has(mediaBinRowId(row)));
     const resolvedAnchorIndex = anchorIndex >= 0 ? anchorIndex : targetIndex;
     const start = Math.min(resolvedAnchorIndex, targetIndex);
     const end = Math.max(resolvedAnchorIndex, targetIndex);
     const nextSelection = additive ? new Set(selectedIds) : new Set<string>();
     for (const row of sortedRows.slice(start, end + 1)) {
-      nextSelection.add(row.item.id);
+      nextSelection.add(mediaBinRowId(row));
     }
-    selectionAnchorRef.current = sortedRows[resolvedAnchorIndex].item.id;
+    selectionAnchorRef.current = mediaBinRowId(sortedRows[resolvedAnchorIndex]);
     onSelectItems(Array.from(nextSelection));
   }
 
   useEffect(() => {
     const visibleSelectedIds = sortedRows
-      .map((row) => row.item.id)
+      .map(mediaBinRowId)
       .filter((itemId) => selectedIds.has(itemId));
     if (visibleSelectedIds.length === 0) {
       selectionAnchorRef.current = null;
@@ -609,8 +683,8 @@ export function MediaBinTable({
       requestAnimationFrame(() => {
         const root = selectionRootRef.current;
         const item = root
-          ? Array.from(root.querySelectorAll<HTMLElement>("[data-media-item-id]")).find(
-              (element) => element.dataset.mediaItemId === itemId,
+          ? Array.from(root.querySelectorAll<HTMLElement>("[data-media-entry-id]")).find(
+              (element) => element.dataset.mediaEntryId === itemId,
             )
           : null;
         item?.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -622,7 +696,7 @@ export function MediaBinTable({
         return;
       }
       const target = event.target as HTMLElement | null;
-      if (target !== panel && !target?.closest("[data-media-item-id]")) {
+      if (target !== panel && !target?.closest("[data-media-entry-id]")) {
         return;
       }
       const direction =
@@ -637,9 +711,9 @@ export function MediaBinTable({
 
       event.preventDefault();
       const focusedIndex = selectionFocusRef.current
-        ? sortedRows.findIndex((row) => row.item.id === selectionFocusRef.current)
+        ? sortedRows.findIndex((row) => mediaBinRowId(row) === selectionFocusRef.current)
         : -1;
-      const selectedIndex = sortedRows.findIndex((row) => selectedIds.has(row.item.id));
+      const selectedIndex = sortedRows.findIndex((row) => selectedIds.has(mediaBinRowId(row)));
       const currentIndex = focusedIndex >= 0 ? focusedIndex : selectedIndex;
       const step =
         viewMode === "grid" && (event.key === "ArrowUp" || event.key === "ArrowDown")
@@ -651,8 +725,9 @@ export function MediaBinTable({
             ? 0
             : sortedRows.length - 1
           : clamp(currentIndex + direction * step, 0, sortedRows.length - 1);
-      const targetId = sortedRows[targetIndex].item.id;
+      const targetId = mediaBinRowId(sortedRows[targetIndex]);
       selectionFocusRef.current = targetId;
+      onEntryFocused(targetId);
 
       if (!event.shiftKey) {
         selectionAnchorRef.current = targetId;
@@ -662,17 +737,17 @@ export function MediaBinTable({
       }
 
       const anchorIndex = selectionAnchorRef.current
-        ? sortedRows.findIndex((row) => row.item.id === selectionAnchorRef.current)
+        ? sortedRows.findIndex((row) => mediaBinRowId(row) === selectionAnchorRef.current)
         : -1;
       const resolvedAnchorIndex =
         anchorIndex >= 0 ? anchorIndex : Math.max(currentIndex, targetIndex);
-      selectionAnchorRef.current = sortedRows[resolvedAnchorIndex].item.id;
+      selectionAnchorRef.current = mediaBinRowId(sortedRows[resolvedAnchorIndex]);
       const start = Math.min(resolvedAnchorIndex, targetIndex);
       const end = Math.max(resolvedAnchorIndex, targetIndex);
       const nextSelection =
         event.ctrlKey || event.metaKey ? new Set(selectedIds) : new Set<string>();
       for (const row of sortedRows.slice(start, end + 1)) {
-        nextSelection.add(row.item.id);
+        nextSelection.add(mediaBinRowId(row));
       }
       onSelectItems(Array.from(nextSelection));
       scrollItemIntoView(targetId);
@@ -680,7 +755,15 @@ export function MediaBinTable({
 
     panel.addEventListener("keydown", handleSelectionKeyDown);
     return () => panel.removeEventListener("keydown", handleSelectionKeyDown);
-  }, [gridLayout.columns, onSelectItems, onSelectOnly, selectedIds, sortedRows, viewMode]);
+  }, [
+    gridLayout.columns,
+    onEntryFocused,
+    onSelectItems,
+    onSelectOnly,
+    selectedIds,
+    sortedRows,
+    viewMode,
+  ]);
 
   function startMarqueeSelection(event: ReactPointerEvent<HTMLDivElement>) {
     const surface = event.currentTarget;
@@ -693,7 +776,7 @@ export function MediaBinTable({
       event.button !== 0 ||
       sortedRows.length === 0 ||
       pointsAtScrollbar ||
-      (event.target as HTMLElement | null)?.closest("[data-media-item-id]")
+      (event.target as HTMLElement | null)?.closest("[data-media-entry-id]")
     ) {
       return;
     }
@@ -721,7 +804,7 @@ export function MediaBinTable({
       const top = Math.min(startY, currentY);
       const bottom = Math.max(startY, currentY);
       const hitIds = new Set(
-        Array.from(surface.querySelectorAll<HTMLElement>("[data-media-item-id]"))
+        Array.from(surface.querySelectorAll<HTMLElement>("[data-media-entry-id]"))
           .filter((element) => {
             const bounds = element.getBoundingClientRect();
             return (
@@ -731,7 +814,7 @@ export function MediaBinTable({
               bounds.top <= bottom
             );
           })
-          .map((element) => element.dataset.mediaItemId)
+          .map((element) => element.dataset.mediaEntryId)
           .filter((itemId): itemId is string => Boolean(itemId)),
       );
       const nextSelection =
@@ -756,13 +839,15 @@ export function MediaBinTable({
       }
       let lastHitId: string | undefined;
       for (const row of sortedRows) {
-        if (hitIds.has(row.item.id)) {
-          lastHitId = row.item.id;
+        const entryId = mediaBinRowId(row);
+        if (hitIds.has(entryId)) {
+          lastHitId = entryId;
         }
       }
       if (lastHitId && nextSelection.has(lastHitId)) {
         selectionAnchorRef.current = lastHitId;
         selectionFocusRef.current = lastHitId;
+        onEntryFocused(lastHitId);
       } else if (nextSelection.size === 0) {
         selectionAnchorRef.current = null;
         selectionFocusRef.current = null;
@@ -860,6 +945,8 @@ export function MediaBinTable({
     }
     cancelPendingTitleRename();
     setEditingItemId(null);
+    setEditingFolderId(null);
+    onFinishRenameFolder();
   }, [isReadOnly]);
 
   useEffect(() => {
@@ -1097,24 +1184,49 @@ export function MediaBinTable({
       .join(" ");
   }
 
-  function beginTitleRename(item: MediaBinItem) {
+  function beginTitleRename(entry: MediaBinItem | MediaBinFolder) {
     if (isReadOnly) {
       return;
     }
     cancelPendingTitleRename();
-    setRenameValue(item.file_name);
-    setEditingItemId(item.id);
+    if ("file_name" in entry) {
+      setRenameValue(entry.file_name);
+      setEditingFolderId(null);
+      setEditingItemId(entry.id);
+    } else {
+      setRenameValue(entry.name);
+      setEditingItemId(null);
+      setEditingFolderId(entry.id);
+    }
   }
 
-  function scheduleTitleRename(item: MediaBinItem) {
+  function scheduleTitleRename(entry: MediaBinItem | MediaBinFolder) {
     if (isReadOnly) {
       return;
     }
     cancelPendingTitleRename();
     pendingTitleRenameRef.current = window.setTimeout(() => {
       pendingTitleRenameRef.current = null;
-      beginTitleRename(item);
+      beginTitleRename(entry);
     }, titleRenameDelayMs);
+  }
+
+  function handleTitleCellClick(
+    event: ReactMouseEvent<HTMLElement>,
+    entry: MediaBinItem | MediaBinFolder,
+    selected: boolean,
+  ) {
+    if (suppressRowClickRef.current) {
+      return;
+    }
+    activateCell(entry.id, "title");
+    if (selected && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+      if (!isReadOnly && event.detail === 1) {
+        scheduleTitleRename(entry);
+      } else {
+        cancelPendingTitleRename();
+      }
+    }
   }
 
   function finishTitleRename(item: MediaBinItem, commit: boolean) {
@@ -1127,6 +1239,19 @@ export function MediaBinTable({
       onRenameItem(item.id, nextName);
     }
     setEditingItemId(null);
+  }
+
+  function finishFolderRename(folder: MediaBinFolder, commit: boolean) {
+    cancelPendingTitleRename();
+    if (editingFolderId !== folder.id) {
+      return;
+    }
+    const nextName = renameValue.trim();
+    if (!isReadOnly && commit && nextName && nextName !== folder.name) {
+      onRenameFolder(folder.id, nextName);
+    }
+    setEditingFolderId(null);
+    onFinishRenameFolder();
   }
 
   function startColumnResize(
@@ -1195,7 +1320,16 @@ export function MediaBinTable({
     if (event.button !== 0 || (!allowBinding && !isMediaItemEnabled(item))) {
       return;
     }
-    const itemIds = selectedIds.has(item.id) ? Array.from(selectedIds) : [item.id];
+    const itemIds = selectedIds.has(item.id)
+      ? mediaItems
+          .filter((candidate) => selectedIds.has(candidate.id))
+          .map((candidate) => candidate.id)
+      : [item.id];
+    const folderIds = selectedIds.has(item.id)
+      ? rows.flatMap((row) =>
+          row.type === "folder" && selectedIds.has(row.folder.id) ? [row.folder.id] : [],
+        )
+      : [];
     const startX = event.clientX;
     const startY = event.clientY;
     let dragging = false;
@@ -1208,8 +1342,12 @@ export function MediaBinTable({
           : (element?.closest<HTMLElement>("[data-media-bind-video-id]") ?? null);
       const sourceTarget =
         element?.closest<HTMLElement>("[data-source-monitor-drop-target]") ?? null;
+      const folderTarget = isReadOnly
+        ? null
+        : (element?.closest<HTMLElement>("[data-media-folder-id]") ?? null);
       return {
         videoId: bindingTarget?.dataset.mediaBindVideoId ?? null,
+        folderId: folderTarget?.dataset.mediaFolderId ?? null,
         sourceTarget,
       };
     };
@@ -1225,6 +1363,7 @@ export function MediaBinTable({
       moveEvent.preventDefault();
       const target = targetFromPoint(moveEvent.clientX, moveEvent.clientY);
       setDropTargetVideoId(target.videoId);
+      setDropTargetFolderId(target.folderId);
       setPointerDragPreview({
         item,
         project: mediaItemProject(item, projects, mediaItems),
@@ -1239,6 +1378,7 @@ export function MediaBinTable({
       window.removeEventListener("pointercancel", onCancel);
       document.body.classList.remove("is-dragging-media-title");
       setDropTargetVideoId(null);
+      setDropTargetFolderId(null);
       setPointerDragPreview(null);
     };
 
@@ -1254,15 +1394,83 @@ export function MediaBinTable({
         const target = targetFromPoint(finishEvent.clientX, finishEvent.clientY);
         if (target.sourceTarget && item.kind === "video" && isMediaItemEnabled(item)) {
           onPreviewVideo(item.id);
+        } else if (target.folderId) {
+          onMoveEntriesToFolder(itemIds, folderIds, target.folderId);
         } else if (allowBinding && !isReadOnly && target.videoId) {
           void onBindItems(itemIds, target.videoId);
-        } else if (allowBinding && !isReadOnly && item.bound_to_video_id) {
-          onUnbindItems(itemIds);
+        } else if (!isReadOnly) {
+          onMoveEntriesToFolder(itemIds, folderIds, null);
         }
       }
       cleanup();
     };
 
+    const onUp = (upEvent: globalThis.PointerEvent) => finish(upEvent, false);
+    const onCancel = (cancelEvent: globalThis.PointerEvent) => finish(cancelEvent, true);
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onUp, { once: true });
+    window.addEventListener("pointercancel", onCancel, { once: true });
+  }
+
+  function startPointerFolderDrag(event: ReactPointerEvent<HTMLElement>, folder: MediaBinFolder) {
+    if (event.button !== 0 || isReadOnly) {
+      return;
+    }
+    const selectionIncludesFolder = selectedIds.has(folder.id);
+    const folderIds = selectionIncludesFolder
+      ? rows.flatMap((row) =>
+          row.type === "folder" && selectedIds.has(row.folder.id) ? [row.folder.id] : [],
+        )
+      : [folder.id];
+    const itemIds = selectionIncludesFolder
+      ? mediaItems.filter((item) => selectedIds.has(item.id)).map((item) => item.id)
+      : [];
+    const startX = event.clientX;
+    const startY = event.clientY;
+    let dragging = false;
+
+    const folderTargetFromPoint = (clientX: number, clientY: number) => {
+      const element = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+      return element?.closest<HTMLElement>("[data-media-folder-id]")?.dataset.mediaFolderId ?? null;
+    };
+    const onMove = (moveEvent: globalThis.PointerEvent) => {
+      if (!dragging && Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) < 4) {
+        return;
+      }
+      if (!dragging) {
+        dragging = true;
+        document.body.classList.add("is-dragging-media-title");
+      }
+      moveEvent.preventDefault();
+      const targetFolderId = folderTargetFromPoint(moveEvent.clientX, moveEvent.clientY);
+      setDropTargetFolderId(targetFolderId);
+      setPointerDragPreview({ folder, x: moveEvent.clientX, y: moveEvent.clientY });
+    };
+    const cleanup = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      document.body.classList.remove("is-dragging-media-title");
+      setDropTargetFolderId(null);
+      setPointerDragPreview(null);
+    };
+    const finish = (finishEvent: globalThis.PointerEvent, cancelled: boolean) => {
+      if (dragging) {
+        finishEvent.preventDefault();
+        suppressRowClickRef.current = true;
+        window.setTimeout(() => {
+          suppressRowClickRef.current = false;
+        }, 0);
+      }
+      if (dragging && !cancelled) {
+        onMoveEntriesToFolder(
+          itemIds,
+          folderIds,
+          folderTargetFromPoint(finishEvent.clientX, finishEvent.clientY),
+        );
+      }
+      cleanup();
+    };
     const onUp = (upEvent: globalThis.PointerEvent) => finish(upEvent, false);
     const onCancel = (cancelEvent: globalThis.PointerEvent) => finish(cancelEvent, true);
     window.addEventListener("pointermove", onMove, { passive: false });
@@ -1316,7 +1524,37 @@ export function MediaBinTable({
           style={gridStyle}
           onPointerDown={startMarqueeSelection}
         >
-          {sortedRows.map(({ item }) => {
+          {sortedRows.map((row) => {
+            if (row.type === "folder") {
+              const { folder } = row;
+              const expanded = expandedFolderIds.has(folder.id);
+              return (
+                <button
+                  type="button"
+                  role="listitem"
+                  key={folder.id}
+                  data-media-folder-id={folder.id}
+                  data-media-entry-id={folder.id}
+                  className={`media-bin-card media-bin-folder-card ${
+                    selectedIds.has(folder.id) ? "selected" : ""
+                  } ${dropTargetFolderId === folder.id ? "folder-drop-target" : ""}`}
+                  onPointerDown={(event) => startPointerFolderDrag(event, folder)}
+                  onClick={(event) => selectItem(event, folder.id)}
+                  onDoubleClick={() => onToggleFolder(folder.id)}
+                >
+                  <span className="media-bin-card-preview-shell">
+                    <span className="media-bin-card-preview folder">
+                      {expanded ? <FolderOpen aria-hidden="true" /> : <Folder aria-hidden="true" />}
+                    </span>
+                  </span>
+                  <span className="media-bin-card-meta">
+                    <span className="media-bin-card-name">{folder.name}</span>
+                    <span className="media-bin-card-duration">媒体箱</span>
+                  </span>
+                </button>
+              );
+            }
+            const { item } = row;
             const project = mediaItemProject(item, projects, mediaItems);
             const isVideoHovered = gridVideoHover?.itemId === item.id;
             const isSelected = selectedIds.has(item.id);
@@ -1341,6 +1579,7 @@ export function MediaBinTable({
                 role="listitem"
                 key={item.id}
                 data-media-item-id={item.id}
+                data-media-entry-id={item.id}
                 className={`media-bin-card ${isSelected ? "selected" : ""} ${
                   isMediaItemEnabled(item) ? "" : "is-disabled"
                 } ${isMediaItemOffline(item) ? "is-offline" : ""}`}
@@ -1526,23 +1765,173 @@ export function MediaBinTable({
             </div>
           ) : (
             <div className="media-bin-table-body" role="rowgroup">
-              {sortedRows.map(({ item, depth }, rowIndex) => {
+              {sortedRows.map((row, rowIndex) => {
+                if (row.type === "folder") {
+                  const { folder, depth } = row;
+                  const expanded = expandedFolderIds.has(folder.id);
+                  const selected = selectedIds.has(folder.id);
+                  return (
+                    <div
+                      key={folder.id}
+                      data-media-folder-id={folder.id}
+                      data-media-entry-id={folder.id}
+                      className={`media-bin-row media-bin-folder-row ${selected ? "selected" : ""} ${
+                        dropTargetFolderId === folder.id ? "folder-drop-target" : ""
+                      }`}
+                      role="row"
+                      onClick={(event) => {
+                        if (suppressRowClickRef.current) {
+                          event.preventDefault();
+                          return;
+                        }
+                        selectItem(event, folder.id);
+                      }}
+                    >
+                      <span
+                        className="media-bin-label-cell media-bin-folder-label-cell"
+                        role="cell"
+                        onClick={() => {
+                          cancelPendingTitleRename();
+                          setActiveCell(null);
+                        }}
+                      >
+                        <span
+                          className="media-bin-label-color"
+                          style={{ background: folder.color || "#596b91" }}
+                        />
+                        <button
+                          type="button"
+                          className={`media-bin-folder-toggle ${expanded ? "expanded" : ""}`}
+                          style={{
+                            right: `${14 * listIconScale - 15 - titleColumnLeadingSpace}px`,
+                            transform: `translateX(${depth * 22 * listIconScale}px)`,
+                          }}
+                          aria-label={`${expanded ? "折叠" : "展开"}${folder.name}`}
+                          aria-expanded={expanded}
+                          onPointerDown={(event) => event.stopPropagation()}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onToggleFolder(folder.id);
+                          }}
+                        >
+                          <ChevronRight aria-hidden="true" />
+                        </button>
+                      </span>
+                      <span
+                        className={cellClassName(
+                          folder.id,
+                          "title",
+                          selected,
+                          "media-bin-title-cell media-bin-folder-title-cell",
+                        )}
+                        role="cell"
+                        style={{
+                          paddingLeft: `${8 + titleColumnLeadingSpace + depth * 22 * listIconScale}px`,
+                        }}
+                        onPointerDown={(event) => {
+                          if (editingFolderId !== folder.id) {
+                            startPointerFolderDrag(event, folder);
+                          }
+                        }}
+                        onClick={(event) => handleTitleCellClick(event, folder, selected)}
+                        onDoubleClick={() => {
+                          cancelPendingTitleRename();
+                          beginTitleRename(folder);
+                        }}
+                      >
+                        <span className="media-bin-kind-icon folder">
+                          {expanded ? (
+                            <FolderOpen aria-hidden="true" />
+                          ) : (
+                            <Folder aria-hidden="true" />
+                          )}
+                        </span>
+                        {editingFolderId === folder.id ? (
+                          <input
+                            className="media-bin-title-editor"
+                            value={renameValue}
+                            aria-label="重命名媒体箱"
+                            autoFocus
+                            onFocus={(event) => event.currentTarget.select()}
+                            onChange={(event) => setRenameValue(event.currentTarget.value)}
+                            onPointerDown={(event) => event.stopPropagation()}
+                            onClick={(event) => event.stopPropagation()}
+                            onDoubleClick={(event) => event.stopPropagation()}
+                            onBlur={() => finishFolderRename(folder, true)}
+                            onKeyDown={(event) => {
+                              event.stopPropagation();
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                event.currentTarget.blur();
+                              } else if (event.key === "Escape") {
+                                event.preventDefault();
+                                finishFolderRename(folder, false);
+                              }
+                            }}
+                          />
+                        ) : (
+                          <span className="media-bin-name-copy" title={folder.name}>
+                            {folder.name}
+                          </span>
+                        )}
+                      </span>
+                      {(
+                        [
+                          "frameRate",
+                          "mediaStart",
+                          "mediaEnd",
+                          "duration",
+                          "videoInfo",
+                          "audioInfo",
+                        ] as ResizableColumnId[]
+                      ).map((columnId) => (
+                        <span
+                          key={columnId}
+                          className={cellClassName(
+                            folder.id,
+                            columnId,
+                            selected,
+                            "media-bin-folder-empty-cell",
+                          )}
+                          role="cell"
+                          onClick={() => activateCell(folder.id, columnId)}
+                        />
+                      ))}
+                      <span className="media-bin-folder-empty-cell" role="cell" />
+                      <span className="media-bin-boolean-cell" role="cell">
+                        <input
+                          type="checkbox"
+                          checked={folder.hidden === true}
+                          aria-label={`隐藏 ${folder.name}`}
+                          disabled={isReadOnly}
+                          onClick={(event) => event.stopPropagation()}
+                          onChange={(event) =>
+                            onSetFoldersHidden([folder.id], event.currentTarget.checked)
+                          }
+                        />
+                      </span>
+                    </div>
+                  );
+                }
+                const { item, depth, boundChild } = row;
                 const project = mediaItemProject(item, projects, mediaItems);
                 const selected = selectedIds.has(item.id);
                 const endUs = item.start_time_us + item.duration_us;
                 const targetVideoId = bindingTargetVideoId(item);
                 const nextRow = sortedRows[rowIndex + 1];
                 const isLastBoundChild =
-                  depth > 0 &&
+                  boundChild &&
                   (!nextRow ||
-                    nextRow.depth === 0 ||
+                    nextRow.type !== "item" ||
+                    !nextRow.boundChild ||
                     nextRow.item.bound_to_video_id !== item.bound_to_video_id);
                 return (
                   <div
                     key={item.id}
                     data-media-item-id={item.id}
+                    data-media-entry-id={item.id}
                     className={`media-bin-row ${selected ? "selected" : ""} ${
-                      depth ? "bound-child" : ""
+                      boundChild ? "bound-child" : ""
                     } ${isLastBoundChild ? "last-bound-child" : ""} ${
                       targetVideoId && dropTargetVideoId === targetVideoId ? "binding-target" : ""
                     } ${isMediaItemEnabled(item) ? "" : "is-disabled"} ${
@@ -1580,25 +1969,20 @@ export function MediaBinTable({
                     <span
                       className={cellClassName(item.id, "title", selected, "media-bin-title-cell")}
                       role="cell"
+                      style={{
+                        paddingLeft: `${
+                          8 +
+                          titleColumnLeadingSpace +
+                          (depth - (boundChild ? 1 : 0)) * 22 * listIconScale
+                        }px`,
+                      }}
                       data-media-bind-video-id={targetVideoId ?? undefined}
                       onPointerDown={(event) => {
                         if (editingItemId !== item.id) {
                           startPointerMediaDrag(event, item);
                         }
                       }}
-                      onClick={(event) => {
-                        if (suppressRowClickRef.current) {
-                          return;
-                        }
-                        activateCell(item.id, "title");
-                        if (selected && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
-                          if (!isReadOnly && event.detail === 1) {
-                            scheduleTitleRename(item);
-                          } else {
-                            cancelPendingTitleRename();
-                          }
-                        }
-                      }}
+                      onClick={(event) => handleTitleCellClick(event, item, selected)}
                       onDoubleClick={() => {
                         cancelPendingTitleRename();
                         if (!isReadOnly && item.kind !== "video") {
@@ -1606,7 +1990,7 @@ export function MediaBinTable({
                         }
                       }}
                     >
-                      {depth > 0 && <span className="media-bin-bind-branch" aria-hidden="true" />}
+                      {boundChild && <span className="media-bin-bind-branch" aria-hidden="true" />}
                       <span className={`media-bin-kind-icon ${item.kind}`}>
                         {itemIcon(item, project, isMediaVideoDetached(item, detachedVideoIds))}
                       </span>
@@ -1736,14 +2120,24 @@ export function MediaBinTable({
               transform: `translate(${pointerDragPreview.x + 12}px, ${pointerDragPreview.y + 10}px)`,
             }}
           >
-            <span className={`media-bin-kind-icon ${pointerDragPreview.item.kind}`}>
-              {itemIcon(
-                pointerDragPreview.item,
-                pointerDragPreview.project,
-                isMediaVideoDetached(pointerDragPreview.item, detachedVideoIds),
+            <span
+              className={`media-bin-kind-icon ${
+                pointerDragPreview.item?.kind ?? (pointerDragPreview.folder ? "folder" : "")
+              }`}
+            >
+              {pointerDragPreview.item ? (
+                itemIcon(
+                  pointerDragPreview.item,
+                  pointerDragPreview.project,
+                  isMediaVideoDetached(pointerDragPreview.item, detachedVideoIds),
+                )
+              ) : (
+                <Folder aria-hidden="true" />
               )}
             </span>
-            <span>{pointerDragPreview.item.file_name}</span>
+            <span>
+              {pointerDragPreview.item?.file_name ?? pointerDragPreview.folder?.name ?? ""}
+            </span>
           </div>,
           document.body,
         )}

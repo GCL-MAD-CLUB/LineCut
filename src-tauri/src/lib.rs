@@ -266,6 +266,8 @@ enum MediaBinItemOrigin {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MediaBinItem {
     id: String,
+    #[serde(default)]
+    bin_id: Option<String>,
     kind: MediaBinItemKind,
     enabled: bool,
     hidden: bool,
@@ -286,8 +288,22 @@ struct MediaBinItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct MediaBinFolder {
+    id: String,
+    name: String,
+    #[serde(default)]
+    parent_id: Option<String>,
+    #[serde(default)]
+    color: String,
+    #[serde(default)]
+    hidden: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ProjectMediaBinState {
     items: Vec<MediaBinItem>,
+    #[serde(default)]
+    folders: Vec<MediaBinFolder>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
