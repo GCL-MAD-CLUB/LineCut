@@ -44,6 +44,7 @@ import {
 } from "../../store";
 import { isTauriRuntime } from "../../tauriRuntime";
 import { usePanelActive, usePanelInstanceId } from "../../panelState";
+import { usePanelManagerState } from "../DockLayout";
 import type {
   AddExternalSubtitlesResult,
   DemuxMediaResult,
@@ -60,6 +61,7 @@ import "./MediaBin.css";
 import { MediaBinTable, type MediaBinTableRow } from "./MediaBinTable";
 import { activeMediaDragItemIds, markMediaDragHandled } from "./mediaDrag";
 import { setMediaBinClipboardItemCount, useMediaBinState } from "./mediaBinState";
+import { mediaBinPanelType } from "./panelTypes";
 
 const mediaDragType = "application/x-linecut-media";
 interface MediaBinClipboard {
@@ -82,7 +84,6 @@ interface MediaBinContextMenuState {
 
 interface MediaBinProps {
   rootFolderId?: string | null;
-  onOpenFolder?: (folderId: string) => void;
 }
 
 interface MediaLinkDialogState {
@@ -190,9 +191,10 @@ function readDraggedMediaIds(event: DragEvent) {
   }
 }
 
-export function MediaBin({ rootFolderId = null, onOpenFolder }: MediaBinProps) {
+export function MediaBin({ rootFolderId = null }: MediaBinProps) {
   const panelInstanceId = usePanelInstanceId();
   const panelActive = usePanelActive();
+  const openPanel = usePanelManagerState((state) => state.openPanel);
   const projects = useAppStore((state) => state.projects);
   const mediaFolders = useAppStore((state) => state.mediaFolders);
   const mediaItems = useAppStore((state) => state.mediaItems);
@@ -1305,7 +1307,13 @@ export function MediaBin({ rootFolderId = null, onOpenFolder }: MediaBinProps) {
             onSelectItems={selectItems}
             onEntryFocused={focusMediaBinEntry}
             onToggleFolder={toggleFolder}
-            onOpenFolder={(folderId) => onOpenFolder?.(folderId)}
+            onOpenFolder={(folderId) =>
+              openPanel({
+                type: mediaBinPanelType,
+                params: { rootFolderId: folderId },
+                placement: { sourcePanelId: panelInstanceId },
+              })
+            }
             onRenameFolder={mediaFolderRenamed}
             onFinishRenameFolder={() => setRenamingFolderId(null)}
             onMoveEntriesToFolder={moveEntriesToFolder}

@@ -1,15 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent, type WheelEvent } from "react";
+import { useEffect, useRef, useState, type PointerEvent, type WheelEvent } from "react";
 import "./DockLayout.css";
-import { PanelInstanceProvider } from "../../panelState";
 import { PopupMenu, PopupMenuItem, PopupMenuSeparator } from "../PopupMenu";
-import type {
-  DockAreaId,
-  DockLayoutState,
-  DockPanelDefinition,
-  DockPanelOpenRequest,
-} from "./types";
+import { dockAreaOrder, normalizeArea, usePanelManagerState } from "./PanelManager";
+import { PanelActions, PanelHost, PanelMenuItems, PanelTitle } from "./PanelRegistry";
+import type { DockAreaId } from "./types";
 
-const dockAreaOrder: DockAreaId[] = ["leftTop", "leftBottom", "right"];
 const DOCK_DRAG_LONG_PRESS_MS = 220;
 const RESIZER_SIZE_CSS_VAR = "--resizer-size";
 
@@ -22,59 +17,36 @@ function readCssPixelVariable(name: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-interface DockDragState<PanelId extends string> {
-  panelId: PanelId;
+interface DockDragState {
+  panelId: string;
   sourceAreaId: DockAreaId;
   timer: number | null;
   dragging: boolean;
 }
 
-interface DockDragPreview<PanelId extends string> {
-  panelId: PanelId;
+interface DockDragPreview {
+  panelId: string;
   x: number;
   y: number;
 }
 
-interface DockOverflowMenu<PanelId extends string> {
+interface DockOverflowMenu {
   areaId: DockAreaId;
-  activePanelId: PanelId | null;
+  activePanelId: string | null;
   x: number;
   y: number;
   width: number;
 }
 
-interface DockPanelMenu<PanelId extends string> {
+interface DockPanelMenu {
   areaId: DockAreaId;
-  panelId: PanelId;
+  panelId: string;
   x: number;
   y: number;
 }
 
-interface DockLayoutProps<PanelId extends string> {
-  panels: Array<DockPanelDefinition<PanelId>>;
-  initialLayout: DockLayoutState<PanelId>;
-  panelOpenRequest?: DockPanelOpenRequest<PanelId> | null;
-  onFocusedPanelChange?: (panelId: PanelId) => void;
-  onPanelClose?: (panelId: PanelId) => void;
-}
-
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
-}
-
-function normalizeArea<PanelId extends string>(
-  area: DockLayoutState<PanelId>["areas"][DockAreaId],
-) {
-  if (area.tabs.length === 0) {
-    return { tabs: area.tabs, activePanelId: null };
-  }
-  return {
-    tabs: area.tabs,
-    activePanelId:
-      area.activePanelId && area.tabs.includes(area.activePanelId)
-        ? area.activePanelId
-        : area.tabs[0],
-  };
 }
 
 function dockAreaFromPoint(clientX: number, clientY: number): DockAreaId | null {
@@ -86,102 +58,42 @@ function dockAreaFromPoint(clientX: number, clientY: number): DockAreaId | null 
   return null;
 }
 
-export function DockLayout<PanelId extends string>({
-  panels,
-  initialLayout,
-  panelOpenRequest,
-  onFocusedPanelChange,
-  onPanelClose,
-}: DockLayoutProps<PanelId>) {
+export function DockLayout() {
+  const instances = usePanelManagerState((state) => state.instances);
+  const layout = usePanelManagerState((state) => state.layout);
+  const activatePanel = usePanelManagerState((state) => state.activatePanel);
+  const focusPanel = usePanelManagerState((state) => state.focusPanel);
+  const movePanel = usePanelManagerState((state) => state.movePanel);
+  const closePanel = usePanelManagerState((state) => state.closePanel);
+  const closePanels = usePanelManagerState((state) => state.closePanels);
   const workspaceRef = useRef<HTMLElement | null>(null);
   const leftPaneRef = useRef<HTMLElement | null>(null);
-  const dragRef = useRef<DockDragState<PanelId> | null>(null);
+  const dragRef = useRef<DockDragState | null>(null);
   const dropTargetAreaRef = useRef<DockAreaId | null>(null);
-  const handledPanelOpenRequestRef = useRef<DockPanelOpenRequest<PanelId> | null>(null);
   const tabViewportRefs = useRef<Record<DockAreaId, HTMLDivElement | null>>({
     leftTop: null,
     leftBottom: null,
     right: null,
   });
-  const tabElementRefs = useRef<Record<DockAreaId, Map<PanelId, HTMLDivElement>>>({
+  const tabElementRefs = useRef<Record<DockAreaId, Map<string, HTMLDivElement>>>({
     leftTop: new Map(),
     leftBottom: new Map(),
     right: new Map(),
   });
-  const [layout, setLayout] = useState(initialLayout);
   const [leftPaneWidth, setLeftPaneWidth] = useState(100 / 2.8);
   const [previewPaneHeight, setPreviewPaneHeight] = useState(48);
   const [resizerSize] = useState(() => readCssPixelVariable(RESIZER_SIZE_CSS_VAR, 6));
-  const [dragPreview, setDragPreview] = useState<DockDragPreview<PanelId> | null>(null);
+  const [dragPreview, setDragPreview] = useState<DockDragPreview | null>(null);
   const [dropTargetAreaId, setDropTargetAreaId] = useState<DockAreaId | null>(null);
   const [tabsOverflow, setTabsOverflow] = useState<Record<DockAreaId, boolean>>({
     leftTop: false,
     leftBottom: false,
     right: false,
   });
-  const [overflowMenu, setOverflowMenu] = useState<DockOverflowMenu<PanelId> | null>(null);
-  const [panelMenu, setPanelMenu] = useState<DockPanelMenu<PanelId> | null>(null);
+  const [overflowMenu, setOverflowMenu] = useState<DockOverflowMenu | null>(null);
+  const [panelMenu, setPanelMenu] = useState<DockPanelMenu | null>(null);
 
-  const panelMap = useMemo(() => {
-    return new Map(panels.map((panel) => [panel.id, panel]));
-  }, [panels]);
-
-  useEffect(() => {
-    const validPanelIds = new Set(panelMap.keys());
-    setLayout((current) => {
-      let changed = false;
-      const areas = { ...current.areas };
-      for (const areaId of dockAreaOrder) {
-        const area = current.areas[areaId];
-        const tabs = area.tabs.filter((panelId) => validPanelIds.has(panelId));
-        if (tabs.length !== area.tabs.length) {
-          changed = true;
-          areas[areaId] = normalizeArea({ tabs, activePanelId: area.activePanelId });
-        }
-      }
-      return changed ? { areas } : current;
-    });
-  }, [panelMap]);
-
-  useEffect(() => {
-    if (
-      !panelOpenRequest ||
-      handledPanelOpenRequestRef.current === panelOpenRequest ||
-      !panelMap.has(panelOpenRequest.panelId)
-    ) {
-      return;
-    }
-    handledPanelOpenRequestRef.current = panelOpenRequest;
-    let targetAreaId: DockAreaId | null = null;
-    setLayout((current) => {
-      targetAreaId =
-        dockAreaOrder.find((areaId) =>
-          current.areas[areaId].tabs.includes(panelOpenRequest.sourcePanelId),
-        ) ?? null;
-      if (!targetAreaId) {
-        return current;
-      }
-      const areas = { ...current.areas };
-      for (const areaId of dockAreaOrder) {
-        const area = current.areas[areaId];
-        const tabs = area.tabs.filter((panelId) => panelId !== panelOpenRequest.panelId);
-        areas[areaId] = normalizeArea({ tabs, activePanelId: area.activePanelId });
-      }
-      areas[targetAreaId] = {
-        tabs: [...areas[targetAreaId].tabs, panelOpenRequest.panelId],
-        activePanelId: panelOpenRequest.panelId,
-      };
-      return { areas };
-    });
-    onFocusedPanelChange?.(panelOpenRequest.panelId);
-    requestAnimationFrame(() => {
-      if (targetAreaId) {
-        revealTabNow(targetAreaId, panelOpenRequest.panelId);
-      }
-    });
-  }, [panelMap, panelOpenRequest]);
-
-  function revealTabNow(areaId: DockAreaId, panelId: PanelId) {
+  function revealTabNow(areaId: DockAreaId, panelId: string) {
     const viewport = tabViewportRefs.current[areaId];
     const tab = tabElementRefs.current[areaId].get(panelId);
     if (!viewport || !tab) {
@@ -202,7 +114,7 @@ export function DockLayout<PanelId extends string>({
     }
   }
 
-  function revealTab(areaId: DockAreaId, panelId: PanelId) {
+  function revealTab(areaId: DockAreaId, panelId: string) {
     requestAnimationFrame(() => revealTabNow(areaId, panelId));
   }
 
@@ -247,23 +159,30 @@ export function DockLayout<PanelId extends string>({
 
     const animationFrame = requestAnimationFrame(measureOverflow);
     const resizeObserver = new ResizeObserver(measureOverflow);
+    const mutationObserver = new MutationObserver(measureOverflow);
     for (const areaId of dockAreaOrder) {
       const viewport = tabViewportRefs.current[areaId];
       if (viewport) {
         resizeObserver.observe(viewport);
+        mutationObserver.observe(viewport, {
+          childList: true,
+          characterData: true,
+          subtree: true,
+        });
       }
     }
     window.addEventListener("resize", measureOverflow);
     return () => {
       cancelAnimationFrame(animationFrame);
       resizeObserver.disconnect();
+      mutationObserver.disconnect();
       window.removeEventListener("resize", measureOverflow);
     };
-  }, [layout, panels]);
+  }, [layout, instances]);
 
   useEffect(() => {
     revealActiveTabs();
-  }, [layout, panels, leftPaneWidth, previewPaneHeight, tabsOverflow]);
+  }, [layout, instances, leftPaneWidth, previewPaneHeight, tabsOverflow]);
 
   useEffect(() => {
     if (!overflowMenu && !panelMenu) {
@@ -284,7 +203,7 @@ export function DockLayout<PanelId extends string>({
     };
   }, [overflowMenu, panelMenu]);
 
-  function setTabElementRef(areaId: DockAreaId, panelId: PanelId, element: HTMLDivElement | null) {
+  function setTabElementRef(areaId: DockAreaId, panelId: string, element: HTMLDivElement | null) {
     const refs = tabElementRefs.current[areaId];
     if (element) {
       refs.set(panelId, element);
@@ -293,51 +212,10 @@ export function DockLayout<PanelId extends string>({
     }
   }
 
-  function setActivePanel(areaId: DockAreaId, panelId: PanelId) {
-    onFocusedPanelChange?.(panelId);
-    setLayout((current) => ({
-      areas: {
-        ...current.areas,
-        [areaId]: {
-          ...current.areas[areaId],
-          activePanelId: panelId,
-        },
-      },
-    }));
+  function setActivePanel(areaId: DockAreaId, panelId: string) {
+    activatePanel(areaId, panelId);
     setOverflowMenu(null);
     revealTab(areaId, panelId);
-  }
-
-  function closePanels(areaId: DockAreaId, panelIds: Iterable<PanelId>) {
-    const area = normalizeArea(layout.areas[areaId]);
-    const closedPanelIds = new Set(panelIds);
-    if (closedPanelIds.size === 0) {
-      return;
-    }
-    const activeIndex = area.activePanelId ? area.tabs.indexOf(area.activePanelId) : 0;
-    const tabs = area.tabs.filter((tabPanelId) => !closedPanelIds.has(tabPanelId));
-    const activePanelId =
-      area.activePanelId && closedPanelIds.has(area.activePanelId)
-        ? (tabs[Math.min(Math.max(activeIndex, 0), tabs.length - 1)] ?? null)
-        : area.activePanelId;
-    setLayout((current) => ({
-      areas: {
-        ...current.areas,
-        [areaId]: { tabs, activePanelId },
-      },
-    }));
-    if (activePanelId) {
-      onFocusedPanelChange?.(activePanelId);
-      revealTab(areaId, activePanelId);
-    }
-    for (const panelId of closedPanelIds) {
-      onPanelClose?.(panelId);
-    }
-    setPanelMenu(null);
-  }
-
-  function closePanel(areaId: DockAreaId, panelId: PanelId) {
-    closePanels(areaId, [panelId]);
   }
 
   function cycleAreaPanel(areaId: DockAreaId, direction: -1 | 1) {
@@ -348,44 +226,8 @@ export function DockLayout<PanelId extends string>({
     const index = area.tabs.indexOf(area.activePanelId);
     const nextIndex = (index + direction + area.tabs.length) % area.tabs.length;
     const nextPanelId = area.tabs[nextIndex];
-    onFocusedPanelChange?.(nextPanelId);
+    activatePanel(areaId, nextPanelId);
     revealTab(areaId, nextPanelId);
-    setLayout((current) => {
-      return {
-        areas: {
-          ...current.areas,
-          [areaId]: {
-            ...current.areas[areaId],
-            activePanelId: nextPanelId,
-          },
-        },
-      };
-    });
-  }
-
-  function movePanel(panelId: PanelId, targetAreaId: DockAreaId) {
-    setLayout((current) => {
-      const nextAreas = { ...current.areas };
-      for (const areaId of dockAreaOrder) {
-        const area = current.areas[areaId];
-        const tabs = area.tabs.filter((tabPanelId) => tabPanelId !== panelId);
-        nextAreas[areaId] = normalizeArea({
-          tabs,
-          activePanelId: area.activePanelId === panelId ? (tabs[0] ?? null) : area.activePanelId,
-        });
-      }
-
-      const targetTabs = nextAreas[targetAreaId].tabs.includes(panelId)
-        ? nextAreas[targetAreaId].tabs
-        : [...nextAreas[targetAreaId].tabs, panelId];
-
-      nextAreas[targetAreaId] = {
-        tabs: targetTabs,
-        activePanelId: panelId,
-      };
-
-      return { areas: nextAreas };
-    });
   }
 
   function startHorizontalResize(event: PointerEvent<HTMLDivElement>) {
@@ -482,20 +324,16 @@ export function DockLayout<PanelId extends string>({
     setDropTargetAreaId(nextDropTarget);
   }
 
-  function startDockDrag(
-    event: PointerEvent<HTMLDivElement>,
-    areaId: DockAreaId,
-    panelId: PanelId,
-  ) {
+  function startDockDrag(event: PointerEvent<HTMLDivElement>, areaId: DockAreaId, panelId: string) {
     if (event.button !== 0) {
       return;
     }
-    onFocusedPanelChange?.(panelId);
+    focusPanel(panelId);
     event.preventDefault();
     event.stopPropagation();
     clearDockDragTimer();
 
-    const state: DockDragState<PanelId> = {
+    const state: DockDragState = {
       panelId,
       sourceAreaId: areaId,
       timer: null,
@@ -537,7 +375,7 @@ export function DockLayout<PanelId extends string>({
   function toggleOverflowMenu(
     event: PointerEvent<HTMLButtonElement>,
     areaId: DockAreaId,
-    activePanelId: PanelId | null,
+    activePanelId: string | null,
   ) {
     event.preventDefault();
     event.stopPropagation();
@@ -566,7 +404,7 @@ export function DockLayout<PanelId extends string>({
   function openPanelMenu(
     event: PointerEvent<HTMLButtonElement>,
     areaId: DockAreaId,
-    panelId: PanelId,
+    panelId: string,
   ) {
     event.preventDefault();
     event.stopPropagation();
@@ -578,7 +416,7 @@ export function DockLayout<PanelId extends string>({
 
   function renderDockWindow(areaId: DockAreaId) {
     const area = normalizeArea(layout.areas[areaId]);
-    const activePanel = area.activePanelId ? panelMap.get(area.activePanelId) : null;
+    const activePanel = area.activePanelId ? instances[area.activePanelId] : null;
 
     return (
       <section
@@ -599,39 +437,45 @@ export function DockLayout<PanelId extends string>({
                 <div className="dock-empty-tab">拖入面板</div>
               ) : (
                 area.tabs.map((panelId) => {
-                  const panel = panelMap.get(panelId);
-                  if (!panel) {
+                  if (!instances[panelId]) {
                     return null;
                   }
                   const isActive = panelId === area.activePanelId;
                   return (
-                    <div
-                      key={panelId}
-                      ref={(node) => setTabElementRef(areaId, panelId, node)}
-                      className={`dock-tab ${isActive ? "active" : ""}`}
-                      onClick={() => setActivePanel(areaId, panelId)}
-                      onPointerDown={(event) => startDockDrag(event, areaId, panelId)}
-                    >
-                      <button type="button" className="dock-tab-label" title={panel.title}>
-                        {panel.title}
-                      </button>
-                      <button
-                        type="button"
-                        className="dock-tab-grip"
-                        title="面板菜单"
-                        aria-label={`${panel.title} 面板菜单`}
-                        onPointerDown={(event) => openPanelMenu(event, areaId, panelId)}
-                      >
-                        <span />
-                      </button>
-                    </div>
+                    <PanelTitle key={panelId} instanceId={panelId}>
+                      {(title) => (
+                        <div
+                          ref={(node) => setTabElementRef(areaId, panelId, node)}
+                          className={`dock-tab ${isActive ? "active" : ""}`}
+                          onClick={() => setActivePanel(areaId, panelId)}
+                          onPointerDown={(event) => startDockDrag(event, areaId, panelId)}
+                        >
+                          <button type="button" className="dock-tab-label" title={title}>
+                            {title}
+                          </button>
+                          <button
+                            type="button"
+                            className="dock-tab-grip"
+                            title="面板菜单"
+                            aria-label={`${title} 面板菜单`}
+                            onPointerDown={(event) => openPanelMenu(event, areaId, panelId)}
+                          >
+                            <span />
+                          </button>
+                        </div>
+                      )}
+                    </PanelTitle>
                   );
                 })
               )}
             </div>
           </div>
           <div className="dock-tabbar-controls">
-            {activePanel?.actions && <div className="dock-tab-actions">{activePanel.actions}</div>}
+            {activePanel && (
+              <div className="dock-tab-actions">
+                <PanelActions instanceId={activePanel.id} />
+              </div>
+            )}
             {tabsOverflow[areaId] && (
               <button
                 type="button"
@@ -647,20 +491,17 @@ export function DockLayout<PanelId extends string>({
 
         <div className="dock-panel-content">
           {area.tabs.map((panelId) => {
-            const panel = panelMap.get(panelId);
-            if (!panel) {
+            if (!instances[panelId]) {
               return null;
             }
             return (
               <div
                 key={panelId}
                 className={`dock-panel-surface ${panelId === area.activePanelId ? "active" : ""}`}
-                onPointerDownCapture={() => onFocusedPanelChange?.(panelId)}
-                onFocusCapture={() => onFocusedPanelChange?.(panelId)}
+                onPointerDownCapture={() => focusPanel(panelId)}
+                onFocusCapture={() => focusPanel(panelId)}
               >
-                <PanelInstanceProvider instanceId={panelId} active={panelId === area.activePanelId}>
-                  {panel.render()}
-                </PanelInstanceProvider>
+                <PanelHost instanceId={panelId} active={panelId === area.activePanelId} />
               </div>
             );
           })}
@@ -721,7 +562,7 @@ export function DockLayout<PanelId extends string>({
             transform: `translate(${dragPreview.x + 12}px, ${dragPreview.y + 10}px)`,
           }}
         >
-          {panelMap.get(dragPreview.panelId)?.title ?? "面板"}
+          <PanelTitle instanceId={dragPreview.panelId}>{(title) => title}</PanelTitle>
         </div>
       )}
 
@@ -733,19 +574,25 @@ export function DockLayout<PanelId extends string>({
           onPointerDown={(event) => event.stopPropagation()}
           onContextMenu={(event) => event.preventDefault()}
         >
-          <PopupMenuItem onSelect={() => closePanel(panelMenu.areaId, panelMenu.panelId)}>
+          <PopupMenuItem
+            onSelect={() => {
+              closePanel(panelMenu.panelId);
+              setPanelMenu(null);
+            }}
+          >
             关闭面板
           </PopupMenuItem>
           <PopupMenuItem disabled>浮动面板</PopupMenuItem>
           <PopupMenuItem
-            onSelect={() =>
+            onSelect={() => {
               closePanels(
                 panelMenu.areaId,
                 normalizeArea(layout.areas[panelMenu.areaId]).tabs.filter(
                   (panelId) => panelId !== panelMenu.panelId,
                 ),
-              )
-            }
+              );
+              setPanelMenu(null);
+            }}
             disabled={normalizeArea(layout.areas[panelMenu.areaId]).tabs.length <= 1}
           >
             关闭组中的其他面板
@@ -754,16 +601,23 @@ export function DockLayout<PanelId extends string>({
             面板组设置
           </PopupMenuItem>
           <PopupMenuSeparator />
-          <PopupMenuItem onSelect={() => closePanel(panelMenu.areaId, panelMenu.panelId)}>
+          <PopupMenuItem
+            onSelect={() => {
+              closePanel(panelMenu.panelId);
+              setPanelMenu(null);
+            }}
+          >
             关闭
           </PopupMenuItem>
           <PopupMenuItem
-            onSelect={() =>
-              closePanels(panelMenu.areaId, normalizeArea(layout.areas[panelMenu.areaId]).tabs)
-            }
+            onSelect={() => {
+              closePanels(panelMenu.areaId, normalizeArea(layout.areas[panelMenu.areaId]).tabs);
+              setPanelMenu(null);
+            }}
           >
             全部关闭
           </PopupMenuItem>
+          <PanelMenuItems instanceId={panelMenu.panelId} closeMenu={() => setPanelMenu(null)} />
         </PopupMenu>
       )}
 
@@ -778,22 +632,24 @@ export function DockLayout<PanelId extends string>({
           onPointerDown={(event) => event.stopPropagation()}
         >
           {normalizeArea(layout.areas[overflowMenu.areaId]).tabs.map((panelId) => {
-            const panel = panelMap.get(panelId);
-            if (!panel) {
+            if (!instances[panelId]) {
               return null;
             }
             const isActive = panelId === overflowMenu.activePanelId;
             return (
-              <button
-                key={panelId}
-                type="button"
-                className={`dock-overflow-menu-item ${isActive ? "active" : ""}`}
-                title={panel.title}
-                onClick={() => setActivePanel(overflowMenu.areaId, panelId)}
-              >
-                <span className="dock-overflow-check">{isActive ? "✓" : ""}</span>
-                <span>{panel.title}</span>
-              </button>
+              <PanelTitle key={panelId} instanceId={panelId}>
+                {(title) => (
+                  <button
+                    type="button"
+                    className={`dock-overflow-menu-item ${isActive ? "active" : ""}`}
+                    title={title}
+                    onClick={() => setActivePanel(overflowMenu.areaId, panelId)}
+                  >
+                    <span className="dock-overflow-check">{isActive ? "✓" : ""}</span>
+                    <span>{title}</span>
+                  </button>
+                )}
+              </PanelTitle>
             );
           })}
         </div>

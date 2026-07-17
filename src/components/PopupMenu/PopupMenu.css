@@ -72,6 +72,13 @@
   stroke-width: 2.7;
 }
 
+.popup-menu-selection-dot {
+  width: 4px;
+  height: 4px;
+  background: currentColor;
+  border-radius: 50%;
+}
+
 .popup-menu-label {
   min-width: 0;
   overflow: hidden;

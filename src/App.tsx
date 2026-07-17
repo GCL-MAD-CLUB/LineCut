@@ -2,28 +2,27 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 import { Loader2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { appPanelRegistry, initialAppPanelState } from "./appPanelRegistry";
 import { emitAppEvent, useAppEvent } from "./appEvents";
 import { ApplicationMenu, type ApplicationMenuModel } from "./components/ApplicationMenu";
 import {
   DockLayout,
-  type DockPanelOpenRequest,
-  type DockLayoutState,
-  type DockPanelDefinition,
+  PanelManagerProvider,
+  PanelRegistryProvider,
+  usePanelManagerState,
 } from "./components/DockLayout";
-import { ExportPanel } from "./components/ExportPanel";
-import { HistoryPanel } from "./components/HistoryPanel";
+import { HistoryPanelServicesProvider } from "./components/HistoryPanel";
 import { ImportWorkspace } from "./components/ImportWorkspace";
-import { MediaBin } from "./components/MediaBin";
 import {
   useMediaBinClipboardItemCount,
   useMediaBinState,
 } from "./components/MediaBin/mediaBinState";
+import { mediaBinPanelType, type MediaBinPanelParams } from "./components/MediaBin";
 import { PreferencesDialog } from "./components/PreferencesDialog";
 import { ProxyCreationDialog } from "./components/ProxyCreationDialog";
 import { SecondaryTopbar } from "./components/SecondaryTopbar";
-import { SourceMonitor } from "./components/SourceMonitor";
-import { SubtitlePanel } from "./components/SubtitlePanel";
+import { subtitlePanelType } from "./components/SubtitlePanel";
 import { cancelAllTaskProgress, getTaskProgressStatus } from "./components/TaskProgress";
 import { runMediaImportTask } from "./mediaImportTask";
 import { getProjectWorkspaceSnapshot, subtitleTrackCues, useAppStore } from "./store";
@@ -138,24 +137,6 @@ function standaloneSubtitleItem(path: string, index: number): MediaBinItem {
   };
 }
 
-type StaticAppDockPanelId = "source" | "media" | "export" | "subtitles" | "history";
-type MediaFolderDockPanelId = `media-folder-panel:${string}`;
-type AppDockPanelId = StaticAppDockPanelId | MediaFolderDockPanelId;
-
-interface MediaFolderDockPanel {
-  id: MediaFolderDockPanelId;
-  folderId: string;
-}
-
-function isMediaDockPanelId(panelId: AppDockPanelId): boolean {
-  return panelId === "media" || panelId.startsWith("media-folder-panel:");
-}
-
-function newMediaFolderDockPanelId(): MediaFolderDockPanelId {
-  const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
-  return `media-folder-panel:${random}`;
-}
-
 const appWorkspaces = [
   { id: "import", label: "导入" },
   { id: "edit", label: "编辑" },
@@ -163,29 +144,10 @@ const appWorkspaces = [
 
 type AppWorkspace = (typeof appWorkspaces)[number]["id"];
 
-const initialDockLayout: DockLayoutState<AppDockPanelId> = {
-  areas: {
-    leftTop: {
-      tabs: ["source"],
-      activePanelId: "source",
-    },
-    leftBottom: {
-      tabs: ["media", "export"],
-      activePanelId: "media",
-    },
-    right: {
-      tabs: ["subtitles", "history"],
-      activePanelId: "subtitles",
-    },
-  },
-};
-
-export default function App() {
+function AppContent() {
   const [activeWorkspace, setActiveWorkspace] = useState<AppWorkspace>("edit");
-  const [focusedPanelId, setFocusedPanelId] = useState<AppDockPanelId>("source");
-  const [mediaFolderDockPanels, setMediaFolderDockPanels] = useState<MediaFolderDockPanel[]>([]);
-  const [dockPanelOpenRequest, setDockPanelOpenRequest] =
-    useState<DockPanelOpenRequest<AppDockPanelId> | null>(null);
+  const focusedPanelId = usePanelManagerState((state) => state.focusedPanelId);
+  const panelInstances = usePanelManagerState((state) => state.instances);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [historyNavigating, setHistoryNavigating] = useState(false);
   const [recentMediaPaths, setRecentMediaPaths] = useState(() =>
@@ -210,7 +172,8 @@ export default function App() {
   const exportResult = useAppStore((state) => state.exportResult);
   const isMediaBinReadOnly = useAppStore((state) => state.mediaBinReadOnly);
   const projectHistory = useAppStore((state) => state.projectHistory);
-  const focusedMediaPanelId = isMediaDockPanelId(focusedPanelId) ? focusedPanelId : "media";
+  const focusedPanel = focusedPanelId ? panelInstances[focusedPanelId] : undefined;
+  const focusedMediaPanelId = focusedPanel?.type === mediaBinPanelType ? focusedPanel.id : "media";
   const selectedMediaItemCount = useMediaBinState.useInstance(
     focusedMediaPanelId,
     (state) => state.selectedIds.size,
@@ -248,12 +211,12 @@ export default function App() {
         : [],
     [activeTrackId, activeVideoId, mediaItems, project, projects],
   );
-  const editScope = activeWorkspace === "edit" ? focusedPanelId : null;
-  const mediaEditScopeActive = editScope !== null && isMediaDockPanelId(editScope);
+  const editScope = activeWorkspace === "edit" ? focusedPanel : undefined;
+  const mediaEditScopeActive = editScope?.type === mediaBinPanelType;
   const focusedMediaFolderId = mediaEditScopeActive
-    ? (mediaFolderDockPanels.find((panel) => panel.id === focusedMediaPanelId)?.folderId ?? null)
+    ? (editScope.params as MediaBinPanelParams).rootFolderId
     : null;
-  const subtitleEditScopeActive = editScope === "subtitles";
+  const subtitleEditScopeActive = editScope?.type === subtitlePanelType;
   const canCopy = mediaEditScopeActive && selectedMediaItemCount > 0;
   const canPaste = mediaEditScopeActive && !isMediaBinReadOnly && mediaClipboardItemCount > 0;
   const canClear = mediaEditScopeActive && !isMediaBinReadOnly && selectedMediaItemCount > 0;
@@ -591,7 +554,7 @@ export default function App() {
   function selectAllInEditScope() {
     if (mediaEditScopeActive) {
       emitAppEvent("media:select-all", { instanceId: focusedMediaPanelId });
-    } else if (editScope === "subtitles") {
+    } else if (subtitleEditScopeActive) {
       emitAppEvent("subtitle:select-all");
     }
   }
@@ -599,7 +562,7 @@ export default function App() {
   function clearSelectionInEditScope() {
     if (mediaEditScopeActive) {
       emitAppEvent("media:clear-selection", { instanceId: focusedMediaPanelId });
-    } else if (editScope === "subtitles") {
+    } else if (subtitleEditScopeActive) {
       emitAppEvent("subtitle:clear-selection");
     }
   }
@@ -835,120 +798,9 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleShortcut);
   });
 
-  const openMediaFolderPanel = useCallback((folderId: string, sourcePanelId: AppDockPanelId) => {
-    const panel: MediaFolderDockPanel = {
-      id: newMediaFolderDockPanelId(),
-      folderId,
-    };
-    setMediaFolderDockPanels((current) => [...current, panel]);
-    setDockPanelOpenRequest({ panelId: panel.id, sourcePanelId });
-  }, []);
-
-  const closeDockPanel = useCallback((panelId: AppDockPanelId) => {
-    if (!panelId.startsWith("media-folder-panel:")) {
-      return;
-    }
-    setMediaFolderDockPanels((current) => current.filter((panel) => panel.id !== panelId));
-  }, []);
-
-  useEffect(() => {
-    const validFolderIds = new Set(mediaFolders.map((folder) => folder.id));
-    setMediaFolderDockPanels((current) => {
-      const next = current.filter((panel) => validFolderIds.has(panel.folderId));
-      return next.length === current.length ? current : next;
-    });
-  }, [mediaFolders]);
-
-  useEffect(() => {
-    if (
-      focusedPanelId.startsWith("media-folder-panel:") &&
-      !mediaFolderDockPanels.some((panel) => panel.id === focusedPanelId)
-    ) {
-      setFocusedPanelId("media");
-    }
-  }, [focusedPanelId, mediaFolderDockPanels]);
-
-  const dockPanels = useMemo<Array<DockPanelDefinition<AppDockPanelId>>>(
-    () => [
-      {
-        id: "source",
-        title: `源：${project?.asset.file_name ?? "（无剪辑）"}`,
-        render: () => <SourceMonitor />,
-      },
-      {
-        id: "media",
-        title: `项目：${
-          projectFilePath
-            ?.split(/[\\/]/)
-            .pop()
-            ?.replace(/\.lcp$/i, "") ?? "未命名项目"
-        }`,
-        render: () => (
-          <MediaBin onOpenFolder={(folderId) => openMediaFolderPanel(folderId, "media")} />
-        ),
-      },
-      {
-        id: "export",
-        title: "导出设置",
-        render: () => <ExportPanel />,
-      },
-      {
-        id: "subtitles",
-        title: "字幕轨",
-        render: () => <SubtitlePanel />,
-      },
-      {
-        id: "history",
-        title: "历史记录",
-        render: () => (
-          <HistoryPanel
-            disabled={isBusy}
-            onNavigate={navigateProjectHistory}
-            onDelete={deleteCurrentHistoryBranch}
-          />
-        ),
-      },
-      ...mediaFolderDockPanels.flatMap((folderPanel) => {
-        const folder = mediaFolders.find((candidate) => candidate.id === folderPanel.folderId);
-        return folder
-          ? [
-              {
-                id: folderPanel.id,
-                title: `媒体箱：${folder.name}`,
-                render: () => (
-                  <MediaBin
-                    rootFolderId={folder.id}
-                    onOpenFolder={(folderId) => openMediaFolderPanel(folderId, folderPanel.id)}
-                  />
-                ),
-              } satisfies DockPanelDefinition<AppDockPanelId>,
-            ]
-          : [];
-      }),
-    ],
-    [
-      isBusy,
-      mediaFolderDockPanels,
-      mediaFolders,
-      openMediaFolderPanel,
-      project,
-      projectFilePath,
-      projectHistory,
-      projectHistoryFutureDiscarded,
-    ],
-  );
-
   const workspaceContent: Record<AppWorkspace, ReactNode> = {
     import: <ImportWorkspace onImportCompleted={() => setActiveWorkspace("edit")} />,
-    edit: (
-      <DockLayout
-        panels={dockPanels}
-        initialLayout={initialDockLayout}
-        panelOpenRequest={dockPanelOpenRequest}
-        onFocusedPanelChange={setFocusedPanelId}
-        onPanelClose={closeDockPanel}
-      />
-    ),
+    edit: <DockLayout />,
   };
 
   const applicationMenuModel: ApplicationMenuModel = {
@@ -1012,57 +864,75 @@ export default function App() {
   };
 
   return (
-    <div className="app-shell">
-      <header className="application-menubar">
-        <ApplicationMenu model={applicationMenuModel} />
-      </header>
+    <HistoryPanelServicesProvider
+      services={{
+        disabled: isBusy,
+        navigate: navigateProjectHistory,
+        deleteEntry: deleteCurrentHistoryBranch,
+      }}
+    >
+      <div className="app-shell">
+        <header className="application-menubar">
+          <ApplicationMenu model={applicationMenuModel} />
+        </header>
 
-      <SecondaryTopbar
-        projectFilePath={projectFilePath}
-        hasProjectMedia={Boolean(project)}
-        isProjectDirty={projectDirty}
-        workspaces={appWorkspaces}
-        activeWorkspace={activeWorkspace}
-        isWorkspaceSwitchingDisabled={isBusy}
-        onWorkspaceChange={setActiveWorkspace}
-      />
+        <SecondaryTopbar
+          projectFilePath={projectFilePath}
+          hasProjectMedia={Boolean(project)}
+          isProjectDirty={projectDirty}
+          workspaces={appWorkspaces}
+          activeWorkspace={activeWorkspace}
+          isWorkspaceSwitchingDisabled={isBusy}
+          onWorkspaceChange={setActiveWorkspace}
+        />
 
-      {workspaceContent[activeWorkspace]}
+        {workspaceContent[activeWorkspace]}
 
-      <footer className="statusbar">
-        <span className={runningTasks.length > 0 ? "busy-status" : ""}>
-          {runningTasks.length > 0 ? (
-            <>
-              <Loader2 className="spin" size={14} />
-              {activeStatusLabel}
-            </>
-          ) : (
-            message
+        <footer className="statusbar">
+          <span className={runningTasks.length > 0 ? "busy-status" : ""}>
+            {runningTasks.length > 0 ? (
+              <>
+                <Loader2 className="spin" size={14} />
+                {activeStatusLabel}
+              </>
+            ) : (
+              message
+            )}
+          </span>
+          {warnings.length > 0 && <span>{warnings.length} 条导入提示</span>}
+          {exportResult && (
+            <span title={exportResult.files.join("\n")}>{exportResult.output_dir}</span>
           )}
-        </span>
-        {warnings.length > 0 && <span>{warnings.length} 条导入提示</span>}
-        {exportResult && (
-          <span title={exportResult.files.join("\n")}>{exportResult.output_dir}</span>
+        </footer>
+
+        {(warnings.length > 0 || exportResult) && (
+          <aside className="event-drawer">
+            {warnings.map((warning) => (
+              <div key={warning} className="event warning">
+                {warning}
+              </div>
+            ))}
+            {exportResult?.log.map((item) => (
+              <div key={item} className="event">
+                {item}
+              </div>
+            ))}
+          </aside>
         )}
-      </footer>
 
-      {(warnings.length > 0 || exportResult) && (
-        <aside className="event-drawer">
-          {warnings.map((warning) => (
-            <div key={warning} className="event warning">
-              {warning}
-            </div>
-          ))}
-          {exportResult?.log.map((item) => (
-            <div key={item} className="event">
-              {item}
-            </div>
-          ))}
-        </aside>
-      )}
+        <ProxyCreationDialog />
+        <PreferencesDialog open={preferencesOpen} onClose={() => setPreferencesOpen(false)} />
+      </div>
+    </HistoryPanelServicesProvider>
+  );
+}
 
-      <ProxyCreationDialog />
-      <PreferencesDialog open={preferencesOpen} onClose={() => setPreferencesOpen(false)} />
-    </div>
+export default function App() {
+  return (
+    <PanelRegistryProvider registry={appPanelRegistry}>
+      <PanelManagerProvider initialState={initialAppPanelState}>
+        <AppContent />
+      </PanelManagerProvider>
+    </PanelRegistryProvider>
   );
 }

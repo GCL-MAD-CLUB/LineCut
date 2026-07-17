@@ -1,5 +1,17 @@
 import { Check, ChevronRight } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  Children,
+  Fragment,
+  createContext,
+  isValidElement,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import type {
   CSSProperties,
@@ -214,6 +226,7 @@ interface PopupMenuItemProps {
   shortcut?: string;
   mnemonic?: string;
   checked?: boolean;
+  indicator?: "check" | "dot";
   disabled?: boolean;
   submenu?: boolean;
   title?: string;
@@ -225,6 +238,7 @@ export function PopupMenuItem({
   shortcut,
   mnemonic,
   checked,
+  indicator = "check",
   disabled,
   submenu,
   title,
@@ -234,7 +248,13 @@ export function PopupMenuItem({
     <button
       type="button"
       className="popup-menu-item"
-      role={checked === undefined ? "menuitem" : "menuitemcheckbox"}
+      role={
+        checked === undefined
+          ? "menuitem"
+          : indicator === "dot"
+            ? "menuitemradio"
+            : "menuitemcheckbox"
+      }
       aria-checked={checked}
       aria-keyshortcuts={mnemonic}
       data-popup-menu-mnemonic={mnemonic?.toLocaleLowerCase()}
@@ -242,7 +262,14 @@ export function PopupMenuItem({
       title={title}
       onClick={() => void onSelect?.()}
     >
-      <span className="popup-menu-check">{checked === true && <Check aria-hidden="true" />}</span>
+      <span className="popup-menu-check">
+        {checked === true &&
+          (indicator === "dot" ? (
+            <span className="popup-menu-selection-dot" aria-hidden="true" />
+          ) : (
+            <Check aria-hidden="true" />
+          ))}
+      </span>
       <span className="popup-menu-label">{children}</span>
       {shortcut ? <kbd>{shortcut}</kbd> : <span />}
       {submenu && <ChevronRight className="popup-menu-submenu-icon" aria-hidden="true" />}
@@ -252,6 +279,151 @@ export function PopupMenuItem({
 
 export function PopupMenuSeparator() {
   return <div className="popup-menu-separator" role="separator" />;
+}
+
+interface PopupMenuSelectionGroupValue {
+  selectedValue: string | null;
+  selectValue: (value: string) => void;
+}
+
+const PopupMenuSelectionGroupContext = createContext<PopupMenuSelectionGroupValue | null>(null);
+
+interface PopupMenuSelectionItemMetadata {
+  value: string;
+  disabled: boolean;
+}
+
+function selectionItemMetadata(children: ReactNode): PopupMenuSelectionItemMetadata[] {
+  const items: PopupMenuSelectionItemMetadata[] = [];
+  const collect = (nodes: ReactNode) => {
+    Children.forEach(nodes, (child) => {
+      if (!isValidElement<PopupMenuSelectionItemProps>(child)) {
+        return;
+      }
+      if (child.type === Fragment) {
+        collect(child.props.children);
+        return;
+      }
+      if (child.type === PopupMenuSelectionItem) {
+        items.push({ value: child.props.value, disabled: child.props.disabled === true });
+      }
+    });
+  };
+  collect(children);
+  return items;
+}
+
+interface PopupMenuSelectionGroupProps {
+  children: ReactNode;
+  defaultValue?: string;
+  onValueChange?: (value: string) => void;
+}
+
+/**
+ * A self-contained radio group for popup menus. It always renders separators
+ * above and below its items and owns the selected value internally.
+ */
+export function PopupMenuSelectionGroup({
+  children,
+  defaultValue,
+  onValueChange,
+}: PopupMenuSelectionGroupProps) {
+  const items = useMemo(() => selectionItemMetadata(children), [children]);
+  const duplicateValue = items.find(
+    (item, index) => items.findIndex((candidate) => candidate.value === item.value) !== index,
+  )?.value;
+  if (duplicateValue) {
+    throw new Error(`PopupMenuSelectionItem value "${duplicateValue}" must be unique.`);
+  }
+  const itemKey = items.map((item) => `${item.value}:${item.disabled}`).join("\u0000");
+  const initialValueRef = useRef<string | null | undefined>(undefined);
+  if (initialValueRef.current === undefined) {
+    initialValueRef.current =
+      items.find((item) => item.value === defaultValue && !item.disabled)?.value ??
+      items.find((item) => !item.disabled)?.value ??
+      items[0]?.value ??
+      null;
+  }
+  const [selectedValue, setSelectedValue] = useState(initialValueRef.current);
+  const selectedValueRef = useRef(selectedValue);
+
+  useEffect(() => {
+    const selectedItem = items.find((item) => item.value === selectedValueRef.current);
+    if (selectedItem && !selectedItem.disabled) {
+      return;
+    }
+    const fallbackValue = items.find((item) => !item.disabled)?.value ?? items[0]?.value ?? null;
+    selectedValueRef.current = fallbackValue;
+    setSelectedValue(fallbackValue);
+  }, [itemKey, items]);
+
+  const selectValue = useCallback(
+    (value: string) => {
+      if (selectedValueRef.current === value) {
+        return;
+      }
+      selectedValueRef.current = value;
+      setSelectedValue(value);
+      onValueChange?.(value);
+    },
+    [onValueChange],
+  );
+
+  if (items.length === 0) {
+    return null;
+  }
+
+  return (
+    <>
+      <PopupMenuSeparator />
+      <PopupMenuSelectionGroupContext.Provider value={{ selectedValue, selectValue }}>
+        {children}
+      </PopupMenuSelectionGroupContext.Provider>
+      <PopupMenuSeparator />
+    </>
+  );
+}
+
+interface PopupMenuSelectionItemProps {
+  value: string;
+  children: ReactNode;
+  shortcut?: string;
+  mnemonic?: string;
+  disabled?: boolean;
+  title?: string;
+  onSelect?: () => void | Promise<void>;
+}
+
+export function PopupMenuSelectionItem({
+  value,
+  children,
+  shortcut,
+  mnemonic,
+  disabled,
+  title,
+  onSelect,
+}: PopupMenuSelectionItemProps) {
+  const group = useContext(PopupMenuSelectionGroupContext);
+  if (!group) {
+    throw new Error("PopupMenuSelectionItem must be used inside PopupMenuSelectionGroup.");
+  }
+
+  return (
+    <PopupMenuItem
+      shortcut={shortcut}
+      mnemonic={mnemonic}
+      checked={group.selectedValue === value}
+      indicator="dot"
+      disabled={disabled}
+      title={title}
+      onSelect={() => {
+        group.selectValue(value);
+        return onSelect?.();
+      }}
+    >
+      {children}
+    </PopupMenuItem>
+  );
 }
 
 interface PopupMenuSubmenuProps {

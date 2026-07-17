@@ -16,6 +16,14 @@ interface PanelStateHook<State extends object> {
   useInstance: <Selection>(instanceId: string, selector: (state: State) => Selection) => Selection;
 }
 
+const panelStateDisposers = new Set<(instanceId: string) => void>();
+
+export function disposePanelInstanceState(instanceId: string) {
+  for (const dispose of panelStateDisposers) {
+    dispose(instanceId);
+  }
+}
+
 export function PanelInstanceProvider({
   instanceId,
   active = true,
@@ -44,6 +52,7 @@ export function createPanelState<State extends object>(
   initializer: (instanceId: string) => StateCreator<State, [], []>,
 ) {
   const stores = new Map<string, StoreApi<State>>();
+  panelStateDisposers.add((instanceId) => stores.delete(instanceId));
 
   function getStore(instanceId: string) {
     let store = stores.get(instanceId);
