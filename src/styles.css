@@ -524,6 +524,31 @@ select {
   color: var(--color-warning);
 }
 
+.error-dialog {
+  width: min(368px, calc(100vw - 48px));
+}
+
+.error-dialog-body {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 20px;
+}
+
+.error-dialog-icon {
+  width: 24px;
+  height: 24px;
+  color: var(--color-warning);
+}
+
+.error-dialog-body p {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .modal-backdrop {
   position: absolute;
   inset: 0;

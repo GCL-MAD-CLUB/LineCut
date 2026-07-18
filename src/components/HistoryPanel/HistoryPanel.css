@@ -168,36 +168,40 @@
   height: 14px;
 }
 
+.history-delete-dialog {
+  width: min(368px, calc(100vw - 48px));
+}
+
+.history-delete-dialog .modal-dialog-body {
+  padding: 20px;
+}
+
 .history-delete-dialog-message {
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr);
+  grid-template-columns: 30px minmax(0, 1fr);
   align-items: start;
-  gap: 8px;
-  margin: 0 20px;
-  padding: 10px 12px;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
   color: var(--color-text);
-  font-size: 12px;
-  background: var(--color-surface-soft);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
+  font-size: 13px;
 }
 
 .history-delete-dialog-message > svg {
-  align-self: center;
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   color: #c45a5a;
 }
 
 .history-delete-dialog-message strong,
 .history-delete-dialog-message span {
-  margin-left: 8px;
+  margin-left: 0;
   display: block;
 }
 
 .history-delete-dialog-message strong {
   color: var(--color-text-highlight);
-  margin-top: 4px;
+  margin-top: 0;
   font-weight: 500;
 }
 

@@ -22,7 +22,7 @@ interface MediaLinkDialogProps {
   mode: MediaLinkMode;
   onAttach: (candidate: MediaLinkCandidate, path: string) => Promise<boolean>;
   onCancel: () => void;
-  onError?: (message: string) => void;
+  onError?: (error: unknown) => void;
 }
 
 const videoExtensions = ["mp4", "mov", "mkv", "avi", "webm", "m4v", "mts", "m2ts"];
@@ -184,7 +184,7 @@ export function MediaLinkDialog({
         onCancel();
       }
     } catch (error) {
-      onError?.(error instanceof Error ? error.message : String(error));
+      onError?.(error);
     } finally {
       setBusy(false);
     }

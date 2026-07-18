@@ -164,9 +164,8 @@ export function ProxyCreationDialog() {
         setMessage("代理生成已取消");
         return;
       }
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      proxyTask.fail("生成代理失败", errorMessage);
-      setMessage(errorMessage);
+      proxyTask.fail("生成代理失败", error);
+      setMessage("生成代理失败，请检查设置后重试。");
     }
   }
 

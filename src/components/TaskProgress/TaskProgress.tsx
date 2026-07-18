@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import { useMemo, useSyncExternalStore, type ReactNode } from "react";
+import { reportError } from "../../errorReporting";
 import "./TaskProgress.css";
 
 export interface CreateTaskProgressOptions {
@@ -25,7 +26,7 @@ export type TaskProgressListener = (
 export interface TaskProgressHandle {
   update: (update: TaskProgressUpdate) => void;
   remove: () => void;
-  fail: (errorName: string, errorMessage: string) => void;
+  fail: (errorName: string, error: unknown) => void;
 }
 
 export interface TaskProgressView {
@@ -75,6 +76,8 @@ let snapshot: TaskProgressSnapshot = {
   tasks: [],
   errors: [],
 };
+
+const taskFailureMessage = "操作未完成，请稍后重试。";
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -138,7 +141,8 @@ async function stopTaskListener(task: TaskProgressRecord) {
   try {
     await cleanup();
   } catch (error) {
-    addError("停止任务监听失败", error instanceof Error ? error.message : String(error));
+    reportError("停止任务监听失败", error);
+    addError("停止任务监听失败", taskFailureMessage);
   }
 }
 
@@ -188,7 +192,8 @@ async function runTaskCancel(task: TaskProgressRecord) {
           : currentTask,
       ),
     });
-    addError("取消任务失败", error instanceof Error ? error.message : String(error));
+    reportError("取消任务失败", error);
+    addError("取消任务失败", taskFailureMessage);
   }
 }
 
@@ -234,9 +239,10 @@ export async function createTaskProgress({
       });
     },
     remove: () => removeTask(id),
-    fail: (errorName, errorMessage) => {
+    fail: (errorName, error) => {
       removeTask(id);
-      addError(errorName, errorMessage);
+      reportError(errorName, error);
+      addError(errorName, taskFailureMessage);
     },
   };
 
@@ -247,7 +253,8 @@ export async function createTaskProgress({
         task.listener_cleanup = cleanup;
       }
     } catch (error) {
-      addError("启动任务监听失败", error instanceof Error ? error.message : String(error));
+      reportError("启动任务监听失败", error);
+      addError("启动任务监听失败", taskFailureMessage);
     }
   }
 

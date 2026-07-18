@@ -361,9 +361,8 @@ export function ExportPanel() {
         setMessage("导出已取消");
         return;
       }
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      exportTask.fail("导出失败", errorMessage);
-      setMessage(errorMessage);
+      exportTask.fail("导出失败", error);
+      setMessage("导出失败，请检查设置后重试。");
     }
   }
 

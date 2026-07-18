@@ -31,6 +31,7 @@ import {
   createFfmpegTaskId,
   listenToFfmpegTaskProgress,
 } from "../../ffmpegProgress";
+import { reportError } from "../../errorReporting";
 import {
   defaultMediaBinFolderColor,
   isMediaItemEnabled,
@@ -717,9 +718,8 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
         task.remove();
       } catch (error) {
         if (!cancelled) {
-          const message = error instanceof Error ? error.message : String(error);
-          task.fail("字幕绑定失败", message);
-          messagePublished(message);
+          task.fail("字幕绑定失败", error);
+          messagePublished("字幕绑定失败，请检查字幕文件后重试。");
         }
         return;
       }
@@ -730,8 +730,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
         videoId,
       );
     }
-    const targetName = targetVideo.file_name;
-    messagePublished(`已将 ${selectedItemsToBind.length} 个媒体绑定到 ${targetName}`);
+    messagePublished(`已将 ${selectedItemsToBind.length} 个媒体绑定到 ${targetVideo.file_name}`);
   }
 
   async function bindSelectedItems() {
@@ -827,9 +826,8 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
         messagePublished("分解已取消");
         return;
       }
-      const message = error instanceof Error ? error.message : String(error);
-      task.fail("分解失败", message);
-      messagePublished(message);
+      task.fail("分解失败", error);
+      messagePublished("分解媒体失败，请重试。");
     }
   }
 
@@ -1111,7 +1109,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     });
     if (outcome.status !== "success") {
       if (outcome.status === "failed") {
-        messagePublished(outcome.error);
+        messagePublished("重新链接媒体失败，请检查所选文件后重试。");
       }
       return false;
     }
@@ -1172,7 +1170,8 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
         await relinkMediaItem(item, path, "替换素材");
       }
     } catch (error) {
-      messagePublished(error instanceof Error ? error.message : String(error));
+      reportError("替换媒体失败", error);
+      messagePublished("替换媒体失败，请重试。");
     }
   }
 
@@ -1219,7 +1218,8 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     try {
       await invoke("reveal_in_file_manager", { path: proxyPath });
     } catch (error) {
-      messagePublished(error instanceof Error ? error.message : String(error));
+      reportError("在文件管理器中显示代理失败", error);
+      messagePublished("无法在文件管理器中显示代理文件，请重试。");
     }
   }
 
@@ -1510,7 +1510,10 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
             mode={linkDialog.mode}
             onAttach={attachLinkedFile}
             onCancel={() => setLinkDialog(null)}
-            onError={messagePublished}
+            onError={(error) => {
+              reportError("连接媒体失败", error);
+              messagePublished("连接媒体失败，请重试。");
+            }}
           />,
           document.querySelector(".app-shell") ?? document.body,
         )}

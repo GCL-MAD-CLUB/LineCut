@@ -163,6 +163,7 @@ export function HistoryPanel({ disabled = false, onNavigate, onDelete }: History
         createPortal(
           <ModalDialog
             title="删除历史记录"
+            className="history-delete-dialog"
             bodyClassName="history-delete-dialog-body"
             confirmLabel="删除"
             confirmDisabled={disabled}
@@ -179,7 +180,6 @@ export function HistoryPanel({ disabled = false, onNavigate, onDelete }: History
                 <strong>删除“{deleteRequest.label}”及后续历史记录？</strong>
                 <span>
                   项目将回到上一个事件状态，并永久删除共 {deleteRequest.count} 条历史记录。
-                  <br />
                   此操作无法撤销。
                 </span>
               </div>

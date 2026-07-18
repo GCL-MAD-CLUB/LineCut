@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm, open, save } from "@tauri-apps/plugin-dialog";
-import { Loader2 } from "lucide-react";
+import { Loader2, TriangleAlert } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { appPanelRegistry, initialAppPanelState } from "./appPanelRegistry";
 import { emitAppEvent, useAppEvent } from "./appEvents";
@@ -17,6 +17,7 @@ import {
 import { exportPanelType } from "./components/ExportPanel";
 import { HistoryPanelServicesProvider, historyPanelType } from "./components/HistoryPanel";
 import { ImportWorkspace } from "./components/ImportWorkspace";
+import { ModalDialog } from "./components/ModalDialog";
 import {
   useMediaBinClipboardItemCount,
   useMediaBinState,
@@ -29,6 +30,7 @@ import { sourcePanelType } from "./components/SourceMonitor";
 import { subtitlePanelType } from "./components/SubtitlePanel";
 import { cancelAllTaskProgress, getTaskProgressStatus } from "./components/TaskProgress";
 import { runMediaImportTask } from "./mediaImportTask";
+import { reportError } from "./errorReporting";
 import { getProjectWorkspaceSnapshot, subtitleTrackCues, useAppStore } from "./store";
 import { isTauriRuntime } from "./tauriRuntime";
 import type { MediaBinFolder, MediaBinItem, OpenProjectResult, Preferences } from "./types";
@@ -184,6 +186,7 @@ function AppContent() {
   const panelInstances = usePanelManagerState((state) => state.instances);
   const openPanel = usePanelManagerState((state) => state.openPanel);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [errorDialogMessage, setErrorDialogMessage] = useState<string | null>(null);
   const [historyNavigating, setHistoryNavigating] = useState(false);
   const [recentMediaPaths, setRecentMediaPaths] = useState(() =>
     readRecentPaths(recentMediaStorageKey),
@@ -312,7 +315,10 @@ function AppContent() {
       .then((loaded) => {
         preferencesLoaded(loaded);
       })
-      .catch((error) => messagePublished(error instanceof Error ? error.message : String(error)));
+      .catch((error) => {
+        reportError("加载首选项失败", error);
+        messagePublished("无法加载首选项，将使用默认设置。");
+      });
   }, []);
 
   useEffect(() => {
@@ -352,7 +358,7 @@ function AppContent() {
           return openProject(path);
         }
       })
-      .catch(publishError);
+      .catch((error) => publishError(error, "无法打开项目，请检查文件后重试。"));
   }, []);
 
   useEffect(() => {
@@ -426,8 +432,9 @@ function AppContent() {
     };
   }, [projectDirty]);
 
-  function publishError(error: unknown) {
-    messagePublished(error instanceof Error ? error.message : String(error));
+  function publishError(error: unknown, message = "操作未完成，请重试。") {
+    reportError(message, error);
+    setErrorDialogMessage(message);
   }
 
   async function confirmDiscardChanges(message: string) {
@@ -480,7 +487,7 @@ function AppContent() {
       setActiveWorkspace("import");
       messagePublished("已新建项目");
     } catch (error) {
-      publishError(error);
+      publishError(error, "无法新建项目，请重试。");
     }
   }
 
@@ -524,7 +531,7 @@ function AppContent() {
       if (pathToOpen) {
         forgetRecentProject(pathToOpen);
       }
-      publishError(error);
+      publishError(error, "无法打开项目，请检查文件后重试。");
     }
   }
 
@@ -537,7 +544,7 @@ function AppContent() {
       projectClosed();
       messagePublished("项目已关闭");
     } catch (error) {
-      publishError(error);
+      publishError(error, "无法关闭项目，请重试。");
     }
   }
 
@@ -548,9 +555,9 @@ function AppContent() {
     });
     if (makeCurrent) {
       projectSaved(savedPath);
-      messagePublished(`项目已保存到 ${savedPath}`);
+      messagePublished(`项目已保存到 ${fileName(savedPath)}`);
     } else {
-      messagePublished(`项目副本已保存到 ${savedPath}`);
+      messagePublished(`项目副本已保存到 ${fileName(savedPath)}`);
     }
     rememberRecentProject(savedPath);
   }
@@ -581,7 +588,7 @@ function AppContent() {
     try {
       await writeProject(picked, makeCurrent);
     } catch (error) {
-      publishError(error);
+      publishError(error, "无法保存项目，请检查文件位置和权限后重试。");
     }
   }
 
@@ -593,7 +600,7 @@ function AppContent() {
     try {
       await writeProject(projectFilePath, true);
     } catch (error) {
-      publishError(error);
+      publishError(error, "无法保存项目，请检查文件位置和权限后重试。");
     }
   }
 
@@ -738,7 +745,7 @@ function AppContent() {
       return true;
     } catch (error) {
       projectHistoryJumped(previousCursor);
-      publishError(error);
+      publishError(error, "无法完成该操作，请重试。");
       return false;
     } finally {
       setHistoryNavigating(false);
@@ -1059,9 +1066,7 @@ function AppContent() {
             )}
           </span>
           {warnings.length > 0 && <span>{warnings.length} 条导入提示</span>}
-          {exportResult && (
-            <span title={exportResult.files.join("\n")}>{exportResult.output_dir}</span>
-          )}
+          {exportResult && <span>导出结果已生成</span>}
         </footer>
 
         {(warnings.length > 0 || exportResult) && (
@@ -1081,6 +1086,27 @@ function AppContent() {
 
         <ProxyCreationDialog />
         <PreferencesDialog open={preferencesOpen} onClose={() => setPreferencesOpen(false)} />
+        {errorDialogMessage && (
+          <ModalDialog
+            title="操作失败"
+            className="error-dialog"
+            bodyClassName="error-dialog-body"
+            onCancel={() => setErrorDialogMessage(null)}
+            onConfirm={() => setErrorDialogMessage(null)}
+            actions={
+              <button
+                type="button"
+                className="modal-dialog-confirm"
+                onClick={() => setErrorDialogMessage(null)}
+              >
+                确定
+              </button>
+            }
+          >
+            <TriangleAlert className="error-dialog-icon" aria-hidden="true" />
+            <p>{errorDialogMessage}</p>
+          </ModalDialog>
+        )}
       </div>
     </HistoryPanelServicesProvider>
   );

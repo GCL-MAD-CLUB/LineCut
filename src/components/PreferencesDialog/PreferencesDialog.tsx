@@ -12,6 +12,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
+import { reportError } from "../../errorReporting";
 import { createFfmpegTaskId } from "../../ffmpegProgress";
 import { defaultPreferences, useAppStore } from "../../store";
 import { isTauriRuntime } from "../../tauriRuntime";
@@ -89,8 +90,8 @@ export function PreferencesDialog({ open: isOpen, onClose }: PreferencesDialogPr
       onClose();
       setMessage("首选项已保存");
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      setMessage(errorMessage);
+      reportError("保存首选项失败", error);
+      setMessage("无法保存首选项，请检查设置后重试。");
     } finally {
       setIsSavingPreferences(false);
     }

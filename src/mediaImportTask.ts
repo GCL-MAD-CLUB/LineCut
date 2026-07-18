@@ -6,7 +6,7 @@ import type { ImportResult } from "./types";
 export type MediaImportTaskOutcome =
   | { status: "success"; path: string; result: ImportResult }
   | { status: "cancelled"; path: string }
-  | { status: "failed"; path: string; error: string };
+  | { status: "failed"; path: string };
 
 interface RunMediaImportTaskOptions {
   path: string;
@@ -19,10 +19,6 @@ interface RunMediaImportTaskOptions {
 
 function fileName(path: string) {
   return path.split(/[\\/]/).pop() ?? path;
-}
-
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
 }
 
 export async function runMediaImportTask({
@@ -65,8 +61,7 @@ export async function runMediaImportTask({
       task.remove();
       return { status: "cancelled", path };
     }
-    const message = errorMessage(error);
-    task.fail(`导入 ${fileName(path)} 失败`, message);
-    return { status: "failed", path, error: message };
+    task.fail(`导入 ${fileName(path)} 失败`, error);
+    return { status: "failed", path };
   }
 }
