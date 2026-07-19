@@ -1,5 +1,6 @@
 use super::*;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn export_one_range(
     input_path: &str,
     range: &ClipRange,
@@ -338,7 +339,7 @@ pub(crate) fn display_time(us: i64) -> String {
 }
 
 pub(crate) fn file_time_label(us: i64) -> String {
-    display_time(us).replace(':', "-").replace('.', "-")
+    display_time(us).replace([':', '.'], "-")
 }
 
 pub(crate) fn export_file_stem(

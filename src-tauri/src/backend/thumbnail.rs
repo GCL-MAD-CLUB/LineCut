@@ -114,7 +114,7 @@ pub(crate) async fn generate_video_cover_thumbnail(
         )
     })?;
     let preferences = preferences_clone(&state)?;
-    Ok(ensure_video_cover_thumbnail(&project, &preferences, None, None, stream_index).await?)
+    ensure_video_cover_thumbnail(&project, &preferences, None, None, stream_index).await
 }
 
 #[tauri::command]
@@ -171,7 +171,7 @@ pub(crate) async fn generate_subtitle_thumbnail(
     )
     .await?;
     let fingerprint = project.asset.fingerprint;
-    Ok(tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         write_subtitle_thumbnail_cache(
             &preferences,
             &fingerprint,
@@ -187,7 +187,7 @@ pub(crate) async fn generate_subtitle_thumbnail(
             ErrorCode::BlockingTaskFailed,
             format!("Subtitle thumbnail cache write task failed: {error}"),
         )
-    })??)
+    })?
 }
 
 #[tauri::command]
@@ -214,7 +214,7 @@ pub(crate) async fn get_cached_subtitle_thumbnail(
             )
         })?;
     let preferences = preferences_clone(&state)?;
-    Ok(tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         Ok::<_, AppError>(read_subtitle_thumbnail_cache(
             &preferences,
             &project.asset.fingerprint,
@@ -228,7 +228,7 @@ pub(crate) async fn get_cached_subtitle_thumbnail(
             ErrorCode::BlockingTaskFailed,
             format!("Subtitle thumbnail cache read task failed: {error}"),
         )
-    })??)
+    })?
 }
 
 #[tauri::command]
@@ -257,7 +257,7 @@ pub(crate) async fn cache_subtitle_thumbnail(
             )
         })?;
     let preferences = preferences_clone(&state)?;
-    Ok(tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         write_subtitle_thumbnail_cache(
             &preferences,
             &project.asset.fingerprint,
@@ -272,7 +272,7 @@ pub(crate) async fn cache_subtitle_thumbnail(
             ErrorCode::BlockingTaskFailed,
             format!("Subtitle thumbnail cache write task failed: {error}"),
         )
-    })??)
+    })?
 }
 
 pub(crate) async fn ensure_video_cover_thumbnail(
@@ -634,6 +634,7 @@ fn analysis_sample_times(duration_us: i64) -> Vec<i64> {
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn analyze_video_samples(
     program: &str,
     input_path: &str,

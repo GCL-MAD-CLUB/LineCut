@@ -1,8 +1,26 @@
 import type { ComponentType, ReactNode } from "react";
 
-export type DockAreaId = "leftTop" | "leftBottom" | "right";
+export type DockAreaId = string;
 export type PanelInstanceId = string;
 export type PanelTypeId = string;
+export type DockSplitAxis = "x" | "y";
+export type DockDropPosition = "left" | "right" | "up" | "down" | "self";
+
+export interface DockAreaNode {
+  type: "area";
+  areaId: DockAreaId;
+}
+
+export interface DockSplitNode {
+  type: "split";
+  id: string;
+  axis: DockSplitAxis;
+  ratio: number;
+  first: DockLayoutNode;
+  second: DockLayoutNode;
+}
+
+export type DockLayoutNode = DockAreaNode | DockSplitNode;
 
 export interface DockAreaState {
   tabs: PanelInstanceId[];
@@ -10,7 +28,8 @@ export interface DockAreaState {
 }
 
 export interface DockLayoutState {
-  areas: Record<DockAreaId, DockAreaState>;
+  root: DockLayoutNode;
+  areas: Record<string, DockAreaState>;
 }
 
 export interface PanelInstance<Params = unknown> {

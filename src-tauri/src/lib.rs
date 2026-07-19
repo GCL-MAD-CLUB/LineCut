@@ -161,19 +161,14 @@ const fn default_auto_save_max_snapshots() -> u32 {
     20
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ExportNameRule {
+    #[default]
     SourceTimeRange,
     SourceDialogue,
     TimeRange,
     Dialogue,
-}
-
-impl Default for ExportNameRule {
-    fn default() -> Self {
-        Self::SourceTimeRange
-    }
 }
 
 impl Default for Preferences {
@@ -655,6 +650,8 @@ pub fn run() {
             sync_project_workspace,
             close_project,
             path_is_file,
+            load_workspace_config,
+            save_workspace_config,
             set_media_import_drop_region,
             reveal_in_file_manager,
             cancel_task,

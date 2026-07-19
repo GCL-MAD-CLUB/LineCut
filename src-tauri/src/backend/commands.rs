@@ -5,7 +5,7 @@ use crate::project_file::{
 
 #[tauri::command]
 pub(crate) fn get_preferences(state: tauri::State<'_, AppState>) -> CommandResult<Preferences> {
-    Ok(state
+    state
         .preferences
         .lock()
         .map_err(|_| {
@@ -14,7 +14,7 @@ pub(crate) fn get_preferences(state: tauri::State<'_, AppState>) -> CommandResul
                 "Preferences state lock is poisoned",
             )
         })
-        .map(|preferences| preferences.clone())?)
+        .map(|preferences| preferences.clone())
 }
 
 #[tauri::command]
@@ -41,7 +41,7 @@ pub(crate) fn take_preferences_startup_error(
 pub(crate) fn take_launch_project_path(
     state: tauri::State<'_, AppState>,
 ) -> CommandResult<Option<String>> {
-    Ok(state
+    state
         .launch_project_path
         .lock()
         .map_err(|_| {
@@ -50,7 +50,7 @@ pub(crate) fn take_launch_project_path(
                 "Launch project path state lock is poisoned",
             )
         })
-        .map(|mut path| path.take())?)
+        .map(|mut path| path.take())
 }
 
 #[tauri::command]
@@ -147,7 +147,7 @@ pub(crate) async fn auto_save_project_snapshot(
             preferences.auto_save_max_snapshots as usize,
         )
     };
-    Ok(tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         write_auto_save_snapshot(&cache_root, &project_name, workspace, max_snapshots)
             .map(|path| path.map(|path| path.to_string_lossy().into_owned()))
     })
@@ -157,7 +157,7 @@ pub(crate) async fn auto_save_project_snapshot(
             ErrorCode::BlockingTaskFailed,
             format!("Project auto-save task failed: {error}"),
         )
-    })??)
+    })?
 }
 
 #[tauri::command]
@@ -897,6 +897,7 @@ pub(crate) async fn add_external_subtitles(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn export_clips(
     asset_id: String,
     track_asset_id: String,

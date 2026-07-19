@@ -9,12 +9,13 @@ import {
 } from "react";
 import "./DockLayout.css";
 import { PopupMenu, PopupMenuItem, PopupMenuSeparator } from "../PopupMenu";
-import { dockAreaOrder, normalizeArea, usePanelManagerState } from "./PanelManager";
+import { dockAreaIds, normalizeArea, usePanelManagerState } from "./PanelManager";
 import { PanelActions, PanelHost, PanelMenuItems, PanelTitle } from "./PanelRegistry";
-import type { DockAreaId } from "./types";
+import type { DockAreaId, DockDropPosition, DockLayoutNode, DockSplitNode } from "./types";
 
 const DOCK_DRAG_LONG_PRESS_MS = 220;
 const RESIZER_SIZE_CSS_VAR = "--resizer-size";
+const DOCK_DROP_INSET_PX = 25;
 
 function readCssPixelVariable(name: string, fallback: number): number {
   if (typeof document === "undefined") {
@@ -40,8 +41,12 @@ interface DockDragPreview {
 
 interface DockDropTarget {
   areaId: DockAreaId;
+  surface: "title" | "panel";
+  position: DockDropPosition;
   insertionIndex: number;
   showDraggedTitle: boolean;
+  width: number;
+  height: number;
 }
 
 interface DockOverflowMenu {
@@ -63,13 +68,92 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
-function dockAreaFromPoint(clientX: number, clientY: number): DockAreaId | null {
+function dockWindowFromPoint(clientX: number, clientY: number): HTMLElement | null {
   for (const element of document.elementsFromPoint(clientX, clientY)) {
     if (element instanceof HTMLElement && element.dataset.dockArea) {
-      return element.dataset.dockArea as DockAreaId;
+      return element;
     }
   }
   return null;
+}
+
+function dropPositionFromRect(rect: DOMRect, clientX: number, clientY: number): DockDropPosition {
+  const insetLeft = Math.min(rect.left + DOCK_DROP_INSET_PX, rect.left + rect.width / 2);
+  const insetRight = Math.max(rect.right - DOCK_DROP_INSET_PX, rect.left + rect.width / 2);
+  const insetTop = Math.min(rect.top + DOCK_DROP_INSET_PX, rect.top + rect.height / 2);
+  const insetBottom = Math.max(rect.bottom - DOCK_DROP_INSET_PX, rect.top + rect.height / 2);
+
+  if (
+    clientX >= insetLeft &&
+    clientX <= insetRight &&
+    clientY >= insetTop &&
+    clientY <= insetBottom
+  ) {
+    return "self";
+  }
+
+  const edgeDistances: Array<[DockDropPosition, number]> = [
+    ["left", Math.max(0, insetLeft - clientX)],
+    ["right", Math.max(0, clientX - insetRight)],
+    ["up", Math.max(0, insetTop - clientY)],
+    ["down", Math.max(0, clientY - insetBottom)],
+  ];
+  return edgeDistances.reduce((best, current) => (current[1] > best[1] ? current : best))[0];
+}
+
+function DockDropZones({
+  className,
+  position,
+  width,
+  height,
+}: {
+  className: string;
+  position: DockDropPosition;
+  width: number;
+  height: number;
+}) {
+  const leftInset = Math.min(DOCK_DROP_INSET_PX, width / 2);
+  const rightInset = Math.max(width - DOCK_DROP_INSET_PX, width / 2);
+  const topInset = Math.min(DOCK_DROP_INSET_PX, height / 2);
+  const bottomInset = Math.max(height - DOCK_DROP_INSET_PX, height / 2);
+
+  return (
+    <svg
+      className={className}
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
+      <polygon
+        className={position === "left" ? "active" : undefined}
+        points={`0,0 ${leftInset},${topInset} ${leftInset},${bottomInset} 0,${height}`}
+      />
+      <polygon
+        className={position === "right" ? "active" : undefined}
+        points={`${width},0 ${rightInset},${topInset} ${rightInset},${bottomInset} ${width},${height}`}
+      />
+      <polygon
+        className={position === "up" ? "active" : undefined}
+        points={`0,0 ${width},0 ${rightInset},${topInset} ${leftInset},${topInset}`}
+      />
+      <polygon
+        className={position === "down" ? "active" : undefined}
+        points={`0,${height} ${leftInset},${bottomInset} ${rightInset},${bottomInset} ${width},${height}`}
+      />
+      <polygon
+        className={position === "self" ? "active" : undefined}
+        points={`${leftInset},${topInset} ${rightInset},${topInset} ${rightInset},${bottomInset} ${leftInset},${bottomInset}`}
+      />
+    </svg>
+  );
+}
+
+function DockSelfDropZone({ className, active = true }: { className: string; active?: boolean }) {
+  return (
+    <svg className={className} viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+      <polygon className={active ? "active" : undefined} points="0,0 100,0 100,100 0,100" />
+    </svg>
+  );
 }
 
 export function DockLayout() {
@@ -78,41 +162,28 @@ export function DockLayout() {
   const activatePanel = usePanelManagerState((state) => state.activatePanel);
   const focusPanel = usePanelManagerState((state) => state.focusPanel);
   const movePanel = usePanelManagerState((state) => state.movePanel);
+  const resizeSplit = usePanelManagerState((state) => state.resizeSplit);
   const closePanel = usePanelManagerState((state) => state.closePanel);
   const closePanels = usePanelManagerState((state) => state.closePanels);
-  const workspaceRef = useRef<HTMLElement | null>(null);
-  const leftPaneRef = useRef<HTMLElement | null>(null);
+  const areaIds = dockAreaIds(layout.root);
   const dragRef = useRef<DockDragState | null>(null);
   const dropTargetRef = useRef<DockDropTarget | null>(null);
   const draggedTabWidthRef = useRef(0);
   const pendingTabPositionsRef = useRef<Map<string, DOMRect> | null>(null);
   const tabAnimationFrameRef = useRef<number | null>(null);
-  const tabViewportRefs = useRef<Record<DockAreaId, HTMLDivElement | null>>({
-    leftTop: null,
-    leftBottom: null,
-    right: null,
-  });
-  const tabElementRefs = useRef<Record<DockAreaId, Map<string, HTMLDivElement>>>({
-    leftTop: new Map(),
-    leftBottom: new Map(),
-    right: new Map(),
-  });
-  const [leftPaneWidth, setLeftPaneWidth] = useState(100 / 2.8);
-  const [previewPaneHeight, setPreviewPaneHeight] = useState(48);
+  const tabViewportRefs = useRef(new Map<DockAreaId, HTMLDivElement>());
+  const tabElementRefs = useRef(new Map<DockAreaId, Map<string, HTMLDivElement>>());
+  const splitElementRefs = useRef(new Map<string, HTMLDivElement>());
   const [resizerSize] = useState(() => readCssPixelVariable(RESIZER_SIZE_CSS_VAR, 6));
   const [dragPreview, setDragPreview] = useState<DockDragPreview | null>(null);
   const [dropTarget, setDropTarget] = useState<DockDropTarget | null>(null);
-  const [tabsOverflow, setTabsOverflow] = useState<Record<DockAreaId, boolean>>({
-    leftTop: false,
-    leftBottom: false,
-    right: false,
-  });
+  const [tabsOverflow, setTabsOverflow] = useState<Record<string, boolean>>({});
   const [overflowMenu, setOverflowMenu] = useState<DockOverflowMenu | null>(null);
   const [panelMenu, setPanelMenu] = useState<DockPanelMenu | null>(null);
 
   function revealTabNow(areaId: DockAreaId, panelId: string) {
-    const viewport = tabViewportRefs.current[areaId];
-    const tab = tabElementRefs.current[areaId].get(panelId);
+    const viewport = tabViewportRefs.current.get(areaId);
+    const tab = tabElementRefs.current.get(areaId)?.get(panelId);
     if (!viewport || !tab) {
       return;
     }
@@ -137,7 +208,7 @@ export function DockLayout() {
 
   function revealActiveTabs() {
     requestAnimationFrame(() => {
-      for (const areaId of dockAreaOrder) {
+      for (const areaId of areaIds) {
         const activePanelId = normalizeArea(layout.areas[areaId]).activePanelId;
         if (activePanelId) {
           revealTabNow(areaId, activePanelId);
@@ -148,9 +219,9 @@ export function DockLayout() {
 
   useEffect(() => {
     function measureOverflow() {
-      const nextOverflow = dockAreaOrder.reduce(
+      const nextOverflow = areaIds.reduce(
         (result, areaId) => {
-          const viewport = tabViewportRefs.current[areaId];
+          const viewport = tabViewportRefs.current.get(areaId);
           if (!viewport) {
             result[areaId] = false;
             return result;
@@ -162,12 +233,12 @@ export function DockLayout() {
           result[areaId] = viewport.scrollWidth > availableWidth + 1;
           return result;
         },
-        { leftTop: false, leftBottom: false, right: false } as Record<DockAreaId, boolean>,
+        {} as Record<string, boolean>,
       );
 
       revealActiveTabs();
       setTabsOverflow((current) => {
-        if (dockAreaOrder.every((areaId) => current[areaId] === nextOverflow[areaId])) {
+        if (areaIds.every((areaId) => current[areaId] === nextOverflow[areaId])) {
           return current;
         }
         return nextOverflow;
@@ -177,8 +248,8 @@ export function DockLayout() {
     const animationFrame = requestAnimationFrame(measureOverflow);
     const resizeObserver = new ResizeObserver(measureOverflow);
     const mutationObserver = new MutationObserver(measureOverflow);
-    for (const areaId of dockAreaOrder) {
-      const viewport = tabViewportRefs.current[areaId];
+    for (const areaId of areaIds) {
+      const viewport = tabViewportRefs.current.get(areaId);
       if (viewport) {
         resizeObserver.observe(viewport);
         mutationObserver.observe(viewport, {
@@ -199,7 +270,7 @@ export function DockLayout() {
 
   useEffect(() => {
     revealActiveTabs();
-  }, [layout, instances, leftPaneWidth, previewPaneHeight, tabsOverflow]);
+  }, [layout, instances, tabsOverflow]);
 
   useEffect(() => {
     if (!overflowMenu && !panelMenu) {
@@ -221,18 +292,25 @@ export function DockLayout() {
   }, [overflowMenu, panelMenu]);
 
   function setTabElementRef(areaId: DockAreaId, panelId: string, element: HTMLDivElement | null) {
-    const refs = tabElementRefs.current[areaId];
+    let refs = tabElementRefs.current.get(areaId);
+    if (!refs) {
+      refs = new Map();
+      tabElementRefs.current.set(areaId, refs);
+    }
     if (element) {
       refs.set(panelId, element);
     } else {
       refs.delete(panelId);
+      if (refs.size === 0) {
+        tabElementRefs.current.delete(areaId);
+      }
     }
   }
 
   function captureTabPositions() {
     const positions = new Map<string, DOMRect>();
-    for (const areaId of dockAreaOrder) {
-      for (const [panelId, element] of tabElementRefs.current[areaId]) {
+    for (const refs of tabElementRefs.current.values()) {
+      for (const [panelId, element] of refs) {
         positions.set(panelId, element.getBoundingClientRect());
       }
     }
@@ -244,8 +322,8 @@ export function DockLayout() {
       cancelAnimationFrame(tabAnimationFrameRef.current);
       tabAnimationFrameRef.current = null;
     }
-    const tabs = dockAreaOrder.flatMap((areaId) =>
-      Array.from(tabElementRefs.current[areaId].values()),
+    const tabs = Array.from(tabElementRefs.current.values()).flatMap((refs) =>
+      Array.from(refs.values()),
     );
     for (const tab of tabs) {
       tab.style.transition = "none";
@@ -261,6 +339,8 @@ export function DockLayout() {
     const currentTarget = dropTargetRef.current;
     if (
       currentTarget?.areaId === nextTarget?.areaId &&
+      currentTarget?.surface === nextTarget?.surface &&
+      currentTarget?.position === nextTarget?.position &&
       currentTarget?.insertionIndex === nextTarget?.insertionIndex &&
       currentTarget?.showDraggedTitle === nextTarget?.showDraggedTitle
     ) {
@@ -280,8 +360,8 @@ export function DockLayout() {
     }
 
     const movedTabs: HTMLDivElement[] = [];
-    for (const areaId of dockAreaOrder) {
-      for (const [panelId, element] of tabElementRefs.current[areaId]) {
+    for (const refs of tabElementRefs.current.values()) {
+      for (const [panelId, element] of refs) {
         const previousPosition = previousPositions.get(panelId);
         if (!previousPosition) {
           continue;
@@ -336,58 +416,33 @@ export function DockLayout() {
     revealTab(areaId, nextPanelId);
   }
 
-  function startHorizontalResize(event: PointerEvent<HTMLDivElement>) {
-    const rect = workspaceRef.current?.getBoundingClientRect();
+  function startSplitResize(event: PointerEvent<HTMLDivElement>, split: DockSplitNode) {
+    const rect = splitElementRefs.current.get(split.id)?.getBoundingClientRect();
     if (!rect) {
       return;
     }
     event.preventDefault();
+    event.stopPropagation();
 
-    const minLeft = 320;
-    const minRight = 420 + resizerSize;
-    const minPercent = (minLeft / rect.width) * 100;
-    const maxPercent = 100 - (minRight / rect.width) * 100;
+    const size = split.axis === "x" ? rect.width : rect.height;
+    const minimumRatio = Math.min(0.45, 160 / Math.max(size - resizerSize, 1));
 
     const onMove = (moveEvent: globalThis.PointerEvent) => {
-      const next = ((moveEvent.clientX - rect.left) / rect.width) * 100;
-      setLeftPaneWidth(clamp(next, minPercent, maxPercent));
+      const offset =
+        split.axis === "x" ? moveEvent.clientX - rect.left : moveEvent.clientY - rect.top;
+      resizeSplit(split.id, clamp(offset / size, minimumRatio, 1 - minimumRatio));
     };
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
-      document.body.classList.remove("is-resizing-x");
+      window.removeEventListener("pointercancel", onUp);
+      document.body.classList.remove(`is-resizing-${split.axis}`);
     };
 
-    document.body.classList.add("is-resizing-x");
+    document.body.classList.add(`is-resizing-${split.axis}`);
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp, { once: true });
-  }
-
-  function startVerticalResize(event: PointerEvent<HTMLDivElement>) {
-    const rect = leftPaneRef.current?.getBoundingClientRect();
-    if (!rect) {
-      return;
-    }
-    event.preventDefault();
-
-    const minTop = 220;
-    const minBottom = 240 + resizerSize;
-    const minPercent = (minTop / rect.height) * 100;
-    const maxPercent = 100 - (minBottom / rect.height) * 100;
-
-    const onMove = (moveEvent: globalThis.PointerEvent) => {
-      const next = ((moveEvent.clientY - rect.top) / rect.height) * 100;
-      setPreviewPaneHeight(clamp(next, minPercent, maxPercent));
-    };
-    const onUp = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      document.body.classList.remove("is-resizing-y");
-    };
-
-    document.body.classList.add("is-resizing-y");
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp, { once: true });
+    window.addEventListener("pointercancel", onUp, { once: true });
   }
 
   function clearDockDragTimer(state = dragRef.current) {
@@ -403,7 +458,7 @@ export function DockLayout() {
     clearDockDragTimer(state);
     const target = dropTargetRef.current;
     if (state?.dragging && target) {
-      movePanel(state.panelId, target.areaId, target.insertionIndex);
+      movePanel(state.panelId, target.areaId, target.insertionIndex, target.position);
     }
     dragRef.current = null;
     setDragPreview(null);
@@ -424,26 +479,58 @@ export function DockLayout() {
     }
     event.preventDefault();
     setDragPreview({ panelId: state.panelId, x: event.clientX, y: event.clientY });
-    const targetAreaId = dockAreaFromPoint(event.clientX, event.clientY);
-    setDockDropTarget(
-      targetAreaId
-        ? {
-            areaId: targetAreaId,
-            insertionIndex: dockInsertionIndex(
-              targetAreaId,
-              state.panelId,
-              event.clientX,
-              event.clientY,
-            ),
-            showDraggedTitle: isOverDockTabbar(targetAreaId, event.clientY),
-          }
-        : null,
-    );
+    setDockDropTarget(dockDropTargetFromPoint(state.panelId, event.clientX, event.clientY));
   }
 
   function isOverDockTabbar(areaId: DockAreaId, clientY: number) {
-    const viewportRect = tabViewportRefs.current[areaId]?.getBoundingClientRect();
+    const viewportRect = tabViewportRefs.current.get(areaId)?.getBoundingClientRect();
     return Boolean(viewportRect && clientY >= viewportRect.top && clientY <= viewportRect.bottom);
+  }
+
+  function dockDropTargetFromPoint(
+    draggedPanelId: string,
+    clientX: number,
+    clientY: number,
+  ): DockDropTarget | null {
+    const dockWindow = dockWindowFromPoint(clientX, clientY);
+    const areaId = dockWindow?.dataset.dockArea;
+    if (!dockWindow || !areaId || !layout.areas[areaId]) {
+      return null;
+    }
+
+    const tabbar = dockWindow.querySelector<HTMLElement>(":scope > .dock-tabbar");
+    const panelContent = dockWindow.querySelector<HTMLElement>(":scope > .dock-panel-content");
+    const tabbarRect = tabbar?.getBoundingClientRect();
+    const contentRect = panelContent?.getBoundingClientRect();
+    const overTitle = Boolean(
+      tabbarRect &&
+      clientX >= tabbarRect.left &&
+      clientX <= tabbarRect.right &&
+      clientY >= tabbarRect.top &&
+      clientY <= tabbarRect.bottom,
+    );
+    const surface = overTitle ? "title" : "panel";
+    const position =
+      surface === "title" || !contentRect
+        ? "self"
+        : dropPositionFromRect(contentRect, clientX, clientY);
+    const targetTabs = normalizeArea(layout.areas[areaId]).tabs;
+    const tabsWithoutDragged = targetTabs.filter((panelId) => panelId !== draggedPanelId);
+    const preserveCurrentIndex =
+      surface === "panel" && position === "self" && dragRef.current?.sourceAreaId === areaId;
+    return {
+      areaId,
+      surface,
+      position,
+      insertionIndex: overTitle
+        ? dockInsertionIndex(areaId, draggedPanelId, clientX, clientY)
+        : preserveCurrentIndex
+          ? Math.max(targetTabs.indexOf(draggedPanelId), 0)
+          : tabsWithoutDragged.length,
+      showDraggedTitle: surface === "title",
+      width: contentRect?.width ?? 0,
+      height: contentRect?.height ?? 0,
+    };
   }
 
   function dockInsertionIndex(
@@ -459,7 +546,7 @@ export function DockLayout() {
       return tabs.length;
     }
     for (let index = 0; index < tabs.length; index += 1) {
-      const tab = tabElementRefs.current[areaId].get(tabs[index]);
+      const tab = tabElementRefs.current.get(areaId)?.get(tabs[index]);
       if (tab) {
         const rect = tab.getBoundingClientRect();
         if (clientX < rect.left + rect.width / 2) {
@@ -496,12 +583,16 @@ export function DockLayout() {
       setActivePanel(areaId, panelId);
       setDragPreview({ panelId, x: event.clientX, y: event.clientY });
       draggedTabWidthRef.current =
-        tabElementRefs.current[areaId].get(panelId)?.getBoundingClientRect().width ?? 0;
+        tabElementRefs.current.get(areaId)?.get(panelId)?.getBoundingClientRect().width ?? 0;
       const sourceTabs = normalizeArea(layout.areas[areaId]).tabs;
       setDockDropTarget({
-        areaId: dockAreaFromPoint(event.clientX, event.clientY) ?? state.sourceAreaId,
+        areaId: state.sourceAreaId,
+        surface: "title",
+        position: "self",
         insertionIndex: sourceTabs.indexOf(panelId),
         showDraggedTitle: true,
+        width: 0,
+        height: 0,
       });
     }, DOCK_DRAG_LONG_PRESS_MS);
 
@@ -511,7 +602,7 @@ export function DockLayout() {
   }
 
   function handleTabbarWheel(event: WheelEvent<HTMLDivElement>, areaId: DockAreaId) {
-    const area = layout.areas[areaId];
+    const area = normalizeArea(layout.areas[areaId]);
     if (area.tabs.length <= 1) {
       return;
     }
@@ -588,7 +679,7 @@ export function DockLayout() {
       ? areaTabs.filter((panelId) => panelId !== draggedPanelId)
       : areaTabs;
     const displayedTabs =
-      draggedPanelId && dropTarget?.areaId === areaId
+      draggedPanelId && dropTarget?.areaId === areaId && dropTarget.showDraggedTitle
         ? [
             ...tabsWithoutDragged.slice(0, dropTarget.insertionIndex),
             draggedPanelId,
@@ -603,15 +694,18 @@ export function DockLayout() {
 
     return (
       <section
-        className={`dock-window ${displayedTabs.length > 1 ? "has-multiple-tabs" : "has-single-tab"} ${
-          dropTarget?.areaId === areaId ? "drop-target" : ""
-        }`}
+        key={areaId}
+        className={`dock-window ${displayedTabs.length > 1 ? "has-multiple-tabs" : "has-single-tab"}`}
         data-dock-area={areaId}
       >
         <div className="dock-tabbar" onWheel={(event) => handleTabbarWheel(event, areaId)}>
           <div
             ref={(node) => {
-              tabViewportRefs.current[areaId] = node;
+              if (node) {
+                tabViewportRefs.current.set(areaId, node);
+              } else {
+                tabViewportRefs.current.delete(areaId);
+              }
             }}
             className="dock-tabs-viewport"
           >
@@ -701,6 +795,12 @@ export function DockLayout() {
               />
             )}
           </div>
+          {dragPreview && dropTarget?.areaId === areaId && (
+            <DockSelfDropZone
+              className="dock-title-drop-zones"
+              active={dropTarget.surface === "title"}
+            />
+          )}
         </div>
 
         <div className="dock-panel-content">
@@ -724,50 +824,67 @@ export function DockLayout() {
               <span>将面板拖到这里</span>
             </div>
           )}
+          {dragPreview &&
+            dropTarget?.areaId === areaId &&
+            (dropTarget.surface === "title" ? (
+              <DockSelfDropZone className="dock-drop-zones" active={false} />
+            ) : (
+              <DockDropZones
+                className="dock-drop-zones"
+                position={dropTarget.position}
+                width={dropTarget.width}
+                height={dropTarget.height}
+              />
+            ))}
         </div>
       </section>
     );
   }
 
+  function renderDockNode(node: DockLayoutNode) {
+    if (node.type === "area") {
+      return renderDockWindow(node.areaId);
+    }
+    const gridStyle =
+      node.axis === "x"
+        ? {
+            gridTemplateColumns: `minmax(0, ${node.ratio}fr) ${resizerSize}px minmax(0, ${1 - node.ratio}fr)`,
+          }
+        : {
+            gridTemplateRows: `minmax(0, ${node.ratio}fr) ${resizerSize}px minmax(0, ${1 - node.ratio}fr)`,
+          };
+    return (
+      <div
+        key={node.id}
+        ref={(element) => {
+          if (element) {
+            splitElementRefs.current.set(node.id, element);
+          } else {
+            splitElementRefs.current.delete(node.id);
+          }
+        }}
+        className={`dock-split dock-split-${node.axis}`}
+        data-split-id={node.id}
+        style={gridStyle}
+      >
+        {renderDockNode(node.first)}
+        <div
+          className={`pane-resizer ${
+            node.axis === "x" ? "pane-resizer-vertical" : "pane-resizer-horizontal"
+          }`}
+          role="separator"
+          aria-orientation={node.axis === "x" ? "vertical" : "horizontal"}
+          title={node.axis === "x" ? "调整左右窗口宽度" : "调整上下窗口高度"}
+          onPointerDown={(event) => startSplitResize(event, node)}
+        />
+        {renderDockNode(node.second)}
+      </div>
+    );
+  }
+
   return (
     <>
-      <main
-        ref={workspaceRef}
-        className="workspace dock-workspace"
-        style={{
-          gridTemplateColumns: `minmax(320px, ${leftPaneWidth}%) ${resizerSize}px minmax(420px, 1fr)`,
-        }}
-      >
-        <section
-          ref={leftPaneRef}
-          className="left-pane dock-left-pane"
-          style={{
-            gridTemplateRows: `minmax(220px, ${previewPaneHeight}%) ${resizerSize}px minmax(240px, 1fr)`,
-          }}
-        >
-          {renderDockWindow("leftTop")}
-
-          <div
-            className="pane-resizer pane-resizer-horizontal"
-            role="separator"
-            aria-orientation="horizontal"
-            title="调整上下窗口高度"
-            onPointerDown={startVerticalResize}
-          />
-
-          {renderDockWindow("leftBottom")}
-        </section>
-
-        <div
-          className="pane-resizer pane-resizer-vertical"
-          role="separator"
-          aria-orientation="vertical"
-          title="调整左右窗口宽度"
-          onPointerDown={startHorizontalResize}
-        />
-
-        {renderDockWindow("right")}
-      </main>
+      <main className="workspace dock-workspace">{renderDockNode(layout.root)}</main>
 
       {dragPreview && !dropTarget?.showDraggedTitle && (
         <div

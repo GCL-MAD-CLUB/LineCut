@@ -12,6 +12,7 @@ import {
   usePanelManagerState,
   type DockAreaId,
   type OpenPanelRequest,
+  type PanelManagerInitialState,
 } from "./components/DockLayout";
 import { exportPanelType } from "./components/ExportPanel";
 import { HistoryPanelServicesProvider, historyPanelType } from "./components/HistoryPanel";
@@ -88,6 +89,7 @@ const recentMediaStorageKey = "linecut:recent-media-paths";
 const recentProjectStorageKey = "linecut:recent-project-paths";
 const recentPathsLimit = 10;
 const warningDisplayDurationMs = 5000;
+const workspaceConfigSaveDelayMs = 120;
 
 function fileName(path: string) {
   return path.split(/[\\/]/).pop() ?? path;
@@ -1033,14 +1035,14 @@ function AppContent() {
         label: "导出设置",
         checked: Boolean(panelInstances.export),
         enabled: true,
-        execute: () => showSingletonPanel("export", exportPanelType, {}, "leftBottom"),
+        execute: () => showSingletonPanel("export", exportPanelType, {}, "right"),
       },
       subtitles: {
         id: "subtitles",
         label: "字幕轨",
         checked: Boolean(panelInstances.subtitles),
         enabled: true,
-        execute: () => showSingletonPanel("subtitles", subtitlePanelType, {}, "right"),
+        execute: () => showSingletonPanel("subtitles", subtitlePanelType, {}, "middle"),
       },
       history: {
         id: "history",
@@ -1114,12 +1116,117 @@ function AppContent() {
   );
 }
 
+function WorkspaceConfigAutoSave() {
+  const instances = usePanelManagerState((state) => state.instances);
+  const layout = usePanelManagerState((state) => state.layout);
+  const focusedPanelId = usePanelManagerState((state) => state.focusedPanelId);
+  const config = useMemo<PanelManagerInitialState>(
+    () => ({
+      instances: Object.values(instances),
+      layout,
+      focusedPanelId,
+    }),
+    [focusedPanelId, instances, layout],
+  );
+  const configRef = useRef(config);
+  const saveTimerRef = useRef<number | null>(null);
+  const savingRef = useRef(false);
+  const saveQueuedRef = useRef(false);
+
+  const saveLatestConfig = useMemo(
+    () => () => {
+      if (savingRef.current) {
+        saveQueuedRef.current = true;
+        return;
+      }
+      savingRef.current = true;
+      const latestConfig = configRef.current;
+      void runOperation("workspace.save", () =>
+        invokeCommand("save_workspace_config", { config: latestConfig }),
+      ).finally(() => {
+        savingRef.current = false;
+        if (saveQueuedRef.current) {
+          saveQueuedRef.current = false;
+          saveLatestConfig();
+        }
+      });
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+    configRef.current = config;
+    if (saveTimerRef.current !== null) {
+      window.clearTimeout(saveTimerRef.current);
+    }
+    saveTimerRef.current = window.setTimeout(() => {
+      saveTimerRef.current = null;
+      saveLatestConfig();
+    }, workspaceConfigSaveDelayMs);
+  }, [config, saveLatestConfig]);
+
+  useEffect(
+    () => () => {
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+        saveLatestConfig();
+      }
+    },
+    [saveLatestConfig],
+  );
+
+  return null;
+}
+
+function RestoredPanelManager() {
+  const [initialState, setInitialState] = useState<PanelManagerInitialState | null>(() =>
+    isTauriRuntime() ? null : initialAppPanelState,
+  );
+
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+    let mounted = true;
+    void runOperation("workspace.load", () =>
+      invokeCommand<PanelManagerInitialState | null>("load_workspace_config"),
+    ).then((outcome) => {
+      if (!mounted) {
+        return;
+      }
+      const restoredState =
+        outcome.status === "success" &&
+        outcome.value &&
+        outcome.value.instances.every((instance) => appPanelRegistry.get(instance.type))
+          ? outcome.value
+          : initialAppPanelState;
+      setInitialState(restoredState);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  if (!initialState) {
+    return <div className="app-shell" />;
+  }
+
+  return (
+    <PanelManagerProvider initialState={initialState}>
+      <WorkspaceConfigAutoSave />
+      <AppContent />
+    </PanelManagerProvider>
+  );
+}
+
 export default function App() {
   return (
     <PanelRegistryProvider registry={appPanelRegistry}>
-      <PanelManagerProvider initialState={initialAppPanelState}>
-        <AppContent />
-      </PanelManagerProvider>
+      <RestoredPanelManager />
     </PanelRegistryProvider>
   );
 }

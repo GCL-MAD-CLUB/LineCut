@@ -1,5 +1,6 @@
 use super::*;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn parse_embedded_subtitle_async(
     video_path: &Path,
     stream_index: i32,

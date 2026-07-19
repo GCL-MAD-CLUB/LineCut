@@ -36,7 +36,9 @@ export type OperationKey =
   | "thumbnail.subtitle.generate"
   | "thumbnail.video"
   | "window.closeListener"
-  | "window.title";
+  | "window.title"
+  | "workspace.load"
+  | "workspace.save";
 
 export const ERROR_CATEGORIES = [
   "cancelled",

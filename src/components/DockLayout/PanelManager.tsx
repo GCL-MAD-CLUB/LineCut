@@ -1,22 +1,22 @@
 import { createContext, useContext, useRef, type ReactNode } from "react";
 import { useStore } from "zustand";
 import { createStore, type StoreApi } from "zustand/vanilla";
-import { disposePanelInstanceState, usePanelInstanceId } from "../../panelState";
 import { clientError } from "../../errors";
+import { disposePanelInstanceState, usePanelInstanceId } from "../../panelState";
 import type {
   DockAreaId,
   DockAreaState,
+  DockDropPosition,
+  DockLayoutNode,
   DockLayoutState,
   OpenPanelRequest,
   PanelInstance,
   PanelManagerInitialState,
 } from "./types";
 
-const dockAreaOrder: DockAreaId[] = ["leftTop", "leftBottom", "right"];
-
-function normalizeArea(area: DockAreaState): DockAreaState {
-  if (area.tabs.length === 0) {
-    return { tabs: area.tabs, activePanelId: null };
+function normalizeArea(area: DockAreaState | undefined): DockAreaState {
+  if (!area || area.tabs.length === 0) {
+    return { tabs: area?.tabs ?? [], activePanelId: null };
   }
   return {
     tabs: area.tabs,
@@ -27,13 +27,85 @@ function normalizeArea(area: DockAreaState): DockAreaState {
   };
 }
 
-function panelArea(layout: DockLayoutState, panelId: string) {
-  return dockAreaOrder.find((areaId) => layout.areas[areaId].tabs.includes(panelId)) ?? null;
+function dockAreaIds(node: DockLayoutNode): DockAreaId[] {
+  if (node.type === "area") {
+    return [node.areaId];
+  }
+  return [...dockAreaIds(node.first), ...dockAreaIds(node.second)];
 }
 
-function nextPanelInstanceId(type: string) {
+function panelArea(layout: DockLayoutState, panelId: string) {
+  return (
+    dockAreaIds(layout.root).find((areaId) => layout.areas[areaId]?.tabs.includes(panelId)) ?? null
+  );
+}
+
+function nextUniqueId(prefix: string) {
   const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
-  return `${type}:${random}`;
+  return `${prefix}:${random}`;
+}
+
+function replaceDockArea(
+  node: DockLayoutNode,
+  areaId: DockAreaId,
+  replacement: DockLayoutNode,
+): DockLayoutNode {
+  if (node.type === "area") {
+    return node.areaId === areaId ? replacement : node;
+  }
+  return {
+    ...node,
+    first: replaceDockArea(node.first, areaId, replacement),
+    second: replaceDockArea(node.second, areaId, replacement),
+  };
+}
+
+function updateDockSplit(node: DockLayoutNode, splitId: string, ratio: number): DockLayoutNode {
+  if (node.type === "area") {
+    return node;
+  }
+  if (node.id === splitId) {
+    return { ...node, ratio };
+  }
+  return {
+    ...node,
+    first: updateDockSplit(node.first, splitId, ratio),
+    second: updateDockSplit(node.second, splitId, ratio),
+  };
+}
+
+function pruneEmptyDockAreas(layout: DockLayoutState, fallbackAreaId: DockAreaId): DockLayoutState {
+  function prune(node: DockLayoutNode): DockLayoutNode | null {
+    if (node.type === "area") {
+      return normalizeArea(layout.areas[node.areaId]).tabs.length > 0 ? node : null;
+    }
+    const first = prune(node.first);
+    const second = prune(node.second);
+    if (!first) {
+      return second;
+    }
+    if (!second) {
+      return first;
+    }
+    return { ...node, first, second };
+  }
+
+  const root = prune(layout.root) ?? { type: "area", areaId: fallbackAreaId };
+  const retainedAreaIds = new Set(dockAreaIds(root));
+  const areas = Object.fromEntries(
+    Array.from(retainedAreaIds, (areaId) => [areaId, normalizeArea(layout.areas[areaId])]),
+  );
+  return { root, areas };
+}
+
+function firstAvailableAreaId(layout: DockLayoutState) {
+  return dockAreaIds(layout.root).find((areaId) => Boolean(layout.areas[areaId])) ?? null;
+}
+
+function focusedOrFirstAreaId(layout: DockLayoutState, focusedPanelId: string | null) {
+  return (
+    (focusedPanelId ? panelArea(layout, focusedPanelId) : null) ?? firstAvailableAreaId(layout)
+  );
 }
 
 export interface PanelManagerState {
@@ -43,7 +115,13 @@ export interface PanelManagerState {
   openPanel: <Params>(request: OpenPanelRequest<Params>) => string;
   activatePanel: (areaId: DockAreaId, panelId: string) => void;
   focusPanel: (panelId: string) => void;
-  movePanel: (panelId: string, targetAreaId: DockAreaId, targetIndex?: number) => void;
+  movePanel: (
+    panelId: string,
+    targetAreaId: DockAreaId,
+    targetIndex?: number,
+    position?: DockDropPosition,
+  ) => void;
+  resizeSplit: (splitId: string, ratio: number) => void;
   closePanel: (panelId: string) => void;
   closePanels: (areaId: DockAreaId, panelIds: Iterable<string>) => void;
 }
@@ -57,7 +135,7 @@ function createPanelManagerStore(initialState: PanelManagerInitialState) {
     focusedPanelId: initialState.focusedPanelId,
 
     openPanel: (request) => {
-      const id = request.id ?? nextPanelInstanceId(request.type);
+      const id = request.id ?? nextUniqueId(request.type);
       const existing = get().instances[id];
       if (existing) {
         const areaId = panelArea(get().layout, id);
@@ -71,15 +149,24 @@ function createPanelManagerStore(initialState: PanelManagerInitialState) {
         const sourceAreaId = request.placement?.sourcePanelId
           ? panelArea(state.layout, request.placement.sourcePanelId)
           : null;
-        const targetAreaId = request.placement?.areaId ?? sourceAreaId ?? "leftBottom";
+        const requestedAreaId = request.placement?.areaId;
+        const targetAreaId =
+          (requestedAreaId && state.layout.areas[requestedAreaId] ? requestedAreaId : null) ??
+          sourceAreaId ??
+          focusedOrFirstAreaId(state.layout, state.focusedPanelId);
+        if (!targetAreaId) {
+          return state;
+        }
+
         const areas = { ...state.layout.areas };
-        for (const areaId of dockAreaOrder) {
-          const area = areas[areaId];
+        for (const areaId of dockAreaIds(state.layout.root)) {
+          const area = normalizeArea(areas[areaId]);
           const tabs = area.tabs.filter((panelId) => panelId !== id);
           areas[areaId] = normalizeArea({ tabs, activePanelId: area.activePanelId });
         }
+        const targetArea = normalizeArea(areas[targetAreaId]);
         areas[targetAreaId] = {
-          tabs: [...areas[targetAreaId].tabs, id],
+          tabs: [...targetArea.tabs, id],
           activePanelId: id,
         };
         return {
@@ -87,7 +174,7 @@ function createPanelManagerStore(initialState: PanelManagerInitialState) {
             ...state.instances,
             [id]: { id, type: request.type, params: request.params },
           },
-          layout: { areas },
+          layout: { ...state.layout, areas },
           focusedPanelId: id,
         };
       });
@@ -96,14 +183,16 @@ function createPanelManagerStore(initialState: PanelManagerInitialState) {
 
     activatePanel: (areaId, panelId) => {
       set((state) => {
-        if (!state.instances[panelId] || !state.layout.areas[areaId].tabs.includes(panelId)) {
+        const area = state.layout.areas[areaId];
+        if (!state.instances[panelId] || !area?.tabs.includes(panelId)) {
           return state;
         }
         return {
           layout: {
+            ...state.layout,
             areas: {
               ...state.layout.areas,
-              [areaId]: { ...state.layout.areas[areaId], activePanelId: panelId },
+              [areaId]: { ...area, activePanelId: panelId },
             },
           },
           focusedPanelId: panelId,
@@ -117,35 +206,76 @@ function createPanelManagerStore(initialState: PanelManagerInitialState) {
       }
     },
 
-    movePanel: (panelId, targetAreaId, targetIndex) => {
+    movePanel: (panelId, requestedTargetAreaId, targetIndex, position = "self") => {
       set((state) => {
         if (!state.instances[panelId]) {
           return state;
         }
+        const targetAreaId = state.layout.areas[requestedTargetAreaId]
+          ? requestedTargetAreaId
+          : focusedOrFirstAreaId(state.layout, state.focusedPanelId);
+        if (!targetAreaId) {
+          return state;
+        }
+
         const areas = { ...state.layout.areas };
-        for (const areaId of dockAreaOrder) {
-          const area = areas[areaId];
+        for (const areaId of dockAreaIds(state.layout.root)) {
+          const area = normalizeArea(areas[areaId]);
           const tabs = area.tabs.filter((tabPanelId) => tabPanelId !== panelId);
           areas[areaId] = normalizeArea({
             tabs,
             activePanelId: area.activePanelId === panelId ? (tabs[0] ?? null) : area.activePanelId,
           });
         }
-        const targetTabs = areas[targetAreaId].tabs;
-        const insertionIndex = Math.min(
-          Math.max(targetIndex ?? targetTabs.length, 0),
-          targetTabs.length,
-        );
-        areas[targetAreaId] = {
-          tabs: [
-            ...targetTabs.slice(0, insertionIndex),
-            panelId,
-            ...targetTabs.slice(insertionIndex),
-          ],
-          activePanelId: panelId,
+
+        if (position === "self") {
+          const targetArea = normalizeArea(areas[targetAreaId]);
+          const insertionIndex = Math.min(
+            Math.max(targetIndex ?? targetArea.tabs.length, 0),
+            targetArea.tabs.length,
+          );
+          areas[targetAreaId] = {
+            tabs: [
+              ...targetArea.tabs.slice(0, insertionIndex),
+              panelId,
+              ...targetArea.tabs.slice(insertionIndex),
+            ],
+            activePanelId: panelId,
+          };
+          return {
+            layout: pruneEmptyDockAreas({ ...state.layout, areas }, targetAreaId),
+            focusedPanelId: panelId,
+          };
+        }
+
+        const newAreaId = nextUniqueId("dock-area");
+        const newAreaNode: DockLayoutNode = { type: "area", areaId: newAreaId };
+        const targetAreaNode: DockLayoutNode = { type: "area", areaId: targetAreaId };
+        const newAreaComesFirst = position === "left" || position === "up";
+        const splitNode: DockLayoutNode = {
+          type: "split",
+          id: nextUniqueId("dock-split"),
+          axis: position === "left" || position === "right" ? "x" : "y",
+          ratio: 0.5,
+          first: newAreaComesFirst ? newAreaNode : targetAreaNode,
+          second: newAreaComesFirst ? targetAreaNode : newAreaNode,
         };
-        return { layout: { areas }, focusedPanelId: panelId };
+        areas[newAreaId] = { tabs: [panelId], activePanelId: panelId };
+        const root = replaceDockArea(state.layout.root, targetAreaId, splitNode);
+        return {
+          layout: pruneEmptyDockAreas({ root, areas }, newAreaId),
+          focusedPanelId: panelId,
+        };
       });
+    },
+
+    resizeSplit: (splitId, ratio) => {
+      set((state) => ({
+        layout: {
+          ...state.layout,
+          root: updateDockSplit(state.layout.root, splitId, Math.min(Math.max(ratio, 0.05), 0.95)),
+        },
+      }));
     },
 
     closePanel: (panelId) => {
@@ -160,14 +290,14 @@ function createPanelManagerStore(initialState: PanelManagerInitialState) {
       const existingClosedPanelIds = Array.from(closedPanelIds).filter(
         (panelId) => get().instances[panelId],
       );
-      if (existingClosedPanelIds.length === 0) {
+      if (existingClosedPanelIds.length === 0 || !get().layout.areas[areaId]) {
         return;
       }
       set((state) => {
         const area = normalizeArea(state.layout.areas[areaId]);
         const activeIndex = area.activePanelId ? area.tabs.indexOf(area.activePanelId) : 0;
         const areas = { ...state.layout.areas };
-        for (const currentAreaId of dockAreaOrder) {
+        for (const currentAreaId of dockAreaIds(state.layout.root)) {
           const currentArea = normalizeArea(areas[currentAreaId]);
           const tabs = currentArea.tabs.filter((panelId) => !closedPanelIds.has(panelId));
           const currentActiveIndex = currentArea.activePanelId
@@ -181,8 +311,8 @@ function createPanelManagerStore(initialState: PanelManagerInitialState) {
                 : currentArea.activePanelId,
           };
         }
-        const targetTabs = areas[areaId].tabs;
-        if (area.activePanelId && closedPanelIds.has(area.activePanelId)) {
+        const targetTabs = areas[areaId]?.tabs ?? [];
+        if (areas[areaId] && area.activePanelId && closedPanelIds.has(area.activePanelId)) {
           areas[areaId].activePanelId =
             targetTabs[Math.min(Math.max(activeIndex, 0), targetTabs.length - 1)] ?? null;
         }
@@ -190,13 +320,14 @@ function createPanelManagerStore(initialState: PanelManagerInitialState) {
         for (const panelId of existingClosedPanelIds) {
           delete instances[panelId];
         }
+        const layout = pruneEmptyDockAreas({ ...state.layout, areas }, areaId);
         const focusedPanelId =
           state.focusedPanelId && closedPanelIds.has(state.focusedPanelId)
-            ? (areas[areaId].activePanelId ??
-              dockAreaOrder.map((id) => areas[id].activePanelId).find(Boolean) ??
-              null)
+            ? (dockAreaIds(layout.root)
+                .map((id) => normalizeArea(layout.areas[id]).activePanelId)
+                .find(Boolean) ?? null)
             : state.focusedPanelId;
-        return { instances, layout: { areas }, focusedPanelId };
+        return { instances, layout, focusedPanelId };
       });
       for (const panelId of existingClosedPanelIds) {
         disposePanelInstanceState(panelId);
@@ -252,4 +383,4 @@ export function useCurrentPanel() {
   };
 }
 
-export { dockAreaOrder, normalizeArea };
+export { dockAreaIds, normalizeArea };

@@ -247,6 +247,8 @@ const operationPolicies = {
   "thumbnail.video": silent("生成视频封面失败"),
   "window.closeListener": modal("窗口关闭监听失败"),
   "window.title": silent("更新窗口标题失败"),
+  "workspace.load": silent("加载工作区布局失败"),
+  "workspace.save": silent("保存工作区布局失败"),
 } satisfies Record<OperationKey, OperationPolicy>;
 
 interface IncidentSnapshot {
