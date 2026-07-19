@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { runMediaImportTask } from "../../mediaImportTask";
+import { runOperation } from "../../errors";
 import { useAppStore } from "../../store";
 import { isTauriRuntime } from "../../tauriRuntime";
 import type { MediaBinItem } from "../../types";
@@ -140,7 +141,7 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
   const messagePublished = useAppStore((state) => state.actions.messagePublished);
   const warningsAppended = useAppStore((state) => state.actions.warningsAppended);
   const exportResultChanged = useAppStore((state) => state.actions.exportResultChanged);
-  const { isRunning: isImporting } = getTaskProgressStatus("import");
+  const { isRunning: isImporting } = getTaskProgressStatus("media.import");
   const pendingItems = useMemo<PendingMediaItem[]>(
     () => [
       ...videoPaths.map((path) => ({ kind: "video" as const, path })),
@@ -178,7 +179,13 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
       messagePublished("请在 Tauri 桌面窗口中选择本地媒体。");
       return;
     }
-    const picked = await open({ multiple: true, title, filters });
+    const outcome = await runOperation("media.import", () =>
+      open({ multiple: true, title, filters }),
+    );
+    if (outcome.status !== "success") {
+      return;
+    }
+    const picked = outcome.value;
     const selectedPaths = Array.isArray(picked) ? picked : picked ? [picked] : [];
     const paths = selectedPaths.filter((path) => !importedPathKeys.has(pathKey(path)));
     if (paths.length === 0) {
@@ -241,7 +248,7 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
       probeItems.map((item) =>
         runMediaImportTask({
           path: item.path,
-          operation: "import",
+          operation: "media.import",
           taskIdPrefix: `import-${item.kind}`,
           onSuccess: (result) => {
             mediaProjectsAdded([result.project]);
@@ -254,14 +261,12 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
     const loadedResults = outcomes.flatMap((outcome) =>
       outcome.status === "success" ? [outcome.result] : [],
     );
-    const errors = outcomes.filter((outcome) => outcome.status === "failed");
     const cancelledCount = outcomes.filter((outcome) => outcome.status === "cancelled").length;
 
     const importedCount = loadedResults.length + subtitlePaths.length;
     clearPendingItems();
     const resultParts = [
       importedCount > 0 ? `已导入 ${importedCount} 个媒体` : "未导入任何媒体",
-      ...(errors.length > 0 ? [`${errors.length} 个失败`] : []),
       ...(cancelledCount > 0 ? [`${cancelledCount} 个已取消`] : []),
     ];
     messagePublished(resultParts.join("，"));

@@ -4,7 +4,7 @@ pub(crate) fn proxy_output_path(
     project: &Project,
     preferences: &Preferences,
     options: &ProxyOptions,
-) -> Result<PathBuf, String> {
+) -> AppResult<PathBuf> {
     let output_dir = match options.location {
         ProxyLocation::SourceProxyFolder => {
             let source_path = PathBuf::from(&project.asset.path);
@@ -16,7 +16,10 @@ pub(crate) fn proxy_output_path(
         ProxyLocation::Custom => {
             let trimmed = options.custom_location.trim();
             if trimmed.is_empty() {
-                return Err("请选择代理输出位置".to_string());
+                return Err(app_error(
+                    ErrorCode::ProxyOutputRequired,
+                    "Proxy output directory is empty",
+                ));
             }
             PathBuf::from(trimmed)
         }
@@ -41,7 +44,7 @@ pub(crate) fn proxy_extension(preset: ProxyPreset) -> &'static str {
     }
 }
 
-pub(crate) fn proxy_video_filter(options: &ProxyOptions) -> Result<Option<String>, String> {
+pub(crate) fn proxy_video_filter(options: &ProxyOptions) -> AppResult<Option<String>> {
     let filter = match options.frame_size {
         ProxyFrameSize::Full => Some("scale=trunc(iw/2)*2:trunc(ih/2)*2".to_string()),
         ProxyFrameSize::Half => Some("scale=trunc(iw/4)*2:-2".to_string()),
@@ -50,7 +53,10 @@ pub(crate) fn proxy_video_filter(options: &ProxyOptions) -> Result<Option<String
             let width = proxy_custom_width(options);
             let height = proxy_custom_height(options);
             if width < 2 || height < 2 {
-                return Err("自定义代理尺寸必须大于 2px".to_string());
+                return Err(app_error(
+                    ErrorCode::ProxyDimensionsInvalid,
+                    "Custom proxy dimensions must be at least 2 pixels",
+                ));
             }
             Some(format!(
                 "scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2"

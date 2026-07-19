@@ -7,6 +7,7 @@ use sha2::Sha256;
 use zeroize::Zeroizing;
 
 use super::keyring;
+use crate::{app_error, AppError, AppResult, ErrorCode};
 
 const MAGIC: &[u8; 8] = b"LCSEAL2\0";
 const PROTOCOL_VERSION: u16 = 1;
@@ -42,24 +43,42 @@ pub(super) fn recognizes(bytes: &[u8]) -> bool {
     bytes.starts_with(MAGIC)
 }
 
-pub(super) fn seal(content_version: u16, plaintext: &[u8]) -> Result<Vec<u8>, String> {
+pub(super) fn seal(content_version: u16, plaintext: &[u8]) -> AppResult<Vec<u8>> {
     if content_version < 2 {
-        return Err("统一加密协议只接受 V2 及以上的项目内容".to_string());
+        return Err(app_error(
+            ErrorCode::ProjectVersionUnsupported,
+            "The encrypted project protocol requires content version 2 or newer",
+        ));
     }
     if plaintext.len() > MAX_PLAINTEXT_LEN {
-        return Err("项目数据过大，无法保存".to_string());
+        return Err(app_error(
+            ErrorCode::ProjectEncodeFailed,
+            "Project payload exceeds the encoding limit",
+        ));
     }
 
     let application_key = keyring::current_key()?;
     let mut salt = [0u8; SALT_LEN];
     let mut nonce = [0u8; NONCE_LEN];
-    getrandom::getrandom(&mut salt).map_err(|error| format!("生成项目加密盐失败: {error}"))?;
-    getrandom::getrandom(&mut nonce).map_err(|error| format!("生成项目加密随机数失败: {error}"))?;
+    getrandom::getrandom(&mut salt).map_err(|error| {
+        app_error(
+            ErrorCode::ProjectRandomFailed,
+            format!("Failed to generate the project encryption salt: {error}"),
+        )
+    })?;
+    getrandom::getrandom(&mut nonce).map_err(|error| {
+        app_error(
+            ErrorCode::ProjectRandomFailed,
+            format!("Failed to generate the project encryption nonce: {error}"),
+        )
+    })?;
 
-    let ciphertext_len = plaintext
-        .len()
-        .checked_add(TAG_LEN)
-        .ok_or_else(|| "项目数据长度溢出".to_string())?;
+    let ciphertext_len = plaintext.len().checked_add(TAG_LEN).ok_or_else(|| {
+        app_error(
+            ErrorCode::ProjectEncodeFailed,
+            "Project payload length overflow",
+        )
+    })?;
     let header = build_header(
         content_version,
         plaintext.len(),
@@ -74,8 +93,12 @@ pub(super) fn seal(content_version: u16, plaintext: &[u8]) -> Result<Vec<u8>, St
         content_version,
         &application_key.id,
     )?;
-    let cipher = XChaCha20Poly1305::new_from_slice(file_key.as_slice())
-        .map_err(|_| "初始化项目加密器失败".to_string())?;
+    let cipher = XChaCha20Poly1305::new_from_slice(file_key.as_slice()).map_err(|_| {
+        app_error(
+            ErrorCode::ProjectEncryptionFailed,
+            "Failed to initialize the project cipher",
+        )
+    })?;
     let ciphertext = cipher
         .encrypt(
             XNonce::from_slice(&nonce),
@@ -84,7 +107,12 @@ pub(super) fn seal(content_version: u16, plaintext: &[u8]) -> Result<Vec<u8>, St
                 aad: &header,
             },
         )
-        .map_err(|_| "加密项目文件失败".to_string())?;
+        .map_err(|_| {
+            app_error(
+                ErrorCode::ProjectEncryptionFailed,
+                "Failed to encrypt the project payload",
+            )
+        })?;
 
     let mut output = Vec::with_capacity(HEADER_LEN + ciphertext.len());
     output.extend_from_slice(&header);
@@ -92,9 +120,12 @@ pub(super) fn seal(content_version: u16, plaintext: &[u8]) -> Result<Vec<u8>, St
     Ok(output)
 }
 
-pub(super) fn open(bytes: &[u8]) -> Result<OpenedProject, String> {
+pub(super) fn open(bytes: &[u8]) -> AppResult<OpenedProject> {
     if bytes.len() < HEADER_LEN || !recognizes(bytes) {
-        return Err("不是有效的 LineCut 加密项目文件".to_string());
+        return Err(app_error(
+            ErrorCode::ProjectFormatInvalid,
+            "Input is not a recognized encrypted LineCut project file",
+        ));
     }
 
     let protocol_version = read_u16(bytes, OFFSET_PROTOCOL_VERSION)?;
@@ -116,13 +147,19 @@ pub(super) fn open(bytes: &[u8]) -> Result<OpenedProject, String> {
             .iter()
             .any(|byte| *byte != 0)
     {
-        return Err("项目文件加密协议不受支持或文件头已损坏".to_string());
+        return Err(app_error(
+            ErrorCode::ProjectVersionUnsupported,
+            "The project encryption protocol is unsupported or its header is invalid",
+        ));
     }
     if plaintext_len > MAX_PLAINTEXT_LEN as u64
         || ciphertext_len != plaintext_len + TAG_LEN as u64
         || ciphertext_len as usize != bytes.len() - HEADER_LEN
     {
-        return Err("项目文件加密长度校验失败".to_string());
+        return Err(app_error(
+            ErrorCode::ProjectIntegrityFailed,
+            "The encrypted project length fields are inconsistent",
+        ));
     }
 
     let mut key_id = [0u8; 16];
@@ -132,7 +169,6 @@ pub(super) fn open(bytes: &[u8]) -> Result<OpenedProject, String> {
     let mut nonce = [0u8; NONCE_LEN];
     nonce.copy_from_slice(&bytes[OFFSET_NONCE..OFFSET_RESERVED]);
 
-    let authentication_error = || "项目文件认证失败，文件已损坏或密钥不匹配".to_string();
     let application_key = keyring::find_key(&key_id)?.ok_or_else(authentication_error)?;
     let file_key = derive_file_key(
         application_key.material.as_slice(),
@@ -196,7 +232,7 @@ fn derive_file_key(
     salt: &[u8; SALT_LEN],
     content_version: u16,
     key_id: &[u8; 16],
-) -> Result<Zeroizing<[u8; 32]>, String> {
+) -> AppResult<Zeroizing<[u8; 32]>> {
     let hkdf = Hkdf::<Sha256>::new(Some(salt), application_key);
     let mut info = Vec::with_capacity(52);
     info.extend_from_slice(b"LineCut/project-file/content-key");
@@ -204,31 +240,51 @@ fn derive_file_key(
     info.extend_from_slice(&content_version.to_le_bytes());
     info.extend_from_slice(key_id);
     let mut file_key = Zeroizing::new([0u8; 32]);
-    hkdf.expand(&info, file_key.as_mut())
-        .map_err(|_| "派生项目文件内容密钥失败".to_string())?;
+    hkdf.expand(&info, file_key.as_mut()).map_err(|_| {
+        app_error(
+            ErrorCode::ProjectKeyDerivationFailed,
+            "Failed to derive the project content key",
+        )
+    })?;
     Ok(file_key)
 }
 
-fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, String> {
+fn read_u16(bytes: &[u8], offset: usize) -> AppResult<u16> {
     Ok(u16::from_le_bytes(
-        bytes[offset..offset + 2]
-            .try_into()
-            .map_err(|_| "项目文件加密头损坏".to_string())?,
+        bytes[offset..offset + 2].try_into().map_err(|_| {
+            app_error(
+                ErrorCode::ProjectFormatInvalid,
+                "Encrypted project header is truncated",
+            )
+        })?,
     ))
 }
 
-fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, String> {
+fn read_u32(bytes: &[u8], offset: usize) -> AppResult<u32> {
     Ok(u32::from_le_bytes(
-        bytes[offset..offset + 4]
-            .try_into()
-            .map_err(|_| "项目文件加密头损坏".to_string())?,
+        bytes[offset..offset + 4].try_into().map_err(|_| {
+            app_error(
+                ErrorCode::ProjectFormatInvalid,
+                "Encrypted project header is truncated",
+            )
+        })?,
     ))
 }
 
-fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, String> {
+fn read_u64(bytes: &[u8], offset: usize) -> AppResult<u64> {
     Ok(u64::from_le_bytes(
-        bytes[offset..offset + 8]
-            .try_into()
-            .map_err(|_| "项目文件加密头损坏".to_string())?,
+        bytes[offset..offset + 8].try_into().map_err(|_| {
+            app_error(
+                ErrorCode::ProjectFormatInvalid,
+                "Encrypted project header is truncated",
+            )
+        })?,
     ))
+}
+
+fn authentication_error() -> AppError {
+    app_error(
+        ErrorCode::ProjectAuthenticationFailed,
+        "Project authentication failed because the payload is corrupted or the key identifier is unavailable",
+    )
 }

@@ -356,7 +356,10 @@ export function SubtitlePanel() {
         }),
       );
     for (const request of requests) {
-      void request.promise.catch(() => undefined);
+      void request.promise.then(
+        () => undefined,
+        () => undefined,
+      );
     }
     return () => {
       for (const request of requests) {

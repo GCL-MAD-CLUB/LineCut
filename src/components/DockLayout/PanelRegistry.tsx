@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { PanelInstanceProvider } from "../../panelState";
+import { clientError } from "../../errors";
 import {
   PopupMenuItem,
   PopupMenuSelectionGroup,
@@ -39,7 +40,10 @@ export class PanelRegistry {
   constructor(definitions: readonly AnyPanelDefinition[]) {
     for (const definition of definitions) {
       if (this.definitions.has(definition.type)) {
-        throw new Error(`Panel type "${definition.type}" is already registered.`);
+        throw clientError(
+          "PANEL_TYPE_DUPLICATE",
+          `Panel type is already registered: ${definition.type}`,
+        );
       }
       this.definitions.set(definition.type, {
         ...definition,
@@ -70,7 +74,10 @@ export function PanelRegistryProvider({
 export function usePanelRegistry() {
   const registry = useContext(PanelRegistryContext);
   if (!registry) {
-    throw new Error("Panel registry must be used inside PanelRegistryProvider.");
+    throw clientError(
+      "PANEL_REGISTRY_CONTEXT_MISSING",
+      "Panel registry was requested outside PanelRegistryProvider",
+    );
   }
   return registry;
 }

@@ -1,6 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useState } from "react";
+import { invokeCommand, runOperation } from "../../errors";
 import {
   cancelFfmpegTask,
   createFfmpegTaskId,
@@ -62,7 +62,7 @@ export function ProxyCreationDialog() {
   const proxyDialogClosed = useAppStore((state) => state.actions.proxyDialogClosed);
   const proxyGenerated = useAppStore((state) => state.actions.proxyGenerated);
   const setMessage = useAppStore((state) => state.actions.messagePublished);
-  const { isRunning: isGeneratingProxy } = getTaskProgressStatus("proxy");
+  const { isRunning: isGeneratingProxy } = getTaskProgressStatus("proxy.generate");
   const [frameSize, setFrameSize] = useState<ProxyFrameSize>("full");
   const [customWidth, setCustomWidth] = useState(1280);
   const [customHeight, setCustomHeight] = useState(720);
@@ -72,19 +72,21 @@ export function ProxyCreationDialog() {
   const [customLocation, setCustomLocation] = useState("");
 
   async function chooseCustomLocation(previousLocation: ProxyLocation) {
-    try {
-      const picked = await openDialog({
+    const outcome = await runOperation("proxy.generate", () =>
+      openDialog({
         directory: true,
         multiple: false,
-      });
-      const path = Array.isArray(picked) ? picked[0] : picked;
-      if (path) {
-        setCustomLocation(path);
-        setLocation("custom");
-      } else {
-        setLocation(previousLocation);
-      }
-    } catch {
+      }),
+    );
+    if (outcome.status !== "success") {
+      setLocation(previousLocation);
+      return;
+    }
+    const path = Array.isArray(outcome.value) ? outcome.value[0] : outcome.value;
+    if (path) {
+      setCustomLocation(path);
+      setLocation("custom");
+    } else {
       setLocation(previousLocation);
     }
   }
@@ -139,7 +141,7 @@ export function ProxyCreationDialog() {
     const proxyTaskId = createFfmpegTaskId("proxy");
     let proxyCancelled = false;
     const proxyTask = await createTaskProgress({
-      operation: "proxy",
+      operation: "proxy.generate",
       label: `生成代理 ${project.asset.file_name}`,
       current: 0,
       total: 1,
@@ -150,7 +152,7 @@ export function ProxyCreationDialog() {
       },
     });
     try {
-      const result = await invoke<ProxyResult>("generate_proxy", {
+      const result = await invokeCommand<ProxyResult>("generate_proxy", {
         assetId: project.asset.id,
         options,
         taskId: proxyTaskId,
@@ -164,8 +166,7 @@ export function ProxyCreationDialog() {
         setMessage("代理生成已取消");
         return;
       }
-      proxyTask.fail("生成代理失败", error);
-      setMessage("生成代理失败，请检查设置后重试。");
+      proxyTask.fail(error, { displayName: project.asset.file_name, resourceKind: "proxy" });
     }
   }
 

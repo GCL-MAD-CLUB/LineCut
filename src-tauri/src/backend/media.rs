@@ -6,7 +6,7 @@ pub(crate) async fn probe_media(
     state: &AppState,
     task_id: &str,
     cancel: Arc<AtomicBool>,
-) -> Result<ProbeOutput, String> {
+) -> AppResult<ProbeOutput> {
     let args = vec![
         "-v".to_string(),
         "error".to_string(),
@@ -19,8 +19,13 @@ pub(crate) async fn probe_media(
     ];
     let program = ffprobe_program(preferences);
     let stdout = run_output(&program, &args, state, task_id, cancel.clone()).await?;
-    spawn_blocking_cancellable(cancel, "解析媒体信息", move |_| {
-        serde_json::from_str(&stdout).map_err(|e| format!("ffprobe JSON 解析失败: {e}"))
+    spawn_blocking_cancellable(cancel, "parse media probe output", move |_| {
+        serde_json::from_str(&stdout).map_err(|error| {
+            app_error(
+                ErrorCode::MediaProbeDecodeFailed,
+                format!("Failed to decode ffprobe JSON output: {error}"),
+            )
+        })
     })
     .await
 }
@@ -30,27 +35,45 @@ pub(crate) fn fingerprint_file(
     meta: &fs::Metadata,
     modified_at: i64,
     cancel: &AtomicBool,
-) -> Result<String, String> {
+) -> AppResult<String> {
     ensure_not_cancelled(cancel)?;
-    let mut file = fs::File::open(path).map_err(|e| format!("打开媒体文件失败: {e}"))?;
+    let mut file = fs::File::open(path).map_err(|error| {
+        app_error(
+            ErrorCode::MediaReadFailed,
+            format!("Failed to open media file: {error}"),
+        )
+    })?;
     let mut hasher = Sha256::new();
     hasher.update(meta.len().to_le_bytes());
     hasher.update(modified_at.to_le_bytes());
 
     let head_len = meta.len().min(HEAD_TAIL_HASH_BYTES) as usize;
     let mut head = vec![0u8; head_len];
-    file.read_exact(&mut head)
-        .map_err(|e| format!("读取媒体文件头失败: {e}"))?;
+    file.read_exact(&mut head).map_err(|error| {
+        app_error(
+            ErrorCode::MediaReadFailed,
+            format!("Failed to read the media file header: {error}"),
+        )
+    })?;
     hasher.update(&head);
     ensure_not_cancelled(cancel)?;
 
     if meta.len() > HEAD_TAIL_HASH_BYTES {
         let tail_len = meta.len().min(HEAD_TAIL_HASH_BYTES) as usize;
         file.seek(SeekFrom::End(-(tail_len as i64)))
-            .map_err(|e| format!("定位媒体文件尾失败: {e}"))?;
+            .map_err(|error| {
+                app_error(
+                    ErrorCode::MediaReadFailed,
+                    format!("Failed to seek to the media file tail: {error}"),
+                )
+            })?;
         let mut tail = vec![0u8; tail_len];
-        file.read_exact(&mut tail)
-            .map_err(|e| format!("读取媒体文件尾失败: {e}"))?;
+        file.read_exact(&mut tail).map_err(|error| {
+            app_error(
+                ErrorCode::MediaReadFailed,
+                format!("Failed to read the media file tail: {error}"),
+            )
+        })?;
         hasher.update(&tail);
     }
 
@@ -59,11 +82,26 @@ pub(crate) fn fingerprint_file(
 }
 
 pub(crate) fn modified_secs(meta: &fs::Metadata) -> i64 {
-    meta.modified()
-        .ok()
-        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
-        .map(|value| value.as_secs() as i64)
-        .unwrap_or(0)
+    let modified = match meta.modified() {
+        Ok(modified) => modified,
+        Err(error) => {
+            app_error(
+                ErrorCode::MediaReadFailed,
+                format!("Failed to read media modification time: {error}"),
+            );
+            return 0;
+        }
+    };
+    match modified.duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_secs() as i64,
+        Err(error) => {
+            app_error(
+                ErrorCode::MediaReadFailed,
+                format!("Media modification time is earlier than the Unix epoch: {error}"),
+            );
+            0
+        }
+    }
 }
 
 pub(crate) fn tag_value(tags: &HashMap<String, String>, keys: &[&str]) -> Option<String> {

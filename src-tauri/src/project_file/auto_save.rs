@@ -1,4 +1,4 @@
-use crate::ProjectWorkspace;
+use crate::{app_error, AppResult, ErrorCode, ProjectWorkspace};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -18,12 +18,17 @@ pub(super) fn write_snapshot(
     project_name: &str,
     workspace: &ProjectWorkspace,
     max_snapshots: usize,
-) -> Result<Option<PathBuf>, String> {
+) -> AppResult<Option<PathBuf>> {
     let max_snapshots = max_snapshots.max(1);
     let project_name = sanitized_project_name(project_name);
     let hash = models::content_hash(workspace)?;
     let directory = cache_root.join(AUTO_SAVE_DIRECTORY);
-    fs::create_dir_all(&directory).map_err(|error| format!("创建自动备份目录失败: {error}"))?;
+    fs::create_dir_all(&directory).map_err(|error| {
+        app_error(
+            ErrorCode::AutoSaveWriteFailed,
+            format!("Failed to create the auto-save directory: {error}"),
+        )
+    })?;
 
     let prefix = format!("{project_name}--");
     let file_name = format!("{prefix}{hash}.lcp");
@@ -50,7 +55,7 @@ fn prune_to_global_limit(
     directory: &Path,
     max_snapshots: usize,
     current_path: Option<&Path>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let mut snapshots = snapshots(directory, None)?;
     let current_snapshot = current_path.and_then(|current_path| {
         snapshots
@@ -74,12 +79,21 @@ fn sort_newest_first(snapshots: &mut [SnapshotEntry]) {
     });
 }
 
-fn snapshots(directory: &Path, prefix: Option<&str>) -> Result<Vec<SnapshotEntry>, String> {
-    let entries =
-        fs::read_dir(directory).map_err(|error| format!("读取自动备份目录失败: {error}"))?;
+fn snapshots(directory: &Path, prefix: Option<&str>) -> AppResult<Vec<SnapshotEntry>> {
+    let entries = fs::read_dir(directory).map_err(|error| {
+        app_error(
+            ErrorCode::AutoSaveReadFailed,
+            format!("Failed to read the auto-save directory: {error}"),
+        )
+    })?;
     let mut snapshots = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|error| format!("读取自动备份条目失败: {error}"))?;
+        let entry = entry.map_err(|error| {
+            app_error(
+                ErrorCode::AutoSaveReadFailed,
+                format!("Failed to read an auto-save directory entry: {error}"),
+            )
+        })?;
         let path = entry.path();
         let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
@@ -91,9 +105,12 @@ fn snapshots(directory: &Path, prefix: Option<&str>) -> Result<Vec<SnapshotEntry
         {
             continue;
         }
-        let metadata = entry
-            .metadata()
-            .map_err(|error| format!("读取自动备份信息失败: {error}"))?;
+        let metadata = entry.metadata().map_err(|error| {
+            app_error(
+                ErrorCode::AutoSaveReadFailed,
+                format!("Failed to read auto-save file metadata: {error}"),
+            )
+        })?;
         if metadata.is_file() {
             snapshots.push(SnapshotEntry {
                 path,
@@ -104,12 +121,15 @@ fn snapshots(directory: &Path, prefix: Option<&str>) -> Result<Vec<SnapshotEntry
     Ok(snapshots)
 }
 
-fn prune_snapshots(entries: impl Iterator<Item = SnapshotEntry>) -> Result<(), String> {
+fn prune_snapshots(entries: impl Iterator<Item = SnapshotEntry>) -> AppResult<()> {
     for entry in entries {
         fs::remove_file(&entry.path).map_err(|error| {
-            format!(
-                "删除过期自动备份失败（{}）: {error}",
-                entry.path.to_string_lossy()
+            app_error(
+                ErrorCode::AutoSaveWriteFailed,
+                format!(
+                    "Failed to remove expired auto-save snapshot {}: {error}",
+                    entry.path.to_string_lossy()
+                ),
             )
         })?;
     }

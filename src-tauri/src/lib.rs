@@ -24,9 +24,11 @@ use tokio::process::Command;
 use uuid::Uuid;
 
 mod backend;
+mod error;
 mod project_file;
 
 use backend::*;
+use error::*;
 
 const HEAD_TAIL_HASH_BYTES: u64 = 1024 * 1024;
 const FFMPEG_PROGRESS_EVENT: &str = "ffmpeg-progress";
@@ -41,6 +43,7 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 struct AppState {
     projects: Mutex<HashMap<String, Project>>,
     preferences: Mutex<Preferences>,
+    startup_preferences_error: Mutex<Option<AppError>>,
     launch_project_path: Mutex<Option<String>>,
     running_tasks: Mutex<HashMap<String, RunningTask>>,
     running_ffmpeg: Mutex<HashMap<String, RunningFfmpeg>>,
@@ -48,9 +51,18 @@ struct AppState {
 
 impl AppState {
     fn new() -> Self {
+        Self::from_preferences_result(load_preferences())
+    }
+
+    fn from_preferences_result(result: AppResult<Preferences>) -> Self {
+        let (preferences, startup_preferences_error) = match result {
+            Ok(preferences) => (preferences, None),
+            Err(error) => (Preferences::default(), Some(error)),
+        };
         Self {
             projects: Mutex::new(HashMap::new()),
-            preferences: Mutex::new(load_preferences().unwrap_or_default()),
+            preferences: Mutex::new(preferences),
+            startup_preferences_error: Mutex::new(startup_preferences_error),
             launch_project_path: Mutex::new(project_path_from_launch_args()),
             running_tasks: Mutex::new(HashMap::new()),
             running_ffmpeg: Mutex::new(HashMap::new()),
@@ -89,7 +101,7 @@ impl TaskGuard<'_> {
         self.cancel.clone()
     }
 
-    fn check_cancelled(&self) -> Result<(), String> {
+    fn check_cancelled(&self) -> AppResult<()> {
         ensure_not_cancelled(&self.cancel)
     }
 }
@@ -108,6 +120,11 @@ impl Drop for TaskGuard<'_> {
                     }
                 }
             }
+        } else {
+            app_error(
+                ErrorCode::TaskStateUnavailable,
+                "Task state lock is poisoned while releasing a task guard",
+            );
         }
         if !cancelled_cleanup_paths.is_empty() {
             tauri::async_runtime::spawn_blocking(move || {
@@ -346,13 +363,58 @@ struct ProjectWorkspace {
 struct OpenProjectResult {
     path: String,
     workspace: ProjectWorkspace,
-    warnings: Vec<String>,
+    warnings: Vec<UserNotice>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum NoticeSeverity {
+    Info,
+    Warning,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct UserNotice {
+    code: String,
+    severity: NoticeSeverity,
+    message: String,
+}
+
+impl UserNotice {
+    fn warning(code: &str, message: impl Into<String>) -> Self {
+        Self {
+            code: code.to_string(),
+            severity: NoticeSeverity::Warning,
+            message: message.into(),
+        }
+    }
+
+    fn warning_with_detail(
+        code: &str,
+        message: impl Into<String>,
+        detail: impl AsRef<str>,
+    ) -> Self {
+        tracing::warn!(
+            notice_code = code,
+            detail = detail.as_ref(),
+            "operation warning"
+        );
+        Self::warning(code, message)
+    }
+
+    fn info(code: &str, message: impl Into<String>) -> Self {
+        Self {
+            code: code.to_string(),
+            severity: NoticeSeverity::Info,
+            message: message.into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ImportResult {
     project: Project,
-    warnings: Vec<String>,
+    warnings: Vec<UserNotice>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -409,7 +471,7 @@ enum ProxyLocation {
 struct AddExternalSubtitlesResult {
     tracks: Vec<SubtitleTrack>,
     cues: HashMap<String, Vec<SubtitleCue>>,
-    warnings: Vec<String>,
+    warnings: Vec<UserNotice>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -512,7 +574,7 @@ struct ExportResult {
     ranges: Vec<ClipRange>,
     files: Vec<String>,
     output_dir: String,
-    log: Vec<String>,
+    log: Vec<UserNotice>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -549,19 +611,34 @@ struct ProbeStream {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let result = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(AppState::new())
         .setup(|app| {
+            init_logging(app.handle())?;
+            app.manage(AppState::new());
             #[cfg(windows)]
             if let Some(window) = app.get_webview_window("main") {
-                window.set_theme(Some(tauri::Theme::Light))?;
-                install_system_file_drop(app.handle().clone(), window.hwnd()?)?;
+                window
+                    .set_theme(Some(tauri::Theme::Light))
+                    .map_err(|error| {
+                        app_error(
+                            ErrorCode::WindowThemeFailed,
+                            format!("Failed to apply the main window theme: {error}"),
+                        )
+                    })?;
+                let hwnd = window.hwnd().map_err(|error| {
+                    app_error(
+                        ErrorCode::WindowHandleUnavailable,
+                        format!("Failed to obtain the main window handle: {error}"),
+                    )
+                })?;
+                install_system_file_drop(app.handle().clone(), hwnd)?;
             }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_preferences,
+            take_preferences_startup_error,
             take_launch_project_path,
             update_preferences,
             import_media,
@@ -581,7 +658,9 @@ pub fn run() {
             set_media_import_drop_region,
             reveal_in_file_manager,
             cancel_task,
-            export_clips
+            export_clips,
+            play_system_sound,
+            record_frontend_incident
         ])
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
@@ -589,6 +668,39 @@ pub fn run() {
                 let _ = cancel_all_tasks(state.inner());
             }
         })
-        .run(tauri::generate_context!())
-        .expect("failed to run LineCut");
+        .run(tauri::generate_context!());
+    if let Err(error) = result {
+        app_error(
+            ErrorCode::ApplicationRunFailed,
+            format!("Application event loop failed: {error}"),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preferences_startup_failure_uses_defaults_and_preserves_the_diagnostic() {
+        let state = AppState::from_preferences_result(Err(app_error(
+            ErrorCode::PreferencesDecodeFailed,
+            "Preferences fixture is invalid",
+        )));
+
+        assert_eq!(
+            state
+                .preferences
+                .lock()
+                .expect("preferences lock")
+                .ffmpeg_path,
+            DEFAULT_FFMPEG_PROGRAM
+        );
+        assert!(state
+            .startup_preferences_error
+            .lock()
+            .expect("startup diagnostic lock")
+            .as_ref()
+            .is_some_and(|error| error.is(ErrorCode::PreferencesDecodeFailed)));
+    }
 }

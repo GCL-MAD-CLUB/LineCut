@@ -9,21 +9,26 @@ pub(crate) fn hidden_command(program: &str) -> Command {
     command
 }
 
-pub(crate) fn register_task<'a>(
-    task_id: &str,
-    state: &'a AppState,
-) -> Result<TaskGuard<'a>, String> {
+pub(crate) fn register_task<'a>(task_id: &str, state: &'a AppState) -> AppResult<TaskGuard<'a>> {
     if task_id.trim().is_empty() {
-        return Err("任务 ID 不能为空".to_string());
+        return Err(app_error(
+            ErrorCode::TaskIdInvalid,
+            "Task identifier is empty",
+        ));
     }
 
     let cancel = Arc::new(AtomicBool::new(false));
-    let mut tasks = state
-        .running_tasks
-        .lock()
-        .map_err(|_| "任务状态锁定失败".to_string())?;
+    let mut tasks = state.running_tasks.lock().map_err(|_| {
+        app_error(
+            ErrorCode::TaskStateUnavailable,
+            "Task state lock is poisoned",
+        )
+    })?;
     if tasks.contains_key(task_id) {
-        return Err(format!("任务已存在: {task_id}"));
+        return Err(app_error(
+            ErrorCode::TaskAlreadyRunning,
+            format!("Task identifier is already registered: {task_id}"),
+        ));
     }
     tasks.insert(
         task_id.to_string(),
@@ -44,17 +49,22 @@ pub(crate) fn register_task_cleanup_paths(
     task_id: &str,
     paths: &[PathBuf],
     state: &AppState,
-) -> Result<(), String> {
+) -> AppResult<()> {
     if paths.is_empty() {
         return Ok(());
     }
-    let mut tasks = state
-        .running_tasks
-        .lock()
-        .map_err(|_| "任务状态锁定失败".to_string())?;
-    let task = tasks
-        .get_mut(task_id)
-        .ok_or_else(|| format!("任务不存在: {task_id}"))?;
+    let mut tasks = state.running_tasks.lock().map_err(|_| {
+        app_error(
+            ErrorCode::TaskStateUnavailable,
+            "Task state lock is poisoned",
+        )
+    })?;
+    let task = tasks.get_mut(task_id).ok_or_else(|| {
+        app_error(
+            ErrorCode::TaskNotFound,
+            format!("Task identifier is not registered: {task_id}"),
+        )
+    })?;
     for path in paths {
         if !task.cleanup_paths.contains(path) {
             task.cleanup_paths.push(path.clone());
@@ -63,15 +73,18 @@ pub(crate) fn register_task_cleanup_paths(
     Ok(())
 }
 
-pub(crate) fn ensure_not_cancelled(cancel: &AtomicBool) -> Result<(), String> {
+pub(crate) fn ensure_not_cancelled(cancel: &AtomicBool) -> AppResult<()> {
     if cancel.load(Ordering::SeqCst) {
-        Err("任务已取消".to_string())
+        Err(app_error(
+            ErrorCode::TaskCancelled,
+            "Task cancellation was requested",
+        ))
     } else {
         Ok(())
     }
 }
 
-pub(crate) fn check_optional_cancel(cancel: Option<&AtomicBool>) -> Result<(), String> {
+pub(crate) fn check_optional_cancel(cancel: Option<&AtomicBool>) -> AppResult<()> {
     cancel.map_or(Ok(()), ensure_not_cancelled)
 }
 
@@ -79,10 +92,10 @@ pub(crate) async fn spawn_blocking_cancellable<T, F>(
     cancel: Arc<AtomicBool>,
     operation: &'static str,
     work: F,
-) -> Result<T, String>
+) -> AppResult<T>
 where
     T: Send + 'static,
-    F: FnOnce(&AtomicBool) -> Result<T, String> + Send + 'static,
+    F: FnOnce(&AtomicBool) -> AppResult<T> + Send + 'static,
 {
     tokio::task::spawn_blocking(move || {
         ensure_not_cancelled(&cancel)?;
@@ -91,7 +104,12 @@ where
         Ok(result)
     })
     .await
-    .map_err(|error| format!("{operation}任务失败: {error}"))?
+    .map_err(|error| {
+        app_error(
+            ErrorCode::BlockingTaskFailed,
+            format!("Blocking task join failed during {operation}: {error}"),
+        )
+    })?
 }
 
 pub(crate) fn register_running_ffmpeg(
@@ -101,13 +119,15 @@ pub(crate) fn register_running_ffmpeg(
     cancel: Arc<AtomicBool>,
     pid: Option<u32>,
     cleanup_paths: Vec<PathBuf>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     ensure_not_cancelled(&cancel)?;
     register_task_cleanup_paths(&task_id, &cleanup_paths, state)?;
-    let mut running = state
-        .running_ffmpeg
-        .lock()
-        .map_err(|_| "任务状态锁定失败".to_string())?;
+    let mut running = state.running_ffmpeg.lock().map_err(|_| {
+        app_error(
+            ErrorCode::TaskStateUnavailable,
+            "FFmpeg task state lock is poisoned",
+        )
+    })?;
     running.insert(
         id.clone(),
         RunningFfmpeg {
@@ -119,25 +139,41 @@ pub(crate) fn register_running_ffmpeg(
     );
     if cancel.load(Ordering::SeqCst) {
         running.remove(&id);
-        return Err("任务已取消".to_string());
+        return Err(app_error(
+            ErrorCode::TaskCancelled,
+            "Task cancellation was requested",
+        ));
     }
     Ok(())
 }
 
 pub(crate) fn clear_running_ffmpeg(state: &AppState, id: &str) {
-    if let Ok(mut running) = state.running_ffmpeg.lock() {
-        running.remove(id);
+    match state.running_ffmpeg.lock() {
+        Ok(mut running) => {
+            running.remove(id);
+        }
+        Err(_) => {
+            let _ = app_error(
+                ErrorCode::TaskStateUnavailable,
+                "FFmpeg task state lock is poisoned during cleanup",
+            );
+        }
     }
 }
 
 pub(crate) fn take_task_for_cancellation(
     task_id: &str,
     state: &AppState,
-) -> Result<(bool, Vec<RunningFfmpeg>, Vec<PathBuf>), String> {
+) -> AppResult<(bool, Vec<RunningFfmpeg>, Vec<PathBuf>)> {
     let logical_task = state
         .running_tasks
         .lock()
-        .map_err(|_| "任务状态锁定失败".to_string())?
+        .map_err(|_| {
+            app_error(
+                ErrorCode::TaskStateUnavailable,
+                "Task state lock is poisoned",
+            )
+        })?
         .get(task_id)
         .cloned();
     if let Some(task) = &logical_task {
@@ -145,10 +181,12 @@ pub(crate) fn take_task_for_cancellation(
     }
 
     let processes = {
-        let mut running = state
-            .running_ffmpeg
-            .lock()
-            .map_err(|_| "任务状态锁定失败".to_string())?;
+        let mut running = state.running_ffmpeg.lock().map_err(|_| {
+            app_error(
+                ErrorCode::TaskStateUnavailable,
+                "FFmpeg task state lock is poisoned",
+            )
+        })?;
         let matching_ids = running
             .iter()
             .filter(|(_, task)| task.task_id == task_id)
@@ -171,11 +209,16 @@ pub(crate) fn take_task_for_cancellation(
     ))
 }
 
-pub(crate) fn cancel_all_tasks(state: &AppState) -> Result<bool, String> {
+pub(crate) fn cancel_all_tasks(state: &AppState) -> AppResult<bool> {
     let logical_tasks = state
         .running_tasks
         .lock()
-        .map_err(|_| "任务状态锁定失败".to_string())?
+        .map_err(|_| {
+            app_error(
+                ErrorCode::TaskStateUnavailable,
+                "Task state lock is poisoned",
+            )
+        })?
         .values()
         .cloned()
         .collect::<Vec<_>>();
@@ -184,10 +227,12 @@ pub(crate) fn cancel_all_tasks(state: &AppState) -> Result<bool, String> {
     }
 
     let processes = {
-        let mut running = state
-            .running_ffmpeg
-            .lock()
-            .map_err(|_| "任务状态锁定失败".to_string())?;
+        let mut running = state.running_ffmpeg.lock().map_err(|_| {
+            app_error(
+                ErrorCode::TaskStateUnavailable,
+                "FFmpeg task state lock is poisoned",
+            )
+        })?;
         running.drain().map(|(_, task)| task).collect::<Vec<_>>()
     };
 
@@ -215,35 +260,70 @@ pub(crate) fn stop_running_ffmpeg(tasks: Vec<RunningFfmpeg>) {
 pub(crate) fn remove_cleanup_paths(paths: &[PathBuf]) {
     for path in paths.iter().rev() {
         if path.is_dir() {
-            let _ = fs::remove_dir_all(path);
+            if let Err(error) = fs::remove_dir_all(path) {
+                let _ = app_error(
+                    ErrorCode::TaskCleanupFailed,
+                    format!(
+                        "Failed to remove task cleanup directory {}: {error}",
+                        path.display()
+                    ),
+                );
+            }
         } else {
-            let _ = fs::remove_file(path);
+            if let Err(error) = fs::remove_file(path) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    let _ = app_error(
+                        ErrorCode::TaskCleanupFailed,
+                        format!(
+                            "Failed to remove task cleanup file {}: {error}",
+                            path.display()
+                        ),
+                    );
+                }
+            }
         }
     }
 }
 
 pub(crate) async fn remove_cleanup_paths_async(paths: Vec<PathBuf>) {
-    let _ = tokio::task::spawn_blocking(move || remove_cleanup_paths(&paths)).await;
+    if let Err(error) = tokio::task::spawn_blocking(move || remove_cleanup_paths(&paths)).await {
+        let _ = app_error(
+            ErrorCode::BlockingTaskFailed,
+            format!("Task cleanup worker failed to join: {error}"),
+        );
+    }
 }
 
 pub(crate) fn kill_process_tree(pid: u32) {
     #[cfg(windows)]
     {
-        let _ = StdCommand::new("taskkill")
+        if let Err(error) = StdCommand::new("taskkill")
             .args(["/PID", &pid.to_string(), "/T", "/F"])
             .creation_flags(CREATE_NO_WINDOW)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status();
+            .status()
+        {
+            let _ = app_error(
+                ErrorCode::ProcessTerminationFailed,
+                format!("Failed to execute taskkill for process {pid}: {error}"),
+            );
+        }
     }
 
     #[cfg(not(windows))]
     {
-        let _ = StdCommand::new("kill")
+        if let Err(error) = StdCommand::new("kill")
             .args(["-TERM", &pid.to_string()])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status();
+            .status()
+        {
+            let _ = app_error(
+                ErrorCode::ProcessTerminationFailed,
+                format!("Failed to execute kill for process {pid}: {error}"),
+            );
+        }
     }
 }
 
@@ -276,13 +356,18 @@ pub(crate) fn ffmpeg_args_with_progress(args: &[String]) -> Vec<String> {
 }
 
 pub(crate) fn emit_ffmpeg_progress(app: &tauri::AppHandle, task_id: &str, progress: f64) {
-    let _ = app.emit(
+    if let Err(error) = app.emit(
         FFMPEG_PROGRESS_EVENT,
         FfmpegProgressPayload {
             task_id: task_id.to_string(),
             progress: progress.clamp(0.0, 1.0),
         },
-    );
+    ) {
+        let _ = app_error(
+            ErrorCode::EventEmitFailed,
+            format!("Failed to emit FFmpeg progress event: {error}"),
+        );
+    }
 }
 
 pub(crate) async fn run_output(
@@ -291,7 +376,7 @@ pub(crate) async fn run_output(
     state: &AppState,
     logical_task_id: &str,
     cancel: Arc<AtomicBool>,
-) -> Result<String, String> {
+) -> AppResult<String> {
     ensure_not_cancelled(&cancel)?;
     let process_id = Uuid::new_v4().to_string();
     let mut child = hidden_command(program)
@@ -299,7 +384,12 @@ pub(crate) async fn run_output(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("启动 {program} 失败，请确认它在 PATH 中: {e}"))?;
+        .map_err(|error| {
+            app_error(
+                ErrorCode::ExternalToolStartFailed,
+                format!("Failed to start external tool {program}: {error}"),
+            )
+        })?;
     let pid = child.id();
     if let Err(error) = register_running_ffmpeg(
         state,
@@ -315,27 +405,43 @@ pub(crate) async fn run_output(
 
     let output = child.wait_with_output().await;
     clear_running_ffmpeg(state, &process_id);
-    let output = output.map_err(|e| format!("等待 {program} 结束失败: {e}"))?;
+    let output = output.map_err(|error| {
+        app_error(
+            ErrorCode::ExternalToolWaitFailed,
+            format!("Failed to wait for external tool {program}: {error}"),
+        )
+    })?;
     ensure_not_cancelled(&cancel)?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("{program} 执行失败: {stderr}"))
+        Err(app_error(
+            ErrorCode::ExternalToolExecutionFailed,
+            format!("External tool {program} exited unsuccessfully; stderr={stderr}"),
+        ))
     }
 }
 
-pub(crate) async fn run_status(program: &str, args: &[String]) -> Result<(), String> {
+pub(crate) async fn run_status(program: &str, args: &[String]) -> AppResult<()> {
     let output = hidden_command(program)
         .args(args)
         .output()
         .await
-        .map_err(|e| format!("启动 {program} 失败，请确认它在 PATH 中: {e}"))?;
+        .map_err(|error| {
+            app_error(
+                ErrorCode::ExternalToolStartFailed,
+                format!("Failed to start external tool {program}: {error}"),
+            )
+        })?;
     if output.status.success() {
         Ok(())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("{program} 执行失败: {stderr}"))
+        Err(app_error(
+            ErrorCode::ExternalToolExecutionFailed,
+            format!("External tool {program} exited unsuccessfully; stderr={stderr}"),
+        ))
     }
 }
 
@@ -343,7 +449,7 @@ pub(crate) async fn run_status_with_ffmpeg_progress(
     program: &str,
     args: &[String],
     progress: FfmpegProgressContext<'_>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     ensure_not_cancelled(&progress.cancel)?;
     let progress_args = ffmpeg_args_with_progress(args);
     let task_id = Uuid::new_v4().to_string();
@@ -353,7 +459,12 @@ pub(crate) async fn run_status_with_ffmpeg_progress(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("启动 {program} 失败，请确认它在 PATH 中: {e}"))?;
+        .map_err(|error| {
+            app_error(
+                ErrorCode::ExternalToolStartFailed,
+                format!("Failed to start external tool {program}: {error}"),
+            )
+        })?;
     let pid = child.id();
     if let Err(err) = register_running_ffmpeg(
         progress.state,
@@ -367,14 +478,18 @@ pub(crate) async fn run_status_with_ffmpeg_progress(
         return Err(err);
     }
 
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| format!("读取 {program} 进度失败"))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| format!("读取 {program} 错误输出失败"))?;
+    let stdout = child.stdout.take().ok_or_else(|| {
+        app_error(
+            ErrorCode::ExternalToolOutputUnavailable,
+            format!("External tool {program} did not expose a progress stream"),
+        )
+    })?;
+    let stderr = child.stderr.take().ok_or_else(|| {
+        app_error(
+            ErrorCode::ExternalToolOutputUnavailable,
+            format!("External tool {program} did not expose a diagnostic stream"),
+        )
+    })?;
 
     let stderr_task = tokio::spawn(async move {
         let mut body = String::new();
@@ -395,7 +510,10 @@ pub(crate) async fn run_status_with_ffmpeg_progress(
             remove_cleanup_paths_async(progress.cleanup_paths.clone()).await;
             clear_running_ffmpeg(progress.state, &task_id);
             emit_ffmpeg_progress(progress.app, progress.task_id, last_emitted);
-            return Err("任务已取消".to_string());
+            return Err(app_error(
+                ErrorCode::TaskCancelled,
+                "Task cancellation was requested",
+            ));
         }
 
         let line = match tokio::time::timeout(Duration::from_millis(120), lines.next_line()).await {
@@ -403,7 +521,10 @@ pub(crate) async fn run_status_with_ffmpeg_progress(
             Ok(Ok(None)) => break,
             Ok(Err(err)) => {
                 clear_running_ffmpeg(progress.state, &task_id);
-                return Err(format!("读取 {program} 进度失败: {err}"));
+                return Err(app_error(
+                    ErrorCode::ExternalToolOutputInvalid,
+                    format!("Failed to read progress from external tool {program}: {err}"),
+                ));
             }
             Err(_) => continue,
         };
@@ -428,10 +549,18 @@ pub(crate) async fn run_status_with_ffmpeg_progress(
         Ok(status) => status,
         Err(err) => {
             clear_running_ffmpeg(progress.state, &task_id);
-            return Err(format!("等待 {program} 结束失败: {err}"));
+            return Err(app_error(
+                ErrorCode::ExternalToolWaitFailed,
+                format!("Failed to wait for external tool {program}: {err}"),
+            ));
         }
     };
-    let stderr = stderr_task.await.unwrap_or_default();
+    let stderr = stderr_task.await.map_err(|error| {
+        app_error(
+            ErrorCode::BlockingTaskFailed,
+            format!("External tool diagnostic reader failed to join: {error}"),
+        )
+    })?;
     let was_cancelled = cancel.load(Ordering::SeqCst);
     clear_running_ffmpeg(progress.state, &task_id);
 
@@ -446,9 +575,15 @@ pub(crate) async fn run_status_with_ffmpeg_progress(
         remove_cleanup_paths_async(progress.cleanup_paths.clone()).await;
         emit_ffmpeg_progress(progress.app, progress.task_id, last_emitted);
         if was_cancelled {
-            Err("任务已取消".to_string())
+            Err(app_error(
+                ErrorCode::TaskCancelled,
+                "Task cancellation was requested",
+            ))
         } else {
-            Err(format!("{program} 执行失败: {stderr}"))
+            Err(app_error(
+                ErrorCode::ExternalToolExecutionFailed,
+                format!("External tool {program} exited unsuccessfully; stderr={stderr}"),
+            ))
         }
     }
 }

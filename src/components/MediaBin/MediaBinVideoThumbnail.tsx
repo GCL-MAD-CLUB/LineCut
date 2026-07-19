@@ -1,5 +1,6 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
+import { runOperation } from "../../errors";
 import { isTauriRuntime } from "../../tauriRuntime";
 import { extractVideoCover } from "../../thumbnail";
 import { frameDurationUs, normalizeFrameRate } from "../../timeline";
@@ -68,13 +69,15 @@ export function MediaBinVideoThumbnail({
       };
     }
 
-    void extractVideoCover(item.id, project.asset.fingerprint)
-      .then(showThumbnail)
-      .catch(() => {
-        if (!cancelled) {
-          setUseVideoFallback(true);
-        }
-      });
+    void runOperation("thumbnail.video", () =>
+      extractVideoCover(item.id, project.asset.fingerprint),
+    ).then((outcome) => {
+      if (outcome.status === "success") {
+        showThumbnail(outcome.value);
+      } else if (!cancelled) {
+        setUseVideoFallback(true);
+      }
+    });
 
     return () => {
       cancelled = true;

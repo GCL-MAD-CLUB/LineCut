@@ -1,6 +1,7 @@
 import { createContext, useContext, type ReactNode } from "react";
 import { definePanel } from "../DockLayout";
 import { HistoryPanel } from "./HistoryPanel";
+import { clientError } from "../../errors";
 
 export const historyPanelType = "history";
 
@@ -29,7 +30,10 @@ export function HistoryPanelServicesProvider({
 function ManagedHistoryPanel() {
   const services = useContext(HistoryPanelServicesContext);
   if (!services) {
-    throw new Error("History panel services are not available.");
+    throw clientError(
+      "HISTORY_PANEL_SERVICES_UNAVAILABLE",
+      "History panel services were requested outside their provider",
+    );
   }
   return (
     <HistoryPanel

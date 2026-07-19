@@ -1,6 +1,7 @@
 import { createContext, useContext, type ReactNode } from "react";
 import { useStore } from "zustand";
 import { createStore, type StateCreator, type StoreApi } from "zustand/vanilla";
+import { clientError } from "./errors";
 
 const PanelInstanceContext = createContext<string | null>(null);
 const PanelActiveContext = createContext(true);
@@ -39,7 +40,10 @@ export function PanelInstanceProvider({
 export function usePanelInstanceId() {
   const instanceId = useContext(PanelInstanceContext);
   if (!instanceId) {
-    throw new Error("Panel instance ID must be used inside a DockLayout panel.");
+    throw clientError(
+      "PANEL_INSTANCE_CONTEXT_MISSING",
+      "Panel instance identifier was requested outside a DockLayout panel",
+    );
   }
   return instanceId;
 }
@@ -66,7 +70,10 @@ export function createPanelState<State extends object>(
   function usePanelState<Selection>(selector: (state: State) => Selection) {
     const instanceId = useContext(PanelInstanceContext);
     if (!instanceId) {
-      throw new Error("Panel state must be used inside a DockLayout panel.");
+      throw clientError(
+        "PANEL_STATE_CONTEXT_MISSING",
+        "Panel state was requested outside a DockLayout panel",
+      );
     }
     return useStore(getStore(instanceId), selector);
   }

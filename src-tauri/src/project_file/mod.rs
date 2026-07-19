@@ -1,4 +1,4 @@
-use crate::ProjectWorkspace;
+use crate::{app_error, AppResult, ErrorCode, ProjectWorkspace};
 use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
 
@@ -9,11 +9,11 @@ mod keyring;
 mod models;
 mod protocol;
 
-pub(crate) fn normalize_project_path(path: &str) -> Result<PathBuf, String> {
+pub(crate) fn normalize_project_path(path: &str) -> AppResult<PathBuf> {
     io::normalize_path(path)
 }
 
-pub(crate) fn write_project_file(path: &Path, workspace: ProjectWorkspace) -> Result<(), String> {
+pub(crate) fn write_project_file(path: &Path, workspace: ProjectWorkspace) -> AppResult<()> {
     let encrypted = encode_current_workspace(&workspace)?;
     io::write_atomic(path, &encrypted)
 }
@@ -23,11 +23,11 @@ pub(crate) fn write_auto_save_snapshot(
     project_name: &str,
     workspace: ProjectWorkspace,
     max_snapshots: usize,
-) -> Result<Option<PathBuf>, String> {
+) -> AppResult<Option<PathBuf>> {
     auto_save::write_snapshot(cache_root, project_name, &workspace, max_snapshots)
 }
 
-fn encode_current_workspace(workspace: &ProjectWorkspace) -> Result<Vec<u8>, String> {
+fn encode_current_workspace(workspace: &ProjectWorkspace) -> AppResult<Vec<u8>> {
     let current = models::from_runtime(
         workspace,
         crate::now_millis() as u64,
@@ -37,7 +37,7 @@ fn encode_current_workspace(workspace: &ProjectWorkspace) -> Result<Vec<u8>, Str
     protocol::seal(models::current_version(), plaintext.as_slice())
 }
 
-pub(crate) fn read_project_file(path: &Path) -> Result<ProjectWorkspace, String> {
+pub(crate) fn read_project_file(path: &Path) -> AppResult<ProjectWorkspace> {
     let bytes = io::read(path)?;
     let bytes = bytes.as_slice();
     let current = if protocol::recognizes(bytes) {
@@ -46,7 +46,10 @@ pub(crate) fn read_project_file(path: &Path) -> Result<ProjectWorkspace, String>
     } else if handle_v1::recognizes(bytes) {
         models::upgrade_v1(handle_v1::decode(bytes)?)?
     } else {
-        return Err("不是有效的 LineCut 项目文件".to_string());
+        return Err(app_error(
+            ErrorCode::ProjectFormatInvalid,
+            "Input is not a recognized LineCut project file",
+        ));
     };
     models::into_runtime(current)
 }

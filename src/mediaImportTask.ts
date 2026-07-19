@@ -1,5 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
 import { createTaskProgress } from "./components/TaskProgress";
+import { invokeCommand } from "./errors";
+import type { OperationKey } from "./errors";
 import { cancelFfmpegTask, createFfmpegTaskId, listenToFfmpegTaskProgress } from "./ffmpegProgress";
 import type { ImportResult } from "./types";
 
@@ -10,7 +11,7 @@ export type MediaImportTaskOutcome =
 
 interface RunMediaImportTaskOptions {
   path: string;
-  operation: string;
+  operation: OperationKey;
   taskIdPrefix: string;
   assetId?: string;
   label?: string;
@@ -44,7 +45,7 @@ export async function runMediaImportTask({
   });
 
   try {
-    const result = await invoke<ImportResult>("import_media", {
+    const result = await invokeCommand<ImportResult>("import_media", {
       path,
       taskId,
       assetId: assetId ?? null,
@@ -61,7 +62,7 @@ export async function runMediaImportTask({
       task.remove();
       return { status: "cancelled", path };
     }
-    task.fail(`导入 ${fileName(path)} 失败`, error);
+    task.fail(error, { displayName: fileName(path), resourceKind: "media" });
     return { status: "failed", path };
   }
 }

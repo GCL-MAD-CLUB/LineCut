@@ -1,6 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, type DialogFilter } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useState } from "react";
+import { invokeCommand, runOperation } from "../../errors";
 import { formatMonitorTime } from "../../time";
 import type { MediaBinItemKind } from "../../types";
 import { ModalDialog } from "../ModalDialog";
@@ -22,7 +22,6 @@ interface MediaLinkDialogProps {
   mode: MediaLinkMode;
   onAttach: (candidate: MediaLinkCandidate, path: string) => Promise<boolean>;
   onCancel: () => void;
-  onError?: (error: unknown) => void;
 }
 
 const videoExtensions = ["mp4", "mov", "mkv", "avi", "webm", "m4v", "mts", "m2ts"];
@@ -74,13 +73,7 @@ function dialogFilters(candidate: MediaLinkCandidate, mode: MediaLinkMode): Dial
   return [{ name: "字幕", extensions: subtitleExtensions }];
 }
 
-export function MediaLinkDialog({
-  candidates,
-  mode,
-  onAttach,
-  onCancel,
-  onError,
-}: MediaLinkDialogProps) {
+export function MediaLinkDialog({ candidates, mode, onAttach, onCancel }: MediaLinkDialogProps) {
   const candidateKey = useMemo(
     () => `${mode}:${candidates.map((candidate) => candidate.id).join("\u0000")}`,
     [candidates, mode],
@@ -133,61 +126,64 @@ export function MediaLinkDialog({
     if (!current || busy) {
       return;
     }
-    try {
-      const picked = await openDialog({
-        multiple: false,
-        title: `${useMediaBrowser ? "附加" : "选择"}${fileName(current.filePath)}`,
-        filters: dialogFilters(current, mode),
-      });
-      const path = Array.isArray(picked) ? picked[0] : picked;
-      if (!path) {
-        return;
-      }
-      setBusy(true);
-      const processed = new Set(processedIds);
-      const skipped = new Set(skippedIds);
-      if (await onAttach(current, path)) {
-        processed.add(current.id);
-      }
+    const selectedCandidate = current;
+    await runOperation(
+      "media.link",
+      async () => {
+        const picked = await openDialog({
+          multiple: false,
+          title: `${useMediaBrowser ? "附加" : "选择"}${fileName(selectedCandidate.filePath)}`,
+          filters: dialogFilters(selectedCandidate, mode),
+        });
+        const path = Array.isArray(picked) ? picked[0] : picked;
+        if (!path) {
+          return false;
+        }
+        setBusy(true);
+        const processed = new Set(processedIds);
+        const skipped = new Set(skippedIds);
+        if (await onAttach(selectedCandidate, path)) {
+          processed.add(selectedCandidate.id);
+        }
 
-      if (autoRelink) {
-        const directory = directoryName(path);
-        for (const candidate of candidates) {
-          if (
-            candidate.id === current.id ||
-            processed.has(candidate.id) ||
-            skipped.has(candidate.id)
-          ) {
-            continue;
-          }
-          const automaticPath = joinPath(directory, fileName(candidate.filePath));
-          const nameMatches =
-            !matchFileName || fileName(automaticPath) === fileName(candidate.filePath);
-          const extensionMatches =
-            !matchExtension || fileExtension(automaticPath) === fileExtension(candidate.filePath);
-          if (!nameMatches || !extensionMatches) {
-            continue;
-          }
-          const exists = await invoke<boolean>("path_is_file", { path: automaticPath });
-          if (exists && (await onAttach(candidate, automaticPath))) {
-            processed.add(candidate.id);
+        if (autoRelink) {
+          const directory = directoryName(path);
+          for (const candidate of candidates) {
+            if (
+              candidate.id === selectedCandidate.id ||
+              processed.has(candidate.id) ||
+              skipped.has(candidate.id)
+            ) {
+              continue;
+            }
+            const automaticPath = joinPath(directory, fileName(candidate.filePath));
+            const nameMatches =
+              !matchFileName || fileName(automaticPath) === fileName(candidate.filePath);
+            const extensionMatches =
+              !matchExtension || fileExtension(automaticPath) === fileExtension(candidate.filePath);
+            if (!nameMatches || !extensionMatches) {
+              continue;
+            }
+            const exists = await invokeCommand<boolean>("path_is_file", { path: automaticPath });
+            if (exists && (await onAttach(candidate, automaticPath))) {
+              processed.add(candidate.id);
+            }
           }
         }
-      }
 
-      setProcessedIds(processed);
-      const handled = new Set([...processed, ...skipped]);
-      const next = nextCandidate(handled);
-      if (next) {
-        setCurrentId(next.id);
-      } else {
-        onCancel();
-      }
-    } catch (error) {
-      onError?.(error);
-    } finally {
-      setBusy(false);
-    }
+        setProcessedIds(processed);
+        const handled = new Set([...processed, ...skipped]);
+        const next = nextCandidate(handled);
+        if (next) {
+          setCurrentId(next.id);
+        } else {
+          onCancel();
+        }
+        return true;
+      },
+      { displayName: fileName(selectedCandidate.filePath), resourceKind: "media" },
+    );
+    setBusy(false);
   }
 
   return (

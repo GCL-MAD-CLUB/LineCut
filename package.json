@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
-    "build": "tsc && vite build",
+    "build": "npm run check:errors && tsc && vite build",
+    "check:errors": "node scripts/check-error-boundaries.mjs",
     "format": "prettier --write . && npm run format:rust",
     "format:check": "prettier --check . && npm run format:rust:check",
     "format:rust": "cargo fmt --manifest-path src-tauri/Cargo.toml",

@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   Grid2X2,
@@ -26,12 +25,12 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { emitAppEvent, useAppEvent } from "../../appEvents";
+import { invokeCommand, runOperation } from "../../errors";
 import {
   cancelFfmpegTask,
   createFfmpegTaskId,
   listenToFfmpegTaskProgress,
 } from "../../ffmpegProgress";
-import { reportError } from "../../errorReporting";
 import {
   defaultMediaBinFolderColor,
   isMediaItemEnabled,
@@ -247,11 +246,11 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
   const setShowHidden = useMediaBinState((state) => state.setShowHidden);
   const setBindingPopoverOpen = useMediaBinState((state) => state.setBindingPopoverOpen);
   const setBindingVideoId = useMediaBinState((state) => state.setBindingVideoId);
-  const { isRunning: isImporting } = getTaskProgressStatus("media_import");
-  const { isRunning: isBinding } = getTaskProgressStatus("media_bin_bind");
-  const { isRunning: isDemuxing } = getTaskProgressStatus("media_bin_demux");
-  const { isRunning: isRelinking } = getTaskProgressStatus("media_relink");
-  const { isRunning: isGeneratingProxy } = getTaskProgressStatus("proxy");
+  const { isRunning: isImporting } = getTaskProgressStatus("media.import");
+  const { isRunning: isBinding } = getTaskProgressStatus("media.bindSubtitles");
+  const { isRunning: isDemuxing } = getTaskProgressStatus("media.demux");
+  const { isRunning: isRelinking } = getTaskProgressStatus("media.relink");
+  const { isRunning: isGeneratingProxy } = getTaskProgressStatus("proxy.generate");
   const isBusy = isImporting || isBinding || isDemuxing || isRelinking;
   const panelRef = useRef<HTMLElement | null>(null);
   const [contextMenu, setContextMenu] = useState<MediaBinContextMenuState | null>(null);
@@ -691,7 +690,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
       const taskId = createFfmpegTaskId("media-bin-bind");
       let cancelled = false;
       const task = await createTaskProgress({
-        operation: "media_bin_bind",
+        operation: "media.bindSubtitles",
         label: `解析并绑定 ${subtitlesToParse.length} 个字幕`,
         current: 0,
         total: 1,
@@ -702,7 +701,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
         },
       });
       try {
-        const result = await invoke<AddExternalSubtitlesResult>("add_external_subtitles", {
+        const result = await invokeCommand<AddExternalSubtitlesResult>("add_external_subtitles", {
           assetId: targetProject.asset.id,
           paths: subtitlesToParse.map((item) => item.path),
           taskId,
@@ -718,8 +717,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
         task.remove();
       } catch (error) {
         if (!cancelled) {
-          task.fail("字幕绑定失败", error);
-          messagePublished("字幕绑定失败，请检查字幕文件后重试。");
+          task.fail(error, { count: subtitlesToParse.length, resourceKind: "subtitle" });
         }
         return;
       }
@@ -800,7 +798,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     const taskId = createFfmpegTaskId("media-bin-demux");
     let cancelled = false;
     const task = await createTaskProgress({
-      operation: "media_bin_demux",
+      operation: "media.demux",
       label: `分解 ${video.file_name}`,
       current: 0,
       total: 1,
@@ -811,7 +809,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
       },
     });
     try {
-      const result = await invoke<DemuxMediaResult>("demux_media_streams", {
+      const result = await invokeCommand<DemuxMediaResult>("demux_media_streams", {
         assetId: videoProject.asset.id,
         taskId,
       });
@@ -826,8 +824,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
         messagePublished("分解已取消");
         return;
       }
-      task.fail("分解失败", error);
-      messagePublished("分解媒体失败，请重试。");
+      task.fail(error, { displayName: video.file_name, resourceKind: "media" });
     }
   }
 
@@ -850,11 +847,15 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
               ),
           ),
       );
-      await Promise.all(
+      const closeOutcomes = await Promise.all(
         Array.from(projectIdsToClose).map((assetId) =>
-          invoke("close_project", { assetId }).catch(() => false),
+          runOperation("media.closeBackend", () => invokeCommand("close_project", { assetId })),
         ),
       );
+      if (closeOutcomes.some((outcome) => outcome.status !== "success")) {
+        await restoreBackendWorkspace();
+        return;
+      }
     }
     mediaBinEntriesRemoved(
       selectedFolders.map((folder) => folder.id),
@@ -1022,7 +1023,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
   });
   useAppEvent("media:clear", ({ instanceId }) => {
     if (instanceId === panelInstanceId) {
-      void removeSelection();
+      return removeSelection();
     }
   });
   useAppEvent("media:duplicate", ({ instanceId }) => {
@@ -1081,11 +1082,12 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
 
   async function restoreBackendWorkspace() {
     if (!isTauriRuntime()) {
-      return;
+      return true;
     }
-    await invoke("sync_project_workspace", { workspace: getProjectWorkspaceSnapshot() }).catch(
-      () => undefined,
+    const outcome = await runOperation("project.restoreBackend", () =>
+      invokeCommand("sync_project_workspace", { workspace: getProjectWorkspaceSnapshot() }),
     );
+    return outcome.status === "success";
   }
 
   async function relinkMediaItem(item: MediaBinItem, path: string, historyLabel: string) {
@@ -1102,21 +1104,20 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
 
     const outcome = await runMediaImportTask({
       path,
-      operation: "media_relink",
+      operation: "media.relink",
       taskIdPrefix: "media-relink",
       assetId: currentProject.asset.id,
       label: `重新链接 ${item.file_name}`,
     });
     if (outcome.status !== "success") {
-      if (outcome.status === "failed") {
-        messagePublished("重新链接媒体失败，请检查所选文件后重试。");
-      }
       return false;
     }
 
     const linkedKind = outcome.result.project.asset.video_stream_index !== null ? "video" : "audio";
     if (linkedKind !== item.kind) {
-      await restoreBackendWorkspace();
+      if (!(await restoreBackendWorkspace())) {
+        return false;
+      }
       messagePublished(
         `${item.file_name} 需要${item.kind === "video" ? "视频" : "音频"}文件，所选文件类型不匹配。`,
       );
@@ -1163,16 +1164,17 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
       }
       return;
     }
-    try {
-      const picked = await openDialog({ multiple: false, title: `替换素材：${item.file_name}` });
-      const path = Array.isArray(picked) ? picked[0] : picked;
-      if (path) {
-        await relinkMediaItem(item, path, "替换素材");
-      }
-    } catch (error) {
-      reportError("替换媒体失败", error);
-      messagePublished("替换媒体失败，请重试。");
-    }
+    await runOperation(
+      "media.replace",
+      async () => {
+        const picked = await openDialog({ multiple: false, title: `替换素材：${item.file_name}` });
+        const path = Array.isArray(picked) ? picked[0] : picked;
+        if (path) {
+          await relinkMediaItem(item, path, "替换素材");
+        }
+      },
+      { displayName: item.file_name, resourceKind: "media" },
+    );
   }
 
   function makeSelectedMediaOffline() {
@@ -1215,12 +1217,11 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     if (!proxyPath) {
       return;
     }
-    try {
-      await invoke("reveal_in_file_manager", { path: proxyPath });
-    } catch (error) {
-      reportError("在文件管理器中显示代理失败", error);
-      messagePublished("无法在文件管理器中显示代理文件，请重试。");
-    }
+    await runOperation(
+      "media.revealProxy",
+      () => invokeCommand("reveal_in_file_manager", { path: proxyPath }),
+      { displayName: proxyPath.split(/[\\/]/).pop(), resourceKind: "proxy" },
+    );
   }
 
   function openContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
@@ -1510,10 +1511,6 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
             mode={linkDialog.mode}
             onAttach={attachLinkedFile}
             onCancel={() => setLinkDialog(null)}
-            onError={(error) => {
-              reportError("连接媒体失败", error);
-              messagePublished("连接媒体失败，请重试。");
-            }}
           />,
           document.querySelector(".app-shell") ?? document.body,
         )}

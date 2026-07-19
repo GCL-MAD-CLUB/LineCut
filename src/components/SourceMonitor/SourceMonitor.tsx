@@ -11,6 +11,7 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import { useAppEvent } from "../../appEvents";
+import { runBackgroundOperation, runOperation } from "../../errors";
 import {
   isMediaItemEnabled,
   isMediaItemOffline,
@@ -131,7 +132,7 @@ export function SourceMonitor() {
   const sourcePreviewSelected = useAppStore((state) => state.actions.sourcePreviewSelected);
   const proxyPreviewSelected = useAppStore((state) => state.actions.proxyPreviewSelected);
   const proxyDialogOpened = useAppStore((state) => state.actions.proxyDialogOpened);
-  const { isRunning: isGeneratingProxy } = getTaskProgressStatus("proxy");
+  const { isRunning: isGeneratingProxy } = getTaskProgressStatus("proxy.generate");
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const boundAudioRefs = useRef(new Map<string, HTMLAudioElement>());
   const sourceMonitorRef = useRef<HTMLDivElement | null>(null);
@@ -186,7 +187,7 @@ export function SourceMonitor() {
         // Metadata may not be available during the first ref callback.
       }
       element.playbackRate = video.playbackRate;
-      void element.play().catch(() => undefined);
+      runBackgroundOperation("media.playback", () => element.play());
     },
     [],
   );
@@ -385,7 +386,10 @@ export function SourceMonitor() {
       detail.focusEndUs === undefined,
     );
     if (detail.play) {
-      void videoRef.current?.play();
+      const video = videoRef.current;
+      if (video) {
+        runBackgroundOperation("media.playback", () => video.play());
+      }
     }
   });
 
@@ -659,7 +663,7 @@ export function SourceMonitor() {
   function playBoundAudio(video: HTMLVideoElement) {
     syncBoundAudio(video, true);
     for (const audio of boundAudioRefs.current.values()) {
-      void audio.play().catch(() => undefined);
+      runBackgroundOperation("media.playback", () => audio.play());
     }
   }
 
@@ -755,7 +759,11 @@ export function SourceMonitor() {
       if (!restore?.resumePlayback) {
         return;
       }
-      void element.play().catch(() => setIsPlaying(false));
+      void runOperation("media.playback", () => element.play()).then((outcome) => {
+        if (outcome.status !== "success") {
+          setIsPlaying(false);
+        }
+      });
     };
     if (usToMonitorFrame(element.currentTime * 1_000_000) !== restoredFrame) {
       element.addEventListener("seeked", resumePlayback, { once: true });
@@ -776,7 +784,8 @@ export function SourceMonitor() {
     }
     cuePlaybackEndFrameRef.current = null;
     if (videoRef.current.paused) {
-      void videoRef.current.play();
+      const video = videoRef.current;
+      runBackgroundOperation("media.playback", () => video.play());
     } else {
       const pausedAtFrame = playbackFrame();
       videoRef.current.pause();

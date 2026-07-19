@@ -1,3 +1,4 @@
+use crate::{app_error, AppResult, ErrorCode};
 use bincode::Options;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -171,39 +172,61 @@ pub(super) fn recognizes(bytes: &[u8]) -> bool {
     bytes.starts_with(MAGIC)
 }
 
-pub(super) fn decode(bytes: &[u8]) -> Result<ProjectFile, String> {
+pub(super) fn decode(bytes: &[u8]) -> AppResult<ProjectFile> {
     if bytes.len() < HEADER_LEN || !recognizes(bytes) {
-        return Err("不是有效的 LineCut V1 项目文件".to_string());
+        return Err(app_error(
+            ErrorCode::ProjectFormatInvalid,
+            "Input is not a recognized LineCut V1 project file",
+        ));
     }
     let version = u16::from_le_bytes([bytes[8], bytes[9]]);
     let family = u16::from_le_bytes([bytes[10], bytes[11]]);
     if version != VERSION || family != FORMAT_FAMILY {
-        return Err("旧格式处理器只接受 LineCut V1 项目文件".to_string());
+        return Err(app_error(
+            ErrorCode::ProjectVersionUnsupported,
+            "The legacy decoder only accepts LineCut V1 project files",
+        ));
     }
-    let payload_len = u64::from_le_bytes(
-        bytes[12..20]
-            .try_into()
-            .map_err(|_| "V1 项目文件头损坏".to_string())?,
-    );
+    let payload_len = u64::from_le_bytes(bytes[12..20].try_into().map_err(|_| {
+        app_error(
+            ErrorCode::ProjectFormatInvalid,
+            "The V1 project header is truncated",
+        )
+    })?);
     if payload_len > MAX_PAYLOAD_LEN as u64 || payload_len as usize != bytes.len() - HEADER_LEN {
-        return Err("V1 项目文件长度校验失败".to_string());
+        return Err(app_error(
+            ErrorCode::ProjectIntegrityFailed,
+            "The V1 project payload length is inconsistent",
+        ));
     }
     let payload = &bytes[HEADER_LEN..];
     if Sha256::digest(payload).as_slice() != &bytes[20..HEADER_LEN] {
-        return Err("V1 项目文件完整性校验失败".to_string());
+        return Err(app_error(
+            ErrorCode::ProjectIntegrityFailed,
+            "The V1 project payload hash does not match",
+        ));
     }
 
     bincode::DefaultOptions::new()
         .with_fixint_encoding()
         .reject_trailing_bytes()
         .deserialize(payload)
-        .map_err(|error| format!("解析 V1 项目文件失败: {error}"))
+        .map_err(|error| {
+            app_error(
+                ErrorCode::ProjectDecodeFailed,
+                format!("Failed to decode the V1 project payload: {error}"),
+            )
+        })
 }
 
 impl ProjectFile {
-    pub(super) fn into_upgrade_parts(self) -> Result<(Value, u64, String), String> {
-        let workspace = serde_json::to_value(self.workspace)
-            .map_err(|error| format!("读取 V1 项目内容失败: {error}"))?;
+    pub(super) fn into_upgrade_parts(self) -> AppResult<(Value, u64, String)> {
+        let workspace = serde_json::to_value(self.workspace).map_err(|error| {
+            app_error(
+                ErrorCode::ProjectMigrationFailed,
+                format!("Failed to convert the V1 workspace into migration data: {error}"),
+            )
+        })?;
         Ok((workspace, self.saved_at, self.app_version))
     }
 }

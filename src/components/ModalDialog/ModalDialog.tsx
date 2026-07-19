@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { captureOperationError, invokeCommand, runBackgroundOperation } from "../../errors";
 import "./ModalDialog.css";
 
 export interface ModalDialogProps {
@@ -17,7 +18,18 @@ export interface ModalDialogProps {
   onConfirm: () => void;
 }
 
-function playPromptSound() {
+async function playPromptSound() {
+  try {
+    const played = await invokeCommand<boolean>("play_system_sound");
+    if (played) {
+      return;
+    }
+  } catch (error) {
+    captureOperationError("feedback.audio", error);
+  }
+
+  // Fallback to a synthesized prompt when the native system sound is unavailable
+  // (e.g. on non-Windows platforms or when the Tauri backend is not reachable).
   try {
     const AudioContextClass =
       window.AudioContext ??
@@ -47,8 +59,9 @@ function playPromptSound() {
       oscillator.stop(start + 0.095);
     });
 
-    window.setTimeout(() => void context.close(), 520);
-  } catch {
+    window.setTimeout(() => runBackgroundOperation("feedback.audio", () => context.close()), 520);
+  } catch (error) {
+    captureOperationError("feedback.audio", error);
     // Audio feedback is best-effort; the visual alert still runs if audio is blocked.
   }
 }
@@ -81,7 +94,7 @@ export function ModalDialog({
   );
 
   function requestAttention() {
-    playPromptSound();
+    void playPromptSound();
     if (attentionTimerRef.current !== null) {
       window.clearTimeout(attentionTimerRef.current);
     }

@@ -150,13 +150,19 @@ export interface ExportBoundMedia {
 
 export interface ImportResult {
   project: Project;
-  warnings: string[];
+  warnings: UserNotice[];
+}
+
+export interface UserNotice {
+  code: string;
+  severity: "info" | "warning";
+  message: string;
 }
 
 export interface OpenProjectResult {
   path: string;
   workspace: ProjectWorkspace;
-  warnings: string[];
+  warnings: UserNotice[];
 }
 
 export interface ProxyResult {
@@ -166,7 +172,7 @@ export interface ProxyResult {
 export interface AddExternalSubtitlesResult {
   tracks: SubtitleTrack[];
   cues: Record<string, SubtitleCue[]>;
-  warnings: string[];
+  warnings: UserNotice[];
 }
 
 export interface ExportOptions {
@@ -194,7 +200,7 @@ export interface ExportResult {
   ranges: ClipRange[];
   files: string[];
   output_dir: string;
-  log: string[];
+  log: UserNotice[];
 }
 
 export interface Preferences {

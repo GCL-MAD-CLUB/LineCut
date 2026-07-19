@@ -1,3 +1,4 @@
+use crate::{app_error, AppResult, ErrorCode};
 use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
@@ -15,18 +16,18 @@ pub(super) struct ApplicationKey {
     pub(super) material: Zeroizing<[u8; 32]>,
 }
 
-pub(super) fn current_key() -> Result<ApplicationKey, String> {
+pub(super) fn current_key() -> AppResult<ApplicationKey> {
     derive_application_key()
 }
 
-pub(super) fn find_key(id: &[u8; 16]) -> Result<Option<ApplicationKey>, String> {
+pub(super) fn find_key(id: &[u8; 16]) -> AppResult<Option<ApplicationKey>> {
     // Add historical application keys here when rotating key material. The encrypted protocol and
     // content-version models remain unchanged; key IDs select the correct external key slot.
     let current = derive_application_key()?;
     Ok((current.id == *id).then_some(current))
 }
 
-fn derive_application_key() -> Result<ApplicationKey, String> {
+fn derive_application_key() -> AppResult<ApplicationKey> {
     let input = Zeroizing::new(
         BUILD_KEY_MASK
             .iter()
@@ -38,7 +39,12 @@ fn derive_application_key() -> Result<ApplicationKey, String> {
     let hkdf = Hkdf::<Sha256>::new(Some(ROOT_DERIVATION_SALT), input.as_slice());
     let mut material = Zeroizing::new([0u8; 32]);
     hkdf.expand(ROOT_DERIVATION_INFO, material.as_mut())
-        .map_err(|_| "派生项目文件根密钥失败".to_string())?;
+        .map_err(|_| {
+            app_error(
+                ErrorCode::ProjectKeyDerivationFailed,
+                "Failed to derive the project root key",
+            )
+        })?;
 
     let mut id_hasher = Sha256::new();
     id_hasher.update(KEY_ID_CONTEXT);

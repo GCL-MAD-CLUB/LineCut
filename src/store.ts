@@ -23,6 +23,7 @@ import type {
   ProjectWorkspace,
   SubtitleCue,
   SubtitleTrack,
+  UserNotice,
 } from "./types";
 
 interface AppActions {
@@ -86,8 +87,8 @@ interface AppActions {
   proxyGenerated: (path: string) => void;
   preferencesLoaded: (preferences: Preferences) => void;
   messagePublished: (message: string) => void;
-  warningsReplaced: (warnings: string[]) => void;
-  warningsAppended: (warnings: string[]) => void;
+  warningsReplaced: (warnings: UserNotice[]) => void;
+  warningsAppended: (warnings: UserNotice[]) => void;
   exportResultChanged: (result: ExportResult | null) => void;
   mediaBinReadOnlyChanged: (readOnly: boolean) => void;
   projectHistoryJumped: (cursor: number) => boolean;
@@ -111,7 +112,7 @@ interface AppStore {
   proxyDialogOpen: boolean;
   preferences: Preferences;
   message: string;
-  warnings: string[];
+  warnings: UserNotice[];
   exportResult: ExportResult | null;
   mediaBinReadOnly: boolean;
   projectHistory: ProjectHistoryState;

@@ -655,13 +655,6 @@ body.is-marquee-selecting * {
     flex-basis 100ms linear;
 }
 
-.media-bin-offline-label {
-  flex: 0 0 auto;
-  margin-left: auto;
-  color: #d3a07b;
-  font-size: 10px;
-}
-
 body.is-resizing-media-column {
   cursor: col-resize;
   user-select: none;

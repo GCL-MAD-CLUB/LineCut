@@ -1,4 +1,11 @@
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import {
+  captureOperationError,
+  clientError,
+  invokeCommand,
+  runBackgroundOperation,
+  runOperation,
+} from "./errors";
 import { isTauriRuntime } from "./tauriRuntime";
 
 const thumbnailWidth = 160;
@@ -123,7 +130,10 @@ function rememberThumbnail(key: string, url: string, timeUs: number) {
 }
 
 function cancelledError() {
-  return new DOMException("字幕缩略图请求已取消", "AbortError");
+  return clientError(
+    "SUBTITLE_THUMBNAIL_REQUEST_CANCELLED",
+    "Subtitle thumbnail request was cancelled",
+  );
 }
 
 function normalizedPriority(priority: number | undefined) {
@@ -158,7 +168,7 @@ function scheduleThumbnailWorker() {
   workerScheduled = true;
   queueMicrotask(() => {
     workerScheduled = false;
-    void drainThumbnailQueue();
+    runBackgroundOperation("thumbnail.subtitle.generate", drainThumbnailQueue);
   });
 }
 
@@ -236,13 +246,18 @@ async function drainThumbnailQueue() {
         continue;
       }
 
+      const outcome = await runOperation("thumbnail.subtitle.generate", () =>
+        extractThumbnail(job.options),
+      );
       try {
-        const extracted = await extractThumbnail(job.options);
+        if (outcome.status !== "success") {
+          job.reject(outcome.status === "failed" ? outcome.error : cancelledError());
+          continue;
+        }
+        const extracted = outcome.value;
         const url = URL.createObjectURL(extracted.blob);
         rememberThumbnail(job.key, url, extracted.timeUs);
         job.resolve(url);
-      } catch (error) {
-        job.reject(error);
       } finally {
         pendingJobs.delete(job.key);
         job.settled = true;
@@ -263,10 +278,13 @@ async function extractThumbnail(options: SubtitleThumbnailOptions) {
 
   if (tauriRuntime) {
     try {
-      const cached = await invoke<SubtitleThumbnailCacheLookup>("get_cached_subtitle_thumbnail", {
-        assetId: options.assetId,
-        timeUs: Math.max(0, Math.round(options.timeUs)),
-      });
+      const cached = await invokeCommand<SubtitleThumbnailCacheLookup>(
+        "get_cached_subtitle_thumbnail",
+        {
+          assetId: options.assetId,
+          timeUs: Math.max(0, Math.round(options.timeUs)),
+        },
+      );
       extractionTimeUs = cached.cache_time_us;
       if (cached.bytes) {
         return {
@@ -274,7 +292,8 @@ async function extractThumbnail(options: SubtitleThumbnailOptions) {
           timeUs: cached.cache_time_us,
         } satisfies ExtractedThumbnail;
       }
-    } catch {
+    } catch (error) {
+      captureOperationError("thumbnail.subtitle.cache.read", error);
       // Cache failures must not prevent the thumbnail from being displayed.
     }
   }
@@ -286,16 +305,20 @@ async function extractThumbnail(options: SubtitleThumbnailOptions) {
         void persistSubtitleThumbnail(options.assetId, extractionTimeUs, blob);
       }
       return { blob, timeUs: extractionTimeUs } satisfies ExtractedThumbnail;
-    } catch {
+    } catch (error) {
+      captureOperationError("thumbnail.subtitle.generate", error);
       unsupportedWebViewSources.add(videoSource);
       resetExtractorVideo();
     }
   }
 
   if (!tauriRuntime) {
-    throw new Error("浏览器无法生成字幕缩略图");
+    throw clientError(
+      "SUBTITLE_THUMBNAIL_BROWSER_UNAVAILABLE",
+      "The browser runtime cannot generate subtitle thumbnails",
+    );
   }
-  const serializedBytes = await invoke<number[]>("generate_subtitle_thumbnail", {
+  const serializedBytes = await invokeCommand<number[]>("generate_subtitle_thumbnail", {
     assetId: options.assetId,
     timeUs: Math.max(0, Math.round(extractionTimeUs)),
   });
@@ -308,12 +331,13 @@ async function extractThumbnail(options: SubtitleThumbnailOptions) {
 async function persistSubtitleThumbnail(assetId: string, timeUs: number, blob: Blob) {
   try {
     const bytes = Array.from(new Uint8Array(await blob.arrayBuffer()));
-    await invoke("cache_subtitle_thumbnail", {
+    await invokeCommand("cache_subtitle_thumbnail", {
       assetId,
       timeUs: Math.max(0, Math.round(timeUs)),
       bytes,
     });
-  } catch {
+  } catch (error) {
+    captureOperationError("thumbnail.subtitle.cache.write", error);
     // Persistence is best effort; the in-memory thumbnail remains usable.
   }
 }
@@ -365,11 +389,21 @@ function waitForVideoEvent(
     };
     const handleError = () => {
       cleanup();
-      reject(video.error ?? new Error("视频帧解码失败"));
+      reject(
+        clientError(
+          "VIDEO_FRAME_DECODE_FAILED",
+          `The browser failed to decode the video frame; mediaErrorCode=${video.error?.code ?? 0}`,
+        ),
+      );
     };
     const timeoutId = window.setTimeout(() => {
       cleanup();
-      reject(new Error("视频帧解码超时"));
+      reject(
+        clientError(
+          "VIDEO_FRAME_DECODE_TIMEOUT",
+          `Video frame decoding exceeded ${extractionTimeoutMs} milliseconds`,
+        ),
+      );
     }, extractionTimeoutMs);
 
     for (const eventName of successEvents) {
@@ -416,7 +450,12 @@ function thumbnailBlob(canvas: HTMLCanvasElement) {
         if (blob) {
           resolve(blob);
         } else {
-          reject(new Error("无法编码字幕缩略图"));
+          reject(
+            clientError(
+              "SUBTITLE_THUMBNAIL_ENCODE_FAILED",
+              "The browser canvas returned an empty subtitle thumbnail blob",
+            ),
+          );
         }
       },
       "image/jpeg",
@@ -431,12 +470,18 @@ async function extractThumbnailInWebView(videoSource: string, timeUs: number) {
   await seekVideo(video, timeUs);
 
   if (video.videoWidth <= 0 || video.videoHeight <= 0) {
-    throw new Error("视频帧尺寸无效");
+    throw clientError(
+      "VIDEO_FRAME_DIMENSIONS_INVALID",
+      `Decoded video frame dimensions are invalid: ${video.videoWidth}x${video.videoHeight}`,
+    );
   }
   const canvas = canvasElement();
   const context = canvas.getContext("2d", { alpha: false });
   if (!context) {
-    throw new Error("无法创建字幕缩略图画布");
+    throw clientError(
+      "SUBTITLE_THUMBNAIL_CANVAS_UNAVAILABLE",
+      "The browser did not provide a 2D canvas context for subtitle thumbnail rendering",
+    );
   }
 
   const scale = Math.max(thumbnailWidth / video.videoWidth, thumbnailHeight / video.videoHeight);

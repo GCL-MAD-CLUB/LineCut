@@ -4,23 +4,53 @@ use crate::project_file::{
 };
 
 #[tauri::command]
-pub(crate) fn get_preferences(state: tauri::State<'_, AppState>) -> Result<Preferences, String> {
-    state
+pub(crate) fn get_preferences(state: tauri::State<'_, AppState>) -> CommandResult<Preferences> {
+    Ok(state
         .preferences
         .lock()
-        .map_err(|_| "首选项状态锁定失败".to_string())
-        .map(|preferences| preferences.clone())
+        .map_err(|_| {
+            app_error(
+                ErrorCode::PreferencesStateUnavailable,
+                "Preferences state lock is poisoned",
+            )
+        })
+        .map(|preferences| preferences.clone())?)
+}
+
+#[tauri::command]
+pub(crate) fn take_preferences_startup_error(
+    state: tauri::State<'_, AppState>,
+) -> CommandResult<()> {
+    let error = state
+        .startup_preferences_error
+        .lock()
+        .map_err(|_| {
+            app_error(
+                ErrorCode::PreferencesStateUnavailable,
+                "Startup preferences diagnostic lock is poisoned",
+            )
+        })?
+        .take();
+    match error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 #[tauri::command]
 pub(crate) fn take_launch_project_path(
     state: tauri::State<'_, AppState>,
-) -> Result<Option<String>, String> {
-    state
+) -> CommandResult<Option<String>> {
+    Ok(state
         .launch_project_path
         .lock()
-        .map_err(|_| "启动项目路径状态锁定失败".to_string())
-        .map(|mut path| path.take())
+        .map_err(|_| {
+            app_error(
+                ErrorCode::LaunchPathStateUnavailable,
+                "Launch project path state lock is poisoned",
+            )
+        })
+        .map(|mut path| path.take())?)
 }
 
 #[tauri::command]
@@ -29,7 +59,7 @@ pub(crate) async fn update_preferences(
     task_id: String,
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
-) -> Result<Preferences, String> {
+) -> CommandResult<Preferences> {
     let task = register_task(&task_id, state.inner())?;
     emit_ffmpeg_progress(&app, &task_id, 0.0);
     let cancel = task.cancel_token();
@@ -39,15 +69,22 @@ pub(crate) async fn update_preferences(
         ensure_not_cancelled(&cancel)?;
         save_preferences(&normalized)?;
         ensure_not_cancelled(&cancel)?;
-        Ok::<_, String>(normalized)
+        Ok::<_, AppError>(normalized)
     })
     .await
-    .map_err(|error| format!("保存首选项任务失败: {error}"))??;
+    .map_err(|error| {
+        app_error(
+            ErrorCode::BlockingTaskFailed,
+            format!("Preferences save task failed: {error}"),
+        )
+    })??;
     task.check_cancelled()?;
-    *state
-        .preferences
-        .lock()
-        .map_err(|_| "首选项状态锁定失败".to_string())? = normalized.clone();
+    *state.preferences.lock().map_err(|_| {
+        app_error(
+            ErrorCode::PreferencesStateUnavailable,
+            "Preferences state lock is poisoned",
+        )
+    })? = normalized.clone();
     emit_ffmpeg_progress(&app, &task_id, 1.0);
     Ok(normalized)
 }
@@ -56,7 +93,7 @@ pub(crate) async fn update_preferences(
 pub(crate) async fn cancel_task(
     task_id: String,
     state: tauri::State<'_, AppState>,
-) -> Result<bool, String> {
+) -> CommandResult<bool> {
     let (found, processes, cleanup_paths) = take_task_for_cancellation(&task_id, state.inner())?;
     if !processes.is_empty() || !cleanup_paths.is_empty() {
         tokio::task::spawn_blocking(move || {
@@ -64,7 +101,12 @@ pub(crate) async fn cancel_task(
             remove_cleanup_paths(&cleanup_paths);
         })
         .await
-        .map_err(|error| format!("等待任务取消失败: {error}"))?;
+        .map_err(|error| {
+            app_error(
+                ErrorCode::BlockingTaskFailed,
+                format!("Task cancellation cleanup failed: {error}"),
+            )
+        })?;
     }
     Ok(found)
 }
@@ -73,12 +115,17 @@ pub(crate) async fn cancel_task(
 pub(crate) async fn save_project_file(
     path: String,
     workspace: ProjectWorkspace,
-) -> Result<String, String> {
+) -> CommandResult<String> {
     let normalized_path = normalize_project_path(&path)?;
     let output_path = normalized_path.clone();
     tokio::task::spawn_blocking(move || write_project_file(&output_path, workspace))
         .await
-        .map_err(|error| format!("保存项目任务失败: {error}"))??;
+        .map_err(|error| {
+            app_error(
+                ErrorCode::BlockingTaskFailed,
+                format!("Project save task failed: {error}"),
+            )
+        })??;
     Ok(normalized_path.to_string_lossy().into_owned())
 }
 
@@ -87,41 +134,84 @@ pub(crate) async fn auto_save_project_snapshot(
     project_name: String,
     workspace: ProjectWorkspace,
     state: tauri::State<'_, AppState>,
-) -> Result<Option<String>, String> {
+) -> CommandResult<Option<String>> {
     let (cache_root, max_snapshots) = {
-        let preferences = state
-            .preferences
-            .lock()
-            .map_err(|_| "首选项状态锁定失败".to_string())?;
+        let preferences = state.preferences.lock().map_err(|_| {
+            app_error(
+                ErrorCode::PreferencesStateUnavailable,
+                "Preferences state lock is poisoned",
+            )
+        })?;
         (
             configured_cache_root(&preferences),
             preferences.auto_save_max_snapshots as usize,
         )
     };
-    tokio::task::spawn_blocking(move || {
+    Ok(tokio::task::spawn_blocking(move || {
         write_auto_save_snapshot(&cache_root, &project_name, workspace, max_snapshots)
             .map(|path| path.map(|path| path.to_string_lossy().into_owned()))
     })
     .await
-    .map_err(|error| format!("自动备份任务失败: {error}"))?
+    .map_err(|error| {
+        app_error(
+            ErrorCode::BlockingTaskFailed,
+            format!("Project auto-save task failed: {error}"),
+        )
+    })??)
 }
 
 #[tauri::command]
 pub(crate) async fn open_project_file(
     path: String,
     state: tauri::State<'_, AppState>,
-) -> Result<OpenProjectResult, String> {
+) -> CommandResult<OpenProjectResult> {
     let input_path = PathBuf::from(path);
     let read_path = input_path.clone();
     let mut workspace = tokio::task::spawn_blocking(move || read_project_file(&read_path))
         .await
-        .map_err(|error| format!("打开项目任务失败: {error}"))??;
+        .map_err(|error| {
+            app_error(
+                ErrorCode::BlockingTaskFailed,
+                format!("Project open task failed: {error}"),
+            )
+        })??;
     let mut warnings = Vec::new();
 
     for project in &mut workspace.projects {
         for track in &mut project.tracks {
             if matches!(&track.source_type, SubtitleSourceType::Embedded) {
                 track.source_path = None;
+            }
+            if let Some(detail) = track.warning.take() {
+                tracing::warn!(
+                    notice_code = "LEGACY_TRACK_WARNING_SANITIZED",
+                    track_id = %track.id,
+                    detail = %detail,
+                    "sanitized persisted subtitle warning"
+                );
+                let public_message = match &track.source_type {
+                    SubtitleSourceType::Embedded => match track.stream_index {
+                        Some(stream_index) => format!("字幕流 {stream_index} 当前不可用"),
+                        None => "内嵌字幕当前不可用".to_string(),
+                    },
+                    SubtitleSourceType::External => {
+                        let display_name = track
+                            .source_path
+                            .as_deref()
+                            .and_then(|path| Path::new(path).file_name())
+                            .and_then(|value| value.to_str())
+                            .or_else(|| {
+                                track
+                                    .title
+                                    .as_deref()
+                                    .and_then(|title| Path::new(title).file_name())
+                                    .and_then(|value| value.to_str())
+                            })
+                            .unwrap_or("字幕文件");
+                        format!("外挂字幕当前不可用：{display_name}")
+                    }
+                };
+                track.warning = Some(public_message);
             }
         }
     }
@@ -151,12 +241,32 @@ pub(crate) async fn open_project_file(
             continue;
         }
         if !media_path.is_file() {
-            warnings.push(format!("项目引用的媒体文件不存在: {}", project.asset.path));
-        } else if let Ok(metadata) = fs::metadata(media_path) {
-            if metadata.len() as i64 != project.asset.file_size
-                || modified_secs(&metadata) != project.asset.modified_at
-            {
-                warnings.push("源媒体自项目保存后已发生变化，导出前请确认内容正确".to_string());
+            warnings.push(UserNotice::warning_with_detail(
+                "PROJECT_MEDIA_MISSING",
+                format!("项目引用的媒体文件不存在：{}", project.asset.file_name),
+                format!("missing media path: {}", project.asset.path),
+            ));
+        } else {
+            match fs::metadata(media_path) {
+                Ok(metadata) => {
+                    if metadata.len() as i64 != project.asset.file_size
+                        || modified_secs(&metadata) != project.asset.modified_at
+                    {
+                        warnings.push(UserNotice::warning(
+                            "PROJECT_MEDIA_CHANGED",
+                            format!("源媒体自项目保存后已发生变化：{}", project.asset.file_name),
+                        ));
+                    }
+                }
+                Err(error) => {
+                    app_error(
+                        ErrorCode::MediaReadFailed,
+                        format!(
+                            "Failed to read project media metadata for {}: {error}",
+                            media_path.display()
+                        ),
+                    );
+                }
             }
         }
     }
@@ -173,15 +283,21 @@ pub(crate) async fn open_project_file(
         if !Path::new(&item.path).is_file() {
             item.offline = true;
             if !project_paths.contains(&item.path) {
-                warnings.push(format!("项目引用的文件不存在: {}", item.path));
+                warnings.push(UserNotice::warning_with_detail(
+                    "PROJECT_ITEM_MISSING",
+                    format!("项目引用的文件不存在：{}", item.file_name),
+                    format!("missing project item path: {}", item.path),
+                ));
             }
         }
     }
 
-    let mut projects = state
-        .projects
-        .lock()
-        .map_err(|_| "项目状态锁定失败".to_string())?;
+    let mut projects = state.projects.lock().map_err(|_| {
+        app_error(
+            ErrorCode::ProjectStateUnavailable,
+            "Project state lock is poisoned",
+        )
+    })?;
     projects.clear();
     projects.extend(
         workspace
@@ -202,11 +318,13 @@ pub(crate) async fn open_project_file(
 pub(crate) fn sync_project_workspace(
     workspace: ProjectWorkspace,
     state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
-    let mut projects = state
-        .projects
-        .lock()
-        .map_err(|_| "项目状态锁定失败".to_string())?;
+) -> CommandResult<()> {
+    let mut projects = state.projects.lock().map_err(|_| {
+        app_error(
+            ErrorCode::ProjectStateUnavailable,
+            "Project state lock is poisoned",
+        )
+    })?;
     projects.clear();
     projects.extend(
         workspace
@@ -221,14 +339,19 @@ pub(crate) fn sync_project_workspace(
 pub(crate) fn close_project(
     asset_id: Option<String>,
     state: tauri::State<'_, AppState>,
-) -> Result<bool, String> {
+) -> CommandResult<bool> {
     let Some(asset_id) = asset_id else {
         return Ok(false);
     };
     Ok(state
         .projects
         .lock()
-        .map_err(|_| "项目状态锁定失败".to_string())?
+        .map_err(|_| {
+            app_error(
+                ErrorCode::ProjectStateUnavailable,
+                "Project state lock is poisoned",
+            )
+        })?
         .remove(&asset_id)
         .is_some())
 }
@@ -239,10 +362,13 @@ pub(crate) fn path_is_file(path: String) -> bool {
 }
 
 #[tauri::command]
-pub(crate) fn reveal_in_file_manager(path: String) -> Result<(), String> {
+pub(crate) fn reveal_in_file_manager(path: String) -> CommandResult<()> {
     let target = PathBuf::from(path);
     if !target.exists() {
-        return Err(format!("文件不存在: {}", target.to_string_lossy()));
+        return Err(app_error(
+            ErrorCode::FileNotFound,
+            format!("File to reveal does not exist: {}", target.display()),
+        ));
     }
 
     #[cfg(target_os = "windows")]
@@ -264,10 +390,12 @@ pub(crate) fn reveal_in_file_manager(path: String) -> Result<(), String> {
         command
     };
 
-    command
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("无法在资源管理器中显示文件: {error}"))
+    command.spawn().map(|_| ()).map_err(|error| {
+        app_error(
+            ErrorCode::FileRevealFailed,
+            format!("Failed to reveal file {}: {error}", target.display()),
+        )
+    })
 }
 
 #[tauri::command]
@@ -277,7 +405,7 @@ pub(crate) async fn import_media(
     asset_id: Option<String>,
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
-) -> Result<ImportResult, String> {
+) -> CommandResult<ImportResult> {
     const SUBTITLE_PROGRESS_START: f64 = 0.08;
     const SUBTITLE_PROGRESS_END: f64 = 0.54;
     const COVER_PROGRESS_START: f64 = 0.54;
@@ -287,7 +415,10 @@ pub(crate) async fn import_media(
     let preferences = preferences_clone(&state)?;
     let input_path = PathBuf::from(&path);
     if !input_path.exists() {
-        return Err(format!("媒体文件不存在: {}", path));
+        return Err(app_error(
+            ErrorCode::MediaNotFound,
+            format!("Media file does not exist: {path}"),
+        ));
     }
 
     emit_ffmpeg_progress(&app, &task_id, 0.0);
@@ -304,9 +435,16 @@ pub(crate) async fn import_media(
 
     let identity_path = input_path.clone();
     let (meta, modified_at, fingerprint) =
-        spawn_blocking_cancellable(task.cancel_token(), "读取媒体文件", move |cancel| {
-            let meta =
-                fs::metadata(&identity_path).map_err(|e| format!("读取媒体元数据失败: {e}"))?;
+        spawn_blocking_cancellable(task.cancel_token(), "read media file", move |cancel| {
+            let meta = fs::metadata(&identity_path).map_err(|error| {
+                app_error(
+                    ErrorCode::MediaReadFailed,
+                    format!(
+                        "Failed to read media metadata for {}: {error}",
+                        identity_path.display()
+                    ),
+                )
+            })?;
             let modified_at = modified_secs(&meta);
             let fingerprint = fingerprint_file(&identity_path, &meta, modified_at, cancel)?;
             Ok((meta, modified_at, fingerprint))
@@ -455,13 +593,17 @@ pub(crate) async fn import_media(
                     track.cue_count = parsed.len();
                     cues.insert(track_id.clone(), parsed);
                 }
-                Err(err) => {
-                    if err == "任务已取消" {
-                        return Err(err);
+                Err(error) => {
+                    if error.is(ErrorCode::TaskCancelled) {
+                        return Err(error);
                     }
-                    let message = format!("字幕流 {} 解析失败: {err}", stream.index);
+                    let message = format!("字幕流 {} 解析失败", stream.index);
                     track.warning = Some(message.clone());
-                    warnings.push(message);
+                    warnings.push(UserNotice::warning_with_detail(
+                        "EMBEDDED_SUBTITLE_PARSE_FAILED",
+                        message,
+                        error.detail(),
+                    ));
                 }
             }
             emit_ffmpeg_progress(&app, &task_id, subtitle_progress_end);
@@ -471,7 +613,7 @@ pub(crate) async fn import_media(
                 stream.index
             );
             track.warning = Some(message.clone());
-            warnings.push(message);
+            warnings.push(UserNotice::warning("BITMAP_SUBTITLE_UNSUPPORTED", message));
         }
 
         tracks.push(track);
@@ -479,16 +621,16 @@ pub(crate) async fn import_media(
     }
 
     if tracks.is_empty() {
-        warnings.push(
+        warnings.push(UserNotice::warning(
+            "SUBTITLE_STREAM_NOT_FOUND",
             format!(
                 "未检测到字幕流：{}",
                 Path::new(&path)
                     .file_name()
                     .and_then(|v| v.to_str())
                     .unwrap_or_default()
-            )
-            .to_string(),
-        );
+            ),
+        ));
     }
 
     let project = Project {
@@ -521,10 +663,14 @@ pub(crate) async fn import_media(
         )
         .await
         {
-            if error == "任务已取消" {
+            if error.is(ErrorCode::TaskCancelled) {
                 return Err(error);
             }
-            warnings.push(format!("视频封面分析失败: {error}"));
+            warnings.push(UserNotice::warning_with_detail(
+                "VIDEO_COVER_ANALYSIS_FAILED",
+                format!("视频封面分析失败：{}", project.asset.file_name),
+                error.detail(),
+            ));
         }
     }
     task.check_cancelled()?;
@@ -532,7 +678,12 @@ pub(crate) async fn import_media(
     state
         .projects
         .lock()
-        .map_err(|_| "项目状态锁定失败".to_string())?
+        .map_err(|_| {
+            app_error(
+                ErrorCode::ProjectStateUnavailable,
+                "Project state lock is poisoned",
+            )
+        })?
         .insert(project.asset.id.clone(), project.clone());
 
     emit_ffmpeg_progress(&app, &task_id, 1.0);
@@ -545,7 +696,7 @@ pub(crate) async fn demux_media_streams(
     task_id: String,
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
-) -> Result<DemuxMediaResult, String> {
+) -> CommandResult<DemuxMediaResult> {
     let task = register_task(&task_id, state.inner())?;
     let mut project = project_clone(&asset_id, &state)?;
     emit_ffmpeg_progress(&app, &task_id, 0.0);
@@ -585,7 +736,12 @@ pub(crate) async fn demux_media_streams(
     state
         .projects
         .lock()
-        .map_err(|_| "项目状态锁定失败".to_string())?
+        .map_err(|_| {
+            app_error(
+                ErrorCode::ProjectStateUnavailable,
+                "Project state lock is poisoned",
+            )
+        })?
         .insert(asset_id, project);
     emit_ffmpeg_progress(&app, &task_id, 1.0);
 
@@ -602,7 +758,7 @@ pub(crate) async fn generate_proxy(
     task_id: String,
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
-) -> Result<ProxyResult, String> {
+) -> CommandResult<ProxyResult> {
     let task = register_task(&task_id, state.inner())?;
     let preferences = preferences_clone(&state)?;
     let project = project_clone(&asset_id, &state)?;
@@ -610,9 +766,21 @@ pub(crate) async fn generate_proxy(
     emit_ffmpeg_progress(&app, &task_id, 0.0);
     if let Some(parent) = proxy_path.parent() {
         let parent = parent.to_path_buf();
-        spawn_blocking_cancellable(task.cancel_token(), "创建代理输出目录", move |_| {
-            fs::create_dir_all(parent).map_err(|e| format!("创建代理输出目录失败: {e}"))
-        })
+        spawn_blocking_cancellable(
+            task.cancel_token(),
+            "create proxy output directory",
+            move |_| {
+                fs::create_dir_all(&parent).map_err(|error| {
+                    app_error(
+                        ErrorCode::ProxyWriteFailed,
+                        format!(
+                            "Failed to create proxy output directory {}: {error}",
+                            parent.display()
+                        ),
+                    )
+                })
+            },
+        )
         .await?;
     }
     task.check_cancelled()?;
@@ -663,7 +831,12 @@ pub(crate) async fn generate_proxy(
     state
         .projects
         .lock()
-        .map_err(|_| "项目状态锁定失败".to_string())?
+        .map_err(|_| {
+            app_error(
+                ErrorCode::ProjectStateUnavailable,
+                "Project state lock is poisoned",
+            )
+        })?
         .insert(asset_id, updated_project);
     emit_ffmpeg_progress(&app, &task_id, 1.0);
     Ok(ProxyResult {
@@ -678,7 +851,7 @@ pub(crate) async fn add_external_subtitles(
     task_id: String,
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
-) -> Result<AddExternalSubtitlesResult, String> {
+) -> CommandResult<AddExternalSubtitlesResult> {
     let task = register_task(&task_id, state.inner())?;
     let mut project = project_clone(&asset_id, &state)?;
     let mut new_tracks = Vec::new();
@@ -707,7 +880,12 @@ pub(crate) async fn add_external_subtitles(
     state
         .projects
         .lock()
-        .map_err(|_| "项目状态锁定失败".to_string())?
+        .map_err(|_| {
+            app_error(
+                ErrorCode::ProjectStateUnavailable,
+                "Project state lock is poisoned",
+            )
+        })?
         .insert(asset_id, project);
 
     emit_ffmpeg_progress(&app, &task_id, 1.0);
@@ -730,15 +908,17 @@ pub(crate) async fn export_clips(
     task_id: String,
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
-) -> Result<ExportResult, String> {
+) -> CommandResult<ExportResult> {
     let task = register_task(&task_id, state.inner())?;
     let preferences = preferences_clone(&state)?;
     let project = project_clone(&asset_id, &state)?;
     let track_project = project_clone(&track_asset_id, &state)?;
-    let track_cues = track_project
-        .cues
-        .get(&track_id)
-        .ok_or_else(|| "找不到当前字幕轨".to_string())?;
+    let track_cues = track_project.cues.get(&track_id).ok_or_else(|| {
+        app_error(
+            ErrorCode::ExportTrackNotFound,
+            format!("Subtitle track was not found for export: {track_id}"),
+        )
+    })?;
     let selected_ids = cue_ids.into_iter().collect::<HashSet<_>>();
     let selected_cues = track_cues
         .iter()
@@ -747,7 +927,10 @@ pub(crate) async fn export_clips(
         .collect::<Vec<_>>();
 
     if selected_cues.is_empty() {
-        return Err("请先勾选至少一条台词".to_string());
+        return Err(app_error(
+            ErrorCode::ExportSelectionEmpty,
+            "No subtitle cues were selected for export",
+        ));
     }
 
     let ranges = build_clip_plan(
@@ -770,8 +953,16 @@ pub(crate) async fn export_clips(
             .join(now_millis().to_string())
     };
     let output_dir_to_create = output_dir.clone();
-    spawn_blocking_cancellable(task.cancel_token(), "创建导出目录", move |_| {
-        fs::create_dir_all(output_dir_to_create).map_err(|e| format!("创建导出目录失败: {e}"))
+    spawn_blocking_cancellable(task.cancel_token(), "create export directory", move |_| {
+        fs::create_dir_all(&output_dir_to_create).map_err(|error| {
+            app_error(
+                ErrorCode::ExportWriteFailed,
+                format!(
+                    "Failed to create export directory {}: {error}",
+                    output_dir_to_create.display()
+                ),
+            )
+        })
     })
     .await?;
 
@@ -791,9 +982,21 @@ pub(crate) async fn export_clips(
         ExportLayout::Merged => output_dir.join("_parts"),
     };
     let part_dir_to_create = part_dir.clone();
-    spawn_blocking_cancellable(task.cancel_token(), "创建片段目录", move |_| {
-        fs::create_dir_all(part_dir_to_create).map_err(|e| format!("创建片段目录失败: {e}"))
-    })
+    spawn_blocking_cancellable(
+        task.cancel_token(),
+        "create export segment directory",
+        move |_| {
+            fs::create_dir_all(&part_dir_to_create).map_err(|error| {
+                app_error(
+                    ErrorCode::ExportWriteFailed,
+                    format!(
+                        "Failed to create export segment directory {}: {error}",
+                        part_dir_to_create.display()
+                    ),
+                )
+            })
+        },
+    )
     .await?;
 
     let cue_lookup = track_cues
@@ -843,11 +1046,14 @@ pub(crate) async fn export_clips(
             }),
         )
         .await?;
-        log.push(format!(
-            "导出片段 {}: {} -> {}",
-            range.index + 1,
-            display_time(range.start_us),
-            display_time(range.end_us)
+        log.push(UserNotice::info(
+            "EXPORT_CLIP_COMPLETED",
+            format!(
+                "已导出片段 {}：{} - {}",
+                range.index + 1,
+                display_time(range.start_us),
+                display_time(range.end_us)
+            ),
         ));
         part_files.push(output_path);
     }
@@ -899,7 +1105,16 @@ pub(crate) async fn export_clips(
                 }),
             )
             .await?;
-            log.push(format!("合并输出: {}", merged.to_string_lossy()));
+            log.push(UserNotice::info(
+                "EXPORT_MERGE_COMPLETED",
+                format!(
+                    "已生成合并文件：{}",
+                    merged
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or("导出文件")
+                ),
+            ));
             vec![merged.to_string_lossy().into_owned()]
         }
     };
@@ -917,20 +1132,59 @@ pub(crate) async fn export_clips(
 pub(crate) fn project_clone(
     asset_id: &str,
     state: &tauri::State<'_, AppState>,
-) -> Result<Project, String> {
+) -> AppResult<Project> {
     state
         .projects
         .lock()
-        .map_err(|_| "项目状态锁定失败".to_string())?
+        .map_err(|_| {
+            app_error(
+                ErrorCode::ProjectStateUnavailable,
+                "Project state lock is poisoned",
+            )
+        })?
         .get(asset_id)
         .cloned()
-        .ok_or_else(|| "项目未加载，请重新导入媒体".to_string())
+        .ok_or_else(|| {
+            app_error(
+                ErrorCode::ProjectNotLoaded,
+                format!("Project is not loaded for media asset: {asset_id}"),
+            )
+        })
 }
 
-pub(crate) fn preferences_clone(state: &tauri::State<'_, AppState>) -> Result<Preferences, String> {
+pub(crate) fn preferences_clone(state: &tauri::State<'_, AppState>) -> AppResult<Preferences> {
     state
         .preferences
         .lock()
-        .map_err(|_| "首选项状态锁定失败".to_string())
+        .map_err(|_| {
+            app_error(
+                ErrorCode::PreferencesStateUnavailable,
+                "Preferences state lock is poisoned",
+            )
+        })
         .map(|preferences| preferences.clone())
+}
+
+#[tauri::command]
+pub(crate) fn play_system_sound() -> CommandResult<bool> {
+    #[cfg(windows)]
+    {
+        use windows::Win32::System::Diagnostics::Debug::MessageBeep;
+        use windows::Win32::UI::WindowsAndMessaging::MB_ICONEXCLAMATION;
+
+        unsafe {
+            MessageBeep(MB_ICONEXCLAMATION).map_err(|error| {
+                app_error(
+                    ErrorCode::SystemSoundPlayFailed,
+                    format!("Failed to play system warning sound: {error}"),
+                )
+            })?;
+        }
+        Ok(true)
+    }
+
+    #[cfg(not(windows))]
+    {
+        Ok(false)
+    }
 }

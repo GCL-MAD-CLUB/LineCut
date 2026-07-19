@@ -1,7 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm, open, save } from "@tauri-apps/plugin-dialog";
-import { Loader2, TriangleAlert } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { appPanelRegistry, initialAppPanelState } from "./appPanelRegistry";
 import { emitAppEvent, useAppEvent } from "./appEvents";
@@ -17,7 +16,6 @@ import {
 import { exportPanelType } from "./components/ExportPanel";
 import { HistoryPanelServicesProvider, historyPanelType } from "./components/HistoryPanel";
 import { ImportWorkspace } from "./components/ImportWorkspace";
-import { ModalDialog } from "./components/ModalDialog";
 import {
   useMediaBinClipboardItemCount,
   useMediaBinState,
@@ -30,7 +28,13 @@ import { sourcePanelType } from "./components/SourceMonitor";
 import { subtitlePanelType } from "./components/SubtitlePanel";
 import { cancelAllTaskProgress, getTaskProgressStatus } from "./components/TaskProgress";
 import { runMediaImportTask } from "./mediaImportTask";
-import { reportError } from "./errorReporting";
+import {
+  captureOperationError,
+  invokeCommand,
+  runBackgroundOperation,
+  runOperation,
+  type OperationKey,
+} from "./errors";
 import { getProjectWorkspaceSnapshot, subtitleTrackCues, useAppStore } from "./store";
 import { isTauriRuntime } from "./tauriRuntime";
 import type { MediaBinFolder, MediaBinItem, OpenProjectResult, Preferences } from "./types";
@@ -143,7 +147,8 @@ function readRecentPaths(storageKey: string) {
     return Array.isArray(paths)
       ? paths.filter((path): path is string => typeof path === "string").slice(0, recentPathsLimit)
       : [];
-  } catch {
+  } catch (error) {
+    captureOperationError("storage.recentPaths", error);
     return [];
   }
 }
@@ -186,7 +191,6 @@ function AppContent() {
   const panelInstances = usePanelManagerState((state) => state.instances);
   const openPanel = usePanelManagerState((state) => state.openPanel);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
-  const [errorDialogMessage, setErrorDialogMessage] = useState<string | null>(null);
   const [historyNavigating, setHistoryNavigating] = useState(false);
   const [recentMediaPaths, setRecentMediaPaths] = useState(() =>
     readRecentPaths(recentMediaStorageKey),
@@ -311,14 +315,14 @@ function AppContent() {
       return;
     }
 
-    void invoke<Preferences>("get_preferences")
-      .then((loaded) => {
-        preferencesLoaded(loaded);
-      })
-      .catch((error) => {
-        reportError("加载首选项失败", error);
-        messagePublished("无法加载首选项，将使用默认设置。");
-      });
+    void runOperation("preferences.load", () => invokeCommand("take_preferences_startup_error"));
+    void runOperation("preferences.load", () => invokeCommand<Preferences>("get_preferences")).then(
+      (outcome) => {
+        if (outcome.status === "success") {
+          preferencesLoaded(outcome.value);
+        }
+      },
+    );
   }, []);
 
   useEffect(() => {
@@ -332,16 +336,14 @@ function AppContent() {
         return;
       }
       snapshotRunning = true;
-      void invoke<string | null>("auto_save_project_snapshot", {
-        projectName: autoSaveProjectNameRef.current,
-        workspace: getProjectWorkspaceSnapshot(),
-      })
-        .catch((error) => {
-          console.warn("LineCut auto-save snapshot failed", error);
-        })
-        .finally(() => {
-          snapshotRunning = false;
-        });
+      void runOperation("project.autosave", () =>
+        invokeCommand<string | null>("auto_save_project_snapshot", {
+          projectName: autoSaveProjectNameRef.current,
+          workspace: getProjectWorkspaceSnapshot(),
+        }),
+      ).finally(() => {
+        snapshotRunning = false;
+      });
     }, autoSaveIntervalMinutes * 60_000);
 
     return () => window.clearInterval(timer);
@@ -352,19 +354,20 @@ function AppContent() {
       return;
     }
 
-    void invoke<string | null>("take_launch_project_path")
-      .then((path) => {
-        if (path) {
-          return openProject(path);
-        }
-      })
-      .catch((error) => publishError(error, "无法打开项目，请检查文件后重试。"));
+    void runOperation("project.launchPath", () =>
+      invokeCommand<string | null>("take_launch_project_path"),
+    ).then((outcome) => {
+      if (outcome.status === "success" && outcome.value) {
+        return openProject(outcome.value);
+      }
+    });
   }, []);
 
   useEffect(() => {
     try {
       window.localStorage.setItem(recentMediaStorageKey, JSON.stringify(recentMediaPaths));
-    } catch {
+    } catch (error) {
+      captureOperationError("storage.recentPaths", error);
       // Recent imports are a convenience feature; importing itself must still work.
     }
   }, [recentMediaPaths]);
@@ -372,7 +375,8 @@ function AppContent() {
   useEffect(() => {
     try {
       window.localStorage.setItem(recentProjectStorageKey, JSON.stringify(recentProjectPaths));
-    } catch {
+    } catch (error) {
+      captureOperationError("storage.recentPaths", error);
       // Recent projects are a convenience feature; opening and saving must still work.
     }
   }, [recentProjectPaths]);
@@ -384,7 +388,7 @@ function AppContent() {
 
     const projectTitle = projectFilePath ?? (project ? "未命名项目" : "");
     const title = ` LineCut${projectTitle ? ` - ${projectTitle}${projectDirty ? " *" : ""}` : ""}`;
-    void getCurrentWindow().setTitle(title);
+    runBackgroundOperation("window.title", () => getCurrentWindow().setTitle(title));
   }, [project, projectDirty, projectFilePath]);
 
   useEffect(() => {
@@ -396,35 +400,35 @@ function AppContent() {
     let unlistenCloseRequested: (() => void) | undefined;
 
     const currentWindow = getCurrentWindow();
-    void currentWindow
-      .onCloseRequested(async (event) => {
-        if (!projectDirty || closingWindowRef.current) {
-          await cancelAllTaskProgress();
-          return;
-        }
+    runBackgroundOperation("window.closeListener", async () => {
+      const unlisten = await currentWindow.onCloseRequested((event) => {
+        void runOperation("project.close", async () => {
+          if (!projectDirty || closingWindowRef.current) {
+            await cancelAllTaskProgress();
+            return;
+          }
 
-        event.preventDefault();
-        const shouldClose = await confirm("项目有尚未保存的更改，确定要退出吗？", {
-          title: "LineCut",
-          kind: "warning",
-          okLabel: "退出",
-          cancelLabel: "取消",
+          event.preventDefault();
+          const shouldClose = await confirm("项目有尚未保存的更改，确定要退出吗？", {
+            title: "LineCut",
+            kind: "warning",
+            okLabel: "退出",
+            cancelLabel: "取消",
+          });
+          if (!shouldClose) {
+            return;
+          }
+          closingWindowRef.current = true;
+          await cancelAllTaskProgress();
+          await currentWindow.destroy();
         });
-        if (!shouldClose) {
-          return;
-        }
-        closingWindowRef.current = true;
-        await cancelAllTaskProgress();
-        await currentWindow.destroy();
-      })
-      .then((unlisten) => {
-        if (disposed) {
-          unlisten();
-        } else {
-          unlistenCloseRequested = unlisten;
-        }
-      })
-      .catch(() => undefined);
+      });
+      if (disposed) {
+        unlisten();
+      } else {
+        unlistenCloseRequested = unlisten;
+      }
+    });
 
     return () => {
       disposed = true;
@@ -432,24 +436,22 @@ function AppContent() {
     };
   }, [projectDirty]);
 
-  function publishError(error: unknown, message = "操作未完成，请重试。") {
-    reportError(message, error);
-    setErrorDialogMessage(message);
-  }
-
-  async function confirmDiscardChanges(message: string) {
+  async function confirmDiscardChanges(operation: OperationKey, message: string) {
     if (!projectDirty) {
       return true;
     }
-    if (!isTauriRuntime()) {
-      return window.confirm(message);
-    }
-    return confirm(message, {
-      title: "LineCut",
-      kind: "warning",
-      okLabel: "不保存",
-      cancelLabel: "取消",
+    const outcome = await runOperation(operation, async () => {
+      if (!isTauriRuntime()) {
+        return window.confirm(message);
+      }
+      return confirm(message, {
+        title: "LineCut",
+        kind: "warning",
+        okLabel: "不保存",
+        cancelLabel: "取消",
+      });
     });
+    return outcome.status === "success" && outcome.value;
   }
 
   async function removeBackendProject(assetId?: string) {
@@ -461,7 +463,7 @@ function AppContent() {
       : mediaItems
           .filter((item) => item.origin === "imported" && item.kind !== "subtitle")
           .map((item) => item.id);
-    await Promise.all(assetIds.map((id) => invoke("close_project", { assetId: id })));
+    await Promise.all(assetIds.map((id) => invokeCommand("close_project", { assetId: id })));
   }
 
   async function exitApplication() {
@@ -469,7 +471,7 @@ function AppContent() {
       window.close();
       return;
     }
-    await getCurrentWindow().close();
+    await runOperation("project.close", () => getCurrentWindow().close());
   }
 
   async function newProject() {
@@ -477,17 +479,19 @@ function AppContent() {
       messagePublished("请在 Tauri 桌面窗口中新建项目。");
       return;
     }
-    if (!(await confirmDiscardChanges("当前项目有尚未保存的更改，仍要新建项目吗？"))) {
+    if (
+      !(await confirmDiscardChanges("project.new", "当前项目有尚未保存的更改，仍要新建项目吗？"))
+    ) {
       return;
     }
 
-    try {
+    const outcome = await runOperation("project.new", async () => {
       await removeBackendProject();
       projectCreated();
       setActiveWorkspace("import");
+    });
+    if (outcome.status === "success") {
       messagePublished("已新建项目");
-    } catch (error) {
-      publishError(error, "无法新建项目，请重试。");
     }
   }
 
@@ -506,50 +510,65 @@ function AppContent() {
       messagePublished("请在 Tauri 桌面窗口中打开项目。");
       return;
     }
-    if (!(await confirmDiscardChanges("当前项目有尚未保存的更改，仍要打开其他项目吗？"))) {
+    if (
+      !(await confirmDiscardChanges(
+        "project.open",
+        "当前项目有尚未保存的更改，仍要打开其他项目吗？",
+      ))
+    ) {
       return;
     }
-    const picked = pathToOpen
-      ? pathToOpen
-      : await open({
-          multiple: false,
-          title: "打开 LineCut 项目",
-          filters: projectFilters,
-        });
+    const pickOutcome = pathToOpen
+      ? null
+      : await runOperation("project.open", () =>
+          open({
+            multiple: false,
+            title: "打开 LineCut 项目",
+            filters: projectFilters,
+          }),
+        );
+    if (pickOutcome && pickOutcome.status !== "success") {
+      return;
+    }
+    const picked = pathToOpen ?? (pickOutcome?.status === "success" ? pickOutcome.value : null);
     const path = Array.isArray(picked) ? picked[0] : picked;
     if (!path) {
       return;
     }
 
-    try {
-      const result = await invoke<OpenProjectResult>("open_project_file", { path });
+    const outcome = await runOperation(
+      "project.open",
+      () => invokeCommand<OpenProjectResult>("open_project_file", { path }),
+      { displayName: fileName(path), resourceKind: "project" },
+    );
+    if (outcome.status === "success") {
+      const result = outcome.value;
       projectOpened(result.workspace, result.path);
       warningsReplaced(result.warnings);
       rememberRecentProject(result.path);
       messagePublished(`已打开项目 ${fileName(result.path)}`);
-    } catch (error) {
+    } else if (outcome.status === "failed") {
       if (pathToOpen) {
         forgetRecentProject(pathToOpen);
       }
-      publishError(error, "无法打开项目，请检查文件后重试。");
     }
   }
 
   async function closeProject() {
-    if (!(await confirmDiscardChanges("当前项目有尚未保存的更改，仍要关闭吗？"))) {
+    if (!(await confirmDiscardChanges("project.close", "当前项目有尚未保存的更改，仍要关闭吗？"))) {
       return;
     }
-    try {
+    const outcome = await runOperation("project.close", async () => {
       await removeBackendProject();
       projectClosed();
+    });
+    if (outcome.status === "success") {
       messagePublished("项目已关闭");
-    } catch (error) {
-      publishError(error, "无法关闭项目，请重试。");
     }
   }
 
   async function writeProject(path: string, makeCurrent: boolean) {
-    const savedPath = await invoke<string>("save_project_file", {
+    const savedPath = await invokeCommand<string>("save_project_file", {
       path,
       workspace: getProjectWorkspaceSnapshot(),
     });
@@ -577,19 +596,21 @@ function AppContent() {
       messagePublished("请在 Tauri 桌面窗口中保存项目。");
       return;
     }
-    const picked = await save({
-      title: makeCurrent ? "项目另存为" : "保存项目副本",
-      defaultPath: suggestedProjectName(),
-      filters: projectFilters,
-    });
-    if (!picked) {
+    const pickOutcome = await runOperation("project.save", () =>
+      save({
+        title: makeCurrent ? "项目另存为" : "保存项目副本",
+        defaultPath: suggestedProjectName(),
+        filters: projectFilters,
+      }),
+    );
+    if (pickOutcome.status !== "success" || !pickOutcome.value) {
       return;
     }
-    try {
-      await writeProject(picked, makeCurrent);
-    } catch (error) {
-      publishError(error, "无法保存项目，请检查文件位置和权限后重试。");
-    }
+    const picked = pickOutcome.value;
+    await runOperation("project.save", () => writeProject(picked, makeCurrent), {
+      displayName: fileName(picked),
+      resourceKind: "project",
+    });
   }
 
   async function saveProject() {
@@ -597,11 +618,10 @@ function AppContent() {
       await saveProjectAs(true);
       return;
     }
-    try {
-      await writeProject(projectFilePath, true);
-    } catch (error) {
-      publishError(error, "无法保存项目，请检查文件位置和权限后重试。");
-    }
+    await runOperation("project.save", () => writeProject(projectFilePath, true), {
+      displayName: fileName(projectFilePath),
+      resourceKind: "project",
+    });
   }
 
   function copyInEditScope() {
@@ -661,9 +681,15 @@ function AppContent() {
       messagePublished("请在 Tauri 桌面窗口中导入本地媒体。");
       return;
     }
-    const picked = pathsToImport
-      ? pathsToImport
-      : await open({ multiple: true, title: "导入媒体", filters: mediaFilters });
+    const pickOutcome = pathsToImport
+      ? null
+      : await runOperation("media.import", () =>
+          open({ multiple: true, title: "导入媒体", filters: mediaFilters }),
+        );
+    if (pickOutcome && pickOutcome.status !== "success") {
+      return;
+    }
+    const picked = pathsToImport ?? (pickOutcome?.status === "success" ? pickOutcome.value : null);
     const paths = Array.isArray(picked) ? picked : picked ? [picked] : [];
     if (paths.length === 0) {
       return;
@@ -688,7 +714,7 @@ function AppContent() {
       probePaths.map((path) =>
         runMediaImportTask({
           path,
-          operation: "media_import",
+          operation: "media.import",
           taskIdPrefix: "media-import",
           onSuccess: (result) => {
             mediaProjectsAdded([result.project]);
@@ -704,13 +730,11 @@ function AppContent() {
     const loaded = outcomes.flatMap((outcome) =>
       outcome.status === "success" ? [outcome.result] : [],
     );
-    const errors = outcomes.filter((outcome) => outcome.status === "failed");
     const cancelledCount = outcomes.filter((outcome) => outcome.status === "cancelled").length;
 
     const importedCount = loaded.length + subtitlePaths.length;
     const resultParts = [
       importedCount > 0 ? `已导入 ${importedCount} 个媒体` : "未导入任何媒体",
-      ...(errors.length > 0 ? [`${errors.length} 个失败`] : []),
       ...(cancelledCount > 0 ? [`${cancelledCount} 个已取消`] : []),
     ];
     messagePublished(resultParts.join("，"));
@@ -728,12 +752,14 @@ function AppContent() {
       return false;
     }
 
-    try {
+    const outcome = await runOperation("project.history", async () => {
       if (isTauriRuntime()) {
-        await invoke("sync_project_workspace", {
+        await invokeCommand("sync_project_workspace", {
           workspace: getProjectWorkspaceSnapshot(),
         });
       }
+    });
+    if (outcome.status === "success") {
       const target = Math.max(0, Math.min(targetCursor, projectHistory.entries.length));
       if (Math.abs(target - previousCursor) > 1) {
         messagePublished("已跳转到所选历史记录");
@@ -742,13 +768,12 @@ function AppContent() {
       } else {
         messagePublished("已重做下一步项目操作");
       }
-      return true;
-    } catch (error) {
-      projectHistoryJumped(previousCursor);
-      publishError(error, "无法完成该操作，请重试。");
-      return false;
-    } finally {
       setHistoryNavigating(false);
+      return true;
+    } else {
+      projectHistoryJumped(previousCursor);
+      setHistoryNavigating(false);
+      return false;
     }
   }
 
@@ -772,9 +797,7 @@ function AppContent() {
     messagePublished(`已删除当前事件及其后的 ${removedCount} 条历史记录`);
   }
 
-  useAppEvent("media:import", ({ paths, folderId }) => {
-    void importMedia(paths, folderId ?? null);
-  });
+  useAppEvent("media:import", ({ paths, folderId }) => importMedia(paths, folderId ?? null));
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
@@ -1072,13 +1095,13 @@ function AppContent() {
         {(warnings.length > 0 || exportResult) && (
           <aside className="event-drawer">
             {warnings.map((warning) => (
-              <div key={warning} className="event warning">
-                {warning}
+              <div key={`${warning.code}:${warning.message}`} className="event warning">
+                {warning.message}
               </div>
             ))}
             {exportResult?.log.map((item) => (
-              <div key={item} className="event">
-                {item}
+              <div key={`${item.code}:${item.message}`} className="event">
+                {item.message}
               </div>
             ))}
           </aside>
@@ -1086,27 +1109,6 @@ function AppContent() {
 
         <ProxyCreationDialog />
         <PreferencesDialog open={preferencesOpen} onClose={() => setPreferencesOpen(false)} />
-        {errorDialogMessage && (
-          <ModalDialog
-            title="操作失败"
-            className="error-dialog"
-            bodyClassName="error-dialog-body"
-            onCancel={() => setErrorDialogMessage(null)}
-            onConfirm={() => setErrorDialogMessage(null)}
-            actions={
-              <button
-                type="button"
-                className="modal-dialog-confirm"
-                onClick={() => setErrorDialogMessage(null)}
-              >
-                确定
-              </button>
-            }
-          >
-            <TriangleAlert className="error-dialog-icon" aria-hidden="true" />
-            <p>{errorDialogMessage}</p>
-          </ModalDialog>
-        )}
       </div>
     </HistoryPanelServicesProvider>
   );

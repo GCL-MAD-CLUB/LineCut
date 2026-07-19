@@ -2,6 +2,7 @@ import { createContext, useContext, useRef, type ReactNode } from "react";
 import { useStore } from "zustand";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { disposePanelInstanceState, usePanelInstanceId } from "../../panelState";
+import { clientError } from "../../errors";
 import type {
   DockAreaId,
   DockAreaState,
@@ -225,7 +226,10 @@ export function PanelManagerProvider({
 export function usePanelManagerState<Selection>(selector: (state: PanelManagerState) => Selection) {
   const store = useContext(PanelManagerContext);
   if (!store) {
-    throw new Error("Panel manager must be used inside PanelManagerProvider.");
+    throw clientError(
+      "PANEL_MANAGER_CONTEXT_MISSING",
+      "Panel manager was requested outside PanelManagerProvider",
+    );
   }
   return useStore(store, selector);
 }
@@ -236,7 +240,10 @@ export function useCurrentPanel() {
   const openPanel = usePanelManagerState((state) => state.openPanel);
   const closePanel = usePanelManagerState((state) => state.closePanel);
   if (!instance) {
-    throw new Error(`Panel instance "${panelId}" is not managed by PanelManager.`);
+    throw clientError(
+      "PANEL_INSTANCE_NOT_MANAGED",
+      `Panel instance is not managed by PanelManager: ${panelId}`,
+    );
   }
   return {
     instance,

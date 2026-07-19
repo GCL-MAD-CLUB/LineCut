@@ -549,6 +549,35 @@ select {
   line-height: 1.5;
 }
 
+.error-dialog-body small {
+  display: block;
+  margin-top: 8px;
+  color: #858585;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.fatal-error-fallback {
+  display: grid;
+  min-height: 100vh;
+  place-content: center;
+  gap: 8px;
+  padding: 32px;
+  color: var(--color-text);
+  text-align: center;
+  background: var(--color-canvas);
+}
+
+.fatal-error-fallback strong {
+  color: var(--color-text-highlight);
+  font-size: 15px;
+}
+
+.fatal-error-fallback span {
+  font-size: 12px;
+}
+
 .modal-backdrop {
   position: absolute;
   inset: 0;

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { runOperation } from "./errors";
 
 interface AppEventMap {
   "media:import": { paths?: string[]; folderId?: string };
@@ -22,18 +23,20 @@ export function emitAppEvent<K extends keyof AppEventMap>(
 
 export function useAppEvent<K extends keyof AppEventMap>(
   type: K,
-  handler: (detail: AppEventMap[K]) => void,
+  handler: (detail: AppEventMap[K]) => void | Promise<void>,
 ) {
   const handlerRef = useRef(handler);
   handlerRef.current = handler;
 
   useEffect(() => {
     const listener = (event: Event) => {
-      try {
-        handlerRef.current((event as CustomEvent<AppEventMap[K]>).detail);
-      } catch (error) {
-        console.error(`AppEvent handler failed for "${String(type)}":`, error);
-      }
+      void runOperation(
+        "app.event",
+        async () => handlerRef.current((event as CustomEvent<AppEventMap[K]>).detail),
+        {
+          displayName: String(type),
+        },
+      );
     };
     window.addEventListener(type, listener);
     return () => window.removeEventListener(type, listener);

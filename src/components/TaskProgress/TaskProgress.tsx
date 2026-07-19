@@ -1,10 +1,10 @@
 import { X } from "lucide-react";
 import { useMemo, useSyncExternalStore, type ReactNode } from "react";
-import { reportError } from "../../errorReporting";
+import { captureOperationError, type OperationKey, type PublicContext } from "../../errors";
 import "./TaskProgress.css";
 
 export interface CreateTaskProgressOptions {
-  operation: string;
+  operation: OperationKey;
   label: string;
   current: number;
   total: number;
@@ -26,11 +26,11 @@ export type TaskProgressListener = (
 export interface TaskProgressHandle {
   update: (update: TaskProgressUpdate) => void;
   remove: () => void;
-  fail: (errorName: string, error: unknown) => void;
+  fail: (error: unknown, context?: PublicContext) => void;
 }
 
 export interface TaskProgressView {
-  operation: string;
+  operation: OperationKey;
   label: string;
   current: number;
   total: number;
@@ -45,7 +45,7 @@ export interface TaskProgressStatus {
 
 interface TaskProgressRecord {
   id: string;
-  operation: string;
+  operation: OperationKey;
   label: string;
   current: number;
   total: number;
@@ -54,15 +54,8 @@ interface TaskProgressRecord {
   on_cancel?: () => void | Promise<void>;
 }
 
-interface TaskProgressError {
-  id: string;
-  name: string;
-  message: string;
-}
-
 interface TaskProgressSnapshot {
   tasks: TaskProgressRecord[];
-  errors: TaskProgressError[];
 }
 
 interface TaskProgressProps {
@@ -71,13 +64,9 @@ interface TaskProgressProps {
 
 const listeners = new Set<() => void>();
 let nextTaskId = 1;
-let nextErrorId = 1;
 let snapshot: TaskProgressSnapshot = {
   tasks: [],
-  errors: [],
 };
-
-const taskFailureMessage = "操作未完成，请稍后重试。";
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -141,31 +130,8 @@ async function stopTaskListener(task: TaskProgressRecord) {
   try {
     await cleanup();
   } catch (error) {
-    reportError("停止任务监听失败", error);
-    addError("停止任务监听失败", taskFailureMessage);
+    captureOperationError("task.listener", error);
   }
-}
-
-function addError(name: string, message: string) {
-  const id = `task-progress-error:${nextErrorId++}`;
-  setSnapshot({
-    ...snapshot,
-    errors: [...snapshot.errors, { id, name, message }],
-  });
-
-  window.setTimeout(() => {
-    removeError(id);
-  }, 6000);
-}
-
-function removeError(id: string) {
-  if (!snapshot.errors.some((error) => error.id === id)) {
-    return;
-  }
-  setSnapshot({
-    ...snapshot,
-    errors: snapshot.errors.filter((error) => error.id !== id),
-  });
 }
 
 async function runTaskCancel(task: TaskProgressRecord) {
@@ -192,8 +158,7 @@ async function runTaskCancel(task: TaskProgressRecord) {
           : currentTask,
       ),
     });
-    reportError("取消任务失败", error);
-    addError("取消任务失败", taskFailureMessage);
+    captureOperationError("task.cancel", error);
   }
 }
 
@@ -239,10 +204,9 @@ export async function createTaskProgress({
       });
     },
     remove: () => removeTask(id),
-    fail: (errorName, error) => {
+    fail: (error, context) => {
       removeTask(id);
-      reportError(errorName, error);
-      addError(errorName, taskFailureMessage);
+      captureOperationError(operation, error, context);
     },
   };
 
@@ -253,8 +217,7 @@ export async function createTaskProgress({
         task.listener_cleanup = cleanup;
       }
     } catch (error) {
-      reportError("启动任务监听失败", error);
-      addError("启动任务监听失败", taskFailureMessage);
+      captureOperationError("task.listener", error);
     }
   }
 
@@ -283,7 +246,7 @@ export async function cancelAllTaskProgress() {
   ]);
 }
 
-export function getTaskProgressStatus(operation?: string): TaskProgressStatus {
+export function getTaskProgressStatus(operation?: OperationKey): TaskProgressStatus {
   const { tasks } = getTaskProgressSnapshot();
 
   return useMemo(() => {
@@ -298,31 +261,10 @@ export function getTaskProgressStatus(operation?: string): TaskProgressStatus {
 }
 
 export function TaskProgress({ children }: TaskProgressProps) {
-  const { errors, tasks } = getTaskProgressSnapshot();
-
-  const errorStack = (
-    <div className="task-progress-errors" aria-live="polite">
-      {errors.map((error) => (
-        <div key={error.id} className="task-progress-error">
-          <div>
-            <strong>{error.name}</strong>
-            <span>{error.message}</span>
-          </div>
-          <button type="button" onClick={() => removeError(error.id)} title="关闭">
-            <X aria-hidden="true" />
-          </button>
-        </div>
-      ))}
-    </div>
-  );
+  const { tasks } = getTaskProgressSnapshot();
 
   if (tasks.length === 0) {
-    return (
-      <>
-        {children}
-        {errorStack}
-      </>
-    );
+    return children;
   }
 
   if (tasks.length === 1) {
@@ -349,7 +291,6 @@ export function TaskProgress({ children }: TaskProgressProps) {
             )}
           </div>
         </div>
-        {errorStack}
       </>
     );
   }
@@ -376,7 +317,6 @@ export function TaskProgress({ children }: TaskProgressProps) {
           })}
         </div>
       </div>
-      {errorStack}
     </>
   );
 }

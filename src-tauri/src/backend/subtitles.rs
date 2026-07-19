@@ -9,7 +9,7 @@ pub(crate) async fn parse_embedded_subtitle_async(
     state: &AppState,
     task_id: &str,
     cancel: Arc<AtomicBool>,
-) -> Result<Vec<SubtitleCue>, String> {
+) -> AppResult<Vec<SubtitleCue>> {
     let output_codec = if matches!(codec.to_ascii_lowercase().as_str(), "ass" | "ssa") {
         "ass"
     } else {
@@ -32,7 +32,7 @@ pub(crate) async fn parse_embedded_subtitle_async(
     let text = run_output(&program, &args, state, task_id, cancel.clone()).await?;
     let track_id = track_id.to_string();
     let output_codec = output_codec.to_string();
-    spawn_blocking_cancellable(cancel, "解析内嵌字幕", move |cancel| {
+    spawn_blocking_cancellable(cancel, "parse embedded subtitles", move |cancel| {
         parse_subtitle_text_cancellable(&text, &output_codec, &track_id, Some(cancel))
     })
     .await
@@ -42,7 +42,7 @@ pub(crate) fn load_external_subtitle_cancellable(
     path: &str,
     asset_id: &str,
     cancel: Option<&AtomicBool>,
-) -> Result<(SubtitleTrack, Vec<SubtitleCue>, Option<String>), String> {
+) -> AppResult<(SubtitleTrack, Vec<SubtitleCue>, Option<UserNotice>)> {
     check_optional_cancel(cancel)?;
     let subtitle_path = PathBuf::from(path);
     let track_id = Uuid::new_v4().to_string();
@@ -54,7 +54,9 @@ pub(crate) fn load_external_subtitle_cancellable(
         source_path: Some(path.to_string()),
         codec: "unknown".to_string(),
         language: None,
-        title: Some(path.to_string()),
+        title: subtitle_path
+            .file_name()
+            .map(|value| value.to_string_lossy().into_owned()),
         kind: SubtitleKind::Text,
         offset_us: 0,
         cue_count: 0,
@@ -62,9 +64,21 @@ pub(crate) fn load_external_subtitle_cancellable(
     };
 
     if !subtitle_path.exists() {
-        let message = format!("外挂字幕不存在: {path}");
+        let display_name = subtitle_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("字幕文件");
+        let message = format!("外挂字幕不存在：{display_name}");
         track.warning = Some(message.clone());
-        return Ok((track, Vec::new(), Some(message)));
+        return Ok((
+            track,
+            Vec::new(),
+            Some(UserNotice::warning_with_detail(
+                "EXTERNAL_SUBTITLE_MISSING",
+                message,
+                format!("missing subtitle path: {path}"),
+            )),
+        ));
     }
 
     let codec = codec_from_path(&subtitle_path);
@@ -78,11 +92,23 @@ pub(crate) fn load_external_subtitle_cancellable(
             track.cue_count = cues.len();
             Ok((track, cues, None))
         }
-        Err(err) if err == "任务已取消" => Err(err),
-        Err(err) => {
-            let message = format!("外挂字幕解析失败 {}: {err}", path);
+        Err(error) if error.is(ErrorCode::TaskCancelled) => Err(error),
+        Err(error) => {
+            let display_name = subtitle_path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("字幕文件");
+            let message = format!("外挂字幕解析失败：{display_name}");
             track.warning = Some(message.clone());
-            Ok((track, Vec::new(), Some(message)))
+            Ok((
+                track,
+                Vec::new(),
+                Some(UserNotice::warning_with_detail(
+                    "EXTERNAL_SUBTITLE_PARSE_FAILED",
+                    message,
+                    format!("subtitle path: {path}; detail: {}", error.detail()),
+                )),
+            ))
         }
     }
 }
@@ -91,8 +117,8 @@ pub(crate) async fn load_external_subtitle_async(
     path: String,
     asset_id: String,
     cancel: Arc<AtomicBool>,
-) -> Result<(SubtitleTrack, Vec<SubtitleCue>, Option<String>), String> {
-    spawn_blocking_cancellable(cancel, "解析外挂字幕", move |cancel| {
+) -> AppResult<(SubtitleTrack, Vec<SubtitleCue>, Option<UserNotice>)> {
+    spawn_blocking_cancellable(cancel, "parse external subtitles", move |cancel| {
         load_external_subtitle_cancellable(&path, &asset_id, Some(cancel))
     })
     .await
@@ -103,9 +129,14 @@ pub(crate) fn parse_subtitle_file_cancellable(
     codec: &str,
     track_id: &str,
     cancel: Option<&AtomicBool>,
-) -> Result<Vec<SubtitleCue>, String> {
+) -> AppResult<Vec<SubtitleCue>> {
     check_optional_cancel(cancel)?;
-    let bytes = fs::read(path).map_err(|e| format!("读取字幕文件失败: {e}"))?;
+    let bytes = fs::read(path).map_err(|error| {
+        app_error(
+            ErrorCode::SubtitleReadFailed,
+            format!("Failed to read subtitle file {}: {error}", path.display()),
+        )
+    })?;
     check_optional_cancel(cancel)?;
     let text = decode_text(&bytes);
     parse_subtitle_text_cancellable(&text, codec, track_id, cancel)
@@ -116,7 +147,7 @@ pub(crate) fn parse_subtitle_text_cancellable(
     codec: &str,
     track_id: &str,
     cancel: Option<&AtomicBool>,
-) -> Result<Vec<SubtitleCue>, String> {
+) -> AppResult<Vec<SubtitleCue>> {
     check_optional_cancel(cancel)?;
     let lower_codec = codec.to_ascii_lowercase();
 
@@ -133,7 +164,7 @@ pub(crate) fn normalize_cues_cancellable(
     mut cues: Vec<SubtitleCue>,
     track_id: &str,
     cancel: Option<&AtomicBool>,
-) -> Result<Vec<SubtitleCue>, String> {
+) -> AppResult<Vec<SubtitleCue>> {
     check_optional_cancel(cancel)?;
     cues.sort_by_key(|cue| (cue.start_us, cue.end_us, cue.sequence));
 
@@ -203,7 +234,7 @@ pub(crate) fn parse_srt_or_vtt_cancellable(
     text: &str,
     track_id: &str,
     cancel: Option<&AtomicBool>,
-) -> Result<Vec<SubtitleCue>, String> {
+) -> AppResult<Vec<SubtitleCue>> {
     let normalized = normalize_newlines(text);
     let lines = normalized.lines().collect::<Vec<_>>();
     let timing_re = Regex::new(
@@ -280,7 +311,7 @@ pub(crate) fn parse_ass_cancellable(
     text: &str,
     track_id: &str,
     cancel: Option<&AtomicBool>,
-) -> Result<Vec<SubtitleCue>, String> {
+) -> AppResult<Vec<SubtitleCue>> {
     let normalized = normalize_newlines(text);
     let mut in_events = false;
     let mut fields = vec![

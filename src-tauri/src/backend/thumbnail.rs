@@ -89,20 +89,32 @@ struct CoverCandidate {
 pub(crate) async fn generate_video_cover_thumbnail(
     asset_id: String,
     state: tauri::State<'_, AppState>,
-) -> Result<Vec<u8>, String> {
+) -> CommandResult<Vec<u8>> {
     let project = state
         .projects
         .lock()
-        .map_err(|_| "项目状态锁定失败".to_string())?
+        .map_err(|_| {
+            app_error(
+                ErrorCode::ProjectStateUnavailable,
+                "Project state lock is poisoned",
+            )
+        })?
         .get(&asset_id)
         .cloned()
-        .ok_or_else(|| format!("未找到媒体: {asset_id}"))?;
-    let stream_index = project
-        .asset
-        .video_stream_index
-        .ok_or_else(|| "媒体不包含视频流".to_string())?;
+        .ok_or_else(|| {
+            app_error(
+                ErrorCode::MediaNotFound,
+                format!("Media asset was not found: {asset_id}"),
+            )
+        })?;
+    let stream_index = project.asset.video_stream_index.ok_or_else(|| {
+        app_error(
+            ErrorCode::VideoStreamMissing,
+            format!("Media asset has no video stream: {asset_id}"),
+        )
+    })?;
     let preferences = preferences_clone(&state)?;
-    ensure_video_cover_thumbnail(&project, &preferences, None, None, stream_index).await
+    Ok(ensure_video_cover_thumbnail(&project, &preferences, None, None, stream_index).await?)
 }
 
 #[tauri::command]
@@ -110,18 +122,30 @@ pub(crate) async fn generate_subtitle_thumbnail(
     asset_id: String,
     time_us: i64,
     state: tauri::State<'_, AppState>,
-) -> Result<Vec<u8>, String> {
+) -> CommandResult<Vec<u8>> {
     let project = state
         .projects
         .lock()
-        .map_err(|_| "项目状态锁定失败".to_string())?
+        .map_err(|_| {
+            app_error(
+                ErrorCode::ProjectStateUnavailable,
+                "Project state lock is poisoned",
+            )
+        })?
         .get(&asset_id)
         .cloned()
-        .ok_or_else(|| format!("未找到媒体: {asset_id}"))?;
-    let stream_index = project
-        .asset
-        .video_stream_index
-        .ok_or_else(|| "媒体不包含视频流".to_string())?;
+        .ok_or_else(|| {
+            app_error(
+                ErrorCode::MediaNotFound,
+                format!("Media asset was not found: {asset_id}"),
+            )
+        })?;
+    let stream_index = project.asset.video_stream_index.ok_or_else(|| {
+        app_error(
+            ErrorCode::VideoStreamMissing,
+            format!("Media asset has no video stream: {asset_id}"),
+        )
+    })?;
     let preferences = preferences_clone(&state)?;
     let cache_preferences = preferences.clone();
     let fingerprint = project.asset.fingerprint.clone();
@@ -130,7 +154,12 @@ pub(crate) async fn generate_subtitle_thumbnail(
         read_subtitle_thumbnail_cache(&cache_preferences, &fingerprint, time_us, duration_us)
     })
     .await
-    .map_err(|error| format!("读取字幕缩略图缓存失败: {error}"))?;
+    .map_err(|error| {
+        app_error(
+            ErrorCode::BlockingTaskFailed,
+            format!("Subtitle thumbnail cache read task failed: {error}"),
+        )
+    })?;
     if let Some(bytes) = lookup.bytes {
         return Ok(bytes);
     }
@@ -142,7 +171,7 @@ pub(crate) async fn generate_subtitle_thumbnail(
     )
     .await?;
     let fingerprint = project.asset.fingerprint;
-    tokio::task::spawn_blocking(move || {
+    Ok(tokio::task::spawn_blocking(move || {
         write_subtitle_thumbnail_cache(
             &preferences,
             &fingerprint,
@@ -150,10 +179,15 @@ pub(crate) async fn generate_subtitle_thumbnail(
             duration_us,
             &jpeg,
         )?;
-        Ok::<Vec<u8>, String>(jpeg)
+        Ok::<Vec<u8>, AppError>(jpeg)
     })
     .await
-    .map_err(|error| format!("写入字幕缩略图缓存失败: {error}"))?
+    .map_err(|error| {
+        app_error(
+            ErrorCode::BlockingTaskFailed,
+            format!("Subtitle thumbnail cache write task failed: {error}"),
+        )
+    })??)
 }
 
 #[tauri::command]
@@ -161,17 +195,27 @@ pub(crate) async fn get_cached_subtitle_thumbnail(
     asset_id: String,
     time_us: i64,
     state: tauri::State<'_, AppState>,
-) -> Result<SubtitleThumbnailCacheLookup, String> {
+) -> CommandResult<SubtitleThumbnailCacheLookup> {
     let project = state
         .projects
         .lock()
-        .map_err(|_| "项目状态锁定失败".to_string())?
+        .map_err(|_| {
+            app_error(
+                ErrorCode::ProjectStateUnavailable,
+                "Project state lock is poisoned",
+            )
+        })?
         .get(&asset_id)
         .cloned()
-        .ok_or_else(|| format!("未找到媒体: {asset_id}"))?;
+        .ok_or_else(|| {
+            app_error(
+                ErrorCode::MediaNotFound,
+                format!("Media asset was not found: {asset_id}"),
+            )
+        })?;
     let preferences = preferences_clone(&state)?;
-    tokio::task::spawn_blocking(move || {
-        Ok(read_subtitle_thumbnail_cache(
+    Ok(tokio::task::spawn_blocking(move || {
+        Ok::<_, AppError>(read_subtitle_thumbnail_cache(
             &preferences,
             &project.asset.fingerprint,
             time_us,
@@ -179,7 +223,12 @@ pub(crate) async fn get_cached_subtitle_thumbnail(
         ))
     })
     .await
-    .map_err(|error| format!("读取字幕缩略图缓存失败: {error}"))?
+    .map_err(|error| {
+        app_error(
+            ErrorCode::BlockingTaskFailed,
+            format!("Subtitle thumbnail cache read task failed: {error}"),
+        )
+    })??)
 }
 
 #[tauri::command]
@@ -188,17 +237,27 @@ pub(crate) async fn cache_subtitle_thumbnail(
     time_us: i64,
     bytes: Vec<u8>,
     state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
+) -> CommandResult<()> {
     validate_subtitle_thumbnail_jpeg(&bytes)?;
     let project = state
         .projects
         .lock()
-        .map_err(|_| "项目状态锁定失败".to_string())?
+        .map_err(|_| {
+            app_error(
+                ErrorCode::ProjectStateUnavailable,
+                "Project state lock is poisoned",
+            )
+        })?
         .get(&asset_id)
         .cloned()
-        .ok_or_else(|| format!("未找到媒体: {asset_id}"))?;
+        .ok_or_else(|| {
+            app_error(
+                ErrorCode::MediaNotFound,
+                format!("Media asset was not found: {asset_id}"),
+            )
+        })?;
     let preferences = preferences_clone(&state)?;
-    tokio::task::spawn_blocking(move || {
+    Ok(tokio::task::spawn_blocking(move || {
         write_subtitle_thumbnail_cache(
             &preferences,
             &project.asset.fingerprint,
@@ -208,7 +267,12 @@ pub(crate) async fn cache_subtitle_thumbnail(
         )
     })
     .await
-    .map_err(|error| format!("写入字幕缩略图缓存失败: {error}"))?
+    .map_err(|error| {
+        app_error(
+            ErrorCode::BlockingTaskFailed,
+            format!("Subtitle thumbnail cache write task failed: {error}"),
+        )
+    })??)
 }
 
 pub(crate) async fn ensure_video_cover_thumbnail(
@@ -217,7 +281,7 @@ pub(crate) async fn ensure_video_cover_thumbnail(
     cancel: Option<Arc<AtomicBool>>,
     progress: Option<&CoverProgressCallback>,
     stream_index: i32,
-) -> Result<Vec<u8>, String> {
+) -> AppResult<Vec<u8>> {
     report_cover_progress(progress, 0.0);
     let layout = thumbnail_cache_layout(preferences, &project.asset.fingerprint);
     register_thumbnail_cache(&layout)?;
@@ -251,7 +315,10 @@ pub(crate) async fn ensure_video_cover_thumbnail(
     report_cover_progress(progress, 0.9);
     let candidates = cached_candidates(&cached);
     if candidates.is_empty() {
-        return Err("视频封面分析没有产生可用帧".to_string());
+        return Err(app_error(
+            ErrorCode::ThumbnailNoFrame,
+            "Video cover analysis produced no usable frame",
+        ));
     }
     let selected = select_cover_candidate(&candidates);
     ensure_thumbnail_not_cancelled(cancel.as_ref())?;
@@ -377,8 +444,15 @@ fn read_subtitle_thumbnail_cache(
     time_us: i64,
     duration_us: i64,
 ) -> SubtitleThumbnailCacheLookup {
-    let Ok(_guard) = SUBTITLE_THUMBNAIL_CACHE_LOCK.lock() else {
-        return subtitle_thumbnail_cache_miss(time_us, duration_us);
+    let _guard = match SUBTITLE_THUMBNAIL_CACHE_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            app_error(
+                ErrorCode::ThumbnailCacheStateUnavailable,
+                "Subtitle thumbnail cache lock is poisoned during a cache read",
+            );
+            return subtitle_thumbnail_cache_miss(time_us, duration_us);
+        }
     };
     read_subtitle_thumbnail_cache_unlocked(preferences, fingerprint, time_us, duration_us)
 }
@@ -425,11 +499,14 @@ fn write_subtitle_thumbnail_cache(
     time_us: i64,
     duration_us: i64,
     jpeg: &[u8],
-) -> Result<(), String> {
+) -> AppResult<()> {
     validate_subtitle_thumbnail_jpeg(jpeg)?;
-    let _guard = SUBTITLE_THUMBNAIL_CACHE_LOCK
-        .lock()
-        .map_err(|_| "字幕缩略图缓存锁定失败".to_string())?;
+    let _guard = SUBTITLE_THUMBNAIL_CACHE_LOCK.lock().map_err(|_| {
+        app_error(
+            ErrorCode::ThumbnailCacheStateUnavailable,
+            "Subtitle thumbnail cache lock is poisoned",
+        )
+    })?;
     if read_subtitle_thumbnail_cache_unlocked(preferences, fingerprint, time_us, duration_us)
         .bytes
         .is_some()
@@ -451,32 +528,56 @@ fn write_subtitle_thumbnail_cache(
     )
 }
 
-fn validate_subtitle_thumbnail_jpeg(bytes: &[u8]) -> Result<(), String> {
+fn validate_subtitle_thumbnail_jpeg(bytes: &[u8]) -> AppResult<()> {
     if bytes.len() < 4 || bytes.len() > MAX_SUBTITLE_THUMBNAIL_BYTES {
-        return Err("字幕缩略图缓存数据大小无效".to_string());
+        return Err(app_error(
+            ErrorCode::ThumbnailDataInvalid,
+            format!(
+                "Subtitle thumbnail JPEG size is invalid: {} bytes",
+                bytes.len()
+            ),
+        ));
     }
     if !bytes.starts_with(&[0xff, 0xd8, 0xff]) {
-        return Err("字幕缩略图缓存不是有效的 JPEG 数据".to_string());
+        return Err(app_error(
+            ErrorCode::ThumbnailDataInvalid,
+            "Subtitle thumbnail data does not have a JPEG signature",
+        ));
     }
     Ok(())
 }
 
-fn register_thumbnail_cache(layout: &ThumbnailCacheLayout) -> Result<(), String> {
-    let _guard = THUMBNAIL_CACHE_LOCK
-        .lock()
-        .map_err(|_| "视频封面缓存锁定失败".to_string())?;
-    let index_parent = layout
-        .index_path
-        .parent()
-        .ok_or_else(|| "视频封面索引路径无效".to_string())?;
-    let cache_parent = layout
-        .cache_path
-        .parent()
-        .ok_or_else(|| "视频封面缓存路径无效".to_string())?;
-    fs::create_dir_all(index_parent)
-        .map_err(|error| format!("创建视频封面索引目录失败: {error}"))?;
-    fs::create_dir_all(cache_parent)
-        .map_err(|error| format!("创建视频封面缓存目录失败: {error}"))?;
+fn register_thumbnail_cache(layout: &ThumbnailCacheLayout) -> AppResult<()> {
+    let _guard = THUMBNAIL_CACHE_LOCK.lock().map_err(|_| {
+        app_error(
+            ErrorCode::ThumbnailCacheStateUnavailable,
+            "Video cover cache lock is poisoned",
+        )
+    })?;
+    let index_parent = layout.index_path.parent().ok_or_else(|| {
+        app_error(
+            ErrorCode::ThumbnailCacheInvalid,
+            "Video cover cache index path has no parent directory",
+        )
+    })?;
+    let cache_parent = layout.cache_path.parent().ok_or_else(|| {
+        app_error(
+            ErrorCode::ThumbnailCacheInvalid,
+            "Video cover cache path has no parent directory",
+        )
+    })?;
+    fs::create_dir_all(index_parent).map_err(|error| {
+        app_error(
+            ErrorCode::ThumbnailCacheWriteFailed,
+            format!("Failed to create the video cover cache index directory: {error}"),
+        )
+    })?;
+    fs::create_dir_all(cache_parent).map_err(|error| {
+        app_error(
+            ErrorCode::ThumbnailCacheWriteFailed,
+            format!("Failed to create the video cover cache directory: {error}"),
+        )
+    })?;
     let mut index = read_private_cache::<ThumbnailCacheIndex>(
         &layout.index_path,
         &layout.index_key,
@@ -504,11 +605,16 @@ fn register_thumbnail_cache(layout: &ThumbnailCacheLayout) -> Result<(), String>
 }
 
 fn current_time_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .min(u64::MAX as u128) as u64
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_millis().min(u64::MAX as u128) as u64,
+        Err(error) => {
+            app_error(
+                ErrorCode::SystemClockInvalid,
+                format!("System clock is earlier than the Unix epoch: {error}"),
+            );
+            0
+        }
+    }
 }
 
 fn analysis_sample_times(duration_us: i64) -> Vec<i64> {
@@ -537,8 +643,8 @@ async fn analyze_video_samples(
     fingerprint: &str,
     cancel: Option<&Arc<AtomicBool>>,
     progress: Option<&CoverProgressCallback>,
-) -> Result<(), String> {
-    let mut first_error = None;
+) -> AppResult<()> {
+    let mut first_error: Option<AppError> = None;
     let total = cached.sample_times.len().max(1);
     let mut completed = cached.scores.iter().filter(|score| score.is_some()).count();
     report_cover_progress(progress, completed as f64 / total as f64 * 0.9);
@@ -570,7 +676,12 @@ async fn analyze_video_samples(
                     first_error.get_or_insert(error);
                 }
                 Err(error) => {
-                    first_error.get_or_insert_with(|| format!("等待视频封面候选帧失败: {error}"));
+                    first_error.get_or_insert_with(|| {
+                        app_error(
+                            ErrorCode::BlockingTaskFailed,
+                            format!("Video cover analysis task failed: {error}"),
+                        )
+                    });
                 }
             }
         }
@@ -580,7 +691,12 @@ async fn analyze_video_samples(
         ensure_thumbnail_not_cancelled(cancel)?;
     }
     if cached.scores.iter().all(Option::is_none) {
-        return Err(first_error.unwrap_or_else(|| "视频封面分析没有产生可用帧".to_string()));
+        return Err(first_error.unwrap_or_else(|| {
+            app_error(
+                ErrorCode::ThumbnailNoFrame,
+                "Video cover analysis produced no usable frame",
+            )
+        }));
     }
     Ok(())
 }
@@ -590,7 +706,7 @@ async fn analyze_video_sample(
     input_path: &str,
     stream_index: i32,
     time_us: i64,
-) -> Result<f64, String> {
+) -> AppResult<f64> {
     let mut args = fast_seek_input_args(input_path, time_us, true);
     args.extend([
         "-map".to_string(),
@@ -611,15 +727,29 @@ async fn analyze_video_sample(
         .stderr(Stdio::piped())
         .output()
         .await
-        .map_err(|error| format!("启动 {program} 分析视频封面候选帧失败: {error}"))?;
+        .map_err(|error| {
+            app_error(
+                ErrorCode::ExternalToolStartFailed,
+                format!("Failed to start {program} for video cover analysis: {error}"),
+            )
+        })?;
     if !output.status.success() {
-        return Err(format!(
-            "分析视频封面候选帧失败: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+        return Err(app_error(
+            ErrorCode::ExternalToolExecutionFailed,
+            format!(
+                "Video cover analysis failed; stderr={}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
         ));
     }
     if output.stdout.len() < ANALYSIS_FRAME_BYTES {
-        return Err("视频封面候选帧数据不完整".to_string());
+        return Err(app_error(
+            ErrorCode::ExternalToolOutputInvalid,
+            format!(
+                "Video cover analysis returned an incomplete frame: {} of {ANALYSIS_FRAME_BYTES} bytes",
+                output.stdout.len()
+            ),
+        ));
     }
     Ok(frame_information_score(
         &output.stdout[..ANALYSIS_FRAME_BYTES],
@@ -733,7 +863,7 @@ async fn extract_cover_frame(
     stream_index: i32,
     time_us: i64,
     keyframes_only: bool,
-) -> Result<Vec<u8>, String> {
+) -> AppResult<Vec<u8>> {
     let mut args = fast_seek_input_args(input_path, time_us, keyframes_only);
     args.extend([
         "-map".to_string(),
@@ -756,15 +886,26 @@ async fn extract_cover_frame(
         .stderr(Stdio::piped())
         .output()
         .await
-        .map_err(|error| format!("启动 {program} 提取视频封面失败: {error}"))?;
+        .map_err(|error| {
+            app_error(
+                ErrorCode::ExternalToolStartFailed,
+                format!("Failed to start {program} for video cover extraction: {error}"),
+            )
+        })?;
     if !output.status.success() {
-        return Err(format!(
-            "提取视频封面失败: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+        return Err(app_error(
+            ErrorCode::ThumbnailExtractionFailed,
+            format!(
+                "Video cover extraction failed; stderr={}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
         ));
     }
     if output.stdout.is_empty() {
-        return Err("提取的视频封面为空".to_string());
+        return Err(app_error(
+            ErrorCode::ExternalToolOutputInvalid,
+            "Video cover extraction returned an empty image",
+        ));
     }
     Ok(output.stdout)
 }
@@ -774,7 +915,7 @@ async fn extract_subtitle_thumbnail(
     input_path: &str,
     stream_index: i32,
     time_us: i64,
-) -> Result<Vec<u8>, String> {
+) -> AppResult<Vec<u8>> {
     let args = [
         "-hide_banner".to_string(),
         "-loglevel".to_string(),
@@ -807,22 +948,36 @@ async fn extract_subtitle_thumbnail(
         .stderr(Stdio::piped())
         .output()
         .await
-        .map_err(|error| format!("启动 {program} 提取字幕缩略图失败: {error}"))?;
+        .map_err(|error| {
+            app_error(
+                ErrorCode::ExternalToolStartFailed,
+                format!("Failed to start {program} for subtitle thumbnail extraction: {error}"),
+            )
+        })?;
     if !output.status.success() {
-        return Err(format!(
-            "提取字幕缩略图失败: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+        return Err(app_error(
+            ErrorCode::ThumbnailExtractionFailed,
+            format!(
+                "Subtitle thumbnail extraction failed; stderr={}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
         ));
     }
     if output.stdout.is_empty() {
-        return Err("提取的字幕缩略图为空".to_string());
+        return Err(app_error(
+            ErrorCode::ExternalToolOutputInvalid,
+            "Subtitle thumbnail extraction returned an empty image",
+        ));
     }
     Ok(output.stdout)
 }
 
-fn ensure_thumbnail_not_cancelled(cancel: Option<&Arc<AtomicBool>>) -> Result<(), String> {
+fn ensure_thumbnail_not_cancelled(cancel: Option<&Arc<AtomicBool>>) -> AppResult<()> {
     if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
-        Err("任务已取消".to_string())
+        Err(app_error(
+            ErrorCode::TaskCancelled,
+            "Thumbnail generation was cancelled",
+        ))
     } else {
         Ok(())
     }
@@ -832,7 +987,16 @@ fn read_media_thumbnail_cache(
     layout: &ThumbnailCacheLayout,
     fingerprint: &str,
 ) -> Option<CachedMediaThumbnail> {
-    let _guard = THUMBNAIL_CACHE_LOCK.lock().ok()?;
+    let _guard = match THUMBNAIL_CACHE_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            app_error(
+                ErrorCode::ThumbnailCacheStateUnavailable,
+                "Video cover cache lock is poisoned during a cache read",
+            );
+            return None;
+        }
+    };
     let index = read_private_cache::<ThumbnailCacheIndex>(
         &layout.index_path,
         &layout.index_key,
@@ -849,10 +1013,13 @@ fn write_media_thumbnail_cache(
     layout: &ThumbnailCacheLayout,
     fingerprint: &str,
     cached: &CachedMediaThumbnail,
-) -> Result<(), String> {
-    let _guard = THUMBNAIL_CACHE_LOCK
-        .lock()
-        .map_err(|_| "视频封面缓存锁定失败".to_string())?;
+) -> AppResult<()> {
+    let _guard = THUMBNAIL_CACHE_LOCK.lock().map_err(|_| {
+        app_error(
+            ErrorCode::ThumbnailCacheStateUnavailable,
+            "Video cover cache lock is poisoned",
+        )
+    })?;
     write_private_cache(&layout.cache_path, fingerprint, CACHE_KEY_CONTEXT, cached)
 }
 
@@ -860,15 +1027,60 @@ fn read_private_cache<Value>(path: &Path, key: &str, context: &[u8]) -> Option<V
 where
     Value: for<'de> Deserialize<'de>,
 {
-    let envelope = bincode::deserialize::<PrivateCacheEnvelope>(&fs::read(path).ok()?).ok()?;
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) => {
+            app_error(
+                ErrorCode::ThumbnailCacheReadFailed,
+                format!(
+                    "Failed to read thumbnail cache file {}: {error}",
+                    path.display()
+                ),
+            );
+            return None;
+        }
+    };
+    let envelope = match bincode::deserialize::<PrivateCacheEnvelope>(&bytes) {
+        Ok(envelope) => envelope,
+        Err(error) => {
+            app_error(
+                ErrorCode::ThumbnailCacheInvalid,
+                format!(
+                    "Failed to decode thumbnail cache envelope {}: {error}",
+                    path.display()
+                ),
+            );
+            return None;
+        }
+    };
     if envelope.version != 1 {
         return None;
     }
     let serialized = transform_private_payload(&envelope.payload, key, context);
     if private_cache_digest(&serialized, key, context) != envelope.digest {
+        app_error(
+            ErrorCode::ThumbnailCacheInvalid,
+            format!(
+                "Thumbnail cache digest does not match for {}",
+                path.display()
+            ),
+        );
         return None;
     }
-    bincode::deserialize(&serialized).ok()
+    match bincode::deserialize(&serialized) {
+        Ok(value) => Some(value),
+        Err(error) => {
+            app_error(
+                ErrorCode::ThumbnailCacheInvalid,
+                format!(
+                    "Failed to decode thumbnail cache payload {}: {error}",
+                    path.display()
+                ),
+            );
+            None
+        }
+    }
 }
 
 fn write_private_cache<Value>(
@@ -876,23 +1088,44 @@ fn write_private_cache<Value>(
     key: &str,
     context: &[u8],
     value: &Value,
-) -> Result<(), String>
+) -> AppResult<()>
 where
     Value: Serialize,
 {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| format!("创建缩略图缓存目录失败: {error}"))?;
+        fs::create_dir_all(parent).map_err(|error| {
+            app_error(
+                ErrorCode::ThumbnailCacheWriteFailed,
+                format!("Failed to create the thumbnail cache directory: {error}"),
+            )
+        })?;
     }
-    let serialized =
-        bincode::serialize(value).map_err(|error| format!("编码缩略图缓存失败: {error}"))?;
+    let serialized = bincode::serialize(value).map_err(|error| {
+        app_error(
+            ErrorCode::ThumbnailCacheWriteFailed,
+            format!("Failed to encode thumbnail cache data: {error}"),
+        )
+    })?;
     let envelope = PrivateCacheEnvelope {
         version: 1,
         digest: private_cache_digest(&serialized, key, context),
         payload: transform_private_payload(&serialized, key, context),
     };
-    let output =
-        bincode::serialize(&envelope).map_err(|error| format!("封装缩略图缓存失败: {error}"))?;
-    fs::write(path, output).map_err(|error| format!("写入缩略图缓存失败: {error}"))
+    let output = bincode::serialize(&envelope).map_err(|error| {
+        app_error(
+            ErrorCode::ThumbnailCacheWriteFailed,
+            format!("Failed to encode the thumbnail cache envelope: {error}"),
+        )
+    })?;
+    fs::write(path, output).map_err(|error| {
+        app_error(
+            ErrorCode::ThumbnailCacheWriteFailed,
+            format!(
+                "Failed to write thumbnail cache file {}: {error}",
+                path.display()
+            ),
+        )
+    })
 }
 
 fn private_cache_digest(bytes: &[u8], key: &str, context: &[u8]) -> [u8; 32] {

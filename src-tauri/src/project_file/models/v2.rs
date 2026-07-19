@@ -1,4 +1,4 @@
-use crate::ProjectWorkspace;
+use crate::{app_error, AppResult, ErrorCode, ProjectWorkspace};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -188,17 +188,31 @@ struct EditorState {
 impl ProjectModel for Model {
     const VERSION: u16 = 2;
 
-    fn decode(payload: &[u8]) -> Result<Self, String> {
-        serde_json::from_slice(payload).map_err(|error| format!("解析 V2 项目文件失败: {error}"))
+    fn decode(payload: &[u8]) -> AppResult<Self> {
+        serde_json::from_slice(payload).map_err(|error| {
+            app_error(
+                ErrorCode::ProjectDecodeFailed,
+                format!("Failed to decode the V2 project model: {error}"),
+            )
+        })
     }
 
-    fn encode(&self) -> Result<Vec<u8>, String> {
-        serde_json::to_vec(self).map_err(|error| format!("序列化 V2 项目文件失败: {error}"))
+    fn encode(&self) -> AppResult<Vec<u8>> {
+        serde_json::to_vec(self).map_err(|error| {
+            app_error(
+                ErrorCode::ProjectEncodeFailed,
+                format!("Failed to encode the V2 project model: {error}"),
+            )
+        })
     }
 
-    fn into_upgrade_parts(self) -> Result<UpgradeParts, String> {
-        let workspace = serde_json::to_value(self.workspace)
-            .map_err(|error| format!("读取 V2 项目内容失败: {error}"))?;
+    fn into_upgrade_parts(self) -> AppResult<UpgradeParts> {
+        let workspace = serde_json::to_value(self.workspace).map_err(|error| {
+            app_error(
+                ErrorCode::ProjectMigrationFailed,
+                format!("Failed to convert the V2 workspace into migration data: {error}"),
+            )
+        })?;
         Ok(UpgradeParts {
             workspace,
             saved_at: self.saved_at,
@@ -208,27 +222,44 @@ impl ProjectModel for Model {
 }
 
 impl UpgradeFrom<handle_v1::ProjectFile> for Model {
-    fn upgrade_from(previous: handle_v1::ProjectFile) -> Result<Self, String> {
+    fn upgrade_from(previous: handle_v1::ProjectFile) -> AppResult<Self> {
         let (mut workspace, saved_at, app_version) = previous.into_upgrade_parts()?;
         let media_bin = workspace
             .get_mut("media_bin")
             .and_then(Value::as_object_mut)
-            .ok_or_else(|| "V1 项目缺少媒体库".to_string())?;
+            .ok_or_else(|| {
+                app_error(
+                    ErrorCode::ProjectMigrationFailed,
+                    "The V1 project is missing its media bin",
+                )
+            })?;
         let items = media_bin
             .get_mut("items")
             .and_then(Value::as_array_mut)
-            .ok_or_else(|| "V1 媒体库缺少 items".to_string())?;
+            .ok_or_else(|| {
+                app_error(
+                    ErrorCode::ProjectMigrationFailed,
+                    "The V1 media bin is missing its items array",
+                )
+            })?;
         for item in items {
-            let item = item
-                .as_object_mut()
-                .ok_or_else(|| "V1 媒体库包含无效项目".to_string())?;
+            let item = item.as_object_mut().ok_or_else(|| {
+                app_error(
+                    ErrorCode::ProjectMigrationFailed,
+                    "The V1 media bin contains an invalid item",
+                )
+            })?;
             item.insert("bin_id".to_string(), Value::Null);
         }
         media_bin.insert("folders".to_string(), Value::Array(Vec::new()));
 
         Ok(Self {
-            workspace: serde_json::from_value(workspace)
-                .map_err(|error| format!("将 V1 工作区升级为 V2 失败: {error}"))?,
+            workspace: serde_json::from_value(workspace).map_err(|error| {
+                app_error(
+                    ErrorCode::ProjectMigrationFailed,
+                    format!("Failed to migrate the V1 workspace to V2: {error}"),
+                )
+            })?,
             saved_at,
             app_version,
         })
@@ -240,21 +271,37 @@ impl CurrentProjectModel for Model {
         workspace: &ProjectWorkspace,
         saved_at: u64,
         app_version: &str,
-    ) -> Result<Self, String> {
-        let value = serde_json::to_value(workspace)
-            .map_err(|error| format!("读取当前项目状态失败: {error}"))?;
+    ) -> AppResult<Self> {
+        let value = serde_json::to_value(workspace).map_err(|error| {
+            app_error(
+                ErrorCode::ProjectEncodeFailed,
+                format!("Failed to serialize the runtime project state: {error}"),
+            )
+        })?;
         Ok(Self {
-            workspace: serde_json::from_value(value)
-                .map_err(|error| format!("当前项目状态无法写入 V2: {error}"))?,
+            workspace: serde_json::from_value(value).map_err(|error| {
+                app_error(
+                    ErrorCode::ProjectEncodeFailed,
+                    format!("Runtime project state is incompatible with the V2 model: {error}"),
+                )
+            })?,
             saved_at,
             app_version: app_version.to_string(),
         })
     }
 
-    fn into_runtime(self) -> Result<ProjectWorkspace, String> {
-        let value = serde_json::to_value(self.workspace)
-            .map_err(|error| format!("读取 V2 项目内容失败: {error}"))?;
-        serde_json::from_value(value)
-            .map_err(|error| format!("V2 项目无法转换为当前项目状态: {error}"))
+    fn into_runtime(self) -> AppResult<ProjectWorkspace> {
+        let value = serde_json::to_value(self.workspace).map_err(|error| {
+            app_error(
+                ErrorCode::ProjectDecodeFailed,
+                format!("Failed to serialize the V2 project model for runtime conversion: {error}"),
+            )
+        })?;
+        serde_json::from_value(value).map_err(|error| {
+            app_error(
+                ErrorCode::ProjectDecodeFailed,
+                format!("The V2 project model is incompatible with runtime state: {error}"),
+            )
+        })
     }
 }

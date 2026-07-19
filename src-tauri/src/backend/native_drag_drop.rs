@@ -21,12 +21,15 @@ static MEDIA_IMPORT_DROP_REGION: Mutex<Option<MediaImportDropRegion>> = Mutex::n
 #[tauri::command]
 pub(crate) fn set_media_import_drop_region(
     region: Option<MediaImportDropRegion>,
-) -> Result<(), String> {
+) -> CommandResult<()> {
     #[cfg(windows)]
     {
-        *MEDIA_IMPORT_DROP_REGION
-            .lock()
-            .map_err(|_| "媒体导入投放区域锁定失败".to_string())? = region;
+        *MEDIA_IMPORT_DROP_REGION.lock().map_err(|_| {
+            app_error(
+                ErrorCode::DropRegionStateUnavailable,
+                "Media import drop-region state lock is poisoned",
+            )
+        })? = region;
     }
 
     #[cfg(not(windows))]
@@ -161,11 +164,18 @@ mod windows_drop_target {
         }
 
         fn point_is_allowed(position: &POINT) -> bool {
-            MEDIA_IMPORT_DROP_REGION
-                .lock()
-                .ok()
-                .and_then(|region| *region)
-                .is_some_and(|region| region.contains(position.x, position.y))
+            match MEDIA_IMPORT_DROP_REGION.lock() {
+                Ok(region) => region
+                    .as_ref()
+                    .is_some_and(|region| region.contains(position.x, position.y)),
+                Err(_) => {
+                    app_error(
+                        ErrorCode::DropRegionStateUnavailable,
+                        "Media import drop-region state lock is poisoned during native drag",
+                    );
+                    false
+                }
+            }
         }
 
         fn effect_for(position: &POINT) -> DROPEFFECT {
@@ -334,13 +344,13 @@ mod windows_drop_target {
         }
     }
 
-    pub(super) fn install(
-        app: tauri::AppHandle,
-        hwnd: HWND,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub(super) fn install(app: tauri::AppHandle, hwnd: HWND) -> AppResult<()> {
         let controller = DragDropController::new(hwnd, app);
         if controller.drop_targets.is_empty() {
-            return Err("无法注册系统文件拖放目标".into());
+            return Err(app_error(
+                ErrorCode::NativeDragRegistrationFailed,
+                "No native file drop target could be registered",
+            ));
         }
         DRAG_DROP_CONTROLLER.with(|slot| {
             *slot.borrow_mut() = Some(controller);
@@ -353,6 +363,6 @@ mod windows_drop_target {
 pub(crate) fn install_system_file_drop(
     app: tauri::AppHandle,
     hwnd: windows::Win32::Foundation::HWND,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> AppResult<()> {
     windows_drop_target::install(app, hwnd)
 }

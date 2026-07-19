@@ -1,6 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { TaskProgressListener } from "./components/TaskProgress";
+import { clientError, invokeCommand } from "./errors";
 
 interface FfmpegProgressPayload {
   task_id: string;
@@ -19,9 +19,9 @@ export function createFfmpegTaskId(operation: string) {
 }
 
 export async function cancelFfmpegTask(taskId: string) {
-  const cancelled = await invoke<boolean>("cancel_task", { taskId });
+  const cancelled = await invokeCommand<boolean>("cancel_task", { taskId });
   if (!cancelled) {
-    throw new Error("任务尚未启动或已经结束");
+    throw clientError("TASK_NOT_RUNNING", `Task is not running or has already finished: ${taskId}`);
   }
 }
 

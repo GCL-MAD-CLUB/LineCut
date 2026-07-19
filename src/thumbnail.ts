@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeCommand } from "./errors";
 
 const maximumCachedVideoCovers = 200;
 const videoCoverCache = new Map<string, Uint8Array>();
@@ -39,7 +39,7 @@ export function extractVideoCover(assetId: string, fingerprint: string): Promise
   }
 
   const request = enqueueVideoCover(() =>
-    invoke<number[]>("generate_video_cover_thumbnail", { assetId }),
+    invokeCommand<number[]>("generate_video_cover_thumbnail", { assetId }),
   ).then((serializedBytes) => {
     const bytes = new Uint8Array(serializedBytes);
     rememberVideoCover(fingerprint, bytes);

@@ -13,6 +13,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { clientError } from "../../errors";
 import type {
   CSSProperties,
   MouseEvent as ReactMouseEvent,
@@ -330,7 +331,10 @@ export function PopupMenuSelectionGroup({
     (item, index) => items.findIndex((candidate) => candidate.value === item.value) !== index,
   )?.value;
   if (duplicateValue) {
-    throw new Error(`PopupMenuSelectionItem value "${duplicateValue}" must be unique.`);
+    throw clientError(
+      "POPUP_MENU_VALUE_DUPLICATE",
+      `Popup menu selection value is not unique: ${duplicateValue}`,
+    );
   }
   const itemKey = items.map((item) => `${item.value}:${item.disabled}`).join("\u0000");
   const initialValueRef = useRef<string | null | undefined>(undefined);
@@ -398,7 +402,10 @@ export function PopupMenuSelectionItem({
 }: PopupMenuSelectionItemProps) {
   const group = useContext(PopupMenuSelectionGroupContext);
   if (!group) {
-    throw new Error("PopupMenuSelectionItem must be used inside PopupMenuSelectionGroup.");
+    throw clientError(
+      "POPUP_MENU_GROUP_CONTEXT_MISSING",
+      "PopupMenuSelectionItem was used outside PopupMenuSelectionGroup",
+    );
   }
 
   return (

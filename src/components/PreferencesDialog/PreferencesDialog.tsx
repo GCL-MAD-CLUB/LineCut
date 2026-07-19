@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   Clock3,
@@ -12,7 +11,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
-import { reportError } from "../../errorReporting";
+import { invokeCommand, runOperation } from "../../errors";
 import { createFfmpegTaskId } from "../../ffmpegProgress";
 import { defaultPreferences, useAppStore } from "../../store";
 import { isTauriRuntime } from "../../tauriRuntime";
@@ -48,10 +47,16 @@ export function PreferencesDialog({ open: isOpen, onClose }: PreferencesDialogPr
       setMessage("请在 Tauri 桌面窗口中选择目录。");
       return;
     }
-    const picked = await open({
-      directory: true,
-      multiple: false,
-    });
+    const outcome = await runOperation("preferences.update", () =>
+      open({
+        directory: true,
+        multiple: false,
+      }),
+    );
+    if (outcome.status !== "success") {
+      return;
+    }
+    const picked = outcome.value;
     const path = Array.isArray(picked) ? picked[0] : picked;
     if (path) {
       setDraftPreferences((current) => ({ ...current, [key]: path }));
@@ -63,10 +68,16 @@ export function PreferencesDialog({ open: isOpen, onClose }: PreferencesDialogPr
       setMessage("请在 Tauri 桌面窗口中选择可执行文件。");
       return;
     }
-    const picked = await open({
-      multiple: false,
-      filters: executableFilters,
-    });
+    const outcome = await runOperation("preferences.update", () =>
+      open({
+        multiple: false,
+        filters: executableFilters,
+      }),
+    );
+    if (outcome.status !== "success") {
+      return;
+    }
+    const picked = outcome.value;
     const path = Array.isArray(picked) ? picked[0] : picked;
     if (path) {
       setDraftPreferences((current) => ({ ...current, [key]: path }));
@@ -80,21 +91,20 @@ export function PreferencesDialog({ open: isOpen, onClose }: PreferencesDialogPr
     }
     const preferencesTaskId = createFfmpegTaskId("preferences");
     setIsSavingPreferences(true);
-    try {
-      const saved = await invoke<Preferences>("update_preferences", {
+    const outcome = await runOperation("preferences.update", () =>
+      invokeCommand<Preferences>("update_preferences", {
         preferences: draftPreferences,
         taskId: preferencesTaskId,
-      });
+      }),
+    );
+    if (outcome.status === "success") {
+      const saved = outcome.value;
       setPreferences(saved);
       setDraftPreferences(saved);
       onClose();
       setMessage("首选项已保存");
-    } catch (error) {
-      reportError("保存首选项失败", error);
-      setMessage("无法保存首选项，请检查设置后重试。");
-    } finally {
-      setIsSavingPreferences(false);
     }
+    setIsSavingPreferences(false);
   }
 
   if (!isOpen) {

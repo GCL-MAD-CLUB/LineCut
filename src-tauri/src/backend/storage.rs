@@ -44,34 +44,74 @@ pub(crate) fn preferences_file() -> PathBuf {
     config_root().join("preferences.json")
 }
 
-pub(crate) fn load_preferences() -> Result<Preferences, String> {
-    clear_cache_when_version_changes();
+pub(crate) fn load_preferences() -> AppResult<Preferences> {
+    if let Err(error) = clear_cache_when_version_changes() {
+        tracing::warn!(detail = %error, "cache maintenance skipped");
+    }
     let path = preferences_file();
     if !path.exists() {
         return Ok(installer_media_preferences(Preferences::default()));
     }
-    let body = fs::read_to_string(&path).map_err(|e| format!("读取首选项失败: {e}"))?;
-    let preferences =
-        serde_json::from_str::<Preferences>(&body).map_err(|e| format!("解析首选项失败: {e}"))?;
+    let body = fs::read_to_string(&path).map_err(|error| {
+        app_error(
+            ErrorCode::PreferencesReadFailed,
+            format!("Failed to read preferences: {error}"),
+        )
+    })?;
+    let preferences = serde_json::from_str::<Preferences>(&body).map_err(|error| {
+        app_error(
+            ErrorCode::PreferencesDecodeFailed,
+            format!("Failed to decode preferences: {error}"),
+        )
+    })?;
     normalize_preferences(preferences)
 }
 
 /// Remove cache data only when a 0.2.0-or-newer build upgrades a 0.1.x installation.
 /// The marker lives beside the cache, so preferences, projects, and exports remain untouched.
-fn clear_cache_when_version_changes() {
+fn clear_cache_when_version_changes() -> AppResult<()> {
     let root = config_root();
     let marker = root.join("cache-version");
     let current_version = env!("CARGO_PKG_VERSION");
-    let previous_version = fs::read_to_string(&marker).ok();
+    let previous_version = match fs::read_to_string(&marker) {
+        Ok(version) => Some(version),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            app_error(
+                ErrorCode::CacheMaintenanceFailed,
+                format!(
+                    "Failed to read the cache version marker {}: {error}",
+                    marker.display()
+                ),
+            );
+            None
+        }
+    };
 
     if should_clear_cache_for_upgrade(current_version, previous_version.as_deref()) {
         let cache = root.join("cache");
         if cache.exists() {
-            let _ = fs::remove_dir_all(&cache);
+            fs::remove_dir_all(&cache).map_err(|error| {
+                app_error(
+                    ErrorCode::CacheMaintenanceFailed,
+                    format!("Failed to remove the legacy cache directory: {error}"),
+                )
+            })?;
         }
     }
-    let _ = fs::create_dir_all(&root);
-    let _ = fs::write(marker, current_version);
+    fs::create_dir_all(&root).map_err(|error| {
+        app_error(
+            ErrorCode::CacheMaintenanceFailed,
+            format!("Failed to create the cache version directory: {error}"),
+        )
+    })?;
+    fs::write(marker, current_version).map_err(|error| {
+        app_error(
+            ErrorCode::CacheMaintenanceFailed,
+            format!("Failed to write the cache version marker: {error}"),
+        )
+    })?;
+    Ok(())
 }
 
 fn should_clear_cache_for_upgrade(current_version: &str, previous_version: Option<&str>) -> bool {
@@ -81,8 +121,20 @@ fn should_clear_cache_for_upgrade(current_version: &str, previous_version: Optio
 
 fn is_version_0_2_or_newer(version: &str) -> bool {
     let mut parts = version.trim().split('.');
-    let major = parts.next().and_then(|part| part.parse::<u64>().ok());
-    let minor = parts.next().and_then(|part| part.parse::<u64>().ok());
+    let parse_component = |component: Option<&str>, name: &str| {
+        component.and_then(|component| match component.parse::<u64>() {
+            Ok(value) => Some(value),
+            Err(error) => {
+                app_error(
+                    ErrorCode::CacheMaintenanceFailed,
+                    format!("Cache version {name} component is invalid: {error}"),
+                );
+                None
+            }
+        })
+    };
+    let major = parse_component(parts.next(), "major");
+    let minor = parse_component(parts.next(), "minor");
     matches!((major, minor), (Some(major), Some(minor)) if major > 0 || (major == 0 && minor >= 2))
 }
 
@@ -93,8 +145,19 @@ fn is_version_0_2_or_newer(version: &str) -> bool {
 /// preference file always takes precedence after it has been saved by the application.
 fn installer_media_preferences(mut preferences: Preferences) -> Preferences {
     let path = config_root().join("installer-media-paths.ini");
-    let Ok(contents) = fs::read_to_string(path) else {
-        return preferences;
+    let contents = match fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return preferences,
+        Err(error) => {
+            app_error(
+                ErrorCode::PreferencesReadFailed,
+                format!(
+                    "Failed to read installer media paths from {}: {error}",
+                    path.display()
+                ),
+            );
+            return preferences;
+        }
     };
 
     for line in contents.lines() {
@@ -112,12 +175,18 @@ fn installer_media_preferences(mut preferences: Preferences) -> Preferences {
     preferences
 }
 
-pub(crate) fn normalize_preferences(preferences: Preferences) -> Result<Preferences, String> {
+pub(crate) fn normalize_preferences(preferences: Preferences) -> AppResult<Preferences> {
     if !(1..=1_440).contains(&preferences.auto_save_interval_minutes) {
-        return Err("自动备份间隔必须在 1 到 1440 分钟之间".to_string());
+        return Err(app_error(
+            ErrorCode::PreferencesInvalid,
+            "Auto-save interval must be between 1 and 1440 minutes",
+        ));
     }
     if !(1..=1_000).contains(&preferences.auto_save_max_snapshots) {
-        return Err("自动备份保留数量必须在 1 到 1000 之间".to_string());
+        return Err(app_error(
+            ErrorCode::PreferencesInvalid,
+            "Auto-save retention must be between 1 and 1000 snapshots",
+        ));
     }
     let default_preferences = Preferences::default();
     let normalized = Preferences {
@@ -145,19 +214,41 @@ pub(crate) fn normalize_preferences(preferences: Preferences) -> Result<Preferen
         auto_save_max_snapshots: preferences.auto_save_max_snapshots,
     };
 
-    fs::create_dir_all(configured_cache_root(&normalized))
-        .map_err(|e| format!("创建缓存目录失败: {e}"))?;
-    fs::create_dir_all(configured_export_root(&normalized))
-        .map_err(|e| format!("创建默认导出目录失败: {e}"))?;
+    fs::create_dir_all(configured_cache_root(&normalized)).map_err(|error| {
+        app_error(
+            ErrorCode::PreferencesWriteFailed,
+            format!("Failed to create the configured cache directory: {error}"),
+        )
+    })?;
+    fs::create_dir_all(configured_export_root(&normalized)).map_err(|error| {
+        app_error(
+            ErrorCode::PreferencesWriteFailed,
+            format!("Failed to create the configured export directory: {error}"),
+        )
+    })?;
 
     Ok(normalized)
 }
 
-pub(crate) fn save_preferences(preferences: &Preferences) -> Result<(), String> {
-    fs::create_dir_all(config_root()).map_err(|e| format!("创建配置目录失败: {e}"))?;
-    let body =
-        serde_json::to_vec_pretty(preferences).map_err(|e| format!("序列化首选项失败: {e}"))?;
-    fs::write(preferences_file(), body).map_err(|e| format!("保存首选项失败: {e}"))
+pub(crate) fn save_preferences(preferences: &Preferences) -> AppResult<()> {
+    fs::create_dir_all(config_root()).map_err(|error| {
+        app_error(
+            ErrorCode::PreferencesWriteFailed,
+            format!("Failed to create the preferences directory: {error}"),
+        )
+    })?;
+    let body = serde_json::to_vec_pretty(preferences).map_err(|error| {
+        app_error(
+            ErrorCode::PreferencesWriteFailed,
+            format!("Failed to encode preferences: {error}"),
+        )
+    })?;
+    fs::write(preferences_file(), body).map_err(|error| {
+        app_error(
+            ErrorCode::PreferencesWriteFailed,
+            format!("Failed to write preferences: {error}"),
+        )
+    })
 }
 
 pub(crate) fn ffmpeg_program(preferences: &Preferences) -> String {
@@ -198,25 +289,41 @@ pub(crate) fn bundled_media_program_candidates(program: &str) -> Vec<PathBuf> {
     let sidecar_executable = sidecar_executable_name(program);
     let mut candidates = Vec::new();
 
-    if let Ok(current_exe) = env::current_exe() {
-        if let Some(dir) = current_exe.parent() {
-            candidates.push(dir.join(&executable));
-            candidates.push(dir.join(&sidecar_executable));
-            candidates.push(dir.join("bin").join(&executable));
-            candidates.push(dir.join("bin").join(&sidecar_executable));
+    match env::current_exe() {
+        Ok(current_exe) => {
+            if let Some(dir) = current_exe.parent() {
+                candidates.push(dir.join(&executable));
+                candidates.push(dir.join(&sidecar_executable));
+                candidates.push(dir.join("bin").join(&executable));
+                candidates.push(dir.join("bin").join(&sidecar_executable));
+            }
+        }
+        Err(error) => {
+            app_error(
+                ErrorCode::ExecutablePathUnavailable,
+                format!("Failed to resolve the current executable path: {error}"),
+            );
         }
     }
 
-    if let Ok(current_dir) = env::current_dir() {
-        candidates.push(current_dir.join("bin").join(&sidecar_executable));
-        candidates.push(current_dir.join("bin").join(&executable));
-        candidates.push(
-            current_dir
-                .join("src-tauri")
-                .join("bin")
-                .join(&sidecar_executable),
-        );
-        candidates.push(current_dir.join("src-tauri").join("bin").join(&executable));
+    match env::current_dir() {
+        Ok(current_dir) => {
+            candidates.push(current_dir.join("bin").join(&sidecar_executable));
+            candidates.push(current_dir.join("bin").join(&executable));
+            candidates.push(
+                current_dir
+                    .join("src-tauri")
+                    .join("bin")
+                    .join(&sidecar_executable),
+            );
+            candidates.push(current_dir.join("src-tauri").join("bin").join(&executable));
+        }
+        Err(error) => {
+            app_error(
+                ErrorCode::WorkingDirectoryUnavailable,
+                format!("Failed to resolve the current working directory: {error}"),
+            );
+        }
     }
 
     candidates

@@ -9,7 +9,7 @@ pub(crate) async fn export_one_range(
     output_path: &Path,
     preferences: &Preferences,
     progress: Option<FfmpegProgressContext<'_>>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let args = build_export_args(
         input_path,
         range,
@@ -33,7 +33,7 @@ fn build_export_args(
     has_source_audio: bool,
     bound_media: &[ExportBoundMedia],
     output_path: &Path,
-) -> Result<Vec<String>, String> {
+) -> AppResult<Vec<String>> {
     let duration_us = range.end_us.saturating_sub(range.start_us).max(1);
     let mut args = vec![
         "-y".to_string(),
@@ -52,19 +52,28 @@ fn build_export_args(
     let mut additional_input_indexes = HashMap::new();
     for media in bound_media {
         if media.path.trim().is_empty() {
-            return Err("绑定媒体缺少来源路径".to_string());
+            return Err(app_error(
+                ErrorCode::ExportBoundMediaInvalid,
+                "Bound media source path is empty",
+            ));
         }
         let stream_spec = match media.source {
             ExportBoundMediaSource::EmbeddedStream if media.path == input_path => {
-                let stream_index = media
-                    .stream_index
-                    .ok_or_else(|| "虚拟媒体缺少流索引".to_string())?;
+                let stream_index = media.stream_index.ok_or_else(|| {
+                    app_error(
+                        ErrorCode::ExportBoundMediaInvalid,
+                        "Embedded media stream index is missing",
+                    )
+                })?;
                 format!("0:{stream_index}")
             }
             ExportBoundMediaSource::EmbeddedStream => {
-                let stream_index = media
-                    .stream_index
-                    .ok_or_else(|| "虚拟媒体缺少流索引".to_string())?;
+                let stream_index = media.stream_index.ok_or_else(|| {
+                    app_error(
+                        ErrorCode::ExportBoundMediaInvalid,
+                        "Embedded media stream index is missing",
+                    )
+                })?;
                 let input_index = *additional_input_indexes
                     .entry(media.path.clone())
                     .or_insert_with(|| {
@@ -193,7 +202,7 @@ pub(crate) async fn concat_segments(
     output_path: &Path,
     preferences: &Preferences,
     progress: Option<FfmpegProgressContext<'_>>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let list_path = output_path.with_extension("concat.txt");
     if let Some(context) = &progress {
         register_task_cleanup_paths(
@@ -205,7 +214,7 @@ pub(crate) async fn concat_segments(
     if let Some(cancel) = progress.as_ref().map(|context| context.cancel.clone()) {
         let parts = parts.to_vec();
         let path = list_path.clone();
-        spawn_blocking_cancellable(cancel, "写入合并列表", move |cancel| {
+        spawn_blocking_cancellable(cancel, "write merge list", move |cancel| {
             let mut body = String::new();
             for part in parts {
                 ensure_not_cancelled(cancel)?;
@@ -215,7 +224,12 @@ pub(crate) async fn concat_segments(
                     .replace('\'', "'\\''");
                 body.push_str(&format!("file '{normalized}'\n"));
             }
-            fs::write(path, body).map_err(|e| format!("写入合并列表失败: {e}"))
+            fs::write(path, body).map_err(|error| {
+                app_error(
+                    ErrorCode::ExportWriteFailed,
+                    format!("Failed to write the concat manifest: {error}"),
+                )
+            })
         })
         .await?;
     } else {
@@ -227,7 +241,12 @@ pub(crate) async fn concat_segments(
                 .replace('\'', "'\\''");
             body.push_str(&format!("file '{normalized}'\n"));
         }
-        fs::write(&list_path, body).map_err(|e| format!("写入合并列表失败: {e}"))?;
+        fs::write(&list_path, body).map_err(|error| {
+            app_error(
+                ErrorCode::ExportWriteFailed,
+                format!("Failed to write the concat manifest: {error}"),
+            )
+        })?;
     }
     let args = vec![
         "-y".to_string(),
@@ -470,8 +489,14 @@ pub(crate) fn truncate_chars(value: &str, max_chars: usize) -> String {
 }
 
 pub(crate) fn now_millis() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|value| value.as_millis())
-        .unwrap_or(0)
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_millis(),
+        Err(error) => {
+            app_error(
+                ErrorCode::SystemClockInvalid,
+                format!("System clock is earlier than the Unix epoch: {error}"),
+            );
+            0
+        }
+    }
 }

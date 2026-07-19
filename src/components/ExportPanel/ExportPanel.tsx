@@ -1,7 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Captions, Download, Film, Folder, Link2, Loader2, Music2, Scissors } from "lucide-react";
 import { useEffect, useMemo } from "react";
+import { clientError, invokeCommand, runOperation } from "../../errors";
 import {
   cancelFfmpegTask,
   createFfmpegTaskId,
@@ -173,7 +173,7 @@ export function ExportPanel() {
   const setExportResult = useAppStore((state) => state.actions.exportResultChanged);
   const labelCues = useActiveCues();
   const selectedCount = useAppStore((state) => state.selectedCueIds.size);
-  const { isRunning: isExporting } = getTaskProgressStatus("export");
+  const { isRunning: isExporting } = getTaskProgressStatus("export.clips");
   const canExport = useCanExport(isExporting) && !isMediaBinReadOnly;
   const videoItems = useMemo(
     () => mediaItems.filter((item) => item.kind === "video" && isMediaItemEnabled(item)),
@@ -268,10 +268,16 @@ export function ExportPanel() {
       setMessage("请在 Tauri 桌面窗口中选择导出目录。");
       return;
     }
-    const picked = await open({
-      directory: true,
-      multiple: false,
-    });
+    const outcome = await runOperation("export.clips", () =>
+      open({
+        directory: true,
+        multiple: false,
+      }),
+    );
+    if (outcome.status !== "success") {
+      return;
+    }
+    const picked = outcome.value;
     const path = Array.isArray(picked) ? picked[0] : picked;
     if (path) {
       setExportOptions({ output_dir: path, output_dir_explicit: true });
@@ -307,7 +313,7 @@ export function ExportPanel() {
     const exportTaskId = createFfmpegTaskId("export");
     let exportCancelled = false;
     const exportTask = await createTaskProgress({
-      operation: "export",
+      operation: "export.clips",
       label: `导出 ${selectedCueIds.size} 个片段`,
       current: 0,
       total: 1,
@@ -326,7 +332,10 @@ export function ExportPanel() {
           if (isVirtualMediaItem(item)) {
             const sourceProject = mediaItemProject(item, projects, mediaItems);
             if (!sourceProject) {
-              throw new Error(`无法解析虚拟媒体“${item.file_name}”的来源视频。`);
+              throw clientError(
+                "EXPORT_VIRTUAL_MEDIA_SOURCE_MISSING",
+                `Source video is missing for virtual export media: ${item.file_name}`,
+              );
             }
             return {
               kind,
@@ -336,11 +345,14 @@ export function ExportPanel() {
             };
           }
           if (!item.path) {
-            throw new Error(`绑定媒体“${item.file_name}”缺少来源路径。`);
+            throw clientError(
+              "EXPORT_BOUND_MEDIA_PATH_MISSING",
+              `Source path is missing for bound export media: ${item.file_name}`,
+            );
           }
           return { kind, source: "file", path: item.path, stream_index: null };
         });
-      const result = await invoke<ExportResult>("export_clips", {
+      const result = await invokeCommand<ExportResult>("export_clips", {
         assetId: exportProject.asset.id,
         trackAssetId: trackContext.project.asset.id,
         trackId: activeTrackId,
@@ -361,8 +373,7 @@ export function ExportPanel() {
         setMessage("导出已取消");
         return;
       }
-      exportTask.fail("导出失败", error);
-      setMessage("导出失败，请检查设置后重试。");
+      exportTask.fail(error);
     }
   }
 

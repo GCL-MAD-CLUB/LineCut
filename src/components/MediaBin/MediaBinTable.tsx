@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   Captions,
@@ -23,6 +22,7 @@ import {
   type UIEvent,
 } from "react";
 import { createPortal } from "react-dom";
+import { invokeCommand, runBackgroundOperation, runOperation } from "../../errors";
 import {
   isMediaItemEnabled,
   isMediaItemHidden,
@@ -965,7 +965,9 @@ export function MediaBinTable({
       setSystemFileDragOver(false);
       setSystemFileDragActive(false);
       if (isTauriRuntime()) {
-        void invoke("set_media_import_drop_region", { region: null });
+        runBackgroundOperation("dragDrop.region", () =>
+          invokeCommand("set_media_import_drop_region", { region: null }),
+        );
       }
       return;
     }
@@ -978,14 +980,16 @@ export function MediaBinTable({
     const updateDropRegion = () => {
       const scaleFactor = window.devicePixelRatio || 1;
       const bounds = tableScroll.getBoundingClientRect();
-      void invoke("set_media_import_drop_region", {
-        region: {
-          left: Math.floor(bounds.left * scaleFactor),
-          top: Math.floor(bounds.top * scaleFactor),
-          right: Math.ceil(bounds.right * scaleFactor),
-          bottom: Math.ceil(bounds.bottom * scaleFactor),
-        },
-      });
+      runBackgroundOperation("dragDrop.region", () =>
+        invokeCommand("set_media_import_drop_region", {
+          region: {
+            left: Math.floor(bounds.left * scaleFactor),
+            top: Math.floor(bounds.top * scaleFactor),
+            right: Math.ceil(bounds.right * scaleFactor),
+            bottom: Math.ceil(bounds.bottom * scaleFactor),
+          },
+        }),
+      );
     };
     const scheduleDropRegionUpdate = () => {
       if (frameId !== null) {
@@ -1007,7 +1011,9 @@ export function MediaBinTable({
       }
       resizeObserver.disconnect();
       window.removeEventListener("resize", scheduleDropRegionUpdate);
-      void invoke("set_media_import_drop_region", { region: null });
+      runBackgroundOperation("dragDrop.region", () =>
+        invokeCommand("set_media_import_drop_region", { region: null }),
+      );
     };
   }, [canImport, viewMode]);
 
@@ -1035,8 +1041,8 @@ export function MediaBinTable({
       );
     };
 
-    void getCurrentWebview()
-      .onDragDropEvent(({ payload }) => {
+    void runOperation("dragDrop.listen", () =>
+      getCurrentWebview().onDragDropEvent(({ payload }) => {
         if (payload.type === "leave") {
           setSystemFileDragOver(false);
           setSystemFileDragActive(false);
@@ -1053,20 +1059,19 @@ export function MediaBinTable({
         }
         setSystemFileDragActive(true);
         setSystemFileDragOver(isOverTable);
-      })
-      .then((stopListening) => {
+      }),
+    ).then((outcome) => {
+      if (outcome.status === "success") {
         if (disposed) {
-          stopListening();
+          outcome.value();
         } else {
-          unlisten = stopListening;
+          unlisten = outcome.value;
         }
-      })
-      .catch(() => {
-        if (!disposed) {
-          setSystemFileDragOver(false);
-          setSystemFileDragActive(false);
-        }
-      });
+      } else if (!disposed) {
+        setSystemFileDragOver(false);
+        setSystemFileDragActive(false);
+      }
+    });
 
     return () => {
       disposed = true;
@@ -2138,13 +2143,10 @@ export function MediaBinTable({
                           )}
                           {item.kind === "video" &&
                             isMediaVideoDetached(item, detachedVideoIds) && (
-                              <SplitSquareVertical
-                                className="media-bin-status-icon"
-                                aria-label="已分解"
-                              />
-                            )}
-                          {isMediaItemOffline(item) && (
-                            <span className="media-bin-offline-label">脱机</span>
+                            <SplitSquareVertical
+                              className="media-bin-status-icon"
+                              aria-label="已分解"
+                            />
                           )}
                         </>
                       )}
