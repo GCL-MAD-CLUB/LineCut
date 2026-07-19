@@ -406,24 +406,13 @@ fn non_empty_string(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.trim().is_empty())
 }
 
-fn workspace_config_path(state: &AppState) -> CommandResult<PathBuf> {
-    state
-        .preferences
-        .lock()
-        .map_err(|_| {
-            app_error(
-                ErrorCode::PreferencesStateUnavailable,
-                "Preferences state lock is poisoned",
-            )
-        })
-        .map(|preferences| configured_cache_root(&preferences).join(WORKSPACE_CONFIG_FILE_NAME))
+fn workspace_config_path() -> PathBuf {
+    preferences_file().with_file_name(WORKSPACE_CONFIG_FILE_NAME)
 }
 
 #[tauri::command]
-pub(crate) fn load_workspace_config(
-    state: tauri::State<'_, AppState>,
-) -> CommandResult<Option<WorkspaceConfig>> {
-    let path = workspace_config_path(state.inner())?;
+pub(crate) fn load_workspace_config() -> CommandResult<Option<WorkspaceConfig>> {
+    let path = workspace_config_path();
     if !path.exists() {
         return Ok(None);
     }
@@ -450,12 +439,9 @@ pub(crate) fn load_workspace_config(
 }
 
 #[tauri::command]
-pub(crate) fn save_workspace_config(
-    config: WorkspaceConfig,
-    state: tauri::State<'_, AppState>,
-) -> CommandResult<()> {
+pub(crate) fn save_workspace_config(config: WorkspaceConfig) -> CommandResult<()> {
     let xml = config.into_xml()?;
-    let path = workspace_config_path(state.inner())?;
+    let path = workspace_config_path();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
             app_error(
@@ -582,5 +568,13 @@ mod tests {
         let first = &value["layout"]["root"]["first"];
         assert_eq!(first["areaId"], "left");
         assert!(first.get("area_id").is_none());
+    }
+
+    #[test]
+    fn workspace_config_lives_beside_preferences() {
+        assert_eq!(
+            workspace_config_path().parent(),
+            preferences_file().parent(),
+        );
     }
 }

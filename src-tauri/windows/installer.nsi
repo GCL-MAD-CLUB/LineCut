@@ -902,6 +902,7 @@ Section Uninstall
     SetShellVarContext current
     RmDir /r "$APPDATA\${BUNDLEID}"
     RmDir /r "$LOCALAPPDATA\${BUNDLEID}"
+    RmDir /r "$LOCALAPPDATA\${PRODUCTNAME}"
   ${EndIf}
 
   !ifmacrodef NSIS_HOOK_POSTUNINSTALL

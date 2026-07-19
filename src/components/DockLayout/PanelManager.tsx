@@ -40,6 +40,65 @@ function panelArea(layout: DockLayoutState, panelId: string) {
   );
 }
 
+interface DockAreaCenter {
+  x: number;
+  y: number;
+}
+
+function dockAreaCenters(node: DockLayoutNode) {
+  const centers = new Map<DockAreaId, DockAreaCenter>();
+  function visit(
+    current: DockLayoutNode,
+    left: number,
+    top: number,
+    width: number,
+    height: number,
+  ) {
+    if (current.type === "area") {
+      centers.set(current.areaId, { x: left + width / 2, y: top + height / 2 });
+      return;
+    }
+    if (current.axis === "x") {
+      const firstWidth = width * current.ratio;
+      visit(current.first, left, top, firstWidth, height);
+      visit(current.second, left + firstWidth, top, width - firstWidth, height);
+      return;
+    }
+    const firstHeight = height * current.ratio;
+    visit(current.first, left, top, width, firstHeight);
+    visit(current.second, left, top + firstHeight, width, height - firstHeight);
+  }
+  visit(node, 0, 0, 1, 1);
+  return centers;
+}
+
+function nearestAreaId(
+  layout: DockLayoutState,
+  target: DockAreaCenter | undefined,
+): DockAreaId | null {
+  if (!target) {
+    return null;
+  }
+  const centers = dockAreaCenters(layout.root);
+  let nearest: DockAreaId | null = null;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (const areaId of dockAreaIds(layout.root)) {
+    if (!layout.areas[areaId]) {
+      continue;
+    }
+    const center = centers.get(areaId);
+    if (!center) {
+      continue;
+    }
+    const distance = (center.x - target.x) ** 2 + (center.y - target.y) ** 2;
+    if (distance < nearestDistance) {
+      nearest = areaId;
+      nearestDistance = distance;
+    }
+  }
+  return nearest;
+}
+
 function nextUniqueId(prefix: string) {
   const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
   return `${prefix}:${random}`;
@@ -126,7 +185,18 @@ export interface PanelManagerState {
   closePanels: (areaId: DockAreaId, panelIds: Iterable<string>) => void;
 }
 
-function createPanelManagerStore(initialState: PanelManagerInitialState) {
+function createPanelManagerStore(
+  initialState: PanelManagerInitialState,
+  defaultState: PanelManagerInitialState,
+) {
+  const defaultPanelAreas = new Map(
+    defaultState.instances.flatMap((instance) => {
+      const areaId = panelArea(defaultState.layout, instance.id);
+      return areaId ? [[instance.id, areaId] as const] : [];
+    }),
+  );
+  const defaultAreaCenters = dockAreaCenters(defaultState.layout.root);
+
   return createStore<PanelManagerState>()((set, get) => ({
     instances: Object.fromEntries(
       initialState.instances.map((instance) => [instance.id, instance]),
@@ -150,9 +220,15 @@ function createPanelManagerStore(initialState: PanelManagerInitialState) {
           ? panelArea(state.layout, request.placement.sourcePanelId)
           : null;
         const requestedAreaId = request.placement?.areaId;
+        const defaultAreaId = defaultPanelAreas.get(id) ?? requestedAreaId;
         const targetAreaId =
           (requestedAreaId && state.layout.areas[requestedAreaId] ? requestedAreaId : null) ??
           sourceAreaId ??
+          (defaultAreaId && state.layout.areas[defaultAreaId] ? defaultAreaId : null) ??
+          nearestAreaId(
+            state.layout,
+            defaultAreaId ? defaultAreaCenters.get(defaultAreaId) : undefined,
+          ) ??
           focusedOrFirstAreaId(state.layout, state.focusedPanelId);
         if (!targetAreaId) {
           return state;
@@ -340,14 +416,16 @@ const PanelManagerContext = createContext<StoreApi<PanelManagerState> | null>(nu
 
 export function PanelManagerProvider({
   initialState,
+  defaultState = initialState,
   children,
 }: {
   initialState: PanelManagerInitialState;
+  defaultState?: PanelManagerInitialState;
   children: ReactNode;
 }) {
   const storeRef = useRef<StoreApi<PanelManagerState> | null>(null);
   if (!storeRef.current) {
-    storeRef.current = createPanelManagerStore(initialState);
+    storeRef.current = createPanelManagerStore(initialState, defaultState);
   }
   return (
     <PanelManagerContext.Provider value={storeRef.current}>{children}</PanelManagerContext.Provider>

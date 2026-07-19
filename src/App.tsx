@@ -1216,7 +1216,7 @@ function RestoredPanelManager() {
   }
 
   return (
-    <PanelManagerProvider initialState={initialState}>
+    <PanelManagerProvider initialState={initialState} defaultState={initialAppPanelState}>
       <WorkspaceConfigAutoSave />
       <AppContent />
     </PanelManagerProvider>
