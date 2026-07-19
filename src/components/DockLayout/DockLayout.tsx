@@ -678,19 +678,32 @@ export function DockLayout() {
     const tabsWithoutDragged = draggedPanelId
       ? areaTabs.filter((panelId) => panelId !== draggedPanelId)
       : areaTabs;
+    const isSourceArea = dragRef.current?.sourceAreaId === areaId;
+    const targetShowsDraggedTitle =
+      Boolean(draggedPanelId) && dropTarget?.areaId === areaId && dropTarget.showDraggedTitle;
+    const sourceRetainsDraggedTitle =
+      Boolean(draggedPanelId) && isSourceArea && !dropTarget?.showDraggedTitle;
+    const shouldDisplayDraggedTitle = targetShowsDraggedTitle || sourceRetainsDraggedTitle;
+    const draggedTitleIndex = targetShowsDraggedTitle
+      ? (dropTarget?.insertionIndex ?? tabsWithoutDragged.length)
+      : Math.max(areaTabs.indexOf(draggedPanelId ?? ""), 0);
     const displayedTabs =
-      draggedPanelId && dropTarget?.areaId === areaId && dropTarget.showDraggedTitle
+      draggedPanelId && shouldDisplayDraggedTitle
         ? [
-            ...tabsWithoutDragged.slice(0, dropTarget.insertionIndex),
+            ...tabsWithoutDragged.slice(0, draggedTitleIndex),
             draggedPanelId,
-            ...tabsWithoutDragged.slice(dropTarget.insertionIndex),
+            ...tabsWithoutDragged.slice(draggedTitleIndex),
           ]
         : tabsWithoutDragged;
     const isIntraAreaDrag =
-      Boolean(draggedPanelId) &&
-      dropTarget?.areaId === areaId &&
-      dragRef.current?.sourceAreaId === areaId;
+      Boolean(draggedPanelId) && dropTarget?.areaId === areaId && isSourceArea;
+    const isIntraAreaTitleReorder = isIntraAreaDrag && dropTarget?.surface === "title";
+    const showDropOverlay =
+      Boolean(dragPreview) && dropTarget?.areaId === areaId && !isIntraAreaTitleReorder;
     const showIntraAreaControls = isIntraAreaDrag && Boolean(dropTarget?.showDraggedTitle);
+    const showRetainedSourceControls =
+      sourceRetainsDraggedTitle && area.activePanelId === draggedPanelId;
+    const showDraggedTitleControls = showIntraAreaControls || showRetainedSourceControls;
 
     return (
       <section
@@ -711,7 +724,7 @@ export function DockLayout() {
           >
             <div className="dock-tabs">
               {displayedTabs.length === 0 ? (
-                <div className="dock-empty-tab">拖入面板</div>
+                <div className="dock-empty-tab"></div>
               ) : (
                 displayedTabs.map((panelId) => {
                   if (panelId === draggedPanelId) {
@@ -721,21 +734,21 @@ export function DockLayout() {
                           <div
                             ref={(node) => setTabElementRef(areaId, panelId, node)}
                             className={`dock-tab dock-tab-placeholder ${
-                              showIntraAreaControls ? "active" : ""
+                              showDraggedTitleControls ? "active" : ""
                             }`}
                             style={{ width: draggedTabWidthRef.current }}
                             aria-hidden="true"
                           >
-                            {dropTarget?.showDraggedTitle && (
+                            {shouldDisplayDraggedTitle && (
                               <span
                                 className={`dock-tab-label ${
-                                  showIntraAreaControls ? "" : "dock-tab-drag-label"
+                                  showDraggedTitleControls ? "" : "dock-tab-drag-label"
                                 }`}
                               >
                                 {title}
                               </span>
                             )}
-                            {showIntraAreaControls && (
+                            {showDraggedTitleControls && (
                               <span className="dock-tab-grip">
                                 <span />
                               </span>
@@ -795,7 +808,7 @@ export function DockLayout() {
               />
             )}
           </div>
-          {dragPreview && dropTarget?.areaId === areaId && (
+          {showDropOverlay && (
             <DockSelfDropZone
               className="dock-title-drop-zones"
               active={dropTarget.surface === "title"}
@@ -824,8 +837,7 @@ export function DockLayout() {
               <span>将面板拖到这里</span>
             </div>
           )}
-          {dragPreview &&
-            dropTarget?.areaId === areaId &&
+          {showDropOverlay &&
             (dropTarget.surface === "title" ? (
               <DockSelfDropZone className="dock-drop-zones" active={false} />
             ) : (
