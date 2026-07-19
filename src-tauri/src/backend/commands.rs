@@ -1169,16 +1169,20 @@ pub(crate) fn preferences_clone(state: &tauri::State<'_, AppState>) -> AppResult
 pub(crate) fn play_system_sound() -> CommandResult<bool> {
     #[cfg(windows)]
     {
-        use windows::Win32::System::Diagnostics::Debug::MessageBeep;
-        use windows::Win32::UI::WindowsAndMessaging::MB_ICONEXCLAMATION;
+        const MB_ICONEXCLAMATION: u32 = 0x00000030;
+
+        extern "system" {
+            fn MessageBeep(u_type: u32) -> i32;
+        }
 
         unsafe {
-            MessageBeep(MB_ICONEXCLAMATION).map_err(|error| {
-                app_error(
+            if MessageBeep(MB_ICONEXCLAMATION) == 0 {
+                let error = std::io::Error::last_os_error();
+                return Err(app_error(
                     ErrorCode::SystemSoundPlayFailed,
                     format!("Failed to play system warning sound: {error}"),
-                )
-            })?;
+                ));
+            }
         }
         Ok(true)
     }
