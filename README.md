@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="src-tauri/thumbnail-provider/assets/lcp-thumbnail.png" width="180" alt="LineCut 图标" />
+  <img src="src-tauri\icons\icon.ico" width="180" alt="LineCut 图标" />
 </p>
 
 <h1 align="center">LineCut</h1>
