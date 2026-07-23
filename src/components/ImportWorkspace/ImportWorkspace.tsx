@@ -14,10 +14,10 @@ import {
 import { useMemo, useState } from "react";
 import { runMediaImportTask } from "../../mediaImportTask";
 import { runOperation } from "../../errors";
-import { useAppStore } from "../../store";
+import { useProjectPort } from "../../systems/ProjectSystem";
+import { useTaskProgressStatus } from "../../systems/TaskSystem";
 import { isTauriRuntime } from "../../tauriRuntime";
 import type { MediaBinItem } from "../../types";
-import { getTaskProgressStatus } from "../TaskProgress";
 import "./ImportWorkspace.css";
 
 interface ImportWorkspaceProps {
@@ -134,14 +134,25 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
   const [videoPaths, setVideoPaths] = useState<string[]>([]);
   const [audioPaths, setAudioPaths] = useState<string[]>([]);
   const [subtitlePaths, setSubtitlePaths] = useState<string[]>([]);
-  const mediaItems = useAppStore((state) => state.mediaItems);
-  const isMediaBinReadOnly = useAppStore((state) => state.mediaBinReadOnly);
-  const mediaProjectsAdded = useAppStore((state) => state.actions.mediaProjectsAdded);
-  const mediaItemsAdded = useAppStore((state) => state.actions.mediaItemsAdded);
-  const messagePublished = useAppStore((state) => state.actions.messagePublished);
-  const warningsAppended = useAppStore((state) => state.actions.warningsAppended);
-  const exportResultChanged = useAppStore((state) => state.actions.exportResultChanged);
-  const { isRunning: isImporting } = getTaskProgressStatus("media.import");
+  const {
+    mediaItems,
+    mediaBinReadOnly: isMediaBinReadOnly,
+    mediaProjectsAdded,
+    mediaItemsAdded,
+    messagePublished,
+    warningsAppended,
+    exportResultChanged,
+  } = useProjectPort(
+    ["mediaItems", "mediaBinReadOnly"],
+    [
+      "mediaProjectsAdded",
+      "mediaItemsAdded",
+      "messagePublished",
+      "warningsAppended",
+      "exportResultChanged",
+    ],
+  );
+  const { isRunning: isImporting } = useTaskProgressStatus("media.import");
   const pendingItems = useMemo<PendingMediaItem[]>(
     () => [
       ...videoPaths.map((path) => ({ kind: "video" as const, path })),

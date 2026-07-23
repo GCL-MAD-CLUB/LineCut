@@ -3,7 +3,13 @@ import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 import { Loader2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { appPanelRegistry, initialAppPanelState } from "./appPanelRegistry";
-import { emitAppEvent, useAppEvent } from "./appEvents";
+import { publishEvent, useBroadcastEvent } from "./runtime/events/react";
+import { useProjections } from "./runtime/state/StateHub";
+import {
+  EDIT_CAPABILITY_PROJECTION,
+  type EditCapabilityProjection,
+} from "./runtime/state/contracts";
+import { useStableIdentity } from "./runtime/state/react";
 import { ApplicationMenu, type ApplicationMenuModel } from "./components/ApplicationMenu";
 import {
   DockLayout,
@@ -17,17 +23,13 @@ import {
 import { exportPanelType } from "./components/ExportPanel";
 import { HistoryPanelServicesProvider, historyPanelType } from "./components/HistoryPanel";
 import { ImportWorkspace } from "./components/ImportWorkspace";
-import {
-  useMediaBinClipboardItemCount,
-  useMediaBinState,
-} from "./components/MediaBin/mediaBinState";
 import { mediaBinPanelType, type MediaBinPanelParams } from "./components/MediaBin";
 import { PreferencesDialog } from "./components/PreferencesDialog";
 import { ProxyCreationDialog } from "./components/ProxyCreationDialog";
 import { SecondaryTopbar } from "./components/SecondaryTopbar";
 import { sourcePanelType } from "./components/SourceMonitor";
 import { subtitlePanelType } from "./components/SubtitlePanel";
-import { cancelAllTaskProgress, getTaskProgressStatus } from "./components/TaskProgress";
+import { cancelAllTaskProgress, useTaskProgressStatus } from "./systems/TaskSystem";
 import { runMediaImportTask } from "./mediaImportTask";
 import {
   captureOperationError,
@@ -36,7 +38,7 @@ import {
   runOperation,
   type OperationKey,
 } from "./errors";
-import { getProjectWorkspaceSnapshot, subtitleTrackCues, useAppStore } from "./store";
+import { getProjectWorkspaceSnapshot, useProjectPort } from "./systems/ProjectSystem";
 import { isTauriRuntime } from "./tauriRuntime";
 import type { MediaBinFolder, MediaBinItem, OpenProjectResult, Preferences } from "./types";
 
@@ -188,6 +190,7 @@ const appWorkspaces = [
 type AppWorkspace = (typeof appWorkspaces)[number]["id"];
 
 function AppContent() {
+  const identity = useStableIdentity("app-shell");
   const [activeWorkspace, setActiveWorkspace] = useState<AppWorkspace>("edit");
   const focusedPanelId = usePanelManagerState((state) => state.focusedPanelId);
   const panelInstances = usePanelManagerState((state) => state.instances);
@@ -202,84 +205,92 @@ function AppContent() {
   );
   const closingWindowRef = useRef(false);
 
-  const project = useAppStore((state) => state.project);
-  const projects = useAppStore((state) => state.projects);
-  const mediaFolders = useAppStore((state) => state.mediaFolders);
-  const mediaItems = useAppStore((state) => state.mediaItems);
-  const activeVideoId = useAppStore((state) => state.activeVideoId);
-  const projectFilePath = useAppStore((state) => state.projectFilePath);
-  const projectDirty = useAppStore((state) => state.projectDirty);
-  const autoSaveIntervalMinutes = useAppStore(
-    (state) => state.preferences.auto_save_interval_minutes,
+  const {
+    project,
+    mediaFolders,
+    mediaItems,
+    projectFilePath,
+    projectDirty,
+    message,
+    warnings,
+    exportResult,
+    projectHistory,
+    projectOpened,
+    projectCreated,
+    projectSaved,
+    projectClosed,
+    mediaProjectsAdded,
+    mediaItemsAdded,
+    mediaItemsMovedToFolder,
+    preferencesLoaded,
+    messagePublished,
+    warningsReplaced,
+    warningsAppended,
+    exportResultChanged,
+    projectHistoryJumped,
+    projectHistoryFutureDiscarded,
+    preferences,
+    mediaBinReadOnly,
+  } = useProjectPort(
+    [
+      "project",
+      "mediaFolders",
+      "mediaItems",
+      "projectFilePath",
+      "projectDirty",
+      "preferences",
+      "message",
+      "warnings",
+      "exportResult",
+      "mediaBinReadOnly",
+      "projectHistory",
+    ],
+    [
+      "projectOpened",
+      "projectCreated",
+      "projectSaved",
+      "projectClosed",
+      "mediaProjectsAdded",
+      "mediaItemsAdded",
+      "mediaItemsMovedToFolder",
+      "preferencesLoaded",
+      "messagePublished",
+      "warningsReplaced",
+      "warningsAppended",
+      "exportResultChanged",
+      "projectHistoryJumped",
+      "projectHistoryFutureDiscarded",
+    ],
   );
-  const activeTrackId = useAppStore((state) => state.activeTrackId);
-  const selectedCueCount = useAppStore((state) => state.selectedCueIds.size);
-  const message = useAppStore((state) => state.message);
-  const warnings = useAppStore((state) => state.warnings);
-  const exportResult = useAppStore((state) => state.exportResult);
-  const isMediaBinReadOnly = useAppStore((state) => state.mediaBinReadOnly);
-  const projectHistory = useAppStore((state) => state.projectHistory);
+  const autoSaveIntervalMinutes = preferences.auto_save_interval_minutes;
+  const isMediaBinReadOnly = mediaBinReadOnly;
   const focusedPanel = focusedPanelId ? panelInstances[focusedPanelId] : undefined;
-  const focusedMediaPanelId = focusedPanel?.type === mediaBinPanelType ? focusedPanel.id : "media";
-  const selectedMediaItemCount = useMediaBinState.useInstance(
-    focusedMediaPanelId,
-    (state) => state.selectedIds.size,
-  );
-  const mediaClipboardItemCount = useMediaBinClipboardItemCount();
-  const visibleMediaItemCount = useMediaBinState.useInstance(
-    focusedMediaPanelId,
-    (state) => state.visibleItemCount,
-  );
-  const projectOpened = useAppStore((state) => state.actions.projectOpened);
-  const projectCreated = useAppStore((state) => state.actions.projectCreated);
-  const projectSaved = useAppStore((state) => state.actions.projectSaved);
-  const projectClosed = useAppStore((state) => state.actions.projectClosed);
-  const mediaProjectsAdded = useAppStore((state) => state.actions.mediaProjectsAdded);
-  const mediaItemsAdded = useAppStore((state) => state.actions.mediaItemsAdded);
-  const mediaItemsMovedToFolder = useAppStore((state) => state.actions.mediaItemsMovedToFolder);
-  const preferencesLoaded = useAppStore((state) => state.actions.preferencesLoaded);
-  const messagePublished = useAppStore((state) => state.actions.messagePublished);
-  const warningsReplaced = useAppStore((state) => state.actions.warningsReplaced);
-  const warningsAppended = useAppStore((state) => state.actions.warningsAppended);
-  const exportResultChanged = useAppStore((state) => state.actions.exportResultChanged);
-  const projectHistoryJumped = useAppStore((state) => state.actions.projectHistoryJumped);
-  const projectHistoryFutureDiscarded = useAppStore(
-    (state) => state.actions.projectHistoryFutureDiscarded,
-  );
+  const editCapabilities = useProjections<EditCapabilityProjection>(EDIT_CAPABILITY_PROJECTION);
+  const activeEditCapability = editCapabilities.find(
+    (projection) => projection.value.active,
+  )?.value;
   const autoSaveProjectName = projectFilePath
     ? fileName(projectFilePath).replace(/\.lcp$/i, "")
     : (project?.asset.file_name ?? mediaItems[0]?.file_name)?.replace(/\.[^.]+$/, "") ||
       "未命名项目";
   const autoSaveProjectNameRef = useRef(autoSaveProjectName);
   autoSaveProjectNameRef.current = autoSaveProjectName;
-  const { tasks: runningTasks } = getTaskProgressStatus();
+  const { tasks: runningTasks } = useTaskProgressStatus();
   const isBusy = runningTasks.length > 0 || historyNavigating;
   const hasProject = Boolean(projectFilePath || mediaItems.length > 0 || mediaFolders.length > 0);
   const canUndo = projectHistory.active && projectHistory.cursor > 0;
   const canRedo = projectHistory.active && projectHistory.cursor < projectHistory.entries.length;
-  const activeTrackCues = useMemo(
-    () =>
-      activeTrackId
-        ? subtitleTrackCues(project, projects, mediaItems, activeVideoId, activeTrackId)
-        : [],
-    [activeTrackId, activeVideoId, mediaItems, project, projects],
-  );
   const editScope = activeWorkspace === "edit" ? focusedPanel : undefined;
   const mediaEditScopeActive = editScope?.type === mediaBinPanelType;
   const focusedMediaFolderId = mediaEditScopeActive
     ? (editScope.params as MediaBinPanelParams).rootFolderId
     : null;
-  const subtitleEditScopeActive = editScope?.type === subtitlePanelType;
-  const canCopy = mediaEditScopeActive && selectedMediaItemCount > 0;
-  const canPaste = mediaEditScopeActive && !isMediaBinReadOnly && mediaClipboardItemCount > 0;
-  const canClear = mediaEditScopeActive && !isMediaBinReadOnly && selectedMediaItemCount > 0;
-  const canDuplicate = canClear;
-  const canSelectAll = mediaEditScopeActive
-    ? visibleMediaItemCount > 0
-    : subtitleEditScopeActive && activeTrackCues.length > 0;
-  const canClearSelection = mediaEditScopeActive
-    ? selectedMediaItemCount > 0
-    : subtitleEditScopeActive && selectedCueCount > 0;
+  const canCopy = activeEditCapability?.capabilities.copy ?? false;
+  const canPaste = activeEditCapability?.capabilities.paste ?? false;
+  const canClear = activeEditCapability?.capabilities.clear ?? false;
+  const canDuplicate = activeEditCapability?.capabilities.duplicate ?? false;
+  const canSelectAll = activeEditCapability?.capabilities.selectAll ?? false;
+  const canClearSelection = activeEditCapability?.capabilities.clearSelection ?? false;
   const activeStatusLabel =
     runningTasks.length === 1 ? runningTasks[0].label : `正在执行 ${runningTasks.length} 项操作...`;
 
@@ -627,43 +638,27 @@ function AppContent() {
   }
 
   function copyInEditScope() {
-    if (mediaEditScopeActive) {
-      emitAppEvent("media:copy", { instanceId: focusedMediaPanelId });
-    }
+    void publishEvent("edit.copy.requested", {}, identity);
   }
 
   function pasteInEditScope() {
-    if (mediaEditScopeActive) {
-      emitAppEvent("media:paste", { instanceId: focusedMediaPanelId });
-    }
+    void publishEvent("edit.paste.requested", {}, identity);
   }
 
   function clearInEditScope() {
-    if (mediaEditScopeActive) {
-      emitAppEvent("media:clear", { instanceId: focusedMediaPanelId });
-    }
+    void publishEvent("edit.clear.requested", {}, identity);
   }
 
   function duplicateInEditScope() {
-    if (mediaEditScopeActive) {
-      emitAppEvent("media:duplicate", { instanceId: focusedMediaPanelId });
-    }
+    void publishEvent("edit.duplicate.requested", {}, identity);
   }
 
   function selectAllInEditScope() {
-    if (mediaEditScopeActive) {
-      emitAppEvent("media:select-all", { instanceId: focusedMediaPanelId });
-    } else if (subtitleEditScopeActive) {
-      emitAppEvent("subtitle:select-all");
-    }
+    void publishEvent("edit.select-all.requested", {}, identity);
   }
 
   function clearSelectionInEditScope() {
-    if (mediaEditScopeActive) {
-      emitAppEvent("media:clear-selection", { instanceId: focusedMediaPanelId });
-    } else if (subtitleEditScopeActive) {
-      emitAppEvent("subtitle:clear-selection");
-    }
+    void publishEvent("edit.clear-selection.requested", {}, identity);
   }
 
   function rememberImportedMedia(paths: string[]) {
@@ -799,7 +794,10 @@ function AppContent() {
     messagePublished(`已删除当前事件及其后的 ${removedCount} 条历史记录`);
   }
 
-  useAppEvent("media:import", ({ paths, folderId }) => importMedia(paths, folderId ?? null));
+  useBroadcastEvent(identity, "media.import.requested", async ({ payload }) => {
+    await importMedia(payload.paths, payload.folderId ?? null);
+    return "handled" as const;
+  });
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {

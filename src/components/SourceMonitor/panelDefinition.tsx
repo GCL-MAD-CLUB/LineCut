@@ -1,5 +1,6 @@
+import { useShallow } from "zustand/shallow";
+import { isMediaItemEnabled, useProjectPort } from "../../systems/ProjectSystem";
 import { definePanel, type PanelMenuEntryDefinition } from "../DockLayout";
-import { isMediaItemEnabled, useAppStore } from "../../store";
 import { SourceMonitor } from "./SourceMonitor";
 import { useSourceMonitorState } from "./sourceMonitorState";
 
@@ -9,17 +10,22 @@ export const sourcePanelDefinition = definePanel({
   type: sourcePanelType,
   Component: SourceMonitor,
   useTitle: () => {
-    const project = useAppStore((state) => state.project);
+    const { project } = useProjectPort(["project"], []);
     return `源：${project?.asset.file_name ?? "（无剪辑）"}`;
   },
   useMenuItems: () => {
-    const activeVideoId = useAppStore((state) => state.activeVideoId);
-    const mediaItems = useAppStore((state) => state.mediaItems);
-    const activeVideoChanged = useAppStore((state) => state.actions.activeVideoChanged);
-    const sourcePreviewCleared = useAppStore((state) => state.actions.sourcePreviewCleared);
-    const playbackHistoryVideoIds = useSourceMonitorState((state) => state.playbackHistoryVideoIds);
-    const playedVideoRemoved = useSourceMonitorState((state) => state.playedVideoRemoved);
-    const playbackHistoryCleared = useSourceMonitorState((state) => state.playbackHistoryCleared);
+    const { activeVideoId, mediaItems, activeVideoChanged, sourcePreviewCleared } = useProjectPort(
+      ["activeVideoId", "mediaItems"],
+      ["activeVideoChanged", "sourcePreviewCleared"],
+    );
+    const { playbackHistoryVideoIds, playedVideoRemoved, playbackHistoryCleared } =
+      useSourceMonitorState(
+        useShallow((state) => ({
+          playbackHistoryVideoIds: state.playbackHistoryVideoIds,
+          playedVideoRemoved: state.playedVideoRemoved,
+          playbackHistoryCleared: state.playbackHistoryCleared,
+        })),
+      );
     const historyItems = playbackHistoryVideoIds.flatMap((videoId) => {
       const item = mediaItems.find(
         (candidate) =>

@@ -12,10 +12,10 @@ import {
   isMediaVideoDetached,
   isVirtualMediaItem,
   mediaItemProject,
-  subtitleTrackContext,
   subtitleTrackCues,
-  useAppStore,
-} from "../../store";
+  subtitleTrackContext,
+  useProjectPort,
+} from "../../systems/ProjectSystem";
 import { isTauriRuntime } from "../../tauriRuntime";
 import type {
   ExportLayout,
@@ -26,7 +26,7 @@ import type {
   SubtitleCue,
 } from "../../types";
 import { SelectDropdown, selectDropdownItems } from "../SelectDropdown";
-import { createTaskProgress, getTaskProgressStatus } from "../TaskProgress";
+import { createTaskProgress, useTaskProgressStatus } from "../../systems/TaskSystem";
 import "./ExportPanel.css";
 import { useExportPanelState } from "./exportPanelState";
 
@@ -130,51 +130,55 @@ function buildDialogueLineLabels(cues: SubtitleCue[], lineCount: number) {
   return labels;
 }
 
-function useActiveCues() {
-  const project = useAppStore((state) => state.project);
-  const projects = useAppStore((state) => state.projects);
-  const mediaItems = useAppStore((state) => state.mediaItems);
-  const activeVideoId = useAppStore((state) => state.activeVideoId);
-  const activeTrackId = useAppStore((state) => state.activeTrackId);
-  return useMemo(
+export function ExportPanel() {
+  const {
+    project,
+    projects,
+    mediaItems,
+    activeVideoId,
+    detachedVideoIds,
+    mediaBinReadOnly,
+    activeVideoChanged,
+    activeTrackId,
+    selectedCueIds,
+    preferences,
+    messagePublished,
+    exportResultChanged,
+  } = useProjectPort(
+    [
+      "project",
+      "projects",
+      "mediaItems",
+      "activeVideoId",
+      "detachedVideoIds",
+      "mediaBinReadOnly",
+      "activeTrackId",
+      "selectedCueIds",
+      "preferences",
+    ],
+    ["activeVideoChanged", "messagePublished", "exportResultChanged"],
+  );
+  const {
+    exportOptions,
+    exportVideoId,
+    selectedBoundMediaIds,
+    updateExportOptions,
+    setExportVideoId,
+    setSelectedBoundMediaIds,
+  } = useExportPanelState((state) => state);
+  const labelCues = useMemo(
     () =>
       activeTrackId
         ? subtitleTrackCues(project, projects, mediaItems, activeVideoId, activeTrackId)
         : [],
     [activeTrackId, activeVideoId, mediaItems, project, projects],
   );
-}
-
-function useCanExport(isExporting: boolean) {
-  const project = useAppStore((state) => state.project);
-  const activeTrackId = useAppStore((state) => state.activeTrackId);
-  const selectedCount = useAppStore((state) => state.selectedCueIds.size);
-  return Boolean(project && activeTrackId && selectedCount > 0 && !isExporting);
-}
-
-export function ExportPanel() {
-  const exportOptions = useExportPanelState((state) => state.exportOptions);
-  const setExportOptions = useExportPanelState((state) => state.updateExportOptions);
-  const exportVideoId = useExportPanelState((state) => state.exportVideoId);
-  const selectedBoundMediaIds = useExportPanelState((state) => state.selectedBoundMediaIds);
-  const setExportVideoId = useExportPanelState((state) => state.setExportVideoId);
-  const setSelectedBoundMediaIds = useExportPanelState((state) => state.setSelectedBoundMediaIds);
-  const project = useAppStore((state) => state.project);
-  const projects = useAppStore((state) => state.projects);
-  const mediaItems = useAppStore((state) => state.mediaItems);
-  const activeVideoId = useAppStore((state) => state.activeVideoId);
-  const detachedVideoIds = useAppStore((state) => state.detachedVideoIds);
-  const isMediaBinReadOnly = useAppStore((state) => state.mediaBinReadOnly);
-  const activeVideoChanged = useAppStore((state) => state.actions.activeVideoChanged);
-  const activeTrackId = useAppStore((state) => state.activeTrackId);
-  const selectedCueIds = useAppStore((state) => state.selectedCueIds);
-  const defaultExportDir = useAppStore((state) => state.preferences.default_export_dir);
-  const setMessage = useAppStore((state) => state.actions.messagePublished);
-  const setExportResult = useAppStore((state) => state.actions.exportResultChanged);
-  const labelCues = useActiveCues();
-  const selectedCount = useAppStore((state) => state.selectedCueIds.size);
-  const { isRunning: isExporting } = getTaskProgressStatus("export.clips");
-  const canExport = useCanExport(isExporting) && !isMediaBinReadOnly;
+  const { isRunning: isExporting } = useTaskProgressStatus("export.clips");
+  const selectedCount = selectedCueIds.size;
+  const isMediaBinReadOnly = mediaBinReadOnly;
+  const defaultExportDir = preferences.default_export_dir;
+  const canExport =
+    Boolean(project && activeTrackId && selectedCount > 0 && !isExporting) && !mediaBinReadOnly;
   const videoItems = useMemo(
     () => mediaItems.filter((item) => item.kind === "video" && isMediaItemEnabled(item)),
     [mediaItems],
@@ -220,21 +224,21 @@ export function ExportPanel() {
 
   useEffect(() => {
     if (exportOptions.layout === "merged" && isDialogueNameRule(exportOptions.export_name_rule)) {
-      setExportOptions({
+      updateExportOptions({
         export_name_rule: nonDialogueNameRule(exportOptions.export_name_rule),
         dialogue_line_indexes: [],
       });
     }
-  }, [exportOptions.export_name_rule, exportOptions.layout, setExportOptions]);
+  }, [exportOptions.export_name_rule, exportOptions.layout, updateExportOptions]);
 
   useEffect(() => {
     const validIndexes = exportOptions.dialogue_line_indexes.filter(
       (index) => index < dialogueLineCount,
     );
     if (validIndexes.length !== exportOptions.dialogue_line_indexes.length) {
-      setExportOptions({ dialogue_line_indexes: validIndexes });
+      updateExportOptions({ dialogue_line_indexes: validIndexes });
     }
-  }, [dialogueLineCount, exportOptions.dialogue_line_indexes, setExportOptions]);
+  }, [dialogueLineCount, exportOptions.dialogue_line_indexes, updateExportOptions]);
 
   function toggleDialogueLineIndex(lineIndex: number) {
     const current =
@@ -247,7 +251,7 @@ export function ExportPanel() {
     if (next.length === 0) {
       return;
     }
-    setExportOptions({ dialogue_line_indexes: next });
+    updateExportOptions({ dialogue_line_indexes: next });
   }
 
   function changeExportVideo(videoId: string) {
@@ -265,7 +269,7 @@ export function ExportPanel() {
 
   async function chooseOutputDir() {
     if (!isTauriRuntime()) {
-      setMessage("请在 Tauri 桌面窗口中选择导出目录。");
+      messagePublished("请在 Tauri 桌面窗口中选择导出目录。");
       return;
     }
     const outcome = await runOperation("export.clips", () =>
@@ -280,7 +284,7 @@ export function ExportPanel() {
     const picked = outcome.value;
     const path = Array.isArray(picked) ? picked[0] : picked;
     if (path) {
-      setExportOptions({ output_dir: path, output_dir_explicit: true });
+      updateExportOptions({ output_dir: path, output_dir_explicit: true });
     }
   }
 
@@ -303,11 +307,11 @@ export function ExportPanel() {
       activeTrackId,
     );
     if (!trackContext) {
-      setMessage("无法解析当前字幕轨的来源，请重新绑定字幕后再导出。");
+      messagePublished("无法解析当前字幕轨的来源，请重新绑定字幕后再导出。");
       return;
     }
     if (!isTauriRuntime()) {
-      setMessage("浏览器预览不能导出视频，请运行 Tauri 桌面应用。");
+      messagePublished("浏览器预览不能导出视频，请运行 Tauri 桌面应用。");
       return;
     }
     const exportTaskId = createFfmpegTaskId("export");
@@ -323,7 +327,7 @@ export function ExportPanel() {
         exportCancelled = true;
       },
     });
-    setExportResult(null);
+    exportResultChanged(null);
     try {
       const boundMedia: ExportBoundMedia[] = boundMediaItems
         .filter((item) => selectedBoundMediaIds.includes(item.id))
@@ -364,13 +368,13 @@ export function ExportPanel() {
           : !detachedVideoIds.has(exportProject.asset.id),
         taskId: exportTaskId,
       });
-      setExportResult(result);
-      setMessage(`导出完成：${result.files.length} 个文件`);
+      exportResultChanged(result);
+      messagePublished(`导出完成：${result.files.length} 个文件`);
       exportTask.update({ current: 1 });
       exportTask.remove();
     } catch (error) {
       if (exportCancelled) {
-        setMessage("导出已取消");
+        messagePublished("导出已取消");
         return;
       }
       exportTask.fail(error);
@@ -438,7 +442,7 @@ export function ExportPanel() {
             step={50}
             value={exportOptions.head_padding_ms}
             onChange={(event) =>
-              setExportOptions({ head_padding_ms: Number(event.currentTarget.value) })
+              updateExportOptions({ head_padding_ms: Number(event.currentTarget.value) })
             }
           />
         </label>
@@ -450,7 +454,7 @@ export function ExportPanel() {
             step={50}
             value={exportOptions.tail_padding_ms}
             onChange={(event) =>
-              setExportOptions({ tail_padding_ms: Number(event.currentTarget.value) })
+              updateExportOptions({ tail_padding_ms: Number(event.currentTarget.value) })
             }
           />
         </label>
@@ -462,7 +466,7 @@ export function ExportPanel() {
             step={50}
             value={exportOptions.merge_gap_ms}
             onChange={(event) =>
-              setExportOptions({ merge_gap_ms: Number(event.currentTarget.value) })
+              updateExportOptions({ merge_gap_ms: Number(event.currentTarget.value) })
             }
           />
         </label>
@@ -475,7 +479,7 @@ export function ExportPanel() {
           ["precise_encode", "精确重编码"],
           ["fast_copy", "快速无损"],
         ]}
-        onChange={(mode) => setExportOptions({ mode })}
+        onChange={(mode) => updateExportOptions({ mode })}
       />
       <SegmentedControl<ExportLayout>
         label="输出方式"
@@ -484,7 +488,7 @@ export function ExportPanel() {
           ["individual", "独立片段"],
           ["merged", "合并视频"],
         ]}
-        onChange={(layout) => setExportOptions({ layout })}
+        onChange={(layout) => updateExportOptions({ layout })}
       />
       <SelectMenu<ExportNameRule>
         label="重命名规则"
@@ -492,7 +496,7 @@ export function ExportPanel() {
         options={
           exportOptions.layout === "merged" ? mergedExportNameRuleOptions : allExportNameRuleOptions
         }
-        onChange={(export_name_rule) => setExportOptions({ export_name_rule })}
+        onChange={(export_name_rule) => updateExportOptions({ export_name_rule })}
       />
       {exportOptions.layout === "individual" &&
         isDialogueNameRule(exportOptions.export_name_rule) && (

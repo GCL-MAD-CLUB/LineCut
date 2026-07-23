@@ -1,7 +1,7 @@
 import { X } from "lucide-react";
 import { useMemo, useSyncExternalStore, type ReactNode } from "react";
 import { captureOperationError, type OperationKey, type PublicContext } from "../../errors";
-import "./TaskProgress.css";
+import "../../components/TaskProgress/TaskProgress.css";
 
 export interface CreateTaskProgressOptions {
   operation: OperationKey;
@@ -30,11 +30,15 @@ export interface TaskProgressHandle {
 }
 
 export interface TaskProgressView {
+  id: string;
   operation: OperationKey;
   label: string;
   current: number;
   total: number;
   percent: number;
+  cancellable: boolean;
+  isCancelling: boolean;
+  cancel: () => Promise<void>;
 }
 
 export interface TaskProgressStatus {
@@ -81,17 +85,23 @@ function taskPercent(task: Pick<TaskProgressRecord, "current" | "total">) {
 
 function toViewTask(task: TaskProgressRecord): TaskProgressView {
   return {
+    id: task.id,
     operation: task.operation,
     label: task.label,
     current: task.current,
     total: task.total,
     percent: taskPercent(task),
+    cancellable: Boolean(task.on_cancel),
+    isCancelling: task.is_cancelling,
+    cancel: () => runTaskCancel(task),
   };
 }
 
 function subscribe(listener: () => void) {
   listeners.add(listener);
-  return () => listeners.delete(listener);
+  return () => {
+    listeners.delete(listener);
+  };
 }
 
 function getSnapshot() {
@@ -246,7 +256,7 @@ export async function cancelAllTaskProgress() {
   ]);
 }
 
-export function getTaskProgressStatus(operation?: OperationKey): TaskProgressStatus {
+export function useTaskProgressStatus(operation?: OperationKey): TaskProgressStatus {
   const { tasks } = getTaskProgressSnapshot();
 
   return useMemo(() => {

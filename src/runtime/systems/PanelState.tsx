@@ -1,7 +1,7 @@
 import { createContext, useContext, type ReactNode } from "react";
 import { useStore } from "zustand";
 import { createStore, type StateCreator, type StoreApi } from "zustand/vanilla";
-import { clientError } from "./errors";
+import { clientError } from "../../errors";
 
 const PanelInstanceContext = createContext<string | null>(null);
 const PanelActiveContext = createContext(true);
@@ -14,7 +14,6 @@ interface PanelInstanceProviderProps {
 
 interface PanelStateHook<State extends object> {
   <Selection>(selector: (state: State) => Selection): Selection;
-  useInstance: <Selection>(instanceId: string, selector: (state: State) => Selection) => Selection;
 }
 
 const panelStateDisposers = new Set<(instanceId: string) => void>();
@@ -78,14 +77,5 @@ export function createPanelState<State extends object>(
     return useStore(getStore(instanceId), selector);
   }
 
-  function usePanelInstanceState<Selection>(
-    instanceId: string,
-    selector: (state: State) => Selection,
-  ) {
-    return useStore(getStore(instanceId), selector);
-  }
-
-  return Object.assign(usePanelState, {
-    useInstance: usePanelInstanceState,
-  }) as PanelStateHook<State>;
+  return usePanelState as PanelStateHook<State>;
 }

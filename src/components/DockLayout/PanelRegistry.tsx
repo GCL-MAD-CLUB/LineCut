@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { PanelInstanceProvider } from "../../panelState";
+import { PanelInstanceProvider } from "../../runtime/systems/PanelState";
 import { clientError } from "../../errors";
 import {
   PopupMenuItem,

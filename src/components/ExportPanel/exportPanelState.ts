@@ -1,5 +1,5 @@
 import type { ExportOptions } from "../../types";
-import { createPanelState } from "../../panelState";
+import { createPanelState } from "../../runtime/systems/PanelState";
 
 interface ExportPanelState {
   exportOptions: ExportOptions;

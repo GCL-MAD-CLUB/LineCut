@@ -24,7 +24,10 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import { emitAppEvent, useAppEvent } from "../../appEvents";
+import { useEditCapability } from "../../runtime/capabilities/EditCapability";
+import { publishEvent } from "../../runtime/events/react";
+import { useStableIdentity } from "../../runtime/state/react";
+import { usePanelActive, usePanelInstanceId } from "../../runtime/systems/PanelState";
 import { invokeCommand, runOperation } from "../../errors";
 import {
   cancelFfmpegTask,
@@ -40,11 +43,9 @@ import {
   isVirtualMediaItem,
   mediaItemProject,
   getProjectWorkspaceSnapshot,
-  useAppStore,
-} from "../../store";
+  useProjectPort,
+} from "../../systems/ProjectSystem";
 import { isTauriRuntime } from "../../tauriRuntime";
-import { usePanelActive, usePanelInstanceId } from "../../panelState";
-import { usePanelManagerState } from "../DockLayout";
 import type {
   AddExternalSubtitlesResult,
   DemuxMediaResult,
@@ -56,12 +57,17 @@ import { MediaLinkDialog, type MediaLinkCandidate, type MediaLinkMode } from "..
 import { ModalDialog } from "../ModalDialog";
 import { PopupMenu, PopupMenuItem, PopupMenuSeparator, PopupMenuSubmenu } from "../PopupMenu";
 import { SelectDropdown, selectDropdownItems } from "../SelectDropdown";
-import { createTaskProgress, getTaskProgressStatus } from "../TaskProgress";
+import { createTaskProgress, useTaskProgressStatus } from "../../systems/TaskSystem";
 import "./MediaBin.css";
 import { MediaBinTable, type MediaBinTableRow } from "./MediaBinTable";
 import { activeMediaDragItemIds, markMediaDragHandled } from "./mediaDrag";
-import { setMediaBinClipboardItemCount, useMediaBinState } from "./mediaBinState";
+import {
+  setMediaBinClipboardItemCount,
+  useMediaBinClipboardItemCount,
+  useMediaBinState,
+} from "./mediaBinState";
 import { mediaBinPanelType } from "./panelTypes";
+import { usePanelManagerState } from "../DockLayout";
 
 const mediaDragType = "application/x-linecut-media";
 interface MediaBinClipboard {
@@ -194,63 +200,104 @@ function readDraggedMediaIds(event: DragEvent) {
 export function MediaBin({ rootFolderId = null }: MediaBinProps) {
   const panelInstanceId = usePanelInstanceId();
   const panelActive = usePanelActive();
+  const focusedPanelId = usePanelManagerState((state) => state.focusedPanelId);
   const openPanel = usePanelManagerState((state) => state.openPanel);
-  const projects = useAppStore((state) => state.projects);
-  const mediaFolders = useAppStore((state) => state.mediaFolders);
-  const mediaItems = useAppStore((state) => state.mediaItems);
-  const activeVideoId = useAppStore((state) => state.activeVideoId);
-  const detachedVideoIds = useAppStore((state) => state.detachedVideoIds);
-  const mediaItemRenamed = useAppStore((state) => state.actions.mediaItemRenamed);
-  const mediaBinEntriesAdded = useAppStore((state) => state.actions.mediaBinEntriesAdded);
-  const mediaBinEntriesRemoved = useAppStore((state) => state.actions.mediaBinEntriesRemoved);
-  const mediaFolderAdded = useAppStore((state) => state.actions.mediaFolderAdded);
-  const mediaFolderRenamed = useAppStore((state) => state.actions.mediaFolderRenamed);
-  const mediaFoldersHiddenChanged = useAppStore((state) => state.actions.mediaFoldersHiddenChanged);
-  const mediaEntriesMovedToFolder = useAppStore((state) => state.actions.mediaEntriesMovedToFolder);
-  const mediaItemsMovedToFolder = useAppStore((state) => state.actions.mediaItemsMovedToFolder);
-  const mediaItemsEnabledChanged = useAppStore((state) => state.actions.mediaItemsEnabledChanged);
-  const mediaItemsHiddenChanged = useAppStore((state) => state.actions.mediaItemsHiddenChanged);
-  const mediaItemsOfflineChanged = useAppStore((state) => state.actions.mediaItemsOfflineChanged);
-  const mediaItemRelinked = useAppStore((state) => state.actions.mediaItemRelinked);
-  const mediaProxyPathChanged = useAppStore((state) => state.actions.mediaProxyPathChanged);
-  const mediaItemsBound = useAppStore((state) => state.actions.mediaItemsBound);
-  const mediaItemsUnbound = useAppStore((state) => state.actions.mediaItemsUnbound);
-  const mediaDemuxed = useAppStore((state) => state.actions.mediaDemuxed);
-  const activeVideoChanged = useAppStore((state) => state.actions.activeVideoChanged);
-  const proxyDialogOpened = useAppStore((state) => state.actions.proxyDialogOpened);
-  const subtitleTracksAddedToVideo = useAppStore(
-    (state) => state.actions.subtitleTracksAddedToVideo,
+  const identity = useStableIdentity("media-bin", panelInstanceId);
+  const {
+    projects,
+    mediaFolders,
+    mediaItems,
+    activeVideoId,
+    detachedVideoIds,
+    mediaItemRenamed,
+    mediaBinEntriesAdded,
+    mediaBinEntriesRemoved,
+    mediaFolderAdded,
+    mediaFolderRenamed,
+    mediaFoldersHiddenChanged,
+    mediaEntriesMovedToFolder,
+    mediaItemsMovedToFolder,
+    mediaItemsEnabledChanged,
+    mediaItemsHiddenChanged,
+    mediaItemsOfflineChanged,
+    mediaItemRelinked,
+    mediaProxyPathChanged,
+    mediaItemsBound,
+    mediaItemsUnbound,
+    mediaDemuxed,
+    activeVideoChanged,
+    proxyDialogOpened,
+    subtitleTracksAddedToVideo,
+    messagePublished,
+    warningsAppended,
+    mediaBinReadOnly,
+    mediaBinReadOnlyChanged,
+  } = useProjectPort(
+    [
+      "projects",
+      "mediaFolders",
+      "mediaItems",
+      "activeVideoId",
+      "detachedVideoIds",
+      "mediaBinReadOnly",
+    ],
+    [
+      "mediaItemRenamed",
+      "mediaBinEntriesAdded",
+      "mediaBinEntriesRemoved",
+      "mediaFolderAdded",
+      "mediaFolderRenamed",
+      "mediaFoldersHiddenChanged",
+      "mediaEntriesMovedToFolder",
+      "mediaItemsMovedToFolder",
+      "mediaItemsEnabledChanged",
+      "mediaItemsHiddenChanged",
+      "mediaItemsOfflineChanged",
+      "mediaItemRelinked",
+      "mediaProxyPathChanged",
+      "mediaItemsBound",
+      "mediaItemsUnbound",
+      "mediaDemuxed",
+      "activeVideoChanged",
+      "proxyDialogOpened",
+      "subtitleTracksAddedToVideo",
+      "messagePublished",
+      "warningsAppended",
+      "mediaBinReadOnlyChanged",
+    ],
   );
-  const messagePublished = useAppStore((state) => state.actions.messagePublished);
-  const warningsAppended = useAppStore((state) => state.actions.warningsAppended);
-  const isReadOnly = useAppStore((state) => state.mediaBinReadOnly);
-  const setReadOnly = useAppStore((state) => state.actions.mediaBinReadOnlyChanged);
-
-  const query = useMediaBinState((state) => state.query);
-  const selectedIds = useMediaBinState((state) => state.selectedIds);
-  const viewMode = useMediaBinState((state) => state.viewMode);
-  const listSize = useMediaBinState((state) => state.listSize);
-  const gridSize = useMediaBinState((state) => state.gridSize);
-  const showHidden = useMediaBinState((state) => state.showHidden);
-  const bindingPopoverOpen = useMediaBinState((state) => state.bindingPopoverOpen);
-  const bindingVideoId = useMediaBinState((state) => state.bindingVideoId);
-  const setQuery = useMediaBinState((state) => state.setQuery);
-  const setVisibleItemCount = useMediaBinState((state) => state.setVisibleItemCount);
-  const selectOnly = useMediaBinState((state) => state.selectOnly);
-  const toggleSelected = useMediaBinState((state) => state.toggleSelected);
-  const selectItems = useMediaBinState((state) => state.selectItems);
-  const clearSelection = useMediaBinState((state) => state.clearSelection);
-  const setViewMode = useMediaBinState((state) => state.setViewMode);
-  const setListSize = useMediaBinState((state) => state.setListSize);
-  const setGridSize = useMediaBinState((state) => state.setGridSize);
-  const setShowHidden = useMediaBinState((state) => state.setShowHidden);
-  const setBindingPopoverOpen = useMediaBinState((state) => state.setBindingPopoverOpen);
-  const setBindingVideoId = useMediaBinState((state) => state.setBindingVideoId);
-  const { isRunning: isImporting } = getTaskProgressStatus("media.import");
-  const { isRunning: isBinding } = getTaskProgressStatus("media.bindSubtitles");
-  const { isRunning: isDemuxing } = getTaskProgressStatus("media.demux");
-  const { isRunning: isRelinking } = getTaskProgressStatus("media.relink");
-  const { isRunning: isGeneratingProxy } = getTaskProgressStatus("proxy.generate");
+  const {
+    query,
+    selectedIds,
+    visibleItemCount,
+    viewMode,
+    listSize,
+    gridSize,
+    showHidden,
+    bindingPopoverOpen,
+    bindingVideoId,
+    setQuery,
+    setVisibleItemCount,
+    selectOnly,
+    toggleSelected,
+    selectItems,
+    clearSelection,
+    setViewMode,
+    setListSize,
+    setGridSize,
+    setShowHidden,
+    setBindingPopoverOpen,
+    setBindingVideoId,
+  } = useMediaBinState((state) => state);
+  const clipboardItemCount = useMediaBinClipboardItemCount();
+  const { isRunning: isImporting } = useTaskProgressStatus("media.import");
+  const { isRunning: isBinding } = useTaskProgressStatus("media.bindSubtitles");
+  const { isRunning: isDemuxing } = useTaskProgressStatus("media.demux");
+  const { isRunning: isRelinking } = useTaskProgressStatus("media.relink");
+  const { isRunning: isGeneratingProxy } = useTaskProgressStatus("proxy.generate");
+  const isEditAuthority = panelActive && focusedPanelId === panelInstanceId;
+  const isReadOnly = mediaBinReadOnly;
+  const setReadOnly = mediaBinReadOnlyChanged;
   const isBusy = isImporting || isBinding || isDemuxing || isRelinking;
   const panelRef = useRef<HTMLElement | null>(null);
   const [contextMenu, setContextMenu] = useState<MediaBinContextMenuState | null>(null);
@@ -1011,35 +1058,22 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     messagePublished(`已复制所选内容并创建媒体箱“${folder.name}”`);
   }
 
-  useAppEvent("media:copy", ({ instanceId }) => {
-    if (instanceId === panelInstanceId) {
-      copySelection();
-    }
-  });
-  useAppEvent("media:paste", ({ instanceId }) => {
-    if (instanceId === panelInstanceId) {
-      pasteClipboard();
-    }
-  });
-  useAppEvent("media:clear", ({ instanceId }) => {
-    if (instanceId === panelInstanceId) {
-      return removeSelection();
-    }
-  });
-  useAppEvent("media:duplicate", ({ instanceId }) => {
-    if (instanceId === panelInstanceId) {
-      duplicateSelection();
-    }
-  });
-  useAppEvent("media:select-all", ({ instanceId }) => {
-    if (instanceId === panelInstanceId) {
-      selectItems(rows.map((row) => (row.type === "item" ? row.item.id : row.folder.id)));
-    }
-  });
-  useAppEvent("media:clear-selection", ({ instanceId }) => {
-    if (instanceId === panelInstanceId) {
-      clearSelection();
-    }
+  useEditCapability({
+    identity,
+    active: isEditAuthority,
+    selectedCount: selectedIds.size,
+    visibleCount: visibleItemCount,
+    readOnly: isReadOnly,
+    pasteCount: clipboardItemCount,
+    handlers: {
+      copy: copySelection,
+      paste: pasteClipboard,
+      clear: removeSelection,
+      duplicate: duplicateSelection,
+      selectAll: () =>
+        selectItems(rows.map((row) => (row.type === "item" ? row.item.id : row.folder.id))),
+      clearSelection,
+    },
   });
 
   function setSelectionEnabled(enabled: boolean) {
@@ -1331,10 +1365,14 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
             onPreviewVideo={previewVideo}
             onBindItems={bindItemsToVideo}
             onImportPaths={(paths) =>
-              emitAppEvent("media:import", {
-                paths,
-                folderId: currentFolderId ?? undefined,
-              })
+              void publishEvent(
+                "media.import.requested",
+                {
+                  paths,
+                  folderId: currentFolderId ?? undefined,
+                },
+                identity,
+              )
             }
           />
         </div>
@@ -1429,9 +1467,13 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
             <button
               type="button"
               onClick={() =>
-                emitAppEvent("media:import", {
-                  folderId: currentFolderId ?? undefined,
-                })
+                void publishEvent(
+                  "media.import.requested",
+                  {
+                    folderId: currentFolderId ?? undefined,
+                  },
+                  identity,
+                )
               }
               disabled={isReadOnly || isBusy || !rootFolderAvailable}
               title="导入媒体（视频、音频或字幕）"
@@ -1751,9 +1793,13 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                 </PopupMenuItem>
                 <PopupMenuItem
                   onSelect={() => {
-                    emitAppEvent("media:import", {
-                      folderId: contextMenu.folderId ?? currentFolderId ?? undefined,
-                    });
+                    void publishEvent(
+                      "media.import.requested",
+                      {
+                        folderId: contextMenu.folderId ?? currentFolderId ?? undefined,
+                      },
+                      identity,
+                    );
                     setContextMenu(null);
                   }}
                   disabled={isReadOnly || isBusy || !rootFolderAvailable}
@@ -1872,7 +1918,11 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                 <PopupMenuSeparator />
                 <PopupMenuItem
                   onSelect={() => {
-                    emitAppEvent("media:import", { folderId: currentFolderId ?? undefined });
+                    void publishEvent(
+                      "media.import.requested",
+                      { folderId: currentFolderId ?? undefined },
+                      identity,
+                    );
                     setContextMenu(null);
                   }}
                   disabled={isReadOnly || isBusy || !rootFolderAvailable}

@@ -10,16 +10,19 @@ import {
   type SyntheticEvent,
 } from "react";
 import { flushSync } from "react-dom";
-import { useAppEvent } from "../../appEvents";
+import { usePlaybackCapability } from "../../runtime/capabilities/PlaybackCapability";
 import { runBackgroundOperation, runOperation } from "../../errors";
+import { useStableIdentity } from "../../runtime/state/react";
+import { usePanelActive, usePanelInstanceId } from "../../runtime/systems/PanelState";
 import {
   isMediaItemEnabled,
   isMediaItemOffline,
   isMediaVideoDetached,
   isVirtualMediaItem,
   mediaItemProject,
-  useAppStore,
-} from "../../store";
+  useProjectPort,
+} from "../../systems/ProjectSystem";
+import { useTaskProgressStatus } from "../../systems/TaskSystem";
 import {
   clampTimelineStartFrame,
   frameToTimeUs,
@@ -28,9 +31,9 @@ import {
 } from "../../timeline";
 import { MonitorRange } from "./MonitorRange";
 import { activeMediaDragVideoId, markMediaDragHandled } from "../MediaBin/mediaDrag";
+import { usePanelManagerState } from "../DockLayout";
 import "./SourceMonitor.css";
 import { TimelineRuler } from "./TimelineRuler";
-import { getTaskProgressStatus } from "../TaskProgress";
 import { VideoControls } from "./VideoControls";
 import { VideoDisplay } from "./VideoDisplay";
 import { useSourceMonitorState } from "./sourceMonitorState";
@@ -120,19 +123,65 @@ function isEditableKeyboardTarget(target: EventTarget | null) {
 }
 
 export function SourceMonitor() {
-  const project = useAppStore((state) => state.project);
-  const projects = useAppStore((state) => state.projects);
-  const mediaItems = useAppStore((state) => state.mediaItems);
-  const activeVideoId = useAppStore((state) => state.activeVideoId);
-  const detachedVideoIds = useAppStore((state) => state.detachedVideoIds);
-  const activeVideoChanged = useAppStore((state) => state.actions.activeVideoChanged);
-  const proxyPath = useAppStore((state) => state.proxyPath);
-  const useProxy = useAppStore((state) => state.useProxy);
-  const setMessage = useAppStore((state) => state.actions.messagePublished);
-  const sourcePreviewSelected = useAppStore((state) => state.actions.sourcePreviewSelected);
-  const proxyPreviewSelected = useAppStore((state) => state.actions.proxyPreviewSelected);
-  const proxyDialogOpened = useAppStore((state) => state.actions.proxyDialogOpened);
-  const { isRunning: isGeneratingProxy } = getTaskProgressStatus("proxy.generate");
+  const panelInstanceId = usePanelInstanceId();
+  const panelActive = usePanelActive();
+  const focusedPanelId = usePanelManagerState((state) => state.focusedPanelId);
+  const identity = useStableIdentity("source-monitor", panelInstanceId);
+  const [lastFocusedAt, setLastFocusedAt] = useState(panelInstanceId === "source" ? 1 : 0);
+  useEffect(() => {
+    if (focusedPanelId === panelInstanceId) {
+      setLastFocusedAt(Date.now());
+    }
+  }, [focusedPanelId, panelInstanceId]);
+  const {
+    project,
+    projects,
+    mediaItems,
+    activeVideoId,
+    detachedVideoIds,
+    activeVideoChanged,
+    proxyPath,
+    useProxy,
+    messagePublished,
+    sourcePreviewSelected,
+    proxyPreviewSelected,
+    proxyDialogOpened,
+  } = useProjectPort(
+    [
+      "project",
+      "projects",
+      "mediaItems",
+      "activeVideoId",
+      "detachedVideoIds",
+      "proxyPath",
+      "useProxy",
+    ],
+    [
+      "activeVideoChanged",
+      "messagePublished",
+      "sourcePreviewSelected",
+      "proxyPreviewSelected",
+      "proxyDialogOpened",
+    ],
+  );
+  const {
+    currentFrame,
+    setCurrentFrame,
+    isPlaying,
+    setIsPlaying,
+    zoomLevel,
+    zoomPan,
+    timelineStartFrame,
+    setTimelineStartFrame,
+    timelineSpanFrames,
+    setTimelineSpanFrames,
+    cueRange,
+    setCueRange,
+    mediaKey: panelMediaKey,
+    playedVideoRecorded,
+    syncMedia,
+  } = useSourceMonitorState((state) => state);
+  const { isRunning: isGeneratingProxy } = useTaskProgressStatus("proxy.generate");
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const boundAudioRefs = useRef(new Map<string, HTMLAudioElement>());
   const sourceMonitorRef = useRef<HTMLDivElement | null>(null);
@@ -144,22 +193,7 @@ export function SourceMonitor() {
   const playbackTickRef = useRef<number | null>(null);
   const pendingPreviewRestoreRef = useRef<PendingPreviewRestore | null>(null);
   const cuePlaybackEndFrameRef = useRef<number | null>(null);
-  const currentFrame = useSourceMonitorState((state) => state.currentFrame);
-  const setCurrentFrame = useSourceMonitorState((state) => state.setCurrentFrame);
-  const isPlaying = useSourceMonitorState((state) => state.isPlaying);
-  const setIsPlaying = useSourceMonitorState((state) => state.setIsPlaying);
   const currentFrameRef = useRef(currentFrame);
-  const zoomLevel = useSourceMonitorState((state) => state.zoomLevel);
-  const zoomPan = useSourceMonitorState((state) => state.zoomPan);
-  const timelineStartFrame = useSourceMonitorState((state) => state.timelineStartFrame);
-  const setTimelineStartFrame = useSourceMonitorState((state) => state.setTimelineStartFrame);
-  const timelineSpanFrames = useSourceMonitorState((state) => state.timelineSpanFrames);
-  const setTimelineSpanFrames = useSourceMonitorState((state) => state.setTimelineSpanFrames);
-  const cueRange = useSourceMonitorState((state) => state.cueRange);
-  const setCueRange = useSourceMonitorState((state) => state.setCueRange);
-  const storedMediaKey = useSourceMonitorState((state) => state.mediaKey);
-  const playedVideoRecorded = useSourceMonitorState((state) => state.playedVideoRecorded);
-  const syncMedia = useSourceMonitorState((state) => state.syncMedia);
   const timelineStartFrameRef = useRef(timelineStartFrame);
   const timelineSpanFramesRef = useRef(timelineSpanFrames);
   const [isVideoDragOver, setIsVideoDragOver] = useState(false);
@@ -302,7 +336,7 @@ export function SourceMonitor() {
   }, []);
 
   useLayoutEffect(() => {
-    const mediaChanged = storedMediaKey !== mediaKey;
+    const mediaChanged = panelMediaKey !== mediaKey;
     const nextSpan = durationFrames > 0 ? durationFrames : defaultTimelineSpanFrames;
     syncMedia(mediaKey, durationFrames);
     seekTargetFrameRef.current = mediaChanged ? 0 : currentFrame;
@@ -361,36 +395,45 @@ export function SourceMonitor() {
     });
   }, [durationFrames, minTimelineSpanFrames]);
 
-  useAppEvent("monitor:seek", (detail) => {
-    if (!hasMedia) {
-      return;
-    }
-    if (detail.focusEndUs !== undefined) {
-      const rangeStartFrame = usToMonitorFrame(
-        clamp(Math.min(detail.timeUs, detail.focusEndUs), 0, durationUs),
-      );
-      const rangeEndFrame = usToMonitorFrame(
-        clamp(
-          Math.max(detail.timeUs, detail.focusEndUs),
-          frameToClampedUs(rangeStartFrame),
-          durationUs,
-        ),
-      );
-      setCueRange({ startFrame: rangeStartFrame, endFrame: rangeEndFrame });
-      centerTimelineOnFrame(rangeStartFrame);
-      cuePlaybackEndFrameRef.current = rangeEndFrame;
-    }
-    seekToFrame(
-      usToMonitorFrame(detail.timeUs),
-      detail.focusEndUs !== undefined,
-      detail.focusEndUs === undefined,
-    );
-    if (detail.play) {
-      const video = videoRef.current;
-      if (video) {
-        runBackgroundOperation("media.playback", () => video.play());
+  usePlaybackCapability({
+    identity,
+    active: panelActive,
+    lastFocusedAt,
+    currentFrame,
+    isPlaying,
+    fallbackAuthority: identity.instanceId === "source",
+    onSeek: (detail) => {
+      if (!hasMedia) {
+        return false;
       }
-    }
+      if (detail.focusEndUs !== undefined) {
+        const rangeStartFrame = usToMonitorFrame(
+          clamp(Math.min(detail.timeUs, detail.focusEndUs), 0, durationUs),
+        );
+        const rangeEndFrame = usToMonitorFrame(
+          clamp(
+            Math.max(detail.timeUs, detail.focusEndUs),
+            frameToClampedUs(rangeStartFrame),
+            durationUs,
+          ),
+        );
+        setCueRange({ startFrame: rangeStartFrame, endFrame: rangeEndFrame });
+        centerTimelineOnFrame(rangeStartFrame);
+        cuePlaybackEndFrameRef.current = rangeEndFrame;
+      }
+      seekToFrame(
+        usToMonitorFrame(detail.timeUs),
+        detail.focusEndUs !== undefined,
+        detail.focusEndUs === undefined,
+      );
+      if (detail.play) {
+        const video = videoRef.current;
+        if (video) {
+          runBackgroundOperation("media.playback", () => video.play());
+        }
+      }
+      return true;
+    },
   });
 
   useEffect(() => {
@@ -449,7 +492,7 @@ export function SourceMonitor() {
   function changePreviewMode(value: PreviewMode) {
     if (value === "source") {
       if (activeVideoOffline) {
-        setMessage("完整分辨率媒体已脱机，请先重新链接媒体。");
+        messagePublished("完整分辨率媒体已脱机，请先重新链接媒体。");
         return;
       }
       if (!useProxy) {
@@ -479,11 +522,11 @@ export function SourceMonitor() {
       if (proxyPath) {
         preservePreviewPlayback();
         proxyPreviewSelected();
-        setMessage("原文件无法直接播放，已切换到代理模式。");
+        messagePublished("原文件无法直接播放，已切换到代理模式。");
       } else {
         pendingPreviewRestoreRef.current = null;
         proxyDialogOpened();
-        setMessage("原文件无法直接播放，请创建代理后预览。");
+        messagePublished("原文件无法直接播放，请创建代理后预览。");
       }
     }
   }

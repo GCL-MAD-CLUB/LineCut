@@ -1,14 +1,23 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Captions, CheckCheck, ListFilter, Search, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { emitAppEvent, useAppEvent } from "../../appEvents";
-import { subtitleTrackCues, useAppStore, visibleSubtitleTracks } from "../../store";
+import { useEditCapability } from "../../runtime/capabilities/EditCapability";
+import { usePlaybackStatus } from "../../runtime/capabilities/PlaybackCapability";
+import { eventSource } from "../../runtime/events/EventHub";
+import { publishEvent } from "../../runtime/events/react";
+import { useStableIdentity } from "../../runtime/state/react";
+import { usePanelActive, usePanelInstanceId } from "../../runtime/systems/PanelState";
+import {
+  subtitleTrackCues,
+  useProjectPort,
+  visibleSubtitleTracks,
+} from "../../systems/ProjectSystem";
 import { requestSubtitleThumbnail } from "../../subtitleThumbnail";
 import { formatDuration } from "../../time";
 import { normalizeFrameRate, timeUsToFrame } from "../../timeline";
 import type { SubtitleCue } from "../../types";
 import { SelectDropdown } from "../SelectDropdown";
-import { useSourceMonitorState } from "../SourceMonitor/sourceMonitorState";
+import { usePanelManagerState } from "../DockLayout";
 import "./SubtitlePanel.css";
 import { useSubtitlePanelState } from "./subtitlePanelState";
 
@@ -16,12 +25,30 @@ function cueLabelValue(cue: SubtitleCue) {
   return cue.style?.trim() || cue.speaker?.trim() || "";
 }
 
+function cueMatches(cue: SubtitleCue, query: string) {
+  const normalized = query.trim().toLocaleLowerCase();
+  if (!normalized) {
+    return true;
+  }
+  const haystack = `${cue.plain_text} ${cue.speaker ?? ""} ${cue.style ?? ""}`.toLocaleLowerCase();
+  return normalized
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((token) => haystack.includes(token));
+}
+
+const subtitleEventSource = eventSource("subtitle-panel");
+
 function seekToCue(cue: SubtitleCue, focusRange = false) {
-  emitAppEvent("monitor:seek", {
-    timeUs: cue.start_us,
-    focusEndUs: focusRange ? cue.end_us : undefined,
-    play: focusRange,
-  });
+  void publishEvent(
+    "playback.seek.requested",
+    {
+      timeUs: cue.start_us,
+      focusEndUs: focusRange ? cue.end_us : undefined,
+      play: focusRange,
+    },
+    subtitleEventSource,
+  );
 }
 
 interface CueFrameRange {
@@ -157,18 +184,6 @@ function CueFrameButton({ cue, assetId, fingerprint, videoPath, priority }: CueF
   );
 }
 
-function cueMatches(cue: SubtitleCue, query: string) {
-  const normalized = query.trim().toLocaleLowerCase();
-  if (!normalized) {
-    return true;
-  }
-  const haystack = `${cue.plain_text} ${cue.speaker ?? ""} ${cue.style ?? ""}`.toLocaleLowerCase();
-  return normalized
-    .split(/\s+/)
-    .filter(Boolean)
-    .every((token) => haystack.includes(token));
-}
-
 function closestCueIndexToViewportCenter(
   rows: readonly { index: number; start: number; end: number }[],
   scrollOffset: number,
@@ -195,68 +210,65 @@ function closestCueIndexToViewportCenter(
   return closestRow.index;
 }
 
-function useActiveTrack() {
-  const project = useAppStore((state) => state.project);
-  const projects = useAppStore((state) => state.projects);
-  const activeTrackId = useAppStore((state) => state.activeTrackId);
-  const mediaItems = useAppStore((state) => state.mediaItems);
-  const activeVideoId = useAppStore((state) => state.activeVideoId);
-  return useMemo(
+export function SubtitlePanel() {
+  const panelInstanceId = usePanelInstanceId();
+  const panelActive = usePanelActive();
+  const focusedPanelId = usePanelManagerState((state) => state.focusedPanelId);
+  const identity = useStableIdentity("subtitle-panel", panelInstanceId);
+  const {
+    project,
+    projects,
+    mediaItems,
+    activeVideoId,
+    activeTrackId,
+    selectedCueIds,
+    activeTrackChanged,
+    cueSelectionToggled,
+    cueSelectionCleared,
+    cueSelectionReplaced,
+  } = useProjectPort(
+    ["project", "projects", "mediaItems", "activeVideoId", "activeTrackId", "selectedCueIds"],
+    ["activeTrackChanged", "cueSelectionToggled", "cueSelectionCleared", "cueSelectionReplaced"],
+  );
+  const {
+    query,
+    showOnlySelected,
+    activeCueId,
+    setQuery,
+    setShowOnlySelected,
+    setActiveCueId,
+    syncTrackContext,
+  } = useSubtitlePanelState((state) => state);
+  const activeTrack = useMemo(
     () =>
       visibleSubtitleTracks(project, mediaItems, activeVideoId, projects).find(
         (track) => track.id === activeTrackId,
-      ) ?? null,
+      ),
     [activeTrackId, activeVideoId, mediaItems, project, projects],
   );
-}
-
-function useFilteredCues(visibleTrackId: string) {
-  const project = useAppStore((state) => state.project);
-  const projects = useAppStore((state) => state.projects);
-  const mediaItems = useAppStore((state) => state.mediaItems);
-  const activeVideoId = useAppStore((state) => state.activeVideoId);
-  const query = useSubtitlePanelState((state) => state.query);
-  const selectedCueIds = useAppStore((state) => state.selectedCueIds);
-  const showOnlySelected = useSubtitlePanelState((state) => state.showOnlySelected);
-  const cues = useMemo(
-    () =>
-      visibleTrackId
-        ? subtitleTrackCues(project, projects, mediaItems, activeVideoId, visibleTrackId)
-        : [],
-    [activeVideoId, mediaItems, project, projects, visibleTrackId],
-  );
-  const matchingCues = useMemo(() => cues.filter((cue) => cueMatches(cue, query)), [cues, query]);
-  return useMemo(
-    () =>
-      showOnlySelected ? matchingCues.filter((cue) => selectedCueIds.has(cue.id)) : matchingCues,
-    [matchingCues, selectedCueIds, showOnlySelected],
-  );
-}
-
-export function SubtitlePanel() {
-  const project = useAppStore((state) => state.project);
-  const projects = useAppStore((state) => state.projects);
-  const mediaItems = useAppStore((state) => state.mediaItems);
-  const activeVideoId = useAppStore((state) => state.activeVideoId);
-  const activeTrackId = useAppStore((state) => state.activeTrackId);
-  const query = useSubtitlePanelState((state) => state.query);
-  const selectedCueIds = useAppStore((state) => state.selectedCueIds);
-  const showOnlySelected = useSubtitlePanelState((state) => state.showOnlySelected);
-  const activeCueId = useSubtitlePanelState((state) => state.activeCueId);
-  const setQuery = useSubtitlePanelState((state) => state.setQuery);
-  const setShowOnlySelected = useSubtitlePanelState((state) => state.setShowOnlySelected);
-  const setActiveCueId = useSubtitlePanelState((state) => state.setActiveCueId);
-  const syncTrackContext = useSubtitlePanelState((state) => state.syncTrackContext);
-  const activeTrackChanged = useAppStore((state) => state.actions.activeTrackChanged);
-  const cueSelectionToggled = useAppStore((state) => state.actions.cueSelectionToggled);
-  const cueSelectionCleared = useAppStore((state) => state.actions.cueSelectionCleared);
-  const cueSelectionReplaced = useAppStore((state) => state.actions.cueSelectionReplaced);
-  const activeTrack = useActiveTrack();
+  const filteredCues = useMemo(() => {
+    const cues = activeTrack
+      ? subtitleTrackCues(project, projects, mediaItems, activeVideoId, activeTrack.id)
+      : [];
+    return cues.filter(
+      (cue) => (!showOnlySelected || selectedCueIds.has(cue.id)) && cueMatches(cue, query),
+    );
+  }, [
+    activeTrack,
+    activeVideoId,
+    mediaItems,
+    project,
+    projects,
+    query,
+    selectedCueIds,
+    showOnlySelected,
+  ]);
+  const playback = usePlaybackStatus();
+  const isEditAuthority = panelActive && focusedPanelId === panelInstanceId;
+  const currentFrame = playback?.currentFrame ?? 0;
+  const isPlaying = playback?.isPlaying ?? false;
   const visibleActiveTrackId = activeTrack?.id ?? "";
-  const filteredCues = useFilteredCues(visibleActiveTrackId);
-  const selectedCount = useAppStore((state) => state.selectedCueIds.size);
-  const currentFrame = useSourceMonitorState.useInstance("source", (state) => state.currentFrame);
-  const isPlaying = useSourceMonitorState.useInstance("source", (state) => state.isPlaying);
+  const selectedCount = selectedCueIds.size;
   const listRef = useRef<HTMLDivElement | null>(null);
   const scrollAnimationRef = useRef<number | null>(null);
   const currentFrameRef = useRef(currentFrame);
@@ -466,10 +478,16 @@ export function SubtitlePanel() {
     };
   }, [cueFrameRanges, followCueId, followCueIndex, frameRate, isPlaying, rowVirtualizer]);
 
-  useAppEvent("subtitle:select-all", () => {
-    cueSelectionReplaced(filteredCues.map((cue) => cue.id));
+  useEditCapability({
+    identity,
+    active: isEditAuthority,
+    selectedCount: selectedCueIds.size,
+    visibleCount: filteredCues.length,
+    handlers: {
+      selectAll: () => cueSelectionReplaced(filteredCues.map((cue) => cue.id)),
+      clearSelection: cueSelectionCleared,
+    },
   });
-  useAppEvent("subtitle:clear-selection", cueSelectionCleared);
 
   return (
     <section className="subtitle-panel">

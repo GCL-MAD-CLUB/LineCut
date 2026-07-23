@@ -21,8 +21,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { createPortal } from "react-dom";
-import type { ProjectHistoryCategory } from "../../projectHistory";
-import { useAppStore } from "../../store";
+import { type ProjectHistoryCategory, useProjectPort } from "../../systems/ProjectSystem";
 import { ModalDialog } from "../ModalDialog";
 import "./HistoryPanel.css";
 
@@ -76,7 +75,7 @@ function historyOperationIcon(category: ProjectHistoryCategory) {
 }
 
 export function HistoryPanel({ disabled = false, onNavigate, onDelete }: HistoryPanelProps) {
-  const history = useAppStore((state) => state.projectHistory);
+  const history = useProjectPort(["projectHistory"], []).projectHistory;
   const [deleteRequest, setDeleteRequest] = useState<{
     cursor: number;
     label: string;

@@ -30,7 +30,7 @@ import {
   isMediaVideoDetached,
   mediaItemProject,
   visibleSubtitleTracks,
-} from "../../store";
+} from "../../systems/ProjectSystem";
 import { isTauriRuntime } from "../../tauriRuntime";
 import { formatMonitorTime } from "../../time";
 import { normalizeFrameRate } from "../../timeline";
@@ -2143,11 +2143,11 @@ export function MediaBinTable({
                           )}
                           {item.kind === "video" &&
                             isMediaVideoDetached(item, detachedVideoIds) && (
-                            <SplitSquareVertical
-                              className="media-bin-status-icon"
-                              aria-label="已分解"
-                            />
-                          )}
+                              <SplitSquareVertical
+                                className="media-bin-status-icon"
+                                aria-label="已分解"
+                              />
+                            )}
                         </>
                       )}
                     </span>

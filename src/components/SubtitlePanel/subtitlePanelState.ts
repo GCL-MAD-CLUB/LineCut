@@ -1,4 +1,4 @@
-import { createPanelState } from "../../panelState";
+import { createPanelState } from "../../runtime/systems/PanelState";
 
 interface SubtitlePanelState {
   trackContext: string;

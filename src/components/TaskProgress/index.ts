@@ -1,1 +1,1 @@
-export * from "./TaskProgress";
+export { TaskProgress } from "../../systems/TaskSystem";

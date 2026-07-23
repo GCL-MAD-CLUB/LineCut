@@ -1,4 +1,4 @@
-import { createPanelState } from "../../panelState";
+import { createPanelState } from "../../runtime/systems/PanelState";
 import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
 

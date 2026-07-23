@@ -1,5 +1,6 @@
+import { useShallow } from "zustand/shallow";
+import { useProjectPort } from "../../systems/ProjectSystem";
 import { definePanel, type PanelMenuEntryDefinition } from "../DockLayout";
-import { useAppStore } from "../../store";
 import { MediaBin } from "./MediaBin";
 import { useMediaBinState } from "./mediaBinState";
 import { mediaBinPanelType, type MediaBinPanelParams } from "./panelTypes";
@@ -23,22 +24,26 @@ export const mediaBinPanelDefinition = definePanel<MediaBinPanelParams>({
   type: mediaBinPanelType,
   Component: ManagedMediaBin,
   useTitle: ({ rootFolderId }) => {
-    const projectFilePath = useAppStore((state) => state.projectFilePath);
-    const folderName = useAppStore(
-      (state) => state.mediaFolders.find((folder) => folder.id === rootFolderId)?.name,
+    const { projectFilePath, mediaFolders } = useProjectPort(
+      ["projectFilePath", "mediaFolders"],
+      [],
     );
+    const folderName = mediaFolders.find((folder) => folder.id === rootFolderId)?.name;
     return rootFolderId ? `媒体箱：${folderName ?? "已删除"}` : projectMediaTitle(projectFilePath);
   },
-  useAvailable: ({ rootFolderId }) =>
-    useAppStore(
-      (state) =>
-        rootFolderId === null || state.mediaFolders.some((folder) => folder.id === rootFolderId),
-    ),
+  useAvailable: ({ rootFolderId }) => {
+    const { mediaFolders } = useProjectPort(["mediaFolders"], []);
+    return rootFolderId === null || mediaFolders.some((folder) => folder.id === rootFolderId);
+  },
   useMenuItems: () => {
-    const viewMode = useMediaBinState((state) => state.viewMode);
-    const showHidden = useMediaBinState((state) => state.showHidden);
-    const setViewMode = useMediaBinState((state) => state.setViewMode);
-    const setShowHidden = useMediaBinState((state) => state.setShowHidden);
+    const { viewMode, showHidden, setViewMode, setShowHidden } = useMediaBinState(
+      useShallow((state) => ({
+        viewMode: state.viewMode,
+        showHidden: state.showHidden,
+        setViewMode: state.setViewMode,
+        setShowHidden: state.setShowHidden,
+      })),
+    );
     return [
       {
         type: "selection",

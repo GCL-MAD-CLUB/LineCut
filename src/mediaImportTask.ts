@@ -1,4 +1,4 @@
-import { createTaskProgress } from "./components/TaskProgress";
+import { createTaskProgress } from "./systems/TaskSystem";
 import { invokeCommand } from "./errors";
 import type { OperationKey } from "./errors";
 import { cancelFfmpegTask, createFfmpegTaskId, listenToFfmpegTaskProgress } from "./ffmpegProgress";

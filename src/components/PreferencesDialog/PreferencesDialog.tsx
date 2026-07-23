@@ -13,7 +13,7 @@ import {
 import { useEffect, useState, type ReactNode } from "react";
 import { invokeCommand, runOperation } from "../../errors";
 import { createFfmpegTaskId } from "../../ffmpegProgress";
-import { defaultPreferences, useAppStore } from "../../store";
+import { defaultPreferences, useProjectPort } from "../../systems/ProjectSystem";
 import { isTauriRuntime } from "../../tauriRuntime";
 import type { Preferences } from "../../types";
 
@@ -30,9 +30,12 @@ interface PreferencesDialogProps {
 }
 
 export function PreferencesDialog({ open: isOpen, onClose }: PreferencesDialogProps) {
-  const preferences = useAppStore((state) => state.preferences);
-  const setPreferences = useAppStore((state) => state.actions.preferencesLoaded);
-  const setMessage = useAppStore((state) => state.actions.messagePublished);
+  const { preferences, preferencesLoaded, messagePublished } = useProjectPort(
+    ["preferences"],
+    ["preferencesLoaded", "messagePublished"],
+  );
+  const setPreferences = preferencesLoaded;
+  const setMessage = messagePublished;
   const [draftPreferences, setDraftPreferences] = useState<Preferences>(preferences);
   const [isSavingPreferences, setIsSavingPreferences] = useState(false);
 

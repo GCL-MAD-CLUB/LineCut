@@ -6,12 +6,12 @@ import {
   createFfmpegTaskId,
   listenToFfmpegTaskProgress,
 } from "../../ffmpegProgress";
-import { useAppStore } from "../../store";
+import { useProjectPort } from "../../systems/ProjectSystem";
 import { isTauriRuntime } from "../../tauriRuntime";
 import type { ProxyResult } from "../../types";
 import { ModalDialog } from "../ModalDialog";
 import { SelectDropdown, selectDropdownItems, type SelectDropdownItem } from "../SelectDropdown";
-import { createTaskProgress, getTaskProgressStatus } from "../TaskProgress";
+import { createTaskProgress, useTaskProgressStatus } from "../../systems/TaskSystem";
 import "./ProxyCreationDialog.css";
 
 export type ProxyFrameSize = "full" | "half" | "quarter" | "custom";
@@ -56,13 +56,19 @@ function labelForLocation(location: ProxyLocation, customLocation: string, cache
 }
 
 export function ProxyCreationDialog() {
-  const cacheDir = useAppStore((state) => state.preferences.cache_dir);
-  const project = useAppStore((state) => state.project);
-  const isProxyDialogOpen = useAppStore((state) => state.proxyDialogOpen);
-  const proxyDialogClosed = useAppStore((state) => state.actions.proxyDialogClosed);
-  const proxyGenerated = useAppStore((state) => state.actions.proxyGenerated);
-  const setMessage = useAppStore((state) => state.actions.messagePublished);
-  const { isRunning: isGeneratingProxy } = getTaskProgressStatus("proxy.generate");
+  const {
+    preferences,
+    project,
+    proxyDialogOpen: isProxyDialogOpen,
+    proxyDialogClosed,
+    proxyGenerated,
+    messagePublished: setMessage,
+  } = useProjectPort(
+    ["preferences", "project", "proxyDialogOpen"],
+    ["proxyDialogClosed", "proxyGenerated", "messagePublished"],
+  );
+  const cacheDir = preferences.cache_dir;
+  const { isRunning: isGeneratingProxy } = useTaskProgressStatus("proxy.generate");
   const [frameSize, setFrameSize] = useState<ProxyFrameSize>("full");
   const [customWidth, setCustomWidth] = useState(1280);
   const [customHeight, setCustomHeight] = useState(720);

@@ -1,4 +1,4 @@
-import type { MediaBinFolder, MediaBinItem, Project } from "./types";
+import type { MediaBinFolder, MediaBinItem, Project } from "../../types";
 
 export const projectHistoryRowLimit = 40;
 

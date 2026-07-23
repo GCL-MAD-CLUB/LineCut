@@ -1,4 +1,5 @@
 import { useStore } from "zustand";
+import { useShallow } from "zustand/shallow";
 import { createStore } from "zustand/vanilla";
 import {
   appendProjectHistoryEntry,
@@ -12,7 +13,7 @@ import {
   type ProjectHistoryCategory,
   type ProjectHistoryState,
   type SubtitleSelections,
-} from "./projectHistory";
+} from "./ProjectHistory";
 import type {
   DemuxMediaResult,
   ExportResult,
@@ -24,9 +25,9 @@ import type {
   SubtitleCue,
   SubtitleTrack,
   UserNotice,
-} from "./types";
+} from "../../types";
 
-interface AppActions {
+interface ProjectCommands {
   projectImported: (project: Project) => void;
   projectCreated: () => void;
   projectOpened: (workspace: ProjectWorkspace, path: string) => void;
@@ -95,7 +96,7 @@ interface AppActions {
   projectHistoryFutureDiscarded: () => void;
 }
 
-interface AppStore {
+interface ProjectSystemState {
   project: Project | null;
   projects: Record<string, Project>;
   mediaFolders: MediaBinFolder[];
@@ -116,7 +117,7 @@ interface AppStore {
   exportResult: ExportResult | null;
   mediaBinReadOnly: boolean;
   projectHistory: ProjectHistoryState;
-  actions: AppActions;
+  commands: ProjectCommands;
 }
 
 const mediaLabelColors = {
@@ -360,7 +361,7 @@ function subtitleContextState(
   };
 }
 
-function replaceCurrentSubtitleSelection(state: AppStore, selectedCueIds: Set<string>) {
+function replaceCurrentSubtitleSelection(state: ProjectSystemState, selectedCueIds: Set<string>) {
   const subtitleSelections = { ...state.subtitleSelections };
   const videoSelections = { ...(subtitleSelections[state.activeVideoId] ?? {}) };
   if (selectedCueIds.size > 0) {
@@ -567,7 +568,7 @@ export function defaultPreferences(): Preferences {
   };
 }
 
-function projectFileStateFromStore(state: AppStore): ProjectFileState {
+function projectFileStateFromStore(state: ProjectSystemState): ProjectFileState {
   return {
     projects: state.projects,
     mediaFolders: state.mediaFolders,
@@ -580,7 +581,9 @@ function projectFileStateFromStore(state: AppStore): ProjectFileState {
   };
 }
 
-function reconciledProjectFileState(projectFileState: ProjectFileState): Partial<AppStore> {
+function reconciledProjectFileState(
+  projectFileState: ProjectFileState,
+): Partial<ProjectSystemState> {
   const activeVideo = projectFileState.mediaItems.find(
     (item) => item.id === projectFileState.activeVideoId,
   );
@@ -603,7 +606,10 @@ function reconciledProjectFileState(projectFileState: ProjectFileState): Partial
   };
 }
 
-function removedMediaItemsState(state: AppStore, removed: Set<string>): Partial<AppStore> {
+function removedMediaItemsState(
+  state: ProjectSystemState,
+  removed: Set<string>,
+): Partial<ProjectSystemState> {
   const removedVideoIds = new Set(
     state.mediaItems
       .filter((item) => removed.has(item.id) && item.kind === "video")
@@ -679,10 +685,10 @@ function folderAndDescendantIds(mediaFolders: MediaBinFolder[], folderIds: Itera
 }
 
 function removedMediaBinEntriesState(
-  state: AppStore,
+  state: ProjectSystemState,
   folderIds: Iterable<string>,
   itemIds: Iterable<string>,
-): Partial<AppStore> {
+): Partial<ProjectSystemState> {
   const removedFolders = folderAndDescendantIds(state.mediaFolders, folderIds);
   const removedItems = new Set(itemIds);
   for (const item of state.mediaItems) {
@@ -712,11 +718,11 @@ function removedMediaBinEntriesState(
 }
 
 function movedMediaBinEntriesState(
-  state: AppStore,
+  state: ProjectSystemState,
   itemIds: Iterable<string>,
   folderIds: Iterable<string>,
   targetFolderId: string | null,
-): Partial<AppStore> | AppStore {
+): Partial<ProjectSystemState> | ProjectSystemState {
   if (targetFolderId && !state.mediaFolders.some((folder) => folder.id === targetFolderId)) {
     return state;
   }
@@ -802,10 +808,10 @@ function movedMediaBinEntriesState(
 }
 
 function commitProjectEvent(
-  set: (updater: (state: AppStore) => AppStore) => void,
+  set: (updater: (state: ProjectSystemState) => ProjectSystemState) => void,
   label: string,
   category: ProjectHistoryCategory,
-  recipe: (state: AppStore) => Partial<AppStore> | AppStore,
+  recipe: (state: ProjectSystemState) => Partial<ProjectSystemState> | ProjectSystemState,
 ) {
   set((state) => {
     const update = recipe(state);
@@ -831,7 +837,7 @@ function commitProjectEvent(
   });
 }
 
-const appStore = createStore<AppStore>()((set) => ({
+const projectState = createStore<ProjectSystemState>()((set) => ({
   ...initialProjectState(null),
   projectFilePath: null,
   projectDirty: false,
@@ -844,7 +850,7 @@ const appStore = createStore<AppStore>()((set) => ({
   exportResult: null,
   mediaBinReadOnly: false,
   projectHistory: createProjectHistory(),
-  actions: {
+  commands: {
     projectImported: (project) =>
       set({
         ...initialProjectState(project),
@@ -1728,12 +1734,33 @@ const appStore = createStore<AppStore>()((set) => ({
   },
 }));
 
-export function useAppStore<Selection>(selector: (state: AppStore) => Selection) {
-  return useStore(appStore, selector);
+function useProjectState<Selection>(selector: (state: ProjectSystemState) => Selection) {
+  return useStore(projectState, selector);
+}
+
+type ProjectData = Omit<ProjectSystemState, "commands">;
+
+export function useProjectPort<
+  const StateKey extends keyof ProjectData,
+  const CommandKey extends keyof ProjectCommands,
+>(stateKeys: readonly StateKey[], commandKeys: readonly CommandKey[]) {
+  return useProjectState(
+    useShallow((project) => {
+      const port = {} as Pick<ProjectData, StateKey> & Pick<ProjectCommands, CommandKey>;
+      const writablePort = port as Record<PropertyKey, unknown>;
+      for (const key of stateKeys) {
+        writablePort[key] = project[key];
+      }
+      for (const key of commandKeys) {
+        writablePort[key] = project.commands[key];
+      }
+      return port;
+    }),
+  );
 }
 
 export function getProjectWorkspaceSnapshot(): ProjectWorkspace {
-  const state = appStore.getState();
+  const state = projectState.getState();
   return {
     projects: Object.values(state.projects),
     media_bin: {
