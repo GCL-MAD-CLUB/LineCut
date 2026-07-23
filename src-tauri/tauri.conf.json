@@ -1,12 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "LineCut",
-  "version": "0.2.0-alpha.5",
+  "version": "0.2.0",
   "identifier": "com.linecut.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://127.0.0.1:1420",
     "beforeBuildCommand": "npm run build",
+    "beforeBundleCommand": "npm run build:thumbnail-provider",
     "frontendDist": "../dist"
   },
   "app": {
@@ -41,7 +42,11 @@
       }
     ],
     "externalBin": ["bin/ffmpeg", "bin/ffprobe"],
-    "resources": ["../LICENSE", "../THIRD_PARTY_NOTICES.md"],
+    "resources": {
+      "../LICENSE": "LICENSE",
+      "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
+      "target/release/linecut_thumbnail_provider.dll": "linecut_thumbnail_provider.dll"
+    },
     "windows": {
       "nsis": {
         "installerHooks": "./windows/ffmpeg-options.nsh",

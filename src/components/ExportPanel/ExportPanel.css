@@ -49,6 +49,7 @@
 
 .export-bound-picker > small {
   color: var(--color-text);
+  font-size: 12px;
   opacity: 0.75;
 }
 

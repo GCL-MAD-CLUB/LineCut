@@ -69,6 +69,9 @@ ${StrLoc}
 !define UNINSTALLERSIGNCOMMAND "{{uninstaller_sign_cmd}}"
 !define ESTIMATEDSIZE "{{estimated_size}}"
 !define STARTMENUFOLDER "{{start_menu_folder}}"
+!define LCP_THUMBNAIL_PROVIDER_CLSID "{4F4C9CF5-6463-4DF7-A2B4-7C3B0CC7E67D}"
+!define ITHUMBNAIL_PROVIDER_IID "{E357FCCD-A995-4576-B01F-234630154E96}"
+!define LCP_THUMBNAIL_PROVIDER_FILE "linecut_thumbnail_provider.dll"
 
 Var PassiveMode
 Var UpdateMode
@@ -688,6 +691,17 @@ Section Install
     {{/each}}
   {{/each}}
 
+  ; The thumbnail provider returns the embedded project-card artwork for `.lcp` files. It never
+  ; opens project data, because `.lcp` payloads are encrypted and Explorer is not trusted with it.
+  WriteRegStr SHCTX "Software\Classes\CLSID\${LCP_THUMBNAIL_PROVIDER_CLSID}" "" "LineCut Project Thumbnail Provider"
+  WriteRegStr SHCTX "Software\Classes\CLSID\${LCP_THUMBNAIL_PROVIDER_CLSID}\InprocServer32" "" "$INSTDIR\${LCP_THUMBNAIL_PROVIDER_FILE}"
+  WriteRegStr SHCTX "Software\Classes\CLSID\${LCP_THUMBNAIL_PROVIDER_CLSID}\InprocServer32" "ThreadingModel" "Apartment"
+  WriteRegStr SHCTX "Software\Classes\LineCut.Project\shellex\${ITHUMBNAIL_PROVIDER_IID}" "" "${LCP_THUMBNAIL_PROVIDER_CLSID}"
+  ; An absent TypeOverlay makes Explorer use the application's DefaultIcon as a lower-right
+  ; thumbnail badge. An explicit empty value keeps the supplied project-card artwork unmodified.
+  WriteRegStr SHCTX "Software\Classes\LineCut.Project" "TypeOverlay" ""
+  Call RefreshShellAssociations
+
   ; Register deep links
   {{#each deep_link_protocols as |protocol| ~}}
     WriteRegStr SHCTX "Software\Classes\\{{protocol}}" "URL Protocol" ""
@@ -823,6 +837,17 @@ Section Uninstall
     {{/each}}
   {{/each}}
 
+  ; Remove only the COM registration owned by this installation. Explorer can temporarily keep
+  ; the DLL loaded, so schedule its deletion at reboot if a direct deletion is not possible.
+  ReadRegStr $R7 SHCTX "Software\Classes\CLSID\${LCP_THUMBNAIL_PROVIDER_CLSID}\InprocServer32" ""
+  ${If} $R7 == "$INSTDIR\${LCP_THUMBNAIL_PROVIDER_FILE}"
+    DeleteRegKey SHCTX "Software\Classes\LineCut.Project\shellex\${ITHUMBNAIL_PROVIDER_IID}"
+    DeleteRegValue SHCTX "Software\Classes\LineCut.Project" "TypeOverlay"
+    DeleteRegKey SHCTX "Software\Classes\CLSID\${LCP_THUMBNAIL_PROVIDER_CLSID}"
+  ${EndIf}
+  Delete /REBOOTOK "$INSTDIR\${LCP_THUMBNAIL_PROVIDER_FILE}"
+  Call un.RefreshShellAssociations
+
   ; Delete deep links
   {{#each deep_link_protocols as |protocol| ~}}
     ReadRegStr $R7 SHCTX "Software\Classes\\{{protocol}}\shell\open\command" ""
@@ -920,6 +945,14 @@ Function RestorePreviousInstallLocation
   ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""
   StrCmp $4 "" +2 0
     StrCpy $INSTDIR $4
+FunctionEnd
+
+Function RefreshShellAssociations
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
+FunctionEnd
+
+Function un.RefreshShellAssociations
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
 FunctionEnd
 
 Function Skip

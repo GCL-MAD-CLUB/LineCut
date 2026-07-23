@@ -311,7 +311,6 @@ body.system-file-drag-active .media-bin-table-scroll.system-file-drop-target * {
   height: var(--media-list-row-height, 24px);
   min-height: var(--media-list-row-height, 24px);
   color: #b5b5b5;
-  font-family: var(--font-mono);
   font-size: 12px;
   border-bottom: 1px solid #101010;
   cursor: default;
@@ -872,7 +871,6 @@ body.is-resizing-media-column {
 .media-bin-card-duration {
   flex: 0 0 auto;
   color: inherit;
-  font-family: var(--font-mono);
   font-size: 12px;
   white-space: nowrap;
 }
