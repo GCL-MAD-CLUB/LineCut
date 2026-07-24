@@ -29,11 +29,15 @@ export type OperationKey =
   | "runtime.render"
   | "runtime.unhandled"
   | "storage.recentPaths"
+  | "storyboard.detect"
   | "task.cancel"
   | "task.listener"
   | "thumbnail.subtitle.cache.read"
   | "thumbnail.subtitle.cache.write"
   | "thumbnail.subtitle.generate"
+  | "thumbnail.storyboard.cache.read"
+  | "thumbnail.storyboard.cache.write"
+  | "thumbnail.storyboard.generate"
   | "thumbnail.video"
   | "window.closeListener"
   | "window.title"
@@ -101,11 +105,15 @@ const clientErrorDefinitions = {
   TASK_NOT_RUNNING: { category: "state", retryable: false },
   SUBTITLE_THUMBNAIL_REQUEST_CANCELLED: { category: "cancelled", retryable: false },
   SUBTITLE_THUMBNAIL_BROWSER_UNAVAILABLE: { category: "unsupported", retryable: false },
+  STORYBOARD_THUMBNAIL_REQUEST_CANCELLED: { category: "cancelled", retryable: false },
+  STORYBOARD_THUMBNAIL_BROWSER_UNAVAILABLE: { category: "unsupported", retryable: false },
   VIDEO_FRAME_DECODE_FAILED: { category: "media", retryable: true },
   VIDEO_FRAME_DECODE_TIMEOUT: { category: "media", retryable: true },
   SUBTITLE_THUMBNAIL_ENCODE_FAILED: { category: "runtime", retryable: true },
+  STORYBOARD_THUMBNAIL_ENCODE_FAILED: { category: "runtime", retryable: true },
   VIDEO_FRAME_DIMENSIONS_INVALID: { category: "media", retryable: false },
   SUBTITLE_THUMBNAIL_CANVAS_UNAVAILABLE: { category: "platform", retryable: false },
+  STORYBOARD_THUMBNAIL_CANVAS_UNAVAILABLE: { category: "platform", retryable: false },
   PANEL_INSTANCE_CONTEXT_MISSING: { category: "state", retryable: false },
   PANEL_STATE_CONTEXT_MISSING: { category: "state", retryable: false },
   HISTORY_PANEL_SERVICES_UNAVAILABLE: { category: "state", retryable: false },

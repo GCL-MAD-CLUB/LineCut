@@ -62,6 +62,26 @@ export interface SubtitleCue {
   layer: number | null;
 }
 
+export interface StoryboardShot {
+  id: string;
+  sequence: number;
+  start_frame: number;
+  end_frame: number;
+  start_us: number;
+  end_us: number;
+  score: number;
+}
+
+export interface StoryboardDetectionResult {
+  asset_id: string;
+  duration_us: number;
+  frame_count: number;
+  frame_rate: number;
+  threshold: number;
+  provider: string;
+  shots: StoryboardShot[];
+}
+
 export interface Project {
   asset: MediaAsset;
   streams: MediaStream[];

@@ -25,10 +25,14 @@ const SUBTITLE_THUMBNAIL_CACHE_FOLDER: &str = "Subtitle Thumbnail Cache Files";
 const SUBTITLE_THUMBNAIL_CACHE_KEY_CONTEXT: &[u8] = b"linecut-subtitle-thumbnail-cache-v1";
 const SUBTITLE_THUMBNAIL_BUCKET_US: i64 = 100_000;
 const SUBTITLE_THUMBNAIL_MATCH_TOLERANCE_US: i64 = 100_000;
+const STORYBOARD_THUMBNAIL_CACHE_VERSION: u16 = 1;
+const STORYBOARD_THUMBNAIL_CACHE_FOLDER: &str = "Storyboard Thumbnail Cache Files";
+const STORYBOARD_THUMBNAIL_CACHE_KEY_CONTEXT: &[u8] = b"linecut-storyboard-thumbnail-cache-v1";
 const MAX_SUBTITLE_THUMBNAIL_BYTES: usize = 2 * 1024 * 1024;
 
 static THUMBNAIL_CACHE_LOCK: Mutex<()> = Mutex::new(());
 static SUBTITLE_THUMBNAIL_CACHE_LOCK: Mutex<()> = Mutex::new(());
+static STORYBOARD_THUMBNAIL_CACHE_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Serialize, Deserialize)]
 struct CachedMediaThumbnail {
@@ -71,8 +75,21 @@ struct CachedSubtitleThumbnail {
     jpeg: Vec<u8>,
 }
 
+#[derive(Serialize, Deserialize)]
+struct CachedStoryboardThumbnail {
+    version: u16,
+    time_us: i64,
+    jpeg: Vec<u8>,
+}
+
 #[derive(Serialize)]
 pub(crate) struct SubtitleThumbnailCacheLookup {
+    cache_time_us: i64,
+    bytes: Option<Vec<u8>>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct StoryboardThumbnailCacheLookup {
     cache_time_us: i64,
     bytes: Option<Vec<u8>>,
 }
@@ -163,7 +180,7 @@ pub(crate) async fn generate_subtitle_thumbnail(
     if let Some(bytes) = lookup.bytes {
         return Ok(bytes);
     }
-    let jpeg = extract_subtitle_thumbnail(
+    let jpeg = extract_timeline_thumbnail(
         &ffmpeg_program(&preferences),
         &project.asset.path,
         stream_index,
@@ -238,7 +255,7 @@ pub(crate) async fn cache_subtitle_thumbnail(
     bytes: Vec<u8>,
     state: tauri::State<'_, AppState>,
 ) -> CommandResult<()> {
-    validate_subtitle_thumbnail_jpeg(&bytes)?;
+    validate_timeline_thumbnail_jpeg(&bytes)?;
     let project = state
         .projects
         .lock()
@@ -271,6 +288,164 @@ pub(crate) async fn cache_subtitle_thumbnail(
         app_error(
             ErrorCode::BlockingTaskFailed,
             format!("Subtitle thumbnail cache write task failed: {error}"),
+        )
+    })?
+}
+
+#[tauri::command]
+pub(crate) async fn generate_storyboard_thumbnail(
+    asset_id: String,
+    time_us: i64,
+    state: tauri::State<'_, AppState>,
+) -> CommandResult<Vec<u8>> {
+    let project = state
+        .projects
+        .lock()
+        .map_err(|_| {
+            app_error(
+                ErrorCode::ProjectStateUnavailable,
+                "Project state lock is poisoned",
+            )
+        })?
+        .get(&asset_id)
+        .cloned()
+        .ok_or_else(|| {
+            app_error(
+                ErrorCode::MediaNotFound,
+                format!("Media asset was not found: {asset_id}"),
+            )
+        })?;
+    let stream_index = project.asset.video_stream_index.ok_or_else(|| {
+        app_error(
+            ErrorCode::VideoStreamMissing,
+            format!("Media asset has no video stream: {asset_id}"),
+        )
+    })?;
+    let preferences = preferences_clone(&state)?;
+    let cache_preferences = preferences.clone();
+    let fingerprint = project.asset.fingerprint.clone();
+    let duration_us = project.asset.duration_us;
+    let lookup = tokio::task::spawn_blocking(move || {
+        read_storyboard_thumbnail_cache(&cache_preferences, &fingerprint, time_us, duration_us)
+    })
+    .await
+    .map_err(|error| {
+        app_error(
+            ErrorCode::BlockingTaskFailed,
+            format!("Storyboard thumbnail cache read task failed: {error}"),
+        )
+    })?;
+    if let Some(bytes) = lookup.bytes {
+        return Ok(bytes);
+    }
+    let jpeg = extract_timeline_thumbnail(
+        &ffmpeg_program(&preferences),
+        &project.asset.path,
+        stream_index,
+        lookup.cache_time_us,
+    )
+    .await?;
+    let fingerprint = project.asset.fingerprint;
+    tokio::task::spawn_blocking(move || {
+        write_storyboard_thumbnail_cache(
+            &preferences,
+            &fingerprint,
+            lookup.cache_time_us,
+            duration_us,
+            &jpeg,
+        )?;
+        Ok::<Vec<u8>, AppError>(jpeg)
+    })
+    .await
+    .map_err(|error| {
+        app_error(
+            ErrorCode::BlockingTaskFailed,
+            format!("Storyboard thumbnail cache write task failed: {error}"),
+        )
+    })?
+}
+
+#[tauri::command]
+pub(crate) async fn get_cached_storyboard_thumbnail(
+    asset_id: String,
+    time_us: i64,
+    state: tauri::State<'_, AppState>,
+) -> CommandResult<StoryboardThumbnailCacheLookup> {
+    let project = state
+        .projects
+        .lock()
+        .map_err(|_| {
+            app_error(
+                ErrorCode::ProjectStateUnavailable,
+                "Project state lock is poisoned",
+            )
+        })?
+        .get(&asset_id)
+        .cloned()
+        .ok_or_else(|| {
+            app_error(
+                ErrorCode::MediaNotFound,
+                format!("Media asset was not found: {asset_id}"),
+            )
+        })?;
+    let preferences = preferences_clone(&state)?;
+    tokio::task::spawn_blocking(move || {
+        Ok::<_, AppError>(read_storyboard_thumbnail_cache(
+            &preferences,
+            &project.asset.fingerprint,
+            time_us,
+            project.asset.duration_us,
+        ))
+    })
+    .await
+    .map_err(|error| {
+        app_error(
+            ErrorCode::BlockingTaskFailed,
+            format!("Storyboard thumbnail cache read task failed: {error}"),
+        )
+    })?
+}
+
+#[tauri::command]
+pub(crate) async fn cache_storyboard_thumbnail(
+    asset_id: String,
+    time_us: i64,
+    bytes: Vec<u8>,
+    state: tauri::State<'_, AppState>,
+) -> CommandResult<()> {
+    validate_timeline_thumbnail_jpeg(&bytes)?;
+    let project = state
+        .projects
+        .lock()
+        .map_err(|_| {
+            app_error(
+                ErrorCode::ProjectStateUnavailable,
+                "Project state lock is poisoned",
+            )
+        })?
+        .get(&asset_id)
+        .cloned()
+        .ok_or_else(|| {
+            app_error(
+                ErrorCode::MediaNotFound,
+                format!("Media asset was not found: {asset_id}"),
+            )
+        })?;
+    let preferences = preferences_clone(&state)?;
+    tokio::task::spawn_blocking(move || {
+        write_storyboard_thumbnail_cache(
+            &preferences,
+            &project.asset.fingerprint,
+            time_us,
+            project.asset.duration_us,
+            &bytes,
+        )
+    })
+    .await
+    .map_err(|error| {
+        app_error(
+            ErrorCode::BlockingTaskFailed,
+            format!("Storyboard thumbnail cache write task failed: {error}"),
         )
     })?
 }
@@ -481,7 +656,7 @@ fn read_subtitle_thumbnail_cache_unlocked(
         };
         if cached.version != SUBTITLE_THUMBNAIL_CACHE_VERSION
             || cached.time_us != cache_time_us
-            || validate_subtitle_thumbnail_jpeg(&cached.jpeg).is_err()
+            || validate_timeline_thumbnail_jpeg(&cached.jpeg).is_err()
         {
             continue;
         }
@@ -500,7 +675,7 @@ fn write_subtitle_thumbnail_cache(
     duration_us: i64,
     jpeg: &[u8],
 ) -> AppResult<()> {
-    validate_subtitle_thumbnail_jpeg(jpeg)?;
+    validate_timeline_thumbnail_jpeg(jpeg)?;
     let _guard = SUBTITLE_THUMBNAIL_CACHE_LOCK.lock().map_err(|_| {
         app_error(
             ErrorCode::ThumbnailCacheStateUnavailable,
@@ -528,7 +703,115 @@ fn write_subtitle_thumbnail_cache(
     )
 }
 
-fn validate_subtitle_thumbnail_jpeg(bytes: &[u8]) -> AppResult<()> {
+fn clamped_storyboard_thumbnail_time(time_us: i64, duration_us: i64) -> i64 {
+    time_us.clamp(0, duration_us.saturating_sub(1_000).max(0))
+}
+
+fn storyboard_thumbnail_cache_layout(
+    preferences: &Preferences,
+    fingerprint: &str,
+    time_us: i64,
+) -> (PathBuf, String) {
+    let cache_key = format!("{fingerprint}:{time_us}");
+    let cache_hash = hash_name(STORYBOARD_THUMBNAIL_CACHE_KEY_CONTEXT, cache_key.as_bytes());
+    let path = configured_cache_root(preferences)
+        .join(CACHE_PARENT_FOLDER)
+        .join(STORYBOARD_THUMBNAIL_CACHE_FOLDER)
+        .join(&cache_hash[..2])
+        .join(format!("{cache_hash}.lcsb"));
+    (path, cache_key)
+}
+
+fn storyboard_thumbnail_cache_miss(
+    time_us: i64,
+    duration_us: i64,
+) -> StoryboardThumbnailCacheLookup {
+    StoryboardThumbnailCacheLookup {
+        cache_time_us: clamped_storyboard_thumbnail_time(time_us, duration_us),
+        bytes: None,
+    }
+}
+
+fn read_storyboard_thumbnail_cache(
+    preferences: &Preferences,
+    fingerprint: &str,
+    time_us: i64,
+    duration_us: i64,
+) -> StoryboardThumbnailCacheLookup {
+    let _guard = match STORYBOARD_THUMBNAIL_CACHE_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            app_error(
+                ErrorCode::ThumbnailCacheStateUnavailable,
+                "Storyboard thumbnail cache lock is poisoned during a cache read",
+            );
+            return storyboard_thumbnail_cache_miss(time_us, duration_us);
+        }
+    };
+    let cache_time_us = clamped_storyboard_thumbnail_time(time_us, duration_us);
+    let (path, cache_key) =
+        storyboard_thumbnail_cache_layout(preferences, fingerprint, cache_time_us);
+    let Some(cached) = read_private_cache::<CachedStoryboardThumbnail>(
+        &path,
+        &cache_key,
+        STORYBOARD_THUMBNAIL_CACHE_KEY_CONTEXT,
+    ) else {
+        return storyboard_thumbnail_cache_miss(time_us, duration_us);
+    };
+    if cached.version != STORYBOARD_THUMBNAIL_CACHE_VERSION
+        || cached.time_us != cache_time_us
+        || validate_timeline_thumbnail_jpeg(&cached.jpeg).is_err()
+    {
+        return storyboard_thumbnail_cache_miss(time_us, duration_us);
+    }
+    StoryboardThumbnailCacheLookup {
+        cache_time_us,
+        bytes: Some(cached.jpeg),
+    }
+}
+
+fn write_storyboard_thumbnail_cache(
+    preferences: &Preferences,
+    fingerprint: &str,
+    time_us: i64,
+    duration_us: i64,
+    jpeg: &[u8],
+) -> AppResult<()> {
+    validate_timeline_thumbnail_jpeg(jpeg)?;
+    let _guard = STORYBOARD_THUMBNAIL_CACHE_LOCK.lock().map_err(|_| {
+        app_error(
+            ErrorCode::ThumbnailCacheStateUnavailable,
+            "Storyboard thumbnail cache lock is poisoned",
+        )
+    })?;
+    let cache_time_us = clamped_storyboard_thumbnail_time(time_us, duration_us);
+    let (path, cache_key) =
+        storyboard_thumbnail_cache_layout(preferences, fingerprint, cache_time_us);
+    if let Some(cached) = read_private_cache::<CachedStoryboardThumbnail>(
+        &path,
+        &cache_key,
+        STORYBOARD_THUMBNAIL_CACHE_KEY_CONTEXT,
+    ) {
+        if cached.version == STORYBOARD_THUMBNAIL_CACHE_VERSION
+            && cached.time_us == cache_time_us
+            && validate_timeline_thumbnail_jpeg(&cached.jpeg).is_ok()
+        {
+            return Ok(());
+        }
+    }
+    write_private_cache(
+        &path,
+        &cache_key,
+        STORYBOARD_THUMBNAIL_CACHE_KEY_CONTEXT,
+        &CachedStoryboardThumbnail {
+            version: STORYBOARD_THUMBNAIL_CACHE_VERSION,
+            time_us: cache_time_us,
+            jpeg: jpeg.to_vec(),
+        },
+    )
+}
+
+fn validate_timeline_thumbnail_jpeg(bytes: &[u8]) -> AppResult<()> {
     if bytes.len() < 4 || bytes.len() > MAX_SUBTITLE_THUMBNAIL_BYTES {
         return Err(app_error(
             ErrorCode::ThumbnailDataInvalid,
@@ -911,7 +1194,7 @@ async fn extract_cover_frame(
     Ok(output.stdout)
 }
 
-async fn extract_subtitle_thumbnail(
+async fn extract_timeline_thumbnail(
     program: &str,
     input_path: &str,
     stream_index: i32,
@@ -952,14 +1235,14 @@ async fn extract_subtitle_thumbnail(
         .map_err(|error| {
             app_error(
                 ErrorCode::ExternalToolStartFailed,
-                format!("Failed to start {program} for subtitle thumbnail extraction: {error}"),
+                format!("Failed to start {program} for timeline thumbnail extraction: {error}"),
             )
         })?;
     if !output.status.success() {
         return Err(app_error(
             ErrorCode::ThumbnailExtractionFailed,
             format!(
-                "Subtitle thumbnail extraction failed; stderr={}",
+                "Timeline thumbnail extraction failed; stderr={}",
                 String::from_utf8_lossy(&output.stderr).trim()
             ),
         ));
@@ -967,7 +1250,7 @@ async fn extract_subtitle_thumbnail(
     if output.stdout.is_empty() {
         return Err(app_error(
             ErrorCode::ExternalToolOutputInvalid,
-            "Subtitle thumbnail extraction returned an empty image",
+            "Timeline thumbnail extraction returned an empty image",
         ));
     }
     Ok(output.stdout)

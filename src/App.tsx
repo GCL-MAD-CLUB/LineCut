@@ -2,7 +2,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 import { Loader2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { appPanelRegistry, initialAppPanelState } from "./appPanelRegistry";
+import { appPanelRegistry, initialAppPanelState, withAppPanelDefaults } from "./appPanelRegistry";
 import { publishEvent, useBroadcastEvent } from "./runtime/events/react";
 import { useProjections } from "./runtime/state/StateHub";
 import {
@@ -28,6 +28,7 @@ import { PreferencesDialog } from "./components/PreferencesDialog";
 import { ProxyCreationDialog } from "./components/ProxyCreationDialog";
 import { SecondaryTopbar } from "./components/SecondaryTopbar";
 import { sourcePanelType } from "./components/SourceMonitor";
+import { storyboardPanelType } from "./components/StoryboardPanel";
 import { subtitlePanelType } from "./components/SubtitlePanel";
 import { cancelAllTaskProgress, useTaskProgressStatus } from "./systems/TaskSystem";
 import { runMediaImportTask } from "./mediaImportTask";
@@ -92,6 +93,7 @@ const recentProjectStorageKey = "linecut:recent-project-paths";
 const recentPathsLimit = 10;
 const warningDisplayDurationMs = 5000;
 const workspaceConfigSaveDelayMs = 120;
+const storyboardPanelDefaultMigrationKey = "linecut:workspace:storyboard-panel-default:v1";
 
 function fileName(path: string) {
   return path.split(/[\\/]/).pop() ?? path;
@@ -155,6 +157,38 @@ function readRecentPaths(storageKey: string) {
     captureOperationError("storage.recentPaths", error);
     return [];
   }
+}
+
+function markStoryboardPanelDefaultMigrationApplied() {
+  try {
+    window.localStorage.setItem(storyboardPanelDefaultMigrationKey, "1");
+  } catch (error) {
+    captureOperationError("workspace.save", error);
+  }
+}
+
+function storyboardPanelDefaultMigrationApplied() {
+  try {
+    return window.localStorage.getItem(storyboardPanelDefaultMigrationKey) === "1";
+  } catch (error) {
+    captureOperationError("workspace.load", error);
+    return false;
+  }
+}
+
+function restoreAppPanelDefaults(state: PanelManagerInitialState): PanelManagerInitialState {
+  if (state.instances.some((instance) => instance.id === "storyboard")) {
+    markStoryboardPanelDefaultMigrationApplied();
+    return state;
+  }
+  if (storyboardPanelDefaultMigrationApplied()) {
+    return state;
+  }
+  const restored = withAppPanelDefaults(state);
+  if (restored !== state) {
+    markStoryboardPanelDefaultMigrationApplied();
+  }
+  return restored;
 }
 
 function standaloneSubtitleItem(path: string, index: number): MediaBinItem {
@@ -1042,6 +1076,13 @@ function AppContent() {
         enabled: true,
         execute: () => showSingletonPanel("subtitles", subtitlePanelType, {}, "middle"),
       },
+      storyboard: {
+        id: "storyboard",
+        label: "分镜",
+        checked: Boolean(panelInstances.storyboard),
+        enabled: true,
+        execute: () => showSingletonPanel("storyboard", storyboardPanelType, {}, "middle"),
+      },
       history: {
         id: "history",
         label: "历史记录",
@@ -1200,7 +1241,7 @@ function RestoredPanelManager() {
         outcome.status === "success" &&
         outcome.value &&
         outcome.value.instances.every((instance) => appPanelRegistry.get(instance.type))
-          ? outcome.value
+          ? restoreAppPanelDefaults(outcome.value)
           : initialAppPanelState;
       setInitialState(restoredState);
     });
