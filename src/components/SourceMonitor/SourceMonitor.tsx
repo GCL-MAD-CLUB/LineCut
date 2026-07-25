@@ -191,6 +191,12 @@ export function SourceMonitor() {
   const videoSeekInFlightRef = useRef(false);
   const lastSeekCommandAtRef = useRef(0);
   const playbackTickRef = useRef<number | null>(null);
+  const cuePlaybackVideoFrameCallbackRef = useRef<{
+    video: HTMLVideoElement;
+    callbackId: number;
+  } | null>(null);
+  const cuePlaybackUsesVideoFrameCallbackRef = useRef(false);
+  const cuePlaybackPauseFrameRef = useRef<number | null>(null);
   const pendingPreviewRestoreRef = useRef<PendingPreviewRestore | null>(null);
   const cuePlaybackEndFrameRef = useRef<number | null>(null);
   const currentFrameRef = useRef(currentFrame);
@@ -348,6 +354,8 @@ export function SourceMonitor() {
     if (mediaChanged) {
       pendingPreviewRestoreRef.current = null;
     }
+    stopCuePlaybackFrameMonitor();
+    cuePlaybackPauseFrameRef.current = null;
     cuePlaybackEndFrameRef.current = null;
     setIsPlaying(false);
   }, [mediaKey]);
@@ -369,6 +377,7 @@ export function SourceMonitor() {
       if (playbackTickRef.current !== null) {
         cancelAnimationFrame(playbackTickRef.current);
       }
+      stopCuePlaybackFrameMonitor();
     },
     [],
   );
@@ -421,13 +430,16 @@ export function SourceMonitor() {
         centerTimelineOnFrame(rangeStartFrame);
         cuePlaybackEndFrameRef.current = rangeEndFrame;
       }
+      const video = videoRef.current;
       seekToFrame(
         usToMonitorFrame(detail.timeUs),
         detail.focusEndUs !== undefined,
         detail.focusEndUs === undefined,
       );
+      if (detail.focusEndUs !== undefined && video) {
+        startCuePlaybackFrameMonitor(video);
+      }
       if (detail.play) {
-        const video = videoRef.current;
         if (video) {
           runBackgroundOperation("media.playback", () => video.play());
         }
@@ -565,6 +577,8 @@ export function SourceMonitor() {
 
   function seekToFrame(nextFrame: number, preserveCuePlaybackEnd = false, centerIfHidden = true) {
     if (!preserveCuePlaybackEnd) {
+      stopCuePlaybackFrameMonitor();
+      cuePlaybackPauseFrameRef.current = null;
       cuePlaybackEndFrameRef.current = null;
     }
     const targetFrame = clampMonitorFrame(nextFrame);
@@ -658,6 +672,9 @@ export function SourceMonitor() {
   }
 
   function syncCurrentTimeFromVideo(element: HTMLVideoElement) {
+    if (cuePlaybackPauseFrameRef.current !== null) {
+      return;
+    }
     const nextFrame = usToMonitorFrame(element.currentTime * 1_000_000);
     const targetFrame = seekTargetFrameRef.current;
     const seekAgeMs = performance.now() - lastSeekCommandAtRef.current;
@@ -671,14 +688,12 @@ export function SourceMonitor() {
     }
 
     const cuePlaybackEndFrame = cuePlaybackEndFrameRef.current;
-    if (cuePlaybackEndFrame !== null) {
+    if (cuePlaybackEndFrame !== null && !cuePlaybackUsesVideoFrameCallbackRef.current) {
       const reachedCueEnd =
         element.currentTime * 1_000_000 >= frameToClampedUs(cuePlaybackEndFrame);
       centerTimelineIfFrameHidden(reachedCueEnd ? cuePlaybackEndFrame : nextFrame);
       if (reachedCueEnd) {
-        cuePlaybackEndFrameRef.current = null;
-        seekToFrame(cuePlaybackEndFrame, true, false);
-        element.pause();
+        finishCuePlaybackAtFrame(element, cuePlaybackEndFrame);
         return;
       }
     }
@@ -773,6 +788,63 @@ export function SourceMonitor() {
       cancelAnimationFrame(playbackTickRef.current);
       playbackTickRef.current = null;
     }
+  }
+
+  function stopCuePlaybackFrameMonitor() {
+    const activeCallback = cuePlaybackVideoFrameCallbackRef.current;
+    cuePlaybackVideoFrameCallbackRef.current = null;
+    cuePlaybackUsesVideoFrameCallbackRef.current = false;
+    if (activeCallback) {
+      activeCallback.video.cancelVideoFrameCallback(activeCallback.callbackId);
+    }
+  }
+
+  function startCuePlaybackFrameMonitor(video: HTMLVideoElement) {
+    stopCuePlaybackFrameMonitor();
+    if (
+      cuePlaybackEndFrameRef.current === null ||
+      typeof video.requestVideoFrameCallback !== "function"
+    ) {
+      return;
+    }
+
+    cuePlaybackUsesVideoFrameCallbackRef.current = true;
+    const monitorPresentedFrame: VideoFrameRequestCallback = (_now, metadata) => {
+      cuePlaybackVideoFrameCallbackRef.current = null;
+      const cueEndFrame = cuePlaybackEndFrameRef.current;
+      if (videoRef.current !== video || cueEndFrame === null || video.paused || video.ended) {
+        cuePlaybackUsesVideoFrameCallbackRef.current = false;
+        return;
+      }
+
+      const presentedFrame = usToMonitorFrame(metadata.mediaTime * 1_000_000);
+      if (presentedFrame >= cueEndFrame) {
+        finishCuePlaybackAtFrame(video, cueEndFrame);
+        return;
+      }
+
+      const callbackId = video.requestVideoFrameCallback(monitorPresentedFrame);
+      cuePlaybackVideoFrameCallbackRef.current = { video, callbackId };
+    };
+    const callbackId = video.requestVideoFrameCallback(monitorPresentedFrame);
+    cuePlaybackVideoFrameCallbackRef.current = { video, callbackId };
+  }
+
+  function finishCuePlaybackAtFrame(video: HTMLVideoElement, endFrame: number) {
+    stopCuePlaybackTickerAndFrameMonitor();
+    cuePlaybackEndFrameRef.current = null;
+    cuePlaybackPauseFrameRef.current = endFrame;
+    seekTargetFrameRef.current = endFrame;
+    currentFrameRef.current = endFrame;
+    centerTimelineIfFrameHidden(endFrame);
+    setCurrentFrame(endFrame);
+    pauseBoundAudio();
+    video.pause();
+  }
+
+  function stopCuePlaybackTickerAndFrameMonitor() {
+    stopPlaybackTicker();
+    stopCuePlaybackFrameMonitor();
   }
 
   function startPlaybackTicker() {
@@ -881,13 +953,9 @@ export function SourceMonitor() {
     >
       <VideoDisplay
         key={mediaKey}
-        project={project}
         stageRef={videoStageRef}
         videoRef={videoRef}
         videoSrc={videoSrc}
-        unavailableMessage={
-          activeVideoOffline && !useProxy ? "媒体脱机，请通过右键菜单重新链接媒体" : undefined
-        }
         muted={sourceAudioDetached && !primaryVirtualAudioEnabled}
         zoomLevel={zoomLevel}
         zoomPan={zoomPan}
@@ -895,17 +963,30 @@ export function SourceMonitor() {
         onLoadedMetadata={handleLoadedMetadata}
         onSyncCurrentTime={syncCurrentTimeFromVideo}
         onPlay={(video) => {
+          cuePlaybackPauseFrameRef.current = null;
           syncCurrentTimeFromVideo(video);
           playBoundAudio(video);
           setIsPlaying(true);
           startPlaybackTicker();
+          startCuePlaybackFrameMonitor(video);
         }}
         onPause={(video) => {
+          const cuePauseFrame = cuePlaybackPauseFrameRef.current;
+          cuePlaybackPauseFrameRef.current = null;
+          stopCuePlaybackFrameMonitor();
           cuePlaybackEndFrameRef.current = null;
           stopPlaybackTicker();
           if (pendingPreviewRestoreRef.current) {
             pauseBoundAudio();
             setIsPlaying(pendingPreviewRestoreRef.current.resumePlayback);
+            return;
+          }
+          if (cuePauseFrame !== null) {
+            seekTargetFrameRef.current = cuePauseFrame;
+            currentFrameRef.current = cuePauseFrame;
+            setCurrentFrame(cuePauseFrame);
+            pauseBoundAudio();
+            setIsPlaying(false);
             return;
           }
           syncCurrentTimeFromVideo(video);

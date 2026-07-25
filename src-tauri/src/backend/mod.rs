@@ -7,6 +7,7 @@ mod native_drag_drop;
 mod proxy;
 mod storage;
 mod storyboard;
+mod storyboard_decision;
 mod subtitles;
 mod tasks;
 mod thumbnail;

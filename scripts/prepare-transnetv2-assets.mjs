@@ -203,7 +203,12 @@ async function main() {
   prepareOnnxRuntime(onnxRuntimeExtracted);
   prepareDirectMl(directMlExtracted);
 
-  for (const file of ["transnetv2.onnx", "onnxruntime.dll", "DirectML.dll"]) {
+  for (const file of [
+    "transnetv2.onnx",
+    "storyboard-event-model.json",
+    "onnxruntime.dll",
+    "DirectML.dll",
+  ]) {
     const path = join(resourcesDir, file);
     if (!existsSync(path)) {
       throw new Error(`Missing prepared asset: ${path}`);

@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::fs;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{atomic::AtomicBool, Arc, Mutex as StdMutex, OnceLock};
@@ -14,10 +15,12 @@ use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
 use tokio::process::Child;
 use uuid::Uuid;
 
+use super::storyboard_decision::{detect_storyboard_cuts, StoryboardCut, StoryboardDecisionConfig};
 use super::*;
 
 const TRANSNET_RESOURCE_DIR: &str = "transnetv2";
 const TRANSNET_MODEL_FILE: &str = "transnetv2.onnx";
+const STORYBOARD_EVENT_MODEL_FILE: &str = "storyboard-event-model.json";
 const ONNXRUNTIME_DLL_FILE: &str = "onnxruntime.dll";
 const DIRECTML_DLL_FILE: &str = "DirectML.dll";
 const STORYBOARD_FRAME_WIDTH: usize = 48;
@@ -29,7 +32,6 @@ const TRANSNET_WINDOW_FRAMES: usize = 100;
 const TRANSNET_CENTER_START: usize = 25;
 const TRANSNET_CENTER_END: usize = 75;
 const TRANSNET_STRIDE_FRAMES: usize = 50;
-const STORYBOARD_DETECTION_THRESHOLD: f32 = 0.1;
 const STORYBOARD_PROGRESS_PREDICT_END: f64 = 0.98;
 const STORYBOARD_PROGRESS_MIN_DELTA: f64 = 0.0025;
 const STORYBOARD_PROGRESS_FRAME_REPORT_INTERVAL: usize = 25;
@@ -44,6 +46,7 @@ struct StoryboardRuntimePaths {
     onnxruntime: PathBuf,
     directml: PathBuf,
     model: PathBuf,
+    event_model: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -54,7 +57,6 @@ pub struct StoryboardShot {
     end_frame: usize,
     start_us: i64,
     end_us: i64,
-    score: f32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -63,8 +65,8 @@ pub struct StoryboardDetectionResult {
     duration_us: i64,
     frame_count: usize,
     frame_rate: f64,
-    threshold: f32,
     provider: String,
+    cuts: Vec<StoryboardCut>,
     shots: Vec<StoryboardShot>,
 }
 
@@ -97,7 +99,6 @@ pub(crate) async fn detect_storyboard_shots(
         stream_index,
         &preferences,
         &runtime,
-        STORYBOARD_DETECTION_THRESHOLD,
         task.cancel_token(),
     )
     .await?;
@@ -140,11 +141,13 @@ fn storyboard_runtime_paths(app: &tauri::AppHandle) -> AppResult<StoryboardRunti
         let directml = dir.join(DIRECTML_DLL_FILE);
         let model = dir.join(TRANSNET_MODEL_FILE);
         if onnxruntime.is_file() && directml.is_file() && model.is_file() {
+            let event_model_path = dir.join(STORYBOARD_EVENT_MODEL_FILE);
             return Ok(StoryboardRuntimePaths {
                 runtime_dir: dir,
                 onnxruntime,
                 directml,
                 model,
+                event_model: event_model_path.is_file().then_some(event_model_path),
             });
         }
     }
@@ -227,6 +230,33 @@ fn storyboard_ort_error(error_context: &str, error: impl fmt::Display) -> AppErr
     )
 }
 
+fn storyboard_decision_config(model_path: Option<&PathBuf>) -> AppResult<StoryboardDecisionConfig> {
+    let config = if let Some(model_path) = model_path {
+        let body = fs::read_to_string(model_path).map_err(|error| {
+            app_error(
+                ErrorCode::StoryboardInferenceFailed,
+                format!(
+                    "Failed to read storyboard event model {}: {error}",
+                    model_path.display()
+                ),
+            )
+        })?;
+        serde_json::from_str::<StoryboardDecisionConfig>(&body).map_err(|error| {
+            app_error(
+                ErrorCode::StoryboardInferenceFailed,
+                format!(
+                    "Failed to parse storyboard event model {}: {error}",
+                    model_path.display()
+                ),
+            )
+        })?
+    } else {
+        StoryboardDecisionConfig::default()
+    };
+    config.validate()?;
+    Ok(config)
+}
+
 async fn run_storyboard_detection(
     app: &tauri::AppHandle,
     state: &AppState,
@@ -235,9 +265,9 @@ async fn run_storyboard_detection(
     stream_index: i32,
     preferences: &Preferences,
     runtime: &StoryboardRuntimePaths,
-    threshold: f32,
     cancel: Arc<AtomicBool>,
 ) -> AppResult<StoryboardDetectionResult> {
+    let decision_config = storyboard_decision_config(runtime.event_model.as_ref())?;
     let frame_rate = storyboard_frame_rate(project);
     let expected_frames = expected_frame_count(project.asset.duration_us, frame_rate);
     let mut progress = StoryboardProgressReporter::new(app, task_id, expected_frames);
@@ -367,9 +397,10 @@ async fn run_storyboard_detection(
         ));
     }
 
-    let shots = predictions_to_storyboard_shots(
-        &predictions,
-        STORYBOARD_DETECTION_THRESHOLD,
+    let cuts = detect_storyboard_cuts(&predictions, &decision_config);
+    let shots = storyboard_cuts_to_shots(
+        predictions.len(),
+        &cuts,
         frame_rate,
         project.asset.duration_us,
     );
@@ -378,8 +409,8 @@ async fn run_storyboard_detection(
         duration_us: project.asset.duration_us,
         frame_count: decoded_frames,
         frame_rate,
-        threshold,
         provider: "DirectML".to_string(),
+        cuts,
         shots,
     })
 }
@@ -667,48 +698,47 @@ fn frame_to_time_us(frame: usize, frame_rate: f64, duration_us: i64) -> i64 {
     (((frame as f64 / frame_rate) * 1_000_000.0).round() as i64).clamp(0, duration_us.max(0))
 }
 
-fn predictions_to_storyboard_shots(
-    predictions: &[f32],
-    threshold: f32,
+fn storyboard_cuts_to_shots(
+    frame_count: usize,
+    cuts: &[StoryboardCut],
     frame_rate: f64,
     duration_us: i64,
 ) -> Vec<StoryboardShot> {
-    if predictions.is_empty() {
+    if frame_count == 0 {
         return Vec::new();
     }
 
     let mut raw_ranges = Vec::<(usize, usize)>::new();
-    let mut previous_cut = false;
     let mut start = 0usize;
-    let mut last_index = 0usize;
-    for (index, prediction) in predictions.iter().enumerate() {
-        let cut = *prediction > threshold;
-        if previous_cut && !cut {
-            start = index;
+    for cut in cuts {
+        if cut.cut_frame < start || cut.cut_frame >= frame_count.saturating_sub(1) {
+            continue;
         }
-        if !previous_cut && cut && index != 0 {
-            raw_ranges.push((start, index));
-        }
-        previous_cut = cut;
-        last_index = index;
+        raw_ranges.push((start, cut.cut_frame));
+        start = cut.cut_frame + 1;
     }
-    if !previous_cut {
-        raw_ranges.push((start, last_index));
-    }
-    if raw_ranges.is_empty() {
-        raw_ranges.push((0, predictions.len() - 1));
+    if start < frame_count {
+        raw_ranges.push((start, frame_count - 1));
     }
 
+    let final_range_index = raw_ranges.len().saturating_sub(1);
     raw_ranges
         .into_iter()
         .enumerate()
         .map(|(index, (start_frame, end_frame))| {
             let start_us = frame_to_time_us(start_frame, frame_rate, duration_us);
-            let mut end_us = frame_to_time_us(end_frame.saturating_add(1), frame_rate, duration_us);
-            if end_us <= start_us {
-                end_us = (start_us + frame_to_time_us(1, frame_rate, duration_us).max(1))
-                    .min(duration_us.max(start_us));
-            }
+            let end_us = if index == final_range_index {
+                let exclusive_end =
+                    frame_to_time_us(end_frame.saturating_add(1), frame_rate, duration_us);
+                if exclusive_end <= start_us {
+                    (start_us + frame_to_time_us(1, frame_rate, duration_us).max(1))
+                        .min(duration_us.max(start_us))
+                } else {
+                    exclusive_end
+                }
+            } else {
+                frame_to_time_us(end_frame, frame_rate, duration_us)
+            };
             StoryboardShot {
                 id: format!("shot:{start_frame}:{end_frame}"),
                 sequence: index + 1,
@@ -716,20 +746,140 @@ fn predictions_to_storyboard_shots(
                 end_frame,
                 start_us,
                 end_us,
-                score: shot_boundary_score(predictions, end_frame),
             }
         })
         .collect()
 }
 
-fn shot_boundary_score(predictions: &[f32], end_frame: usize) -> f32 {
-    let start = end_frame.saturating_sub(2);
-    let end = end_frame
-        .saturating_add(2)
-        .min(predictions.len().saturating_sub(1));
-    predictions[start..=end]
-        .iter()
-        .copied()
-        .fold(0.0_f32, f32::max)
-        .clamp(0.0, 1.0)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn packaged_storyboard_event_model_is_valid() {
+        let model_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join(TRANSNET_RESOURCE_DIR)
+            .join(STORYBOARD_EVENT_MODEL_FILE);
+
+        let config =
+            storyboard_decision_config(Some(&model_path)).expect("packaged model must be valid");
+
+        assert_eq!(config.model_origin, "bootstrap_uncalibrated");
+    }
+
+    #[test]
+    fn storyboard_predictions_split_at_isolated_event_peak() {
+        let mut predictions = vec![0.01; 120];
+        predictions[60] = 0.8;
+
+        let cuts = detect_storyboard_cuts(&predictions, &StoryboardDecisionConfig::default());
+        let shots = storyboard_cuts_to_shots(predictions.len(), &cuts, 25.0, 4_800_000);
+
+        assert_eq!(shots.len(), 2);
+        assert_eq!(shots[0].start_frame, 0);
+        assert_eq!(shots[0].end_frame, 60);
+        assert_eq!(shots[1].start_frame, 61);
+        assert_eq!(shots[1].end_frame, 119);
+    }
+
+    #[test]
+    fn storyboard_predictions_merge_contiguous_peak_frames() {
+        let mut predictions = vec![0.01; 100];
+        predictions[40] = 0.9;
+        predictions[41] = 0.95;
+        predictions[42] = 0.92;
+
+        let cuts = detect_storyboard_cuts(&predictions, &StoryboardDecisionConfig::default());
+        let shots = storyboard_cuts_to_shots(predictions.len(), &cuts, 25.0, 4_000_000);
+
+        assert_eq!(cuts.len(), 1);
+        assert_eq!(cuts[0].cut_frame, 41);
+        assert_eq!(shots.len(), 2);
+        assert_eq!(shots[0].start_frame, 0);
+        assert_eq!(shots[0].end_frame, 41);
+        assert_eq!(shots[1].start_frame, 42);
+        assert_eq!(shots[1].end_frame, 99);
+    }
+
+    #[test]
+    fn storyboard_shots_do_not_overlap() {
+        let cuts = vec![
+            StoryboardCut {
+                cut_frame: 40,
+                confidence: 0.9,
+                event_start: 40,
+                event_end: 40,
+                peak_probability: 0.9,
+                robust_prominence: 10.0,
+                event_area: 0.9,
+                event_width: 1,
+            },
+            StoryboardCut {
+                cut_frame: 45,
+                confidence: 0.8,
+                event_start: 45,
+                event_end: 45,
+                peak_probability: 0.8,
+                robust_prominence: 8.0,
+                event_area: 0.8,
+                event_width: 1,
+            },
+        ];
+
+        let shots = storyboard_cuts_to_shots(100, &cuts, 25.0, 4_000_000);
+
+        assert_eq!(shots.len(), 3);
+        assert_eq!(shots[0].end_frame + 1, shots[1].start_frame);
+        assert_eq!(shots[1].end_frame + 1, shots[2].start_frame);
+        assert_eq!(shots[0].end_frame, 40);
+        assert_eq!(shots[1].start_frame, 41);
+        assert_eq!(shots[1].end_frame, 45);
+        assert_eq!(shots[0].end_us, frame_to_time_us(40, 25.0, 4_000_000));
+        assert_eq!(shots[1].start_us, frame_to_time_us(41, 25.0, 4_000_000));
+        assert_eq!(shots[1].end_us, frame_to_time_us(45, 25.0, 4_000_000));
+        assert_eq!(shots[2].start_us, frame_to_time_us(46, 25.0, 4_000_000));
+        assert_eq!(shots[2].end_us, 4_000_000);
+        assert_eq!(
+            shots[1].start_us - shots[0].end_us,
+            frame_to_time_us(1, 25.0, 4_000_000)
+        );
+    }
+
+    #[test]
+    fn storyboard_single_frame_shot_has_an_inclusive_zero_length_time_range() {
+        let cuts = vec![StoryboardCut {
+            cut_frame: 0,
+            confidence: 0.9,
+            event_start: 0,
+            event_end: 0,
+            peak_probability: 0.9,
+            robust_prominence: 10.0,
+            event_area: 0.9,
+            event_width: 1,
+        }];
+
+        let shots = storyboard_cuts_to_shots(10, &cuts, 25.0, 400_000);
+
+        assert_eq!(shots[0].start_frame, 0);
+        assert_eq!(shots[0].end_frame, 0);
+        assert_eq!(shots[0].start_us, 0);
+        assert_eq!(shots[0].end_us, 0);
+        assert_eq!(shots[1].end_us, 400_000);
+    }
+
+    #[test]
+    fn storyboard_predictions_allow_short_edge_shot() {
+        let mut predictions = vec![0.01; 100];
+        predictions[5] = 0.95;
+
+        let cuts = detect_storyboard_cuts(&predictions, &StoryboardDecisionConfig::default());
+        let shots = storyboard_cuts_to_shots(predictions.len(), &cuts, 25.0, 4_000_000);
+
+        assert_eq!(shots.len(), 2);
+        assert_eq!(shots[0].start_frame, 0);
+        assert_eq!(shots[0].end_frame, 5);
+        assert_eq!(shots[1].start_frame, 6);
+        assert_eq!(shots[1].end_frame, 99);
+    }
 }

@@ -1,0 +1,36 @@
+{
+  "model_version": 1,
+  "model_origin": "bootstrap_uncalibrated",
+  "epsilon": 0.000001,
+  "robust_window_radius": 50,
+  "candidate_probability_threshold": 0.1,
+  "peak_radius": 2,
+  "candidate_robust_threshold": 2.5,
+  "event_probability_floor": 0.03,
+  "event_relative_floor": 0.15,
+  "event_robust_floor": 1.5,
+  "event_boundary_patience": 2,
+  "neighbor_radius": 2,
+  "classifier": {
+    "feature_order": [
+      "peak_logit",
+      "robust_prominence",
+      "log_event_area",
+      "log_event_width",
+      "concentration",
+      "left_slope",
+      "right_slope",
+      "asymmetry",
+      "background_difference",
+      "neighbor_mass"
+    ],
+    "intercept": -1.25,
+    "coefficients": [0.55, 0.0, 0.15, -0.2, 1.5, 0.5, 0.5, -0.2, 1.0, 0.15]
+  },
+  "calibration": null,
+  "false_positive_cost": 1.0,
+  "false_negative_cost": 2.0,
+  "minimum_event_distance": 3,
+  "short_shot_midpoint": 2.0,
+  "short_shot_softness": 2.0
+}

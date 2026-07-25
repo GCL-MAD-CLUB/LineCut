@@ -529,15 +529,7 @@ export function SubtitlePanel() {
           {activeTrack?.warning && <div className="warning-line">{activeTrack.warning}</div>}
 
           <div ref={listRef} className="cue-list">
-            {filteredCues.length === 0 ? (
-              <div className="empty-list">
-                <Captions size={36} />
-                <strong>{project ? "没有可显示的字幕" : "字幕区为空"}</strong>
-                <span>
-                  {project ? "当前字幕轨没有匹配的台词。" : "导入视频后会在这里显示全部台词。"}
-                </span>
-              </div>
-            ) : (
+            {filteredCues.length > 0 && (
               <div
                 className="virtual-spacer"
                 style={{ height: `${rowVirtualizer.getTotalSize()}px` }}

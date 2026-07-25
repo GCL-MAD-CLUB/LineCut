@@ -69,7 +69,17 @@ export interface StoryboardShot {
   end_frame: number;
   start_us: number;
   end_us: number;
-  score: number;
+}
+
+export interface StoryboardCut {
+  cut_frame: number;
+  confidence: number;
+  event_start: number;
+  event_end: number;
+  peak_probability: number;
+  robust_prominence: number;
+  event_area: number;
+  event_width: number;
 }
 
 export interface StoryboardDetectionResult {
@@ -77,8 +87,8 @@ export interface StoryboardDetectionResult {
   duration_us: number;
   frame_count: number;
   frame_rate: number;
-  threshold: number;
   provider: string;
+  cuts: StoryboardCut[];
   shots: StoryboardShot[];
 }
 

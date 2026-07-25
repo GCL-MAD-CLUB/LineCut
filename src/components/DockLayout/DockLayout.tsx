@@ -832,11 +832,6 @@ export function DockLayout() {
               </div>
             );
           })}
-          {area.tabs.length === 0 && (
-            <div className="dock-empty-content">
-              <span>将面板拖到这里</span>
-            </div>
-          )}
           {showDropOverlay &&
             (dropTarget.surface === "title" ? (
               <DockSelfDropZone className="dock-drop-zones" active={false} />

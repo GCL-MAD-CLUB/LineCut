@@ -365,21 +365,6 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
               <span role="columnheader" aria-label="状态或操作" />
             </div>
 
-            {!hasItems && (
-              <div className="import-empty-state">
-                <Upload aria-hidden="true" />
-                <strong>选择要导入的本地媒体</strong>
-                <span>可以一次添加多个视频、音频和字幕文件。</span>
-                <button
-                  type="button"
-                  onClick={() => void choosePaths("video", videoFilters, "添加多个视频")}
-                  disabled={isMediaBinReadOnly || isImporting}
-                >
-                  选择视频
-                </button>
-              </div>
-            )}
-
             {importedItems.map((item) => (
               <div className="import-file-row is-imported" role="row" key={`imported:${item.id}`}>
                 <span className="import-file-name" role="cell" title={item.path}>
