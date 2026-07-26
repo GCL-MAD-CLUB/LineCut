@@ -30,6 +30,10 @@ import { requestStoryboardThumbnail } from "../../storyboardThumbnail";
 import { isTauriRuntime } from "../../tauriRuntime";
 import { formatDuration, formatMonitorFrame, formatMonitorTime } from "../../time";
 import { frameToTimeUs, normalizeFrameRate } from "../../timeline";
+import {
+  timelineThumbnailResolutions,
+  useTimelineThumbnailResolution,
+} from "../../timelineThumbnailResolution";
 import type { StoryboardDetectionResult, StoryboardShot } from "../../types";
 import { usePanelManagerState } from "../DockLayout";
 import { SelectDropdown, selectDropdownItems } from "../SelectDropdown";
@@ -345,7 +349,14 @@ function ShotFrameButton({
   priority,
   onSelect,
 }: ShotFrameButtonProps) {
-  const [thumbnailSrc, setThumbnailSrc] = useState("");
+  const { resolution, thumbnailContainerRef } = useTimelineThumbnailResolution<HTMLButtonElement>();
+  const thumbnailIdentity = `${fingerprint}:${videoPath}:${shot.start_us}`;
+  const [thumbnail, setThumbnail] = useState<{
+    identity: string;
+    src: string;
+    width: number;
+    height: number;
+  } | null>(null);
   const [hoverProgress, setHoverProgress] = useState<number | null>(null);
   const [hoverFrameReady, setHoverFrameReady] = useState(false);
   const hoverVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -360,27 +371,58 @@ function ShotFrameButton({
 
   useEffect(() => {
     let active = true;
-    setThumbnailSrc("");
-    const request = requestStoryboardThumbnail({
-      assetId,
-      fingerprint,
-      videoPath,
-      timeUs: shot.start_us,
-      priority,
-    });
-    void request.promise.then(
-      (url) => {
-        if (active) {
-          setThumbnailSrc(url);
-        }
-      },
-      () => undefined,
+    const requestedResolutions = timelineThumbnailResolutions.filter(
+      (candidate) => candidate.width <= resolution.width,
     );
+    const requests = requestedResolutions.map((candidate) => {
+      const request = requestStoryboardThumbnail({
+        assetId,
+        fingerprint,
+        videoPath,
+        timeUs: shot.start_us,
+        priority,
+        resolution: candidate,
+      });
+      void request.promise.then(
+        (src) => {
+          if (!active) {
+            return;
+          }
+          setThumbnail((current) => {
+            if (
+              current?.identity === thumbnailIdentity &&
+              current.width > candidate.width &&
+              current.width <= resolution.width
+            ) {
+              return current;
+            }
+            return {
+              identity: thumbnailIdentity,
+              src,
+              width: candidate.width,
+              height: candidate.height,
+            };
+          });
+        },
+        () => undefined,
+      );
+      return request;
+    });
     return () => {
       active = false;
-      request.cancel();
+      for (const request of requests) {
+        request.cancel();
+      }
     };
-  }, [assetId, fingerprint, priority, shot.start_us, videoPath]);
+  }, [
+    assetId,
+    fingerprint,
+    priority,
+    resolution.width,
+    shot.start_us,
+    thumbnailIdentity,
+    videoPath,
+  ]);
 
   useEffect(() => {
     if (hoverTargetTimeUs === null) {
@@ -422,24 +464,26 @@ function ShotFrameButton({
     return event.currentTarget;
   }
 
+  const visibleThumbnail = thumbnail?.identity === thumbnailIdentity ? thumbnail : null;
+
   return (
     <button
+      ref={thumbnailContainerRef}
       type="button"
       className="shot-frame-button"
       onClick={onSelect}
       onDoubleClick={(event) => event.stopPropagation()}
       onPointerMove={updateHoverPreview}
       onPointerLeave={() => setHoverProgress(null)}
-      title="播放此镜头"
       aria-label={`从 ${formatDuration(shot.start_us)} 播放此镜头`}
     >
-      {thumbnailSrc && (
+      {visibleThumbnail && (
         <img
           className="shot-frame"
-          src={thumbnailSrc}
+          src={visibleThumbnail.src}
           alt=""
-          width={160}
-          height={90}
+          width={visibleThumbnail.width}
+          height={visibleThumbnail.height}
           decoding="async"
           draggable={false}
         />

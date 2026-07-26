@@ -28,7 +28,7 @@ const SUBTITLE_THUMBNAIL_MATCH_TOLERANCE_US: i64 = 100_000;
 const STORYBOARD_THUMBNAIL_CACHE_VERSION: u16 = 1;
 const STORYBOARD_THUMBNAIL_CACHE_FOLDER: &str = "Storyboard Thumbnail Cache Files";
 const STORYBOARD_THUMBNAIL_CACHE_KEY_CONTEXT: &[u8] = b"linecut-storyboard-thumbnail-cache-v1";
-const MAX_SUBTITLE_THUMBNAIL_BYTES: usize = 2 * 1024 * 1024;
+const MAX_TIMELINE_THUMBNAIL_BYTES: usize = 8 * 1024 * 1024;
 
 static THUMBNAIL_CACHE_LOCK: Mutex<()> = Mutex::new(());
 static SUBTITLE_THUMBNAIL_CACHE_LOCK: Mutex<()> = Mutex::new(());
@@ -102,6 +102,33 @@ struct CoverCandidate {
     score: f64,
 }
 
+#[derive(Clone, Copy)]
+struct TimelineThumbnailResolution {
+    width: usize,
+    height: usize,
+}
+
+fn timeline_thumbnail_resolution(width: Option<usize>) -> AppResult<TimelineThumbnailResolution> {
+    match width.unwrap_or(SUBTITLE_THUMBNAIL_WIDTH) {
+        160 => Ok(TimelineThumbnailResolution {
+            width: SUBTITLE_THUMBNAIL_WIDTH,
+            height: SUBTITLE_THUMBNAIL_HEIGHT,
+        }),
+        640 => Ok(TimelineThumbnailResolution {
+            width: 640,
+            height: 360,
+        }),
+        1_280 => Ok(TimelineThumbnailResolution {
+            width: 1_280,
+            height: 720,
+        }),
+        width => Err(app_error(
+            ErrorCode::ThumbnailDataInvalid,
+            format!("Unsupported timeline thumbnail width: {width}"),
+        )),
+    }
+}
+
 #[tauri::command]
 pub(crate) async fn generate_video_cover_thumbnail(
     asset_id: String,
@@ -138,8 +165,10 @@ pub(crate) async fn generate_video_cover_thumbnail(
 pub(crate) async fn generate_subtitle_thumbnail(
     asset_id: String,
     time_us: i64,
+    width: Option<usize>,
     state: tauri::State<'_, AppState>,
 ) -> CommandResult<Vec<u8>> {
+    let resolution = timeline_thumbnail_resolution(width)?;
     let project = state
         .projects
         .lock()
@@ -168,7 +197,13 @@ pub(crate) async fn generate_subtitle_thumbnail(
     let fingerprint = project.asset.fingerprint.clone();
     let duration_us = project.asset.duration_us;
     let lookup = tokio::task::spawn_blocking(move || {
-        read_subtitle_thumbnail_cache(&cache_preferences, &fingerprint, time_us, duration_us)
+        read_subtitle_thumbnail_cache(
+            &cache_preferences,
+            &fingerprint,
+            time_us,
+            duration_us,
+            resolution.width,
+        )
     })
     .await
     .map_err(|error| {
@@ -185,6 +220,7 @@ pub(crate) async fn generate_subtitle_thumbnail(
         &project.asset.path,
         stream_index,
         lookup.cache_time_us,
+        resolution,
     )
     .await?;
     let fingerprint = project.asset.fingerprint;
@@ -194,6 +230,7 @@ pub(crate) async fn generate_subtitle_thumbnail(
             &fingerprint,
             lookup.cache_time_us,
             duration_us,
+            resolution.width,
             &jpeg,
         )?;
         Ok::<Vec<u8>, AppError>(jpeg)
@@ -211,8 +248,10 @@ pub(crate) async fn generate_subtitle_thumbnail(
 pub(crate) async fn get_cached_subtitle_thumbnail(
     asset_id: String,
     time_us: i64,
+    width: Option<usize>,
     state: tauri::State<'_, AppState>,
 ) -> CommandResult<SubtitleThumbnailCacheLookup> {
+    let resolution = timeline_thumbnail_resolution(width)?;
     let project = state
         .projects
         .lock()
@@ -237,6 +276,7 @@ pub(crate) async fn get_cached_subtitle_thumbnail(
             &project.asset.fingerprint,
             time_us,
             project.asset.duration_us,
+            resolution.width,
         ))
     })
     .await
@@ -252,9 +292,11 @@ pub(crate) async fn get_cached_subtitle_thumbnail(
 pub(crate) async fn cache_subtitle_thumbnail(
     asset_id: String,
     time_us: i64,
+    width: Option<usize>,
     bytes: Vec<u8>,
     state: tauri::State<'_, AppState>,
 ) -> CommandResult<()> {
+    let resolution = timeline_thumbnail_resolution(width)?;
     validate_timeline_thumbnail_jpeg(&bytes)?;
     let project = state
         .projects
@@ -280,6 +322,7 @@ pub(crate) async fn cache_subtitle_thumbnail(
             &project.asset.fingerprint,
             time_us,
             project.asset.duration_us,
+            resolution.width,
             &bytes,
         )
     })
@@ -296,8 +339,10 @@ pub(crate) async fn cache_subtitle_thumbnail(
 pub(crate) async fn generate_storyboard_thumbnail(
     asset_id: String,
     time_us: i64,
+    width: Option<usize>,
     state: tauri::State<'_, AppState>,
 ) -> CommandResult<Vec<u8>> {
+    let resolution = timeline_thumbnail_resolution(width)?;
     let project = state
         .projects
         .lock()
@@ -326,7 +371,13 @@ pub(crate) async fn generate_storyboard_thumbnail(
     let fingerprint = project.asset.fingerprint.clone();
     let duration_us = project.asset.duration_us;
     let lookup = tokio::task::spawn_blocking(move || {
-        read_storyboard_thumbnail_cache(&cache_preferences, &fingerprint, time_us, duration_us)
+        read_storyboard_thumbnail_cache(
+            &cache_preferences,
+            &fingerprint,
+            time_us,
+            duration_us,
+            resolution.width,
+        )
     })
     .await
     .map_err(|error| {
@@ -343,6 +394,7 @@ pub(crate) async fn generate_storyboard_thumbnail(
         &project.asset.path,
         stream_index,
         lookup.cache_time_us,
+        resolution,
     )
     .await?;
     let fingerprint = project.asset.fingerprint;
@@ -352,6 +404,7 @@ pub(crate) async fn generate_storyboard_thumbnail(
             &fingerprint,
             lookup.cache_time_us,
             duration_us,
+            resolution.width,
             &jpeg,
         )?;
         Ok::<Vec<u8>, AppError>(jpeg)
@@ -369,8 +422,10 @@ pub(crate) async fn generate_storyboard_thumbnail(
 pub(crate) async fn get_cached_storyboard_thumbnail(
     asset_id: String,
     time_us: i64,
+    width: Option<usize>,
     state: tauri::State<'_, AppState>,
 ) -> CommandResult<StoryboardThumbnailCacheLookup> {
+    let resolution = timeline_thumbnail_resolution(width)?;
     let project = state
         .projects
         .lock()
@@ -395,6 +450,7 @@ pub(crate) async fn get_cached_storyboard_thumbnail(
             &project.asset.fingerprint,
             time_us,
             project.asset.duration_us,
+            resolution.width,
         ))
     })
     .await
@@ -410,9 +466,11 @@ pub(crate) async fn get_cached_storyboard_thumbnail(
 pub(crate) async fn cache_storyboard_thumbnail(
     asset_id: String,
     time_us: i64,
+    width: Option<usize>,
     bytes: Vec<u8>,
     state: tauri::State<'_, AppState>,
 ) -> CommandResult<()> {
+    let resolution = timeline_thumbnail_resolution(width)?;
     validate_timeline_thumbnail_jpeg(&bytes)?;
     let project = state
         .projects
@@ -438,6 +496,7 @@ pub(crate) async fn cache_storyboard_thumbnail(
             &project.asset.fingerprint,
             time_us,
             project.asset.duration_us,
+            resolution.width,
             &bytes,
         )
     })
@@ -594,8 +653,13 @@ fn subtitle_thumbnail_cache_layout(
     preferences: &Preferences,
     fingerprint: &str,
     bucket: i64,
+    width: usize,
 ) -> (PathBuf, String) {
-    let cache_key = format!("{fingerprint}:{bucket}");
+    let cache_key = if width == SUBTITLE_THUMBNAIL_WIDTH {
+        format!("{fingerprint}:{bucket}")
+    } else {
+        format!("{fingerprint}:{bucket}:{width}")
+    };
     let cache_hash = hash_name(SUBTITLE_THUMBNAIL_CACHE_KEY_CONTEXT, cache_key.as_bytes());
     let path = configured_cache_root(preferences)
         .join(CACHE_PARENT_FOLDER)
@@ -618,6 +682,7 @@ fn read_subtitle_thumbnail_cache(
     fingerprint: &str,
     time_us: i64,
     duration_us: i64,
+    width: usize,
 ) -> SubtitleThumbnailCacheLookup {
     let _guard = match SUBTITLE_THUMBNAIL_CACHE_LOCK.lock() {
         Ok(guard) => guard,
@@ -629,7 +694,7 @@ fn read_subtitle_thumbnail_cache(
             return subtitle_thumbnail_cache_miss(time_us, duration_us);
         }
     };
-    read_subtitle_thumbnail_cache_unlocked(preferences, fingerprint, time_us, duration_us)
+    read_subtitle_thumbnail_cache_unlocked(preferences, fingerprint, time_us, duration_us, width)
 }
 
 fn read_subtitle_thumbnail_cache_unlocked(
@@ -637,6 +702,7 @@ fn read_subtitle_thumbnail_cache_unlocked(
     fingerprint: &str,
     time_us: i64,
     duration_us: i64,
+    width: usize,
 ) -> SubtitleThumbnailCacheLookup {
     let requested_time_us = clamped_subtitle_thumbnail_time(time_us, duration_us);
     for bucket in subtitle_thumbnail_candidate_buckets(requested_time_us, duration_us) {
@@ -646,7 +712,8 @@ fn read_subtitle_thumbnail_cache_unlocked(
         {
             continue;
         }
-        let (path, cache_key) = subtitle_thumbnail_cache_layout(preferences, fingerprint, bucket);
+        let (path, cache_key) =
+            subtitle_thumbnail_cache_layout(preferences, fingerprint, bucket, width);
         let Some(cached) = read_private_cache::<CachedSubtitleThumbnail>(
             &path,
             &cache_key,
@@ -673,6 +740,7 @@ fn write_subtitle_thumbnail_cache(
     fingerprint: &str,
     time_us: i64,
     duration_us: i64,
+    width: usize,
     jpeg: &[u8],
 ) -> AppResult<()> {
     validate_timeline_thumbnail_jpeg(jpeg)?;
@@ -682,7 +750,7 @@ fn write_subtitle_thumbnail_cache(
             "Subtitle thumbnail cache lock is poisoned",
         )
     })?;
-    if read_subtitle_thumbnail_cache_unlocked(preferences, fingerprint, time_us, duration_us)
+    if read_subtitle_thumbnail_cache_unlocked(preferences, fingerprint, time_us, duration_us, width)
         .bytes
         .is_some()
     {
@@ -690,7 +758,8 @@ fn write_subtitle_thumbnail_cache(
     }
     let bucket = subtitle_thumbnail_bucket(time_us, duration_us);
     let cache_time_us = subtitle_thumbnail_bucket_time(bucket, duration_us);
-    let (path, cache_key) = subtitle_thumbnail_cache_layout(preferences, fingerprint, bucket);
+    let (path, cache_key) =
+        subtitle_thumbnail_cache_layout(preferences, fingerprint, bucket, width);
     write_private_cache(
         &path,
         &cache_key,
@@ -711,8 +780,13 @@ fn storyboard_thumbnail_cache_layout(
     preferences: &Preferences,
     fingerprint: &str,
     time_us: i64,
+    width: usize,
 ) -> (PathBuf, String) {
-    let cache_key = format!("{fingerprint}:{time_us}");
+    let cache_key = if width == SUBTITLE_THUMBNAIL_WIDTH {
+        format!("{fingerprint}:{time_us}")
+    } else {
+        format!("{fingerprint}:{time_us}:{width}")
+    };
     let cache_hash = hash_name(STORYBOARD_THUMBNAIL_CACHE_KEY_CONTEXT, cache_key.as_bytes());
     let path = configured_cache_root(preferences)
         .join(CACHE_PARENT_FOLDER)
@@ -737,6 +811,7 @@ fn read_storyboard_thumbnail_cache(
     fingerprint: &str,
     time_us: i64,
     duration_us: i64,
+    width: usize,
 ) -> StoryboardThumbnailCacheLookup {
     let _guard = match STORYBOARD_THUMBNAIL_CACHE_LOCK.lock() {
         Ok(guard) => guard,
@@ -750,7 +825,7 @@ fn read_storyboard_thumbnail_cache(
     };
     let cache_time_us = clamped_storyboard_thumbnail_time(time_us, duration_us);
     let (path, cache_key) =
-        storyboard_thumbnail_cache_layout(preferences, fingerprint, cache_time_us);
+        storyboard_thumbnail_cache_layout(preferences, fingerprint, cache_time_us, width);
     let Some(cached) = read_private_cache::<CachedStoryboardThumbnail>(
         &path,
         &cache_key,
@@ -775,6 +850,7 @@ fn write_storyboard_thumbnail_cache(
     fingerprint: &str,
     time_us: i64,
     duration_us: i64,
+    width: usize,
     jpeg: &[u8],
 ) -> AppResult<()> {
     validate_timeline_thumbnail_jpeg(jpeg)?;
@@ -786,7 +862,7 @@ fn write_storyboard_thumbnail_cache(
     })?;
     let cache_time_us = clamped_storyboard_thumbnail_time(time_us, duration_us);
     let (path, cache_key) =
-        storyboard_thumbnail_cache_layout(preferences, fingerprint, cache_time_us);
+        storyboard_thumbnail_cache_layout(preferences, fingerprint, cache_time_us, width);
     if let Some(cached) = read_private_cache::<CachedStoryboardThumbnail>(
         &path,
         &cache_key,
@@ -812,7 +888,7 @@ fn write_storyboard_thumbnail_cache(
 }
 
 fn validate_timeline_thumbnail_jpeg(bytes: &[u8]) -> AppResult<()> {
-    if bytes.len() < 4 || bytes.len() > MAX_SUBTITLE_THUMBNAIL_BYTES {
+    if bytes.len() < 4 || bytes.len() > MAX_TIMELINE_THUMBNAIL_BYTES {
         return Err(app_error(
             ErrorCode::ThumbnailDataInvalid,
             format!(
@@ -1199,6 +1275,7 @@ async fn extract_timeline_thumbnail(
     input_path: &str,
     stream_index: i32,
     time_us: i64,
+    resolution: TimelineThumbnailResolution,
 ) -> AppResult<Vec<u8>> {
     let args = [
         "-hide_banner".to_string(),
@@ -1216,7 +1293,8 @@ async fn extract_timeline_thumbnail(
         "1".to_string(),
         "-vf".to_string(),
         format!(
-            "scale={SUBTITLE_THUMBNAIL_WIDTH}:{SUBTITLE_THUMBNAIL_HEIGHT}:force_original_aspect_ratio=increase,crop={SUBTITLE_THUMBNAIL_WIDTH}:{SUBTITLE_THUMBNAIL_HEIGHT}"
+            "scale={}:{}:force_original_aspect_ratio=increase,crop={}:{}",
+            resolution.width, resolution.height, resolution.width, resolution.height
         ),
         "-q:v".to_string(),
         "8".to_string(),

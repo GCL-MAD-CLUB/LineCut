@@ -15,6 +15,10 @@ import {
 import { requestSubtitleThumbnail } from "../../subtitleThumbnail";
 import { formatDuration } from "../../time";
 import { normalizeFrameRate, timeUsToFrame } from "../../timeline";
+import {
+  timelineThumbnailResolutions,
+  useTimelineThumbnailResolution,
+} from "../../timelineThumbnailResolution";
 import type { SubtitleCue } from "../../types";
 import { SelectDropdown } from "../SelectDropdown";
 import { usePanelManagerState } from "../DockLayout";
@@ -135,47 +139,88 @@ interface CueFrameButtonProps {
 }
 
 function CueFrameButton({ cue, assetId, fingerprint, videoPath, priority }: CueFrameButtonProps) {
-  const [thumbnailSrc, setThumbnailSrc] = useState("");
+  const { resolution, thumbnailContainerRef } = useTimelineThumbnailResolution<HTMLButtonElement>();
+  const thumbnailIdentity = `${fingerprint}:${cue.start_us}`;
+  const [thumbnail, setThumbnail] = useState<{
+    identity: string;
+    src: string;
+    width: number;
+    height: number;
+  } | null>(null);
 
   useEffect(() => {
     let active = true;
-    setThumbnailSrc("");
-    const request = requestSubtitleThumbnail({
-      assetId,
-      fingerprint,
-      videoPath,
-      timeUs: cue.start_us,
-      priority,
-    });
-    void request.promise.then(
-      (url) => {
-        if (active) {
-          setThumbnailSrc(url);
-        }
-      },
-      () => undefined,
+    const requestedResolutions = timelineThumbnailResolutions.filter(
+      (candidate) => candidate.width <= resolution.width,
     );
+    const requests = requestedResolutions.map((candidate) => {
+      const request = requestSubtitleThumbnail({
+        assetId,
+        fingerprint,
+        videoPath,
+        timeUs: cue.start_us,
+        priority,
+        resolution: candidate,
+      });
+      void request.promise.then(
+        (src) => {
+          if (!active) {
+            return;
+          }
+          setThumbnail((current) => {
+            if (
+              current?.identity === thumbnailIdentity &&
+              current.width > candidate.width &&
+              current.width <= resolution.width
+            ) {
+              return current;
+            }
+            return {
+              identity: thumbnailIdentity,
+              src,
+              width: candidate.width,
+              height: candidate.height,
+            };
+          });
+        },
+        () => undefined,
+      );
+      return request;
+    });
     return () => {
       active = false;
-      request.cancel();
+      for (const request of requests) {
+        request.cancel();
+      }
     };
-  }, [assetId, cue.start_us, fingerprint, priority, videoPath]);
+  }, [
+    assetId,
+    cue.start_us,
+    fingerprint,
+    priority,
+    resolution.width,
+    thumbnailIdentity,
+    videoPath,
+  ]);
+
+  const visibleThumbnail = thumbnail?.identity === thumbnailIdentity ? thumbnail : null;
 
   return (
     <button
+      ref={thumbnailContainerRef}
       type="button"
       className="cue-frame-button"
       onClick={() => seekToCue(cue, true)}
       title="播放此条字幕"
       aria-label={`从 ${formatDuration(cue.start_us)} 播放此条字幕`}
     >
-      {thumbnailSrc && (
+      {visibleThumbnail && (
         <img
           className="cue-frame"
-          src={thumbnailSrc}
+          src={visibleThumbnail.src}
           alt=""
-          width={160}
-          height={90}
+          width={visibleThumbnail.width}
+          height={visibleThumbnail.height}
           decoding="async"
           draggable={false}
         />
