@@ -48,7 +48,7 @@ impl Default for StoryboardDecisionConfig {
             robust_window_radius: 50,
             candidate_probability_threshold: 0.1,
             peak_radius: 2,
-            candidate_robust_threshold: 3.5,
+            candidate_robust_threshold: 2.5,
             event_probability_floor: 0.03,
             event_relative_floor: 0.15,
             event_robust_floor: 1.5,
@@ -59,14 +59,14 @@ impl Default for StoryboardDecisionConfig {
                     .iter()
                     .map(|name| (*name).to_string())
                     .collect(),
-                intercept: -1.25,
-                coefficients: vec![0.55, 0.0, 0.15, -0.2, 1.5, 0.5, 0.5, -0.2, 1.0, 0.15],
+                intercept: -2.5,
+                coefficients: vec![0.55, 0.0, -0.3, -0.6, 2.2, 0.75, 0.75, -0.4, 1.1, -0.12],
             },
             calibration: None,
             false_positive_cost: 1.0,
-            false_negative_cost: 1.0,
+            false_negative_cost: 2.0,
             minimum_event_distance: 3,
-            short_shot_midpoint: 6.0,
+            short_shot_midpoint: 2.0,
             short_shot_softness: 2.0,
         }
     }
@@ -659,9 +659,9 @@ mod tests {
     }
 
     #[test]
-    fn low_threshold_candidate_can_be_rejected_by_event_model() {
+    fn marginal_candidate_can_be_rejected_by_event_model() {
         let mut predictions = vec![0.01; 120];
-        predictions[60] = 0.2;
+        predictions[60] = 0.1;
         let config = default_config();
         let series = robust_series(&predictions, &config);
 
@@ -669,6 +669,27 @@ mod tests {
         let cuts = detect_storyboard_cuts(&predictions, &config);
 
         assert_eq!(peaks, vec![60]);
+        assert!(cuts.is_empty());
+    }
+
+    #[test]
+    fn concentrated_lower_probability_peak_is_retained() {
+        let mut predictions = vec![0.01; 120];
+        predictions[60] = 0.13;
+
+        let cuts = detect_storyboard_cuts(&predictions, &default_config());
+
+        assert_eq!(cuts.len(), 1);
+        assert_eq!(cuts[0].cut_frame, 60);
+    }
+
+    #[test]
+    fn broad_motion_like_probability_hump_is_rejected() {
+        let mut predictions = vec![0.01; 120];
+        predictions[57..=63].copy_from_slice(&[0.2, 0.35, 0.6, 0.9, 0.6, 0.35, 0.2]);
+
+        let cuts = detect_storyboard_cuts(&predictions, &default_config());
+
         assert!(cuts.is_empty());
     }
 
@@ -744,7 +765,7 @@ mod tests {
         };
 
         let cuts = apply_short_shot_constraint(
-            vec![event(20, 0.9), event(23, 0.9), event(40, 0.9)],
+            vec![event(20, 0.9), event(21, 0.8), event(40, 0.9)],
             &config,
         );
 

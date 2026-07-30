@@ -24,8 +24,8 @@
       "background_difference",
       "neighbor_mass"
     ],
-    "intercept": -1.25,
-    "coefficients": [0.55, 0.0, 0.15, -0.2, 1.5, 0.5, 0.5, -0.2, 1.0, 0.15]
+    "intercept": -2.5,
+    "coefficients": [0.55, 0.0, -0.3, -0.6, 2.2, 0.75, 0.75, -0.4, 1.1, -0.12]
   },
   "calibration": null,
   "false_positive_cost": 1.0,

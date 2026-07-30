@@ -432,6 +432,7 @@ interface PopupMenuSubmenuProps {
   open: boolean;
   disabled?: boolean;
   mnemonic?: string;
+  enableMnemonics?: boolean;
   menuClassName?: string;
   onOpenChange: (open: boolean) => void;
 }
@@ -442,6 +443,7 @@ export function PopupMenuSubmenu({
   open,
   disabled,
   mnemonic,
+  enableMnemonics = false,
   menuClassName,
   onOpenChange,
 }: PopupMenuSubmenuProps) {
@@ -493,6 +495,7 @@ export function PopupMenuSubmenu({
             ariaLabel={typeof label === "string" ? label : undefined}
             className={menuClassName}
             submenuAnchor={anchor}
+            enableMnemonics={enableMnemonics}
             style={{ position: "fixed", left: anchor.right - 4, top: anchor.top - 3 }}
             onPointerDown={(event) => event.stopPropagation()}
             onContextMenu={(event) => event.preventDefault()}

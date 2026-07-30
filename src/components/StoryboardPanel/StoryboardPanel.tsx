@@ -12,6 +12,7 @@ import {
   type SyntheticEvent,
   type UIEvent as ReactUIEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import { invokeCommand } from "../../errors";
 import { useEditCapability } from "../../runtime/capabilities/EditCapability";
 import { usePlaybackStatus } from "../../runtime/capabilities/PlaybackCapability";
@@ -36,12 +37,17 @@ import {
 } from "../../timelineThumbnailResolution";
 import type { StoryboardDetectionResult, StoryboardShot } from "../../types";
 import { usePanelManagerState } from "../DockLayout";
-import { SelectDropdown, selectDropdownItems } from "../SelectDropdown";
+import { PopupMenu, PopupMenuItem, PopupMenuSeparator, PopupMenuSubmenu } from "../PopupMenu";
+import { SelectDropdown, selectDropdownItems, type SelectDropdownItem } from "../SelectDropdown";
 import "./StoryboardPanel.css";
 import {
   useStoryboardPanelState,
+  type StoryboardRatingComparator,
   type StoryboardShotAnnotation,
+  type StoryboardShotColorLabel,
   type StoryboardShotFilter,
+  type StoryboardShotFlag,
+  type StoryboardShotStack,
 } from "./storyboardPanelState";
 
 const storyboardEventSource = eventSource("storyboard-panel");
@@ -50,14 +56,18 @@ const MAX_UPCOMING_SCROLL_DURATION_MS = 1200;
 const THUMBNAIL_PREFETCH_ROWS_BEFORE = 10;
 const THUMBNAIL_PREFETCH_ROWS_AFTER = 28;
 const TABLE_SCROLLBAR_SPACER_PX = 8;
-const STORYBOARD_THUMBNAIL_WIDTH = 88;
-const STORYBOARD_THUMBNAIL_HEIGHT = 50;
+const STORYBOARD_THUMBNAIL_HEIGHT = 46;
+const STORYBOARD_THUMBNAIL_WIDTH = 82;
 const STORYBOARD_ROW_VERTICAL_PADDING = 16;
 const STORYBOARD_THUMBNAIL_COLUMN_PADDING = 16;
+const STORYBOARD_STATUS_GUTTER_WIDTH = 16;
+const TITLE_RENAME_DELAY_MS = 350;
 
-type StoryboardResizableColumnId = "thumbnail" | "mediaStart" | "mediaEnd" | "duration" | "rating";
-type StoryboardSortableColumnId = "mediaStart" | "mediaEnd" | "duration" | "rating" | "retained";
-type StoryboardTableColumnId = "status" | StoryboardResizableColumnId | "retained" | "trailing";
+type StoryboardResizableColumnId =
+  "thumbnail" | "title" | "mediaStart" | "mediaEnd" | "duration" | "rating" | "retained";
+type StoryboardSortableColumnId =
+  "title" | "mediaStart" | "mediaEnd" | "duration" | "rating" | "retained";
+type StoryboardTableColumnId = StoryboardResizableColumnId | "trailing";
 type StoryboardSortDirection = "ascending" | "descending";
 
 interface StoryboardSort {
@@ -66,7 +76,7 @@ interface StoryboardSort {
 }
 
 const defaultStoryboardSort: StoryboardSort = {
-  columnId: "mediaStart",
+  columnId: "title",
   direction: "ascending",
 };
 
@@ -76,9 +86,9 @@ const storyboardTableHeaders: Array<{
   sortColumnId?: StoryboardSortableColumnId;
   resizeColumn?: StoryboardResizableColumnId;
 }> = [
-  { id: "status", label: "" },
   { id: "thumbnail", label: "" },
-  { id: "mediaStart", label: "媒体开始", sortColumnId: "mediaStart", resizeColumn: "thumbnail" },
+  { id: "title", label: "标题", sortColumnId: "title" },
+  { id: "mediaStart", label: "媒体开始", sortColumnId: "mediaStart", resizeColumn: "title" },
   { id: "mediaEnd", label: "媒体结束", sortColumnId: "mediaEnd", resizeColumn: "mediaStart" },
   {
     id: "duration",
@@ -88,54 +98,128 @@ const storyboardTableHeaders: Array<{
   },
   { id: "rating", label: "星级", sortColumnId: "rating", resizeColumn: "duration" },
   { id: "retained", label: "留用", resizeColumn: "rating" },
-  { id: "trailing", label: "" },
+  { id: "trailing", label: "", resizeColumn: "retained" },
 ];
 
 type StoryboardResizableColumnWidths = Record<StoryboardResizableColumnId, number>;
 
 const initialStoryboardColumnWidths: StoryboardResizableColumnWidths = {
   thumbnail: 104,
+  title: 128,
   mediaStart: 128,
   mediaEnd: 128,
   duration: 140,
   rating: 112,
+  retained: 128,
 };
 
 const minimumStoryboardColumnWidths: StoryboardResizableColumnWidths = {
   thumbnail: 60,
+  title: 38,
   mediaStart: 21,
   mediaEnd: 21,
   duration: 21,
   rating: 30,
+  retained: 21,
 };
 
 const maximumStoryboardColumnWidths: StoryboardResizableColumnWidths = {
   thumbnail: 720,
+  title: 720,
   mediaStart: 300,
   mediaEnd: 300,
   duration: 320,
   rating: 180,
+  retained: 300,
 };
-
-const storyboardStatusColumnWidth = 16;
-const storyboardRetainedColumnWidth = 62;
 
 const storyboardResizableColumnLabels: Record<StoryboardResizableColumnId, string> = {
   thumbnail: "缩略图",
+  title: "标题",
   mediaStart: "媒体开始",
   mediaEnd: "媒体结束",
   duration: "媒体持续时间",
   rating: "星级",
+  retained: "留用",
 };
 
 const storyboardRatingFilters = [1, 2, 3, 4, 5] as const;
+const storyboardRatingComparatorOptions: Array<readonly [StoryboardRatingComparator, string]> = [
+  ["gte", "星级大于等于"],
+  ["lte", "星级小于等于"],
+  ["eq", "星级等于"],
+];
+const storyboardRatingComparatorItems = selectDropdownItems(storyboardRatingComparatorOptions);
+const storyboardRatingComparatorSymbols: Record<StoryboardRatingComparator, string> = {
+  gte: "≥",
+  lte: "≤",
+  eq: "=",
+};
+const storyboardRatingComparatorLabels: Record<StoryboardRatingComparator, string> = {
+  gte: "星级大于等于",
+  lte: "星级小于等于",
+  eq: "星级等于",
+};
+const storyboardShotFlags: StoryboardShotFlag[] = ["retained", "none", "excluded"];
+const storyboardShotFlagLabels: Record<StoryboardShotFlag, string> = {
+  retained: "留用旗标",
+  none: "无旗标",
+  excluded: "排除旗标",
+};
+const storyboardShotColorLabels: Array<readonly [StoryboardShotColorLabel, string]> = [
+  ["red", "红色"],
+  ["yellow", "黄色"],
+  ["green", "绿色"],
+  ["blue", "蓝色"],
+  ["purple", "紫色"],
+];
+const storyboardShotColorLabelValues: Record<StoryboardShotColorLabel, string> = {
+  red: "#ef4444",
+  yellow: "#eab308",
+  green: "#22c55e",
+  blue: "#3b82f6",
+  purple: "#a855f7",
+};
 const storyboardFilterOptions: Array<readonly [StoryboardShotFilter, string]> = [
-  ["all", "全部镜头"],
-  ["retained", "已留用"],
+  ["all", "关闭过滤器"],
+  ["retained", "留用"],
   ["rated", "有星级"],
   ["unrated", "无星级"],
 ];
 const storyboardFilterItems = selectDropdownItems(storyboardFilterOptions);
+const storyboardCustomFilterItems: Array<SelectDropdownItem<StoryboardShotFilter>> = [
+  { type: "option", value: "custom", label: "自定义过滤" },
+  { type: "separator" },
+  ...storyboardFilterItems,
+];
+const storyboardTitleCollator = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: "base",
+});
+
+interface ActiveStoryboardCell {
+  shotId: string;
+  columnId: StoryboardResizableColumnId;
+}
+
+interface StoryboardMarqueeSelection {
+  startX: number;
+  startY: number;
+  currentX: number;
+  currentY: number;
+}
+
+interface StoryboardContextMenuState {
+  x: number;
+  y: number;
+  shotId: string | null;
+  flagSubmenuOpen: boolean;
+  ratingSubmenuOpen: boolean;
+  colorSubmenuOpen: boolean;
+  stackSubmenuOpen: boolean;
+}
+
+const MARQUEE_DRAG_THRESHOLD = 4;
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(Math.max(value, minimum), maximum);
@@ -151,14 +235,35 @@ function isEditableKeyboardTarget(target: EventTarget | null) {
   );
 }
 
-function shotMatches(shot: StoryboardShot, query: string) {
+function defaultShotTitle(shot: StoryboardShot, shotCount: number) {
+  const digits = Math.max(1, String(Math.max(1, shotCount)).length);
+  return `分镜 ${String(shot.sequence).padStart(digits, "0")}`;
+}
+
+function storyboardShotTitle(
+  shot: StoryboardShot,
+  shotCount: number,
+  annotation: StoryboardShotAnnotation | undefined,
+) {
+  return annotation?.title || defaultShotTitle(shot, shotCount);
+}
+
+function storyboardShotFlag(annotation: StoryboardShotAnnotation | undefined): StoryboardShotFlag {
+  if (annotation?.retained) {
+    return "retained";
+  }
+  if (annotation?.excluded) {
+    return "excluded";
+  }
+  return "none";
+}
+
+function shotMatches(title: string, query: string) {
   const normalized = query.trim().toLocaleLowerCase();
   if (!normalized) {
     return true;
   }
-  const haystack = `${formatDuration(shot.start_us)} ${formatDuration(shot.end_us)} ${
-    shot.start_frame
-  } ${shot.end_frame}`.toLocaleLowerCase();
+  const haystack = title.toLocaleLowerCase();
   return normalized
     .split(/\s+/)
     .filter(Boolean)
@@ -169,24 +274,158 @@ function shotMatchesFilter(
   annotation: StoryboardShotAnnotation | undefined,
   filter: StoryboardShotFilter,
   minimumRating: number,
+  ratingComparator: StoryboardRatingComparator,
+  flagFilters: readonly StoryboardShotFlag[],
 ) {
   const rating = annotation?.rating ?? 0;
-  const retained = annotation?.retained ?? false;
-  const matchesMinimumRating = minimumRating === 0 || rating >= minimumRating;
+  const flag = storyboardShotFlag(annotation);
+  const matchesRating =
+    minimumRating === 0 ||
+    (ratingComparator === "gte"
+      ? rating >= minimumRating
+      : ratingComparator === "lte"
+        ? rating <= minimumRating
+        : rating === minimumRating);
 
   if (filter === "all") {
-    return matchesMinimumRating;
+    return matchesRating;
   }
   if (filter === "retained") {
-    return retained && matchesMinimumRating;
+    return flagFilters.includes(flag) && matchesRating;
   }
   if (filter === "rated") {
-    return rating >= Math.max(1, minimumRating);
+    return minimumRating > 0 ? matchesRating : rating > 0;
   }
   if (filter === "unrated") {
     return rating === 0;
   }
-  return retained && rating >= Math.max(1, minimumRating);
+  return flagFilters.includes(flag) && matchesRating;
+}
+
+function stackByShotId(shotStacks: readonly StoryboardShotStack[]) {
+  const result = new Map<string, StoryboardShotStack>();
+  for (const stack of shotStacks) {
+    for (const shotId of stack.shotIds) {
+      result.set(shotId, stack);
+    }
+  }
+  return result;
+}
+
+function mergedStackShot(
+  stack: StoryboardShotStack,
+  shotsById: ReadonlyMap<string, StoryboardShot>,
+) {
+  const firstShot = shotsById.get(stack.shotIds[0]);
+  const lastShot = shotsById.get(stack.shotIds.at(-1) ?? "");
+  if (!firstShot || !lastShot) {
+    return null;
+  }
+  return {
+    ...firstShot,
+    end_frame: lastShot.end_frame,
+    end_us: lastShot.end_us,
+  };
+}
+
+function visibleStoryboardShots(
+  shots: readonly StoryboardShot[],
+  shotStacks: readonly StoryboardShotStack[],
+) {
+  const shotsById = new Map(shots.map((shot) => [shot.id, shot]));
+  const stacksByShotId = stackByShotId(shotStacks);
+  const result: StoryboardShot[] = [];
+  for (const shot of shots) {
+    const stack = stacksByShotId.get(shot.id);
+    if (!stack || stack.expanded) {
+      result.push(shot);
+      continue;
+    }
+    if (shot.id !== stack.shotIds[0]) {
+      continue;
+    }
+    result.push(mergedStackShot(stack, shotsById) ?? shot);
+  }
+  return result;
+}
+
+function stackSortShotsByShotId(
+  shots: readonly StoryboardShot[],
+  shotStacks: readonly StoryboardShotStack[],
+) {
+  const shotsById = new Map(shots.map((shot) => [shot.id, shot]));
+  const result = new Map<string, StoryboardShot>();
+  for (const stack of shotStacks) {
+    const mergedShot = mergedStackShot(stack, shotsById);
+    if (!mergedShot) {
+      continue;
+    }
+    for (const shotId of stack.shotIds) {
+      result.set(shotId, mergedShot);
+    }
+  }
+  return result;
+}
+
+function adjacentShotIds(shotIds: Iterable<string>, shots: readonly StoryboardShot[]) {
+  const selectedShotIds = new Set(shotIds);
+  const orderedIndices = shots
+    .map((shot, index) => ({ shot, index }))
+    .filter(({ shot }) => selectedShotIds.has(shot.id));
+  if (
+    orderedIndices.length < 2 ||
+    orderedIndices.length !== selectedShotIds.size ||
+    orderedIndices.some(
+      ({ index }, selectedIndex) =>
+        selectedIndex > 0 && index !== orderedIndices[selectedIndex - 1].index + 1,
+    )
+  ) {
+    return null;
+  }
+  return orderedIndices.map(({ shot }) => shot.id);
+}
+
+function stackCompositionShotIds(
+  selectedShotIds: Iterable<string>,
+  shots: readonly StoryboardShot[],
+  stacksByShotId: ReadonlyMap<string, StoryboardShotStack>,
+) {
+  const sourceUnits = new Set<string>();
+  const flattenedShotIds = new Set<string>();
+  for (const shotId of selectedShotIds) {
+    const stack = stacksByShotId.get(shotId);
+    if (stack) {
+      sourceUnits.add(`stack:${stack.id}`);
+      for (const stackShotId of stack.shotIds) {
+        flattenedShotIds.add(stackShotId);
+      }
+    } else {
+      sourceUnits.add(`shot:${shotId}`);
+      flattenedShotIds.add(shotId);
+    }
+  }
+  if (sourceUnits.size < 2) {
+    return null;
+  }
+  return adjacentShotIds(flattenedShotIds, shots);
+}
+
+function annotationShotIdsForSelection(
+  selectedShotIds: Iterable<string>,
+  stacksByShotId: ReadonlyMap<string, StoryboardShotStack>,
+) {
+  const targetShotIds = new Set<string>();
+  for (const shotId of selectedShotIds) {
+    const stack = stacksByShotId.get(shotId);
+    if (stack && !stack.expanded) {
+      for (const stackShotId of stack.shotIds) {
+        targetShotIds.add(stackShotId);
+      }
+    } else {
+      targetShotIds.add(shotId);
+    }
+  }
+  return targetShotIds;
 }
 
 function seekToShot(shot: StoryboardShot, focusRange = false) {
@@ -286,12 +525,145 @@ function SortArrow({ direction }: { direction: StoryboardSortDirection }) {
   );
 }
 
+interface StoryboardStackBadgeProps {
+  stack: StoryboardShotStack;
+  shotIndex: number;
+  onToggle: () => void;
+}
+
+function StoryboardStackBadge({ stack, shotIndex, onToggle }: StoryboardStackBadgeProps) {
+  const count = stack.shotIds.length;
+  const position = shotIndex + 1;
+  const isFirst = shotIndex === 0;
+  const className = [
+    "storyboard-stack-badge",
+    stack.expanded ? "is-expanded" : "is-collapsed",
+    isFirst ? "is-first" : "",
+    count > 2 ? "has-third-layer" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  if (stack.expanded && !isFirst) {
+    return (
+      <span className={className} aria-hidden="true">
+        <span className="storyboard-stack-badge-face">
+          {position}/{count}
+        </span>
+      </span>
+    );
+  }
+
+  return (
+    <span className={className}>
+      <span className="storyboard-stack-badge-face">
+        <span className="storyboard-stack-badge-count">{count}</span>
+        {stack.expanded && (
+          <span className="storyboard-stack-badge-position">
+            {position}/{count}
+          </span>
+        )}
+        <button
+          type="button"
+          className="storyboard-stack-badge-toggle"
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggle();
+          }}
+          onDoubleClick={(event) => event.stopPropagation()}
+          aria-label={
+            stack.expanded ? `折叠包含 ${count} 个分镜的堆叠` : `展开包含 ${count} 个分镜的堆叠`
+          }
+        />
+      </span>
+    </span>
+  );
+}
+
+function StoryboardFlagIcon({ flag }: { flag: StoryboardShotFlag }) {
+  if (flag === "retained") {
+    return (
+      <svg
+        className="storyboard-flag-icon is-retained"
+        viewBox="12 5 39 43"
+        width="78"
+        height="86"
+        fill="none"
+        aria-hidden="true"
+      >
+        <g className="storyboard-flag-strokes" strokeWidth="2">
+          <path d="M 36 9 L 47.5 20.5 L 31.5 36.5" strokeLinejoin="miter" />
+          <path d="M 31.5 36.5 L 40 45" />
+          <path d="M 36 9 L 25.46 19.49" strokeLinecap="round" />
+          <path d="M 23.34 28.35 L 31.5 36.5" strokeLinecap="round" />
+          <path
+            d="M 15.40 24.49 L 17.99 27.03 L 22.55 22.42"
+            strokeWidth="1.9"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </g>
+        <path
+          className="storyboard-flag-fill"
+          d="M 36 11.875 L 45.125 21 L 32 34.125 L 22.875 25 Z"
+        />
+      </svg>
+    );
+  }
+
+  if (flag === "none") {
+    return (
+      <svg
+        className="storyboard-flag-icon is-none"
+        viewBox="57 5 33 43"
+        width="66"
+        height="86"
+        fill="none"
+        aria-hidden="true"
+      >
+        <g
+          className="storyboard-flag-strokes"
+          strokeWidth="2"
+          strokeDasharray="2.2 3.457"
+          strokeDashoffset="1.1"
+        >
+          <path d="M 59.5 24.5 L 75.5 8.5 L 87.5 20.5 L 71.5 36.5 Z" />
+          <path d="M 71.5 36.5 L 80.6 45.6" />
+        </g>
+      </svg>
+    );
+  }
+
+  return (
+    <svg
+      className="storyboard-flag-icon is-excluded"
+      viewBox="94 5 36 43"
+      width="72"
+      height="86"
+      fill="none"
+      aria-hidden="true"
+    >
+      <g className="storyboard-flag-strokes" strokeWidth="2">
+        <path d="M 96.79 21.81 L 103.21 28.19 M 103.21 21.81 L 96.79 28.19" />
+        <path d="M 116 9 L 127.5 20.5 L 111.5 36.5" strokeLinejoin="miter" />
+        <path d="M 111.5 36.5 L 120 45" />
+        <path d="M 116 9 L 105.44 19.54" strokeLinecap="round" />
+        <path d="M 105.24 30.19 L 111.5 36.5" strokeLinecap="round" />
+      </g>
+    </svg>
+  );
+}
+
 function storyboardShotSortValue(
   shot: StoryboardShot,
   columnId: StoryboardSortableColumnId,
   shotAnnotations: Record<string, StoryboardShotAnnotation>,
+  shotCount: number,
 ) {
   const annotation = shotAnnotations[shot.id];
+  if (columnId === "title") {
+    return storyboardShotTitle(shot, shotCount, annotation);
+  }
   if (columnId === "mediaStart") {
     return shot.start_us;
   }
@@ -304,21 +676,39 @@ function storyboardShotSortValue(
   if (columnId === "rating") {
     return annotation?.rating ?? 0;
   }
-  return annotation?.retained ? 1 : 0;
+  const flag = storyboardShotFlag(annotation);
+  return flag === "retained" ? 1 : flag === "excluded" ? -1 : 0;
 }
 
 function sortStoryboardShots(
   shots: readonly StoryboardShot[],
   sort: StoryboardSort,
   shotAnnotations: Record<string, StoryboardShotAnnotation>,
+  shotCount: number,
+  sortShotsById: ReadonlyMap<string, StoryboardShot>,
 ) {
   const direction = sort.direction === "ascending" ? 1 : -1;
+  const compareSortValues = (left: string | number, right: string | number) => {
+    if (typeof left === "number" && typeof right === "number") {
+      return left - right;
+    }
+    if (typeof left === "number") {
+      return -1;
+    }
+    if (typeof right === "number") {
+      return 1;
+    }
+    return storyboardTitleCollator.compare(left, right);
+  };
   return shots
     .map((shot, index) => ({ shot, index }))
     .sort((left, right) => {
-      const valueDelta =
-        storyboardShotSortValue(left.shot, sort.columnId, shotAnnotations) -
-        storyboardShotSortValue(right.shot, sort.columnId, shotAnnotations);
+      const leftSortShot = sortShotsById.get(left.shot.id) ?? left.shot;
+      const rightSortShot = sortShotsById.get(right.shot.id) ?? right.shot;
+      const valueDelta = compareSortValues(
+        storyboardShotSortValue(leftSortShot, sort.columnId, shotAnnotations, shotCount),
+        storyboardShotSortValue(rightSortShot, sort.columnId, shotAnnotations, shotCount),
+      );
       return (
         valueDelta * direction ||
         left.shot.sequence - right.shot.sequence ||
@@ -524,8 +914,11 @@ export function StoryboardPanel() {
     showOnlySelected,
     shotFilter,
     minimumRating,
+    ratingComparator,
+    flagFilters,
     activeShotId,
     shots,
+    shotStacks,
     selectedShotIds,
     shotAnnotations,
     detectingVideoContext,
@@ -535,9 +928,20 @@ export function StoryboardPanel() {
     setShowOnlySelected,
     setShotFilter,
     setMinimumRating,
+    setRatingComparator,
+    setFlagFilters,
     setThumbnailSize,
+    setShotTitle,
     setShotRatings,
-    setShotsRetained,
+    adjustShotRatings,
+    setShotFlags,
+    setShotColorLabels,
+    createShotStack,
+    cancelShotStack,
+    removeShotFromStack,
+    splitShotStack,
+    setShotStackExpanded,
+    setAllShotStacksExpanded,
     detectionStarted,
     detectionCompleted,
     detectionFinished,
@@ -546,11 +950,21 @@ export function StoryboardPanel() {
   } = useStoryboardPanelState((state) => state);
   const { isRunning: isDetecting } = useTaskProgressStatus("storyboard.detect");
   const playback = usePlaybackStatus();
+  const panelRef = useRef<HTMLElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const tableHeaderRef = useRef<HTMLDivElement | null>(null);
   const scrollAnimationRef = useRef<number | null>(null);
   const selectionAnchorRef = useRef<string | null>(null);
+  const selectionFocusRef = useRef<string | null>(null);
+  const pendingTitleRenameRef = useRef<number | null>(null);
+  const marqueeCleanupRef = useRef<(() => void) | null>(null);
+  const hadShotsRef = useRef(shots.length > 0);
   const [shotSort, setShotSort] = useState<StoryboardSort>(defaultStoryboardSort);
+  const [activeCell, setActiveCell] = useState<ActiveStoryboardCell | null>(null);
+  const [editingShotId, setEditingShotId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [marqueeSelection, setMarqueeSelection] = useState<StoryboardMarqueeSelection | null>(null);
+  const [contextMenu, setContextMenu] = useState<StoryboardContextMenuState | null>(null);
   const [storyboardColumnWidths, setStoryboardColumnWidths] = useState(
     initialStoryboardColumnWidths,
   );
@@ -567,28 +981,46 @@ export function StoryboardPanel() {
   const videoLabel = project?.asset.file_name ?? "未选择视频";
   const canDetect = isTauriRuntime() && Boolean(project) && hasVideo && !isDetecting;
   const selectedCount = selectedShotIds.size;
-  const displayShots = shots;
+  const shotCount = shots.length;
+  const shotStacksByShotId = useMemo(() => stackByShotId(shotStacks), [shotStacks]);
+  const sortShotsById = useMemo(
+    () => stackSortShotsByShotId(shots, shotStacks),
+    [shotStacks, shots],
+  );
+  const displayShots = useMemo(
+    () => visibleStoryboardShots(shots, shotStacks),
+    [shotStacks, shots],
+  );
   const filteredShots = useMemo(
     () =>
       displayShots.filter(
         (shot) =>
           (!showOnlySelected || selectedShotIds.has(shot.id)) &&
-          shotMatches(shot, query) &&
-          shotMatchesFilter(shotAnnotations[shot.id], shotFilter, minimumRating),
+          shotMatches(storyboardShotTitle(shot, shotCount, shotAnnotations[shot.id]), query) &&
+          shotMatchesFilter(
+            shotAnnotations[shot.id],
+            shotFilter,
+            minimumRating,
+            ratingComparator,
+            flagFilters,
+          ),
       ),
     [
       displayShots,
+      flagFilters,
       minimumRating,
       query,
+      ratingComparator,
       selectedShotIds,
+      shotCount,
       shotAnnotations,
       shotFilter,
       showOnlySelected,
     ],
   );
   const sortedShots = useMemo(
-    () => sortStoryboardShots(filteredShots, shotSort, shotAnnotations),
-    [filteredShots, shotAnnotations, shotSort],
+    () => sortStoryboardShots(filteredShots, shotSort, shotAnnotations, shotCount, sortShotsById),
+    [filteredShots, shotAnnotations, shotCount, shotSort, sortShotsById],
   );
   const currentFrame = playback?.currentFrame ?? 0;
   const isPlaying = playback?.isPlaying ?? false;
@@ -649,27 +1081,29 @@ export function StoryboardPanel() {
   const thumbnailWidth = STORYBOARD_THUMBNAIL_WIDTH * thumbnailScale;
   const thumbnailHeight = STORYBOARD_THUMBNAIL_HEIGHT * thumbnailScale;
   const storyboardRowHeight = thumbnailHeight + STORYBOARD_ROW_VERTICAL_PADDING;
-  const thumbnailColumnWidth = Math.max(
-    storyboardColumnWidths.thumbnail,
-    thumbnailWidth + STORYBOARD_THUMBNAIL_COLUMN_PADDING,
-  );
+  const thumbnailColumnWidth =
+    Math.max(
+      storyboardColumnWidths.thumbnail,
+      thumbnailWidth + STORYBOARD_THUMBNAIL_COLUMN_PADDING,
+    ) + STORYBOARD_STATUS_GUTTER_WIDTH;
   const tableMinWidth =
-    storyboardStatusColumnWidth +
-    storyboardRetainedColumnWidth +
     thumbnailColumnWidth +
+    storyboardColumnWidths.title +
     storyboardColumnWidths.mediaStart +
     storyboardColumnWidths.mediaEnd +
     storyboardColumnWidths.duration +
-    storyboardColumnWidths.rating;
+    storyboardColumnWidths.rating +
+    storyboardColumnWidths.retained;
   const tableStyle = {
-    "--storyboard-fixed-status-width": `${storyboardStatusColumnWidth}px`,
     "--storyboard-fixed-thumbnail-width": `${thumbnailColumnWidth}px`,
+    "--storyboard-status-gutter-width": `${STORYBOARD_STATUS_GUTTER_WIDTH}px`,
     "--storyboard-col-thumbnail": `${thumbnailColumnWidth}px`,
+    "--storyboard-col-title": `${storyboardColumnWidths.title}px`,
     "--storyboard-col-media-start": `${storyboardColumnWidths.mediaStart}px`,
     "--storyboard-col-media-end": `${storyboardColumnWidths.mediaEnd}px`,
     "--storyboard-col-duration": `${storyboardColumnWidths.duration}px`,
     "--storyboard-col-rating": `${storyboardColumnWidths.rating}px`,
-    "--storyboard-col-retained": `${storyboardRetainedColumnWidth}px`,
+    "--storyboard-col-retained": `${storyboardColumnWidths.retained}px`,
     "--storyboard-table-min-width": `${tableMinWidth}px`,
     "--storyboard-thumbnail-width": `${thumbnailWidth}px`,
     "--storyboard-thumbnail-height": `${thumbnailHeight}px`,
@@ -706,6 +1140,54 @@ export function StoryboardPanel() {
     lastRenderedShotIndex + 1 + THUMBNAIL_PREFETCH_ROWS_AFTER,
   );
   const isEditAuthority = panelActive && focusedPanelId === panelInstanceId;
+  const selectedAnnotationShotIds = useMemo(
+    () => annotationShotIdsForSelection(selectedShotIds, shotStacksByShotId),
+    [selectedShotIds, shotStacksByShotId],
+  );
+  const contextMenuShotIds = Array.from(selectedAnnotationShotIds);
+  const contextMenuRatings = contextMenuShotIds.map(
+    (shotId) => shotAnnotations[shotId]?.rating ?? 0,
+  );
+  const contextMenuRating =
+    contextMenuRatings.length > 0 &&
+    contextMenuRatings.every((rating) => rating === contextMenuRatings[0])
+      ? contextMenuRatings[0]
+      : null;
+  const contextMenuFlags = contextMenuShotIds.map((shotId) =>
+    storyboardShotFlag(shotAnnotations[shotId]),
+  );
+  const contextMenuFlag =
+    contextMenuFlags.length > 0 && contextMenuFlags.every((flag) => flag === contextMenuFlags[0])
+      ? contextMenuFlags[0]
+      : null;
+  const composableShotIds = stackCompositionShotIds(selectedShotIds, shots, shotStacksByShotId);
+  const canCreateShotStack = composableShotIds !== null;
+  const contextMenuStackShotIds = Array.from(selectedShotIds).filter((shotId) =>
+    shotStacksByShotId.has(shotId),
+  );
+  const contextMenuStacks = Array.from(
+    new Map(
+      contextMenuStackShotIds.map((shotId) => {
+        const stack = shotStacksByShotId.get(shotId)!;
+        return [stack.id, stack] as const;
+      }),
+    ).values(),
+  );
+  const contextMenuStackRepresentatives = contextMenuStacks.map((stack) => stack.shotIds[0]);
+  const canSplitSelectedShotStacks = contextMenuStackShotIds.some((shotId) => {
+    const stack = shotStacksByShotId.get(shotId);
+    return stack ? stack.shotIds.indexOf(shotId) > 0 : false;
+  });
+  const expandSelectedShotStacks = contextMenuStacks.some((stack) => !stack.expanded);
+  const hasExpandedShotStacks = shotStacks.some((stack) => stack.expanded);
+  const hasCollapsedShotStacks = shotStacks.some((stack) => !stack.expanded);
+  const contextSubmenuOpen = Boolean(
+    contextMenu &&
+    (contextMenu.flagSubmenuOpen ||
+      contextMenu.ratingSubmenuOpen ||
+      contextMenu.colorSubmenuOpen ||
+      contextMenu.stackSubmenuOpen),
+  );
 
   useEffect(() => {
     rowVirtualizer.measure();
@@ -713,13 +1195,130 @@ export function StoryboardPanel() {
 
   useEffect(() => {
     syncVideoContext(videoContext);
+    cancelPendingTitleRename();
+    setEditingShotId(null);
+    setActiveCell(null);
+    setContextMenu(null);
   }, [syncVideoContext, videoContext]);
+
+  useEffect(() => {
+    if (!contextMenu) {
+      return;
+    }
+    const close = () => setContextMenu(null);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        close();
+      }
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("resize", close);
+    window.addEventListener("blur", close);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("blur", close);
+    };
+  }, [contextMenu]);
 
   useEffect(() => {
     if (showOnlySelected && selectedCount === 0) {
       setShowOnlySelected(false);
     }
   }, [selectedCount, setShowOnlySelected, showOnlySelected]);
+
+  useEffect(() => {
+    const hasShots = displayShots.length > 0;
+    if (!hadShotsRef.current && hasShots) {
+      setShotSort(defaultStoryboardSort);
+    }
+    hadShotsRef.current = hasShots;
+  }, [displayShots.length]);
+
+  useEffect(() => {
+    const visibleSelectedIds = sortedShots
+      .map((shot) => shot.id)
+      .filter((shotId) => selectedShotIds.has(shotId));
+    if (visibleSelectedIds.length === 0) {
+      selectionAnchorRef.current = null;
+      selectionFocusRef.current = null;
+      return;
+    }
+    if (!selectionFocusRef.current || !visibleSelectedIds.includes(selectionFocusRef.current)) {
+      const fallbackId = visibleSelectedIds.at(-1)!;
+      selectionFocusRef.current = fallbackId;
+      selectionAnchorRef.current = fallbackId;
+    }
+  }, [selectedShotIds, sortedShots]);
+
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!panel) {
+      return;
+    }
+
+    const handleSelectionKeyDown = (event: KeyboardEvent) => {
+      if (event.altKey || isEditableKeyboardTarget(event.target) || sortedShots.length === 0) {
+        return;
+      }
+      const target = event.target as HTMLElement | null;
+      if (target !== panel && !target?.closest("[data-storyboard-shot-id]")) {
+        return;
+      }
+      const direction =
+        event.key === "ArrowUp" || event.key === "ArrowLeft"
+          ? -1
+          : event.key === "ArrowDown" || event.key === "ArrowRight"
+            ? 1
+            : 0;
+      if (direction === 0 || (!event.shiftKey && (event.ctrlKey || event.metaKey))) {
+        return;
+      }
+
+      event.preventDefault();
+      const focusedIndex = selectionFocusRef.current
+        ? sortedShots.findIndex((shot) => shot.id === selectionFocusRef.current)
+        : -1;
+      const selectedIndex = sortedShots.findIndex((shot) => selectedShotIds.has(shot.id));
+      const currentIndex = focusedIndex >= 0 ? focusedIndex : selectedIndex;
+      const targetIndex =
+        currentIndex < 0
+          ? direction > 0
+            ? 0
+            : sortedShots.length - 1
+          : clamp(currentIndex + direction, 0, sortedShots.length - 1);
+      const targetId = sortedShots[targetIndex].id;
+      selectionFocusRef.current = targetId;
+
+      if (!event.shiftKey) {
+        selectionAnchorRef.current = targetId;
+        shotSelectionReplaced([targetId], targetId);
+        rowVirtualizer.scrollToIndex(targetIndex, { align: "auto" });
+        return;
+      }
+
+      const anchorIndex = selectionAnchorRef.current
+        ? sortedShots.findIndex((shot) => shot.id === selectionAnchorRef.current)
+        : -1;
+      const resolvedAnchorIndex =
+        anchorIndex >= 0 ? anchorIndex : Math.max(currentIndex, targetIndex);
+      selectionAnchorRef.current = sortedShots[resolvedAnchorIndex].id;
+      const start = Math.min(resolvedAnchorIndex, targetIndex);
+      const end = Math.max(resolvedAnchorIndex, targetIndex);
+      const nextSelection =
+        event.ctrlKey || event.metaKey ? new Set(selectedShotIds) : new Set<string>();
+      for (const shot of sortedShots.slice(start, end + 1)) {
+        nextSelection.add(shot.id);
+      }
+      shotSelectionReplaced(Array.from(nextSelection), targetId);
+      rowVirtualizer.scrollToIndex(targetIndex, { align: "auto" });
+    };
+
+    panel.addEventListener("keydown", handleSelectionKeyDown);
+    return () => panel.removeEventListener("keydown", handleSelectionKeyDown);
+  }, [rowVirtualizer, selectedShotIds, shotSelectionReplaced, sortedShots]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -734,22 +1333,41 @@ export function StoryboardPanel() {
       ) {
         return;
       }
+      if (contextMenu) {
+        if (!contextMenu.ratingSubmenuOpen || event.key !== "0") {
+          return;
+        }
+        event.preventDefault();
+        setShotRatings(selectedAnnotationShotIds, 0);
+        setContextMenu(null);
+        return;
+      }
       const rating = Number(event.key);
       if (!Number.isInteger(rating) || rating < 0 || rating > 5) {
         return;
       }
       event.preventDefault();
-      setShotRatings(selectedShotIds, rating);
+      setShotRatings(selectedAnnotationShotIds, rating);
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isEditAuthority, selectedShotIds, setShotRatings]);
+  }, [
+    contextMenu,
+    isEditAuthority,
+    selectedAnnotationShotIds,
+    selectedShotIds.size,
+    setShotRatings,
+  ]);
 
   useEffect(
     () => () => {
       if (scrollAnimationRef.current !== null) {
         cancelAnimationFrame(scrollAnimationRef.current);
       }
+      if (pendingTitleRenameRef.current !== null) {
+        window.clearTimeout(pendingTitleRenameRef.current);
+      }
+      marqueeCleanupRef.current?.();
       document.body.classList.remove("is-resizing-storyboard-column");
     },
     [],
@@ -776,7 +1394,8 @@ export function StoryboardPanel() {
     const initialTargetOffset = offsetInfo[0];
     const distance = Math.abs(initialTargetOffset - startOffset);
     const animationStartFrame = currentFrameRef.current;
-    const isUpcomingShot = animationStartFrame < shot.start_frame || shot.id !== currentShotId;
+    const isUpcomingShot =
+      animationStartFrame < shot.start_frame || followShotIndex !== currentShotIndex;
     const viewportDistance = distance / Math.max(1, list.clientHeight);
     const distanceDuration = clamp(180 + Math.sqrt(viewportDistance) * 300, 160, 900);
     const preferredArrivalFrame = shot.start_frame - 1;
@@ -823,16 +1442,7 @@ export function StoryboardPanel() {
         scrollAnimationRef.current = null;
       }
     };
-  }, [
-    currentShotId,
-    currentShotIndex,
-    followShotId,
-    followShotIndex,
-    frameRate,
-    isPlaying,
-    rowVirtualizer,
-    sortedShots,
-  ]);
+  }, [followShotId, followShotIndex, frameRate, isPlaying, rowVirtualizer, sortedShots]);
 
   useEffect(() => {
     if (!thumbnailVideoPath || thumbnailPrefetchStart >= thumbnailPrefetchEnd) {
@@ -871,16 +1481,283 @@ export function StoryboardPanel() {
   ]);
 
   function clearShotSelection() {
+    cancelPendingTitleRename();
+    setActiveCell(null);
     selectionAnchorRef.current = null;
+    selectionFocusRef.current = null;
     shotSelectionCleared();
   }
 
+  function startMarqueeSelection(event: ReactPointerEvent<HTMLDivElement>) {
+    const surface = event.currentTarget;
+    const bounds = surface.getBoundingClientRect();
+    const pointsAtScrollbar =
+      event.clientX >= bounds.left + surface.clientWidth ||
+      event.clientY >= bounds.top + surface.clientHeight;
+    if (
+      event.button !== 0 ||
+      sortedShots.length === 0 ||
+      pointsAtScrollbar ||
+      (event.target as HTMLElement | null)?.closest("[data-storyboard-shot-id]")
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    cancelPendingTitleRename();
+    setActiveCell(null);
+    marqueeCleanupRef.current?.();
+
+    const pointerId = event.pointerId;
+    const initialSelection = new Set(selectedShotIds);
+    const togglesSelection = event.ctrlKey || event.metaKey;
+    const addsSelection = event.shiftKey && !togglesSelection;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    let dragging = false;
+    let lastSelection = new Set(selectedShotIds);
+
+    const selectionsMatch = (left: Set<string>, right: Set<string>) =>
+      left.size === right.size && Array.from(left).every((shotId) => right.has(shotId));
+
+    const updateSelection = (currentX: number, currentY: number) => {
+      const left = Math.min(startX, currentX);
+      const right = Math.max(startX, currentX);
+      const top = Math.min(startY, currentY);
+      const bottom = Math.max(startY, currentY);
+      const hitIds = new Set(
+        Array.from(surface.querySelectorAll<HTMLElement>("[data-storyboard-shot-id]"))
+          .filter((element) => {
+            const rowBounds = element.getBoundingClientRect();
+            return (
+              rowBounds.right >= left &&
+              rowBounds.left <= right &&
+              rowBounds.bottom >= top &&
+              rowBounds.top <= bottom
+            );
+          })
+          .map((element) => element.dataset.storyboardShotId)
+          .filter((shotId): shotId is string => Boolean(shotId)),
+      );
+      const nextSelection =
+        togglesSelection || addsSelection ? new Set(initialSelection) : new Set<string>();
+      if (togglesSelection) {
+        for (const shotId of hitIds) {
+          if (initialSelection.has(shotId)) {
+            nextSelection.delete(shotId);
+          } else {
+            nextSelection.add(shotId);
+          }
+        }
+      } else {
+        for (const shotId of hitIds) {
+          nextSelection.add(shotId);
+        }
+      }
+
+      if (!selectionsMatch(lastSelection, nextSelection)) {
+        lastSelection = nextSelection;
+        let lastHitId: string | undefined;
+        for (const shot of sortedShots) {
+          if (hitIds.has(shot.id)) {
+            lastHitId = shot.id;
+          }
+        }
+        if (lastHitId && nextSelection.has(lastHitId)) {
+          selectionAnchorRef.current = lastHitId;
+          selectionFocusRef.current = lastHitId;
+        } else if (nextSelection.size === 0) {
+          selectionAnchorRef.current = null;
+          selectionFocusRef.current = null;
+        }
+        const nextPrimaryShotId =
+          lastHitId && nextSelection.has(lastHitId)
+            ? lastHitId
+            : activeShotId && nextSelection.has(activeShotId)
+              ? activeShotId
+              : null;
+        shotSelectionReplaced(Array.from(nextSelection), nextPrimaryShotId);
+      }
+    };
+
+    const cleanup = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      document.body.classList.remove("is-marquee-selecting");
+      setMarqueeSelection(null);
+      if (marqueeCleanupRef.current === cleanup) {
+        marqueeCleanupRef.current = null;
+      }
+    };
+    const finish = (finishEvent: globalThis.PointerEvent, cancelled: boolean) => {
+      if (finishEvent.pointerId !== pointerId) {
+        return;
+      }
+      if (!cancelled && !dragging && !togglesSelection && !addsSelection) {
+        shotSelectionCleared();
+        selectionAnchorRef.current = null;
+        selectionFocusRef.current = null;
+      }
+      cleanup();
+    };
+    const onMove = (moveEvent: globalThis.PointerEvent) => {
+      if (moveEvent.pointerId !== pointerId) {
+        return;
+      }
+      if (
+        !dragging &&
+        Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) < MARQUEE_DRAG_THRESHOLD
+      ) {
+        return;
+      }
+      if (!dragging) {
+        dragging = true;
+        document.body.classList.add("is-marquee-selecting");
+      }
+      moveEvent.preventDefault();
+      const nextMarquee = {
+        startX,
+        startY,
+        currentX: moveEvent.clientX,
+        currentY: moveEvent.clientY,
+      };
+      setMarqueeSelection(nextMarquee);
+      updateSelection(nextMarquee.currentX, nextMarquee.currentY);
+    };
+    const onUp = (upEvent: globalThis.PointerEvent) => finish(upEvent, false);
+    const onCancel = (cancelEvent: globalThis.PointerEvent) => finish(cancelEvent, true);
+
+    marqueeCleanupRef.current = cleanup;
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+  }
+
+  function renderMarqueeOverlay() {
+    if (!marqueeSelection) {
+      return null;
+    }
+    const left = Math.min(marqueeSelection.startX, marqueeSelection.currentX);
+    const top = Math.min(marqueeSelection.startY, marqueeSelection.currentY);
+    const width = Math.abs(marqueeSelection.currentX - marqueeSelection.startX);
+    const height = Math.abs(marqueeSelection.currentY - marqueeSelection.startY);
+    return createPortal(
+      <div
+        className="storyboard-marquee-selection"
+        style={{ left, top, width, height }}
+        aria-hidden="true"
+      />,
+      document.body,
+    );
+  }
+
   function annotationTargetShotIds(shotId: string) {
-    return selectedShotIds.has(shotId) ? selectedShotIds : [shotId];
+    return annotationShotIdsForSelection(
+      selectedShotIds.has(shotId) ? selectedShotIds : [shotId],
+      shotStacksByShotId,
+    );
+  }
+
+  function openContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const shotElement = (event.target as HTMLElement | null)?.closest<HTMLElement>(
+      "[data-storyboard-shot-id]",
+    );
+    const shotId = shotElement?.dataset.storyboardShotId;
+    if (shotId && !selectedShotIds.has(shotId)) {
+      selectionAnchorRef.current = shotId;
+      selectionFocusRef.current = shotId;
+      shotSelectionReplaced([shotId], shotId);
+    }
+    cancelPendingTitleRename();
+    setActiveCell(null);
+    panelRef.current?.focus({ preventScroll: true });
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      shotId: shotId ?? null,
+      flagSubmenuOpen: false,
+      ratingSubmenuOpen: false,
+      colorSubmenuOpen: false,
+      stackSubmenuOpen: false,
+    });
+  }
+
+  function cancelPendingTitleRename() {
+    if (pendingTitleRenameRef.current === null) {
+      return;
+    }
+    window.clearTimeout(pendingTitleRenameRef.current);
+    pendingTitleRenameRef.current = null;
+  }
+
+  function activateCell(shotId: string, columnId: StoryboardResizableColumnId) {
+    cancelPendingTitleRename();
+    setActiveCell({ shotId, columnId });
+  }
+
+  function storyboardCellClassName(
+    shotId: string,
+    columnId: StoryboardResizableColumnId,
+    selected: boolean,
+    baseClassName = "",
+  ) {
+    return [
+      baseClassName,
+      selected && activeCell?.shotId === shotId && activeCell.columnId === columnId
+        ? "storyboard-active-cell"
+        : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  function beginTitleRename(shot: StoryboardShot) {
+    cancelPendingTitleRename();
+    setRenameValue(storyboardShotTitle(shot, shotCount, shotAnnotations[shot.id]));
+    setEditingShotId(shot.id);
+  }
+
+  function scheduleTitleRename(shot: StoryboardShot) {
+    cancelPendingTitleRename();
+    pendingTitleRenameRef.current = window.setTimeout(() => {
+      pendingTitleRenameRef.current = null;
+      beginTitleRename(shot);
+    }, TITLE_RENAME_DELAY_MS);
+  }
+
+  function handleTitleCellClick(
+    event: ReactMouseEvent<HTMLElement>,
+    shot: StoryboardShot,
+    selected: boolean,
+  ) {
+    activateCell(shot.id, "title");
+    if (selected && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+      if (event.detail === 1) {
+        scheduleTitleRename(shot);
+      } else {
+        cancelPendingTitleRename();
+      }
+    }
+  }
+
+  function finishTitleRename(shot: StoryboardShot, commit: boolean) {
+    cancelPendingTitleRename();
+    if (editingShotId !== shot.id) {
+      return;
+    }
+    const nextTitle = renameValue.trim();
+    const currentTitle = storyboardShotTitle(shot, shotCount, shotAnnotations[shot.id]);
+    if (commit && nextTitle && nextTitle !== currentTitle) {
+      setShotTitle(shot.id, nextTitle);
+    }
+    setEditingShotId(null);
   }
 
   function selectVisibleShots() {
     selectionAnchorRef.current = null;
+    selectionFocusRef.current = null;
     shotSelectionReplaced(
       sortedShots.map((shot) => shot.id),
       null,
@@ -893,6 +1770,7 @@ export function StoryboardPanel() {
     focusRange = false,
   ) {
     const additive = event.ctrlKey || event.metaKey;
+    selectionFocusRef.current = shot.id;
     const currentSelection = new Set(selectedShotIds);
     let nextSelection: Set<string>;
     let primaryShotId = activeShotId;
@@ -953,7 +1831,7 @@ export function StoryboardPanel() {
 
   function handleShotDoubleClick(event: ReactMouseEvent<HTMLElement>, shot: StoryboardShot) {
     const target = event.target as HTMLElement;
-    if (target.closest(".shot-frame-button, .shot-rating-button, .shot-retain-cell input")) {
+    if (target.closest(".shot-frame-button, .shot-rating-button, .shot-flag-button")) {
       return;
     }
     seekToShot(shot, true);
@@ -997,8 +1875,22 @@ export function StoryboardPanel() {
     setShotFilter(nextMinimum > 0 ? "rated" : "all");
   }
 
+  function toggleFlagFilter(flag: StoryboardShotFlag) {
+    const nextFlagFilters = flagFilters.includes(flag)
+      ? flagFilters.filter((current) => current !== flag)
+      : storyboardShotFlags.filter((current) => current === flag || flagFilters.includes(current));
+    setFlagFilters(nextFlagFilters);
+    setShotFilter(minimumRating > 0 ? "custom" : "retained");
+  }
+
   function handleShotFilterChange(filter: StoryboardShotFilter) {
+    if (filter === "custom") {
+      return;
+    }
     setShotFilter(filter);
+    if (filter === "retained") {
+      setFlagFilters(["retained"]);
+    }
     setMinimumRating(filter === "rated" ? Math.max(1, minimumRating) : 0);
   }
 
@@ -1158,7 +2050,7 @@ export function StoryboardPanel() {
   }
 
   return (
-    <section className="storyboard-panel">
+    <section ref={panelRef} className="storyboard-panel" tabIndex={-1}>
       <div className="storyboard-project-row">
         <Film aria-hidden="true" />
         <span>分镜</span>
@@ -1173,7 +2065,7 @@ export function StoryboardPanel() {
           <input
             value={query}
             onChange={(event) => setQuery(event.currentTarget.value)}
-            placeholder="搜索时间、帧号"
+            placeholder="搜索分镜"
             disabled={shots.length === 0}
           />
         </label>
@@ -1201,12 +2093,41 @@ export function StoryboardPanel() {
         </button>
       </div>
 
-      <div className="storyboard-filter-row">
+      <div className={`storyboard-filter-row ${shotFilter === "all" ? "is-filter-closed" : ""}`}>
         <span className="storyboard-filter-label">过滤器：</span>
-        <span className="storyboard-filter-comparator" aria-hidden="true">
-          &ge;
-        </span>
-        <div className="storyboard-filter-stars" aria-label="按最低星级过滤">
+        {(shotFilter === "retained" || shotFilter === "custom") && (
+          <>
+            <div className="storyboard-filter-flags" aria-label="按旗标过滤">
+              {storyboardShotFlags.map((flag) => (
+                <button
+                  key={flag}
+                  type="button"
+                  className={flagFilters.includes(flag) ? "active" : ""}
+                  onClick={() => toggleFlagFilter(flag)}
+                  disabled={shots.length === 0}
+                  title={storyboardShotFlagLabels[flag]}
+                  aria-label={storyboardShotFlagLabels[flag]}
+                  aria-pressed={flagFilters.includes(flag)}
+                >
+                  <StoryboardFlagIcon flag={flag} />
+                </button>
+              ))}
+            </div>
+            <span className="storyboard-filter-separator" aria-hidden="true" />
+          </>
+        )}
+        <SelectDropdown
+          ariaLabel="星级比较方式"
+          className={`storyboard-filter-comparator is-${ratingComparator}`}
+          menuClassName="storyboard-rating-comparator-menu"
+          value={ratingComparator}
+          selectedLabel={storyboardRatingComparatorSymbols[ratingComparator]}
+          title={storyboardRatingComparatorLabels[ratingComparator]}
+          items={storyboardRatingComparatorItems}
+          onChange={setRatingComparator}
+          disabled={shots.length === 0}
+        />
+        <div className="storyboard-filter-stars" aria-label="按星级过滤">
           {storyboardRatingFilters.map((rating) => (
             <button
               key={rating}
@@ -1214,8 +2135,8 @@ export function StoryboardPanel() {
               className={rating <= minimumRating ? "active" : ""}
               onClick={() => setRatingFilter(rating)}
               disabled={shots.length === 0}
-              title={`筛选 ${rating} 星及以上`}
-              aria-label={`筛选 ${rating} 星及以上`}
+              title={`筛选${storyboardRatingComparatorLabels[ratingComparator]} ${rating} 星`}
+              aria-label={`筛选${storyboardRatingComparatorLabels[ratingComparator]} ${rating} 星`}
               aria-pressed={rating <= minimumRating}
             >
               <Star aria-hidden="true" />
@@ -1229,28 +2150,46 @@ export function StoryboardPanel() {
           menuClassName="storyboard-filter-menu"
           value={shotFilter}
           selectedLabel={shotFilter === "custom" ? "自定义过滤" : undefined}
-          items={storyboardFilterItems}
+          items={shotFilter === "custom" ? storyboardCustomFilterItems : storyboardFilterItems}
           onChange={handleShotFilterChange}
           disabled={shots.length === 0}
         />
       </div>
 
-      <div className="storyboard-content">
-        <div className="storyboard-list-frame" style={tableStyle}>
+      <div
+        className="storyboard-content"
+        onPointerDown={(event) => {
+          if (!isEditableKeyboardTarget(event.target)) {
+            panelRef.current?.focus({ preventScroll: true });
+          }
+        }}
+      >
+        <div
+          className="storyboard-list-frame"
+          role="table"
+          aria-label="分镜列表"
+          style={tableStyle}
+        >
           <div className="storyboard-list-header-viewport">
             <div ref={tableHeaderRef} className="storyboard-list-header" role="row">
               {storyboardTableHeaders.map(renderTableHeader)}
             </div>
             <div className="storyboard-list-header-fixed-overlay" aria-hidden="true">
-              <span className="storyboard-column-header storyboard-column-status" />
               <span className="storyboard-column-header storyboard-column-thumbnail" />
             </div>
           </div>
 
-          <div ref={listRef} className="shot-list" onScroll={syncTableHeaderScroll}>
+          <div
+            ref={listRef}
+            className="shot-list"
+            onScroll={syncTableHeaderScroll}
+            onPointerDown={startMarqueeSelection}
+            onContextMenu={openContextMenu}
+          >
             {sortedShots.length > 0 && (
               <div
                 className="virtual-spacer"
+                role="rowgroup"
                 style={{
                   height: `${rowVirtualizer.getTotalSize() + TABLE_SCROLLBAR_SPACER_PX}px`,
                 }}
@@ -1261,22 +2200,48 @@ export function StoryboardPanel() {
                   const isPrimaryShot = selected && shot.id === activeShotId;
                   const isCurrentShot = virtualRow.index === currentShotIndex;
                   const annotation = shotAnnotations[shot.id];
+                  const title = storyboardShotTitle(shot, shotCount, annotation);
                   const rating = annotation?.rating ?? 0;
-                  const retained = annotation?.retained ?? false;
+                  const flag = storyboardShotFlag(annotation);
+                  const colorLabel = annotation?.colorLabel;
+                  const shotStack = shotStacksByShotId.get(shot.id);
+                  const shotStackIndex = shotStack?.shotIds.indexOf(shot.id) ?? -1;
                   return (
                     <div
                       key={shot.id}
                       ref={rowVirtualizer.measureElement}
                       data-index={virtualRow.index}
+                      data-storyboard-shot-id={shot.id}
                       className={`shot-row ${selected ? "is-selected" : ""} ${
                         isPrimaryShot ? "is-primary" : ""
-                      } ${isCurrentShot ? "is-current" : ""}`}
-                      style={{ transform: `translateY(${virtualRow.start}px)` }}
+                      } ${isCurrentShot ? "is-current" : ""} ${
+                        colorLabel ? "has-color-label" : ""
+                      } ${shotStack ? "has-shot-stack" : ""} ${
+                        shotStack?.expanded ? "is-expanded-stack-member" : ""
+                      }`}
+                      style={
+                        {
+                          transform: `translateY(${virtualRow.start}px)`,
+                          ...(colorLabel
+                            ? {
+                                "--storyboard-color-label":
+                                  storyboardShotColorLabelValues[colorLabel],
+                              }
+                            : {}),
+                        } as CSSProperties
+                      }
+                      role="row"
                       onClick={(event) => handleShotSelection(event, shot)}
                       onDoubleClick={(event) => handleShotDoubleClick(event, shot)}
                     >
-                      <span className="shot-status-cell" aria-hidden="true" />
-                      <div className="shot-thumbnail-cell">
+                      <div className="shot-thumbnail-cell" role="cell">
+                        {shotStack && (
+                          <StoryboardStackBadge
+                            stack={shotStack}
+                            shotIndex={shotStackIndex}
+                            onToggle={() => setShotStackExpanded(shot.id, !shotStack.expanded)}
+                          />
+                        )}
                         {thumbnailVideoPath && (
                           <ShotFrameButton
                             shot={shot}
@@ -1288,24 +2253,99 @@ export function StoryboardPanel() {
                             priority={Math.abs(virtualRow.index - thumbnailPriorityCenterIndex)}
                             onSelect={(event) => {
                               event.stopPropagation();
+                              cancelPendingTitleRename();
+                              setActiveCell(null);
                               handleShotSelection(event, shot, true);
                             }}
                           />
                         )}
                       </div>
-                      <span className="shot-time-cell">
+                      <span
+                        className={storyboardCellClassName(
+                          shot.id,
+                          "title",
+                          selected,
+                          "shot-title-cell",
+                        )}
+                        role="cell"
+                        onClick={(event) => handleTitleCellClick(event, shot, selected)}
+                      >
+                        {editingShotId === shot.id ? (
+                          <input
+                            className="shot-title-editor"
+                            value={renameValue}
+                            aria-label="重命名分镜"
+                            autoFocus
+                            onFocus={(event) => event.currentTarget.select()}
+                            onChange={(event) => setRenameValue(event.currentTarget.value)}
+                            onPointerDown={(event) => event.stopPropagation()}
+                            onClick={(event) => event.stopPropagation()}
+                            onDoubleClick={(event) => event.stopPropagation()}
+                            onBlur={() => finishTitleRename(shot, true)}
+                            onKeyDown={(event) => {
+                              event.stopPropagation();
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                event.currentTarget.blur();
+                              } else if (event.key === "Escape") {
+                                event.preventDefault();
+                                finishTitleRename(shot, false);
+                              }
+                            }}
+                          />
+                        ) : (
+                          <span
+                            className="shot-title-copy"
+                            title={title}
+                            onDoubleClick={(event) => {
+                              event.stopPropagation();
+                              beginTitleRename(shot);
+                            }}
+                          >
+                            {title}
+                          </span>
+                        )}
+                      </span>
+                      <span
+                        className={storyboardCellClassName(
+                          shot.id,
+                          "mediaStart",
+                          selected,
+                          "shot-time-cell",
+                        )}
+                        role="cell"
+                        onClick={() => activateCell(shot.id, "mediaStart")}
+                      >
                         {formatMonitorTime(shot.start_us, frameRate)}
                       </span>
-                      <span className="shot-time-cell">
+                      <span
+                        className={storyboardCellClassName(
+                          shot.id,
+                          "mediaEnd",
+                          selected,
+                          "shot-time-cell",
+                        )}
+                        role="cell"
+                        onClick={() => activateCell(shot.id, "mediaEnd")}
+                      >
                         {formatMonitorTime(shot.end_us, frameRate)}
                       </span>
-                      <span className="shot-duration-cell">
+                      <span
+                        className={storyboardCellClassName(
+                          shot.id,
+                          "duration",
+                          selected,
+                          "shot-duration-cell",
+                        )}
+                        role="cell"
+                        onClick={() => activateCell(shot.id, "duration")}
+                      >
                         {formatMonitorFrame(
                           Math.max(0, shot.end_frame - shot.start_frame + 1),
                           frameRate,
                         )}
                       </span>
-                      <div className="shot-rating-cell" aria-label={`${rating} 星`}>
+                      <div className="shot-rating-cell" role="cell" aria-label={`${rating} 星`}>
                         {[1, 2, 3, 4, 5].map((star) => (
                           <button
                             key={star}
@@ -1330,20 +2370,33 @@ export function StoryboardPanel() {
                           </button>
                         ))}
                       </div>
-                      <div className="shot-retain-cell">
-                        <input
-                          type="checkbox"
-                          checked={retained}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                          }}
-                          onDoubleClick={(event) => event.stopPropagation()}
-                          onChange={() =>
-                            setShotsRetained(annotationTargetShotIds(shot.id), !retained)
-                          }
-                          title={retained ? "取消留用" : "留用镜头"}
-                          aria-label={retained ? "取消留用镜头" : "留用镜头"}
-                        />
+                      <div className="shot-retain-cell" role="cell">
+                        <div className="shot-flag-controls">
+                          {(["retained", "excluded"] as const).map((nextFlag) => {
+                            const active = flag === nextFlag;
+                            const label = storyboardShotFlagLabels[nextFlag];
+                            return (
+                              <button
+                                key={nextFlag}
+                                type="button"
+                                className={`shot-flag-button ${active ? "active" : ""}`}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setShotFlags(
+                                    annotationTargetShotIds(shot.id),
+                                    active ? "none" : nextFlag,
+                                  );
+                                }}
+                                onDoubleClick={(event) => event.stopPropagation()}
+                                title={active ? `取消${label}` : `设为${label}`}
+                                aria-label={active ? `取消${label}` : `设为${label}`}
+                                aria-pressed={active}
+                              >
+                                <StoryboardFlagIcon flag={nextFlag} />
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
                     </div>
                   );
@@ -1353,6 +2406,8 @@ export function StoryboardPanel() {
           </div>
         </div>
       </div>
+
+      {renderMarqueeOverlay()}
 
       <footer className="storyboard-footer">
         <div className="storyboard-selection-tools">
@@ -1395,6 +2450,299 @@ export function StoryboardPanel() {
           {selectedCount} 条已选择，共 {sortedShots.length} 条
         </span>
       </footer>
+
+      {contextMenu &&
+        createPortal(
+          <PopupMenu
+            className="storyboard-context-menu"
+            contextMenuAnchor={contextMenu}
+            enableMnemonics={!contextSubmenuOpen}
+            style={{
+              position: "fixed",
+              left: contextMenu.x,
+              top: contextMenu.y,
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            <PopupMenuSubmenu
+              label="设置旗标(F)"
+              mnemonic="F"
+              open={contextMenu.flagSubmenuOpen}
+              enableMnemonics
+              menuClassName="storyboard-context-menu"
+              onOpenChange={(open) =>
+                setContextMenu((current) =>
+                  current
+                    ? {
+                        ...current,
+                        flagSubmenuOpen: open,
+                        ratingSubmenuOpen: open ? false : current.ratingSubmenuOpen,
+                        colorSubmenuOpen: open ? false : current.colorSubmenuOpen,
+                        stackSubmenuOpen: open ? false : current.stackSubmenuOpen,
+                      }
+                    : current,
+                )
+              }
+              disabled={contextMenuShotIds.length === 0}
+            >
+              <PopupMenuItem
+                checked={contextMenuFlag === "retained"}
+                mnemonic="F"
+                onSelect={() => {
+                  setShotFlags(contextMenuShotIds, "retained");
+                  setContextMenu(null);
+                }}
+              >
+                留用(F)
+              </PopupMenuItem>
+              <PopupMenuItem
+                checked={contextMenuFlag === "none"}
+                mnemonic="U"
+                onSelect={() => {
+                  setShotFlags(contextMenuShotIds, "none");
+                  setContextMenu(null);
+                }}
+              >
+                无旗标(U)
+              </PopupMenuItem>
+              <PopupMenuItem
+                checked={contextMenuFlag === "excluded"}
+                mnemonic="R"
+                onSelect={() => {
+                  setShotFlags(contextMenuShotIds, "excluded");
+                  setContextMenu(null);
+                }}
+              >
+                排除(R)
+              </PopupMenuItem>
+            </PopupMenuSubmenu>
+
+            <PopupMenuSubmenu
+              label="设置星级(Z)"
+              mnemonic="Z"
+              open={contextMenu.ratingSubmenuOpen}
+              enableMnemonics
+              menuClassName="storyboard-context-menu"
+              onOpenChange={(open) =>
+                setContextMenu((current) =>
+                  current
+                    ? {
+                        ...current,
+                        ratingSubmenuOpen: open,
+                        flagSubmenuOpen: open ? false : current.flagSubmenuOpen,
+                        colorSubmenuOpen: open ? false : current.colorSubmenuOpen,
+                        stackSubmenuOpen: open ? false : current.stackSubmenuOpen,
+                      }
+                    : current,
+                )
+              }
+              disabled={contextMenuShotIds.length === 0}
+            >
+              <PopupMenuItem
+                checked={contextMenuRating === 0}
+                mnemonic="N"
+                shortcut="0"
+                onSelect={() => {
+                  setShotRatings(contextMenuShotIds, 0);
+                  setContextMenu(null);
+                }}
+              >
+                无(N)
+              </PopupMenuItem>
+              {[1, 2, 3, 4, 5].map((rating) => (
+                <PopupMenuItem
+                  key={rating}
+                  checked={contextMenuRating === rating}
+                  mnemonic={String(rating)}
+                  onSelect={() => {
+                    setShotRatings(contextMenuShotIds, rating);
+                    setContextMenu(null);
+                  }}
+                >
+                  {rating} 星({rating})
+                </PopupMenuItem>
+              ))}
+              <PopupMenuSeparator />
+              <PopupMenuItem
+                onSelect={() => {
+                  adjustShotRatings(contextMenuShotIds, -1);
+                  setContextMenu(null);
+                }}
+                disabled={
+                  contextMenuShotIds.length === 0 ||
+                  contextMenuRatings.every((rating) => rating === 0)
+                }
+              >
+                降低星级
+              </PopupMenuItem>
+              <PopupMenuItem
+                onSelect={() => {
+                  adjustShotRatings(contextMenuShotIds, 1);
+                  setContextMenu(null);
+                }}
+                disabled={
+                  contextMenuShotIds.length === 0 ||
+                  contextMenuRatings.every((rating) => rating === 5)
+                }
+              >
+                提升星级
+              </PopupMenuItem>
+            </PopupMenuSubmenu>
+
+            <PopupMenuSubmenu
+              label="设置色标(C)"
+              mnemonic="C"
+              open={contextMenu.colorSubmenuOpen}
+              enableMnemonics
+              menuClassName="storyboard-context-menu"
+              onOpenChange={(open) =>
+                setContextMenu((current) =>
+                  current
+                    ? {
+                        ...current,
+                        colorSubmenuOpen: open,
+                        flagSubmenuOpen: open ? false : current.flagSubmenuOpen,
+                        ratingSubmenuOpen: open ? false : current.ratingSubmenuOpen,
+                        stackSubmenuOpen: open ? false : current.stackSubmenuOpen,
+                      }
+                    : current,
+                )
+              }
+              disabled={contextMenuShotIds.length === 0}
+            >
+              {storyboardShotColorLabels.map(([colorLabel, label]) => (
+                <PopupMenuItem
+                  key={colorLabel}
+                  onSelect={() => {
+                    setShotColorLabels(contextMenuShotIds, colorLabel);
+                    setContextMenu(null);
+                  }}
+                >
+                  {label}
+                </PopupMenuItem>
+              ))}
+              <PopupMenuSeparator />
+              <PopupMenuItem
+                onSelect={() => {
+                  setShotColorLabels(contextMenuShotIds, null);
+                  setContextMenu(null);
+                }}
+              >
+                无
+              </PopupMenuItem>
+            </PopupMenuSubmenu>
+
+            <PopupMenuSeparator />
+
+            <PopupMenuSubmenu
+              label="堆叠(X)"
+              mnemonic="X"
+              open={contextMenu.stackSubmenuOpen}
+              enableMnemonics
+              menuClassName="storyboard-context-menu"
+              onOpenChange={(open) =>
+                setContextMenu((current) =>
+                  current
+                    ? {
+                        ...current,
+                        stackSubmenuOpen: open,
+                        flagSubmenuOpen: open ? false : current.flagSubmenuOpen,
+                        ratingSubmenuOpen: open ? false : current.ratingSubmenuOpen,
+                        colorSubmenuOpen: open ? false : current.colorSubmenuOpen,
+                      }
+                    : current,
+                )
+              }
+              disabled={
+                !canCreateShotStack && contextMenuStacks.length === 0 && shotStacks.length === 0
+              }
+            >
+              <PopupMenuItem
+                mnemonic="G"
+                onSelect={() => {
+                  if (composableShotIds) {
+                    createShotStack(composableShotIds);
+                  }
+                  setContextMenu(null);
+                }}
+                disabled={!canCreateShotStack}
+              >
+                组成堆叠(G)
+              </PopupMenuItem>
+              <PopupMenuItem
+                mnemonic="U"
+                onSelect={() => {
+                  for (const shotId of contextMenuStackRepresentatives) {
+                    cancelShotStack(shotId);
+                  }
+                  setContextMenu(null);
+                }}
+                disabled={contextMenuStacks.length === 0}
+              >
+                取消堆叠(U)
+              </PopupMenuItem>
+              <PopupMenuItem
+                mnemonic="R"
+                onSelect={() => {
+                  for (const shotId of contextMenuStackShotIds) {
+                    removeShotFromStack(shotId);
+                  }
+                  setContextMenu(null);
+                }}
+                disabled={contextMenuStackShotIds.length === 0}
+              >
+                从堆叠中移去(R)
+              </PopupMenuItem>
+              <PopupMenuItem
+                mnemonic="S"
+                onSelect={() => {
+                  for (const shotId of contextMenuStackShotIds) {
+                    splitShotStack(shotId);
+                  }
+                  setContextMenu(null);
+                }}
+                disabled={!canSplitSelectedShotStacks}
+              >
+                拆分堆叠(S)
+              </PopupMenuItem>
+              <PopupMenuSeparator />
+              <PopupMenuItem
+                onSelect={() => {
+                  for (const shotId of contextMenuStackRepresentatives) {
+                    setShotStackExpanded(shotId, expandSelectedShotStacks);
+                  }
+                  setContextMenu(null);
+                }}
+                disabled={contextMenuStacks.length === 0}
+              >
+                {expandSelectedShotStacks ? "展开堆叠" : "折叠堆叠"}
+              </PopupMenuItem>
+              <PopupMenuSeparator />
+              <PopupMenuItem
+                mnemonic="C"
+                onSelect={() => {
+                  setAllShotStacksExpanded(false);
+                  setContextMenu(null);
+                }}
+                disabled={!hasExpandedShotStacks}
+              >
+                折叠全部堆叠(C)
+              </PopupMenuItem>
+              <PopupMenuItem
+                mnemonic="E"
+                onSelect={() => {
+                  setAllShotStacksExpanded(true);
+                  setContextMenu(null);
+                }}
+                disabled={!hasCollapsedShotStacks}
+              >
+                展开全部堆叠(E)
+              </PopupMenuItem>
+            </PopupMenuSubmenu>
+          </PopupMenu>,
+          document.body,
+        )}
     </section>
   );
 }
