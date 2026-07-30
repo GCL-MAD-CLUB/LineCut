@@ -5,6 +5,7 @@ export type StoryboardShotFilter = "all" | "rated" | "unrated" | "retained" | "c
 export type StoryboardRatingComparator = "gte" | "lte" | "eq";
 export type StoryboardShotFlag = "retained" | "none" | "excluded";
 export type StoryboardShotColorLabel = "red" | "yellow" | "green" | "blue" | "purple";
+export type StoryboardShotColorLabelFilter = StoryboardShotColorLabel | "none";
 
 export interface StoryboardShotAnnotation {
   rating: number;
@@ -28,6 +29,7 @@ interface StoryboardPanelState {
   minimumRating: number;
   ratingComparator: StoryboardRatingComparator;
   flagFilters: StoryboardShotFlag[];
+  colorLabelFilters: StoryboardShotColorLabelFilter[];
   activeShotId: string | null;
   shots: StoryboardShot[];
   shotStacks: StoryboardShotStack[];
@@ -42,6 +44,7 @@ interface StoryboardPanelState {
   setMinimumRating: (rating: number) => void;
   setRatingComparator: (comparator: StoryboardRatingComparator) => void;
   setFlagFilters: (flags: StoryboardShotFlag[]) => void;
+  setColorLabelFilters: (colorLabels: StoryboardShotColorLabelFilter[]) => void;
   setThumbnailSize: (size: number) => void;
   setShotTitle: (shotId: string, title: string) => void;
   setShotRating: (shotId: string, rating: number) => void;
@@ -119,6 +122,7 @@ export const useStoryboardPanelState = createPanelState<StoryboardPanelState>(()
   minimumRating: 0,
   ratingComparator: "gte",
   flagFilters: ["retained"],
+  colorLabelFilters: [],
   activeShotId: null,
   shots: [],
   shotStacks: [],
@@ -138,6 +142,7 @@ export const useStoryboardPanelState = createPanelState<StoryboardPanelState>(()
             minimumRating: 0,
             ratingComparator: "gte",
             flagFilters: ["retained"],
+            colorLabelFilters: [],
             activeShotId: null,
             shots: [],
             shotStacks: [],
@@ -157,6 +162,8 @@ export const useStoryboardPanelState = createPanelState<StoryboardPanelState>(()
     }),
   setRatingComparator: (ratingComparator) => set({ ratingComparator }),
   setFlagFilters: (flagFilters) => set({ flagFilters: Array.from(new Set(flagFilters)) }),
+  setColorLabelFilters: (colorLabelFilters) =>
+    set({ colorLabelFilters: Array.from(new Set(colorLabelFilters)) }),
   setThumbnailSize: (thumbnailSize) =>
     set({
       thumbnailSize: Number.isFinite(thumbnailSize) ? Math.min(100, Math.max(0, thumbnailSize)) : 0,

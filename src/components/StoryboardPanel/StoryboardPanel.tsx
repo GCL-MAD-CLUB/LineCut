@@ -45,6 +45,7 @@ import {
   type StoryboardRatingComparator,
   type StoryboardShotAnnotation,
   type StoryboardShotColorLabel,
+  type StoryboardShotColorLabelFilter,
   type StoryboardShotFilter,
   type StoryboardShotFlag,
   type StoryboardShotStack,
@@ -58,7 +59,7 @@ const THUMBNAIL_PREFETCH_ROWS_AFTER = 28;
 const TABLE_SCROLLBAR_SPACER_PX = 8;
 const STORYBOARD_THUMBNAIL_HEIGHT = 46;
 const STORYBOARD_THUMBNAIL_WIDTH = 82;
-const STORYBOARD_ROW_VERTICAL_PADDING = 16;
+const STORYBOARD_ROW_VERTICAL_PADDING = 36;
 const STORYBOARD_THUMBNAIL_COLUMN_PADDING = 16;
 const STORYBOARD_STATUS_GUTTER_WIDTH = 16;
 const TITLE_RENAME_DELAY_MS = 350;
@@ -180,6 +181,14 @@ const storyboardShotColorLabelValues: Record<StoryboardShotColorLabel, string> =
   blue: "#3b82f6",
   purple: "#a855f7",
 };
+const storyboardShotColorFilterLabels: Array<readonly [StoryboardShotColorLabelFilter, string]> = [
+  ...storyboardShotColorLabels,
+  ["none", "无"],
+];
+const storyboardShotColorFilterValues: Record<StoryboardShotColorLabelFilter, string> = {
+  ...storyboardShotColorLabelValues,
+  none: "#7f7f7f",
+};
 const storyboardFilterOptions: Array<readonly [StoryboardShotFilter, string]> = [
   ["all", "关闭过滤器"],
   ["retained", "留用"],
@@ -217,6 +226,13 @@ interface StoryboardContextMenuState {
   ratingSubmenuOpen: boolean;
   colorSubmenuOpen: boolean;
   stackSubmenuOpen: boolean;
+}
+
+interface StoryboardAnnotationMenuState {
+  kind: "flag" | "color";
+  x: number;
+  y: number;
+  shotId: string;
 }
 
 const MARQUEE_DRAG_THRESHOLD = 4;
@@ -276,9 +292,11 @@ function shotMatchesFilter(
   minimumRating: number,
   ratingComparator: StoryboardRatingComparator,
   flagFilters: readonly StoryboardShotFlag[],
+  colorLabelFilters: readonly StoryboardShotColorLabelFilter[],
 ) {
   const rating = annotation?.rating ?? 0;
   const flag = storyboardShotFlag(annotation);
+  const colorLabel = annotation?.colorLabel ?? "none";
   const matchesRating =
     minimumRating === 0 ||
     (ratingComparator === "gte"
@@ -287,19 +305,21 @@ function shotMatchesFilter(
         ? rating <= minimumRating
         : rating === minimumRating);
 
-  if (filter === "all") {
-    return matchesRating;
-  }
-  if (filter === "retained") {
-    return flagFilters.includes(flag) && matchesRating;
-  }
-  if (filter === "rated") {
-    return minimumRating > 0 ? matchesRating : rating > 0;
-  }
-  if (filter === "unrated") {
-    return rating === 0;
-  }
-  return flagFilters.includes(flag) && matchesRating;
+  const matchesColorLabel =
+    colorLabelFilters.length === 0 || colorLabelFilters.includes(colorLabel);
+  const matchesBaseFilter =
+    filter === "all"
+      ? matchesRating
+      : filter === "retained"
+        ? flagFilters.includes(flag) && matchesRating
+        : filter === "rated"
+          ? minimumRating > 0
+            ? matchesRating
+            : rating > 0
+          : filter === "unrated"
+            ? rating === 0
+            : flagFilters.includes(flag) && matchesRating;
+  return matchesBaseFilter && matchesColorLabel;
 }
 
 function stackByShotId(shotStacks: readonly StoryboardShotStack[]) {
@@ -654,6 +674,64 @@ function StoryboardFlagIcon({ flag }: { flag: StoryboardShotFlag }) {
   );
 }
 
+interface StoryboardFlagMenuItemsProps {
+  checkedFlag: StoryboardShotFlag | null;
+  onSelect: (flag: StoryboardShotFlag) => void;
+}
+
+function StoryboardFlagMenuItems({ checkedFlag, onSelect }: StoryboardFlagMenuItemsProps) {
+  return (
+    <>
+      <PopupMenuItem
+        checked={checkedFlag === "retained"}
+        mnemonic="F"
+        onSelect={() => onSelect("retained")}
+      >
+        留用(F)
+      </PopupMenuItem>
+      <PopupMenuItem
+        checked={checkedFlag === "none"}
+        mnemonic="U"
+        onSelect={() => onSelect("none")}
+      >
+        无旗标(U)
+      </PopupMenuItem>
+      <PopupMenuItem
+        checked={checkedFlag === "excluded"}
+        mnemonic="R"
+        onSelect={() => onSelect("excluded")}
+      >
+        排除(R)
+      </PopupMenuItem>
+    </>
+  );
+}
+
+interface StoryboardColorMenuItemsProps {
+  checkedColorLabel: StoryboardShotColorLabel | null | undefined;
+  onSelect: (colorLabel: StoryboardShotColorLabel | null) => void;
+}
+
+function StoryboardColorMenuItems({ checkedColorLabel, onSelect }: StoryboardColorMenuItemsProps) {
+  return (
+    <>
+      {storyboardShotColorLabels.map(([colorLabel, label]) => (
+        <PopupMenuItem
+          key={colorLabel}
+          checked={checkedColorLabel === colorLabel}
+          onSelect={() => onSelect(colorLabel)}
+        >
+          {label}
+        </PopupMenuItem>
+      ))}
+      <PopupMenuSeparator />
+      <PopupMenuItem checked={checkedColorLabel === null} onSelect={() => onSelect(null)}>
+        无
+      </PopupMenuItem>
+    </>
+  );
+}
+
 function storyboardShotSortValue(
   shot: StoryboardShot,
   columnId: StoryboardSortableColumnId,
@@ -916,6 +994,7 @@ export function StoryboardPanel() {
     minimumRating,
     ratingComparator,
     flagFilters,
+    colorLabelFilters,
     activeShotId,
     shots,
     shotStacks,
@@ -930,6 +1009,7 @@ export function StoryboardPanel() {
     setMinimumRating,
     setRatingComparator,
     setFlagFilters,
+    setColorLabelFilters,
     setThumbnailSize,
     setShotTitle,
     setShotRatings,
@@ -965,6 +1045,7 @@ export function StoryboardPanel() {
   const [renameValue, setRenameValue] = useState("");
   const [marqueeSelection, setMarqueeSelection] = useState<StoryboardMarqueeSelection | null>(null);
   const [contextMenu, setContextMenu] = useState<StoryboardContextMenuState | null>(null);
+  const [annotationMenu, setAnnotationMenu] = useState<StoryboardAnnotationMenuState | null>(null);
   const [storyboardColumnWidths, setStoryboardColumnWidths] = useState(
     initialStoryboardColumnWidths,
   );
@@ -1003,10 +1084,12 @@ export function StoryboardPanel() {
             minimumRating,
             ratingComparator,
             flagFilters,
+            colorLabelFilters,
           ),
       ),
     [
       displayShots,
+      colorLabelFilters,
       flagFilters,
       minimumRating,
       query,
@@ -1160,6 +1243,38 @@ export function StoryboardPanel() {
     contextMenuFlags.length > 0 && contextMenuFlags.every((flag) => flag === contextMenuFlags[0])
       ? contextMenuFlags[0]
       : null;
+  const contextMenuColorLabels = contextMenuShotIds.map(
+    (shotId) => shotAnnotations[shotId]?.colorLabel ?? null,
+  );
+  const contextMenuColorLabel =
+    contextMenuColorLabels.length > 0 &&
+    contextMenuColorLabels.every((colorLabel) => colorLabel === contextMenuColorLabels[0])
+      ? contextMenuColorLabels[0]
+      : undefined;
+  const annotationMenuShotIds = annotationMenu
+    ? Array.from(
+        annotationShotIdsForSelection(
+          selectedShotIds.has(annotationMenu.shotId) ? selectedShotIds : [annotationMenu.shotId],
+          shotStacksByShotId,
+        ),
+      )
+    : [];
+  const annotationMenuFlags = annotationMenuShotIds.map((shotId) =>
+    storyboardShotFlag(shotAnnotations[shotId]),
+  );
+  const annotationMenuFlag =
+    annotationMenuFlags.length > 0 &&
+    annotationMenuFlags.every((flag) => flag === annotationMenuFlags[0])
+      ? annotationMenuFlags[0]
+      : null;
+  const annotationMenuColorLabels = annotationMenuShotIds.map(
+    (shotId) => shotAnnotations[shotId]?.colorLabel ?? null,
+  );
+  const annotationMenuColorLabel =
+    annotationMenuColorLabels.length > 0 &&
+    annotationMenuColorLabels.every((colorLabel) => colorLabel === annotationMenuColorLabels[0])
+      ? annotationMenuColorLabels[0]
+      : undefined;
   const composableShotIds = stackCompositionShotIds(selectedShotIds, shots, shotStacksByShotId);
   const canCreateShotStack = composableShotIds !== null;
   const contextMenuStackShotIds = Array.from(selectedShotIds).filter((shotId) =>
@@ -1199,6 +1314,7 @@ export function StoryboardPanel() {
     setEditingShotId(null);
     setActiveCell(null);
     setContextMenu(null);
+    setAnnotationMenu(null);
   }, [syncVideoContext, videoContext]);
 
   useEffect(() => {
@@ -1222,6 +1338,28 @@ export function StoryboardPanel() {
       window.removeEventListener("blur", close);
     };
   }, [contextMenu]);
+
+  useEffect(() => {
+    if (!annotationMenu) {
+      return;
+    }
+    const close = () => setAnnotationMenu(null);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        close();
+      }
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("resize", close);
+    window.addEventListener("blur", close);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("blur", close);
+    };
+  }, [annotationMenu]);
 
   useEffect(() => {
     if (showOnlySelected && selectedCount === 0) {
@@ -1659,6 +1797,25 @@ export function StoryboardPanel() {
     );
   }
 
+  function openAnnotationMenu(
+    event: ReactMouseEvent<HTMLButtonElement>,
+    shotId: string,
+    kind: StoryboardAnnotationMenuState["kind"],
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    cancelPendingTitleRename();
+    setActiveCell(null);
+    panelRef.current?.focus({ preventScroll: true });
+    setContextMenu(null);
+    setAnnotationMenu({
+      kind,
+      x: event.clientX,
+      y: event.clientY,
+      shotId,
+    });
+  }
+
   function openContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
     event.preventDefault();
     const shotElement = (event.target as HTMLElement | null)?.closest<HTMLElement>(
@@ -1673,6 +1830,7 @@ export function StoryboardPanel() {
     cancelPendingTitleRename();
     setActiveCell(null);
     panelRef.current?.focus({ preventScroll: true });
+    setAnnotationMenu(null);
     setContextMenu({
       x: event.clientX,
       y: event.clientY,
@@ -1883,11 +2041,21 @@ export function StoryboardPanel() {
     setShotFilter(minimumRating > 0 ? "custom" : "retained");
   }
 
+  function toggleColorLabelFilter(colorLabel: StoryboardShotColorLabelFilter) {
+    const nextColorLabelFilters = colorLabelFilters.includes(colorLabel)
+      ? colorLabelFilters.filter((current) => current !== colorLabel)
+      : storyboardShotColorFilterLabels
+          .map(([current]) => current)
+          .filter((current) => current === colorLabel || colorLabelFilters.includes(current));
+    setColorLabelFilters(nextColorLabelFilters);
+  }
+
   function handleShotFilterChange(filter: StoryboardShotFilter) {
     if (filter === "custom") {
       return;
     }
     setShotFilter(filter);
+    setColorLabelFilters([]);
     if (filter === "retained") {
       setFlagFilters(["retained"]);
     }
@@ -2093,7 +2261,11 @@ export function StoryboardPanel() {
         </button>
       </div>
 
-      <div className={`storyboard-filter-row ${shotFilter === "all" ? "is-filter-closed" : ""}`}>
+      <div
+        className={`storyboard-filter-row ${
+          shotFilter === "all" && colorLabelFilters.length === 0 ? "is-filter-closed" : ""
+        }`}
+      >
         <span className="storyboard-filter-label">过滤器：</span>
         {(shotFilter === "retained" || shotFilter === "custom") && (
           <>
@@ -2144,13 +2316,42 @@ export function StoryboardPanel() {
           ))}
         </div>
         <span className="storyboard-filter-separator" aria-hidden="true" />
+        <div className="storyboard-filter-colors" aria-label="按色标过滤">
+          {storyboardShotColorFilterLabels.map(([colorLabel, label]) => {
+            const active = colorLabelFilters.includes(colorLabel);
+            return (
+              <button
+                key={colorLabel}
+                type="button"
+                className={active ? "active" : ""}
+                style={
+                  {
+                    "--storyboard-filter-color": storyboardShotColorFilterValues[colorLabel],
+                  } as CSSProperties
+                }
+                onClick={() => toggleColorLabelFilter(colorLabel)}
+                disabled={shots.length === 0}
+                title={`${label}色标`}
+                aria-label={`按${label}色标过滤`}
+                aria-pressed={active}
+              />
+            );
+          })}
+        </div>
+        <span className="storyboard-filter-separator" aria-hidden="true" />
         <SelectDropdown
           ariaLabel="分镜过滤器"
           className="storyboard-filter-dropdown"
           menuClassName="storyboard-filter-menu"
           value={shotFilter}
-          selectedLabel={shotFilter === "custom" ? "自定义过滤" : undefined}
-          items={shotFilter === "custom" ? storyboardCustomFilterItems : storyboardFilterItems}
+          selectedLabel={
+            shotFilter === "custom" || colorLabelFilters.length > 0 ? "自定义过滤" : undefined
+          }
+          items={
+            shotFilter === "custom" || colorLabelFilters.length > 0
+              ? storyboardCustomFilterItems
+              : storyboardFilterItems
+          }
           onChange={handleShotFilterChange}
           disabled={shots.length === 0}
         />
@@ -2235,6 +2436,35 @@ export function StoryboardPanel() {
                       onDoubleClick={(event) => handleShotDoubleClick(event, shot)}
                     >
                       <div className="shot-thumbnail-cell" role="cell">
+                        <div className="shot-thumbnail-topline">
+                          <span className="shot-thumbnail-row-number" aria-hidden="true">
+                            {virtualRow.index + 1}
+                          </span>
+                          <button
+                            type="button"
+                            className={`shot-thumbnail-flag is-${flag}`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setShotFlags(
+                                annotationTargetShotIds(shot.id),
+                                flag === "none" ? "retained" : "none",
+                              );
+                            }}
+                            onContextMenu={(event) => openAnnotationMenu(event, shot.id, "flag")}
+                            onDoubleClick={(event) => event.stopPropagation()}
+                            title={
+                              flag === "none"
+                                ? "设为留用旗标"
+                                : `取消${storyboardShotFlagLabels[flag]}`
+                            }
+                            aria-label={
+                              flag === "none"
+                                ? "设为留用旗标"
+                                : `取消${storyboardShotFlagLabels[flag]}`
+                            }
+                            aria-pressed={flag !== "none"}
+                          />
+                        </div>
                         {shotStack && (
                           <StoryboardStackBadge
                             stack={shotStack}
@@ -2259,6 +2489,51 @@ export function StoryboardPanel() {
                             }}
                           />
                         )}
+                        <button
+                          type="button"
+                          className={`shot-thumbnail-color-label ${
+                            colorLabel ? "has-color-label" : "is-none"
+                          }`}
+                          onClick={(event) => openAnnotationMenu(event, shot.id, "color")}
+                          onDoubleClick={(event) => event.stopPropagation()}
+                          title={colorLabel ? "更改色标" : "设置色标"}
+                          aria-label={colorLabel ? "更改色标" : "设置色标"}
+                        />
+                        <div
+                          className="shot-thumbnail-rating"
+                          role="group"
+                          aria-label={`${rating} 星`}
+                        >
+                          {[1, 2, 3, 4, 5].map((star) => {
+                            const filled = star <= rating;
+                            return (
+                              <button
+                                key={star}
+                                type="button"
+                                className={`shot-thumbnail-rating-slot ${
+                                  filled ? "is-filled" : "is-empty"
+                                }`}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setShotRatings(
+                                    annotationTargetShotIds(shot.id),
+                                    rating === star ? 0 : star,
+                                  );
+                                }}
+                                onDoubleClick={(event) => event.stopPropagation()}
+                                title={`${star} 星`}
+                                aria-label={`${star} 星`}
+                                aria-pressed={rating === star}
+                              >
+                                {filled ? (
+                                  <Star aria-hidden="true" />
+                                ) : (
+                                  <span aria-hidden="true">·</span>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
                       <span
                         className={storyboardCellClassName(
@@ -2486,36 +2761,13 @@ export function StoryboardPanel() {
               }
               disabled={contextMenuShotIds.length === 0}
             >
-              <PopupMenuItem
-                checked={contextMenuFlag === "retained"}
-                mnemonic="F"
-                onSelect={() => {
-                  setShotFlags(contextMenuShotIds, "retained");
+              <StoryboardFlagMenuItems
+                checkedFlag={contextMenuFlag}
+                onSelect={(flag) => {
+                  setShotFlags(contextMenuShotIds, flag);
                   setContextMenu(null);
                 }}
-              >
-                留用(F)
-              </PopupMenuItem>
-              <PopupMenuItem
-                checked={contextMenuFlag === "none"}
-                mnemonic="U"
-                onSelect={() => {
-                  setShotFlags(contextMenuShotIds, "none");
-                  setContextMenu(null);
-                }}
-              >
-                无旗标(U)
-              </PopupMenuItem>
-              <PopupMenuItem
-                checked={contextMenuFlag === "excluded"}
-                mnemonic="R"
-                onSelect={() => {
-                  setShotFlags(contextMenuShotIds, "excluded");
-                  setContextMenu(null);
-                }}
-              >
-                排除(R)
-              </PopupMenuItem>
+              />
             </PopupMenuSubmenu>
 
             <PopupMenuSubmenu
@@ -2611,26 +2863,13 @@ export function StoryboardPanel() {
               }
               disabled={contextMenuShotIds.length === 0}
             >
-              {storyboardShotColorLabels.map(([colorLabel, label]) => (
-                <PopupMenuItem
-                  key={colorLabel}
-                  onSelect={() => {
-                    setShotColorLabels(contextMenuShotIds, colorLabel);
-                    setContextMenu(null);
-                  }}
-                >
-                  {label}
-                </PopupMenuItem>
-              ))}
-              <PopupMenuSeparator />
-              <PopupMenuItem
-                onSelect={() => {
-                  setShotColorLabels(contextMenuShotIds, null);
+              <StoryboardColorMenuItems
+                checkedColorLabel={contextMenuColorLabel}
+                onSelect={(colorLabel) => {
+                  setShotColorLabels(contextMenuShotIds, colorLabel);
                   setContextMenu(null);
                 }}
-              >
-                无
-              </PopupMenuItem>
+              />
             </PopupMenuSubmenu>
 
             <PopupMenuSeparator />
@@ -2740,6 +2979,40 @@ export function StoryboardPanel() {
                 展开全部堆叠(E)
               </PopupMenuItem>
             </PopupMenuSubmenu>
+          </PopupMenu>,
+          document.body,
+        )}
+      {annotationMenu &&
+        createPortal(
+          <PopupMenu
+            className="storyboard-context-menu"
+            contextMenuAnchor={annotationMenu}
+            enableMnemonics
+            style={{
+              position: "fixed",
+              left: annotationMenu.x,
+              top: annotationMenu.y,
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            {annotationMenu.kind === "flag" ? (
+              <StoryboardFlagMenuItems
+                checkedFlag={annotationMenuFlag}
+                onSelect={(flag) => {
+                  setShotFlags(annotationMenuShotIds, flag);
+                  setAnnotationMenu(null);
+                }}
+              />
+            ) : (
+              <StoryboardColorMenuItems
+                checkedColorLabel={annotationMenuColorLabel}
+                onSelect={(colorLabel) => {
+                  setShotColorLabels(annotationMenuShotIds, colorLabel);
+                  setAnnotationMenu(null);
+                }}
+              />
+            )}
           </PopupMenu>,
           document.body,
         )}
