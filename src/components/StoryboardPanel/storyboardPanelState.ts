@@ -6,6 +6,7 @@ export type StoryboardRatingComparator = "gte" | "lte" | "eq";
 export type StoryboardShotFlag = "retained" | "none" | "excluded";
 export type StoryboardShotColorLabel = "red" | "yellow" | "green" | "blue" | "purple";
 export type StoryboardShotColorLabelFilter = StoryboardShotColorLabel | "none";
+export type StoryboardViewMode = "list" | "grid";
 
 export interface StoryboardShotAnnotation {
   rating: number;
@@ -36,7 +37,9 @@ interface StoryboardPanelState {
   selectedShotIds: Set<string>;
   shotAnnotations: Record<string, StoryboardShotAnnotation>;
   detectingVideoContext: string | null;
+  viewMode: StoryboardViewMode;
   thumbnailSize: number;
+  gridSize: number;
   syncVideoContext: (videoContext: string) => void;
   setQuery: (query: string) => void;
   setShowOnlySelected: (value: boolean) => void;
@@ -45,7 +48,9 @@ interface StoryboardPanelState {
   setRatingComparator: (comparator: StoryboardRatingComparator) => void;
   setFlagFilters: (flags: StoryboardShotFlag[]) => void;
   setColorLabelFilters: (colorLabels: StoryboardShotColorLabelFilter[]) => void;
+  setViewMode: (viewMode: StoryboardViewMode) => void;
   setThumbnailSize: (size: number) => void;
+  setGridSize: (size: number) => void;
   setShotTitle: (shotId: string, title: string) => void;
   setShotRating: (shotId: string, rating: number) => void;
   setShotRatings: (shotIds: Iterable<string>, rating: number) => void;
@@ -129,7 +134,9 @@ export const useStoryboardPanelState = createPanelState<StoryboardPanelState>(()
   selectedShotIds: new Set<string>(),
   shotAnnotations: {},
   detectingVideoContext: null,
+  viewMode: "list",
   thumbnailSize: 0,
+  gridSize: 0,
   syncVideoContext: (videoContext) =>
     set((state) =>
       state.videoContext === videoContext
@@ -164,9 +171,14 @@ export const useStoryboardPanelState = createPanelState<StoryboardPanelState>(()
   setFlagFilters: (flagFilters) => set({ flagFilters: Array.from(new Set(flagFilters)) }),
   setColorLabelFilters: (colorLabelFilters) =>
     set({ colorLabelFilters: Array.from(new Set(colorLabelFilters)) }),
+  setViewMode: (viewMode) => set({ viewMode }),
   setThumbnailSize: (thumbnailSize) =>
     set({
       thumbnailSize: Number.isFinite(thumbnailSize) ? Math.min(100, Math.max(0, thumbnailSize)) : 0,
+    }),
+  setGridSize: (gridSize) =>
+    set({
+      gridSize: Number.isFinite(gridSize) ? Math.min(100, Math.max(0, gridSize)) : 0,
     }),
   setShotTitle: (shotId, title) =>
     set((state) => {

@@ -1,6 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { convertFileSrc } from "@tauri-apps/api/core";
-import { CheckCheck, Film, ListFilter, Loader2, Scissors, Search, Star, X } from "lucide-react";
+import { Film, Grid2X2, List, ListFilter, Loader2, Scissors, Search, Star } from "lucide-react";
 import {
   useEffect,
   useMemo,
@@ -9,7 +8,6 @@ import {
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
-  type SyntheticEvent,
   type UIEvent as ReactUIEvent,
 } from "react";
 import { createPortal } from "react-dom";
@@ -29,17 +27,14 @@ import { useProjectPort } from "../../systems/ProjectSystem";
 import { createTaskProgress, useTaskProgressStatus } from "../../systems/TaskSystem";
 import { requestStoryboardThumbnail } from "../../storyboardThumbnail";
 import { isTauriRuntime } from "../../tauriRuntime";
-import { formatDuration, formatMonitorFrame, formatMonitorTime } from "../../time";
-import { frameToTimeUs, normalizeFrameRate } from "../../timeline";
-import {
-  timelineThumbnailResolutions,
-  useTimelineThumbnailResolution,
-} from "../../timelineThumbnailResolution";
+import { normalizeFrameRate } from "../../timeline";
 import type { StoryboardDetectionResult, StoryboardShot } from "../../types";
 import { usePanelManagerState } from "../DockLayout";
 import { PopupMenu, PopupMenuItem, PopupMenuSeparator, PopupMenuSubmenu } from "../PopupMenu";
 import { SelectDropdown, selectDropdownItems, type SelectDropdownItem } from "../SelectDropdown";
 import "./StoryboardPanel.css";
+import { StoryboardIconView } from "./StoryboardIconView";
+import { StoryboardListView } from "./StoryboardListView";
 import {
   useStoryboardPanelState,
   type StoryboardRatingComparator,
@@ -56,13 +51,11 @@ const MIN_UPCOMING_SCROLL_DURATION_MS = 1000;
 const MAX_UPCOMING_SCROLL_DURATION_MS = 1200;
 const THUMBNAIL_PREFETCH_ROWS_BEFORE = 10;
 const THUMBNAIL_PREFETCH_ROWS_AFTER = 28;
-const TABLE_SCROLLBAR_SPACER_PX = 8;
 const STORYBOARD_THUMBNAIL_HEIGHT = 46;
 const STORYBOARD_THUMBNAIL_WIDTH = 82;
 const STORYBOARD_ROW_VERTICAL_PADDING = 36;
 const STORYBOARD_THUMBNAIL_COLUMN_PADDING = 16;
 const STORYBOARD_STATUS_GUTTER_WIDTH = 16;
-const TITLE_RENAME_DELAY_MS = 350;
 
 type StoryboardResizableColumnId =
   "thumbnail" | "title" | "mediaStart" | "mediaEnd" | "duration" | "rating" | "retained";
@@ -205,11 +198,6 @@ const storyboardTitleCollator = new Intl.Collator(undefined, {
   numeric: true,
   sensitivity: "base",
 });
-
-interface ActiveStoryboardCell {
-  shotId: string;
-  columnId: StoryboardResizableColumnId;
-}
 
 interface StoryboardMarqueeSelection {
   startX: number;
@@ -545,61 +533,6 @@ function SortArrow({ direction }: { direction: StoryboardSortDirection }) {
   );
 }
 
-interface StoryboardStackBadgeProps {
-  stack: StoryboardShotStack;
-  shotIndex: number;
-  onToggle: () => void;
-}
-
-function StoryboardStackBadge({ stack, shotIndex, onToggle }: StoryboardStackBadgeProps) {
-  const count = stack.shotIds.length;
-  const position = shotIndex + 1;
-  const isFirst = shotIndex === 0;
-  const className = [
-    "storyboard-stack-badge",
-    stack.expanded ? "is-expanded" : "is-collapsed",
-    isFirst ? "is-first" : "",
-    count > 2 ? "has-third-layer" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  if (stack.expanded && !isFirst) {
-    return (
-      <span className={className} aria-hidden="true">
-        <span className="storyboard-stack-badge-face">
-          {position}/{count}
-        </span>
-      </span>
-    );
-  }
-
-  return (
-    <span className={className}>
-      <span className="storyboard-stack-badge-face">
-        <span className="storyboard-stack-badge-count">{count}</span>
-        {stack.expanded && (
-          <span className="storyboard-stack-badge-position">
-            {position}/{count}
-          </span>
-        )}
-        <button
-          type="button"
-          className="storyboard-stack-badge-toggle"
-          onClick={(event) => {
-            event.stopPropagation();
-            onToggle();
-          }}
-          onDoubleClick={(event) => event.stopPropagation()}
-          aria-label={
-            stack.expanded ? `折叠包含 ${count} 个分镜的堆叠` : `展开包含 ${count} 个分镜的堆叠`
-          }
-        />
-      </span>
-    </span>
-  );
-}
-
 function StoryboardFlagIcon({ flag }: { flag: StoryboardShotFlag }) {
   if (flag === "retained") {
     return (
@@ -796,191 +729,6 @@ function sortStoryboardShots(
     .map(({ shot }) => shot);
 }
 
-interface ShotFrameButtonProps {
-  shot: StoryboardShot;
-  assetId: string;
-  fingerprint: string;
-  videoPath: string;
-  previewVideoPath: string;
-  frameRate: number;
-  priority: number;
-  onSelect: (event: ReactMouseEvent<HTMLButtonElement>) => void;
-}
-
-function ShotFrameButton({
-  shot,
-  assetId,
-  fingerprint,
-  videoPath,
-  previewVideoPath,
-  frameRate,
-  priority,
-  onSelect,
-}: ShotFrameButtonProps) {
-  const { resolution, thumbnailContainerRef } = useTimelineThumbnailResolution<HTMLButtonElement>();
-  const thumbnailIdentity = `${fingerprint}:${videoPath}:${shot.start_us}`;
-  const [thumbnail, setThumbnail] = useState<{
-    identity: string;
-    src: string;
-    width: number;
-    height: number;
-  } | null>(null);
-  const [hoverProgress, setHoverProgress] = useState<number | null>(null);
-  const [hoverFrameReady, setHoverFrameReady] = useState(false);
-  const hoverVideoRef = useRef<HTMLVideoElement | null>(null);
-  const hoverTargetTimeUs = useMemo(() => {
-    if (hoverProgress === null) {
-      return null;
-    }
-    const endTimeUs = Math.max(shot.start_us, frameToTimeUs(shot.end_frame, frameRate));
-    return Math.round(shot.start_us + (endTimeUs - shot.start_us) * clamp(hoverProgress, 0, 1));
-  }, [frameRate, hoverProgress, shot.end_frame, shot.start_us]);
-  const previewSrc = isTauriRuntime() ? convertFileSrc(previewVideoPath) : previewVideoPath;
-
-  useEffect(() => {
-    let active = true;
-    const requestedResolutions = timelineThumbnailResolutions.filter(
-      (candidate) => candidate.width <= resolution.width,
-    );
-    const requests = requestedResolutions.map((candidate) => {
-      const request = requestStoryboardThumbnail({
-        assetId,
-        fingerprint,
-        videoPath,
-        timeUs: shot.start_us,
-        priority,
-        resolution: candidate,
-      });
-      void request.promise.then(
-        (src) => {
-          if (!active) {
-            return;
-          }
-          setThumbnail((current) => {
-            if (
-              current?.identity === thumbnailIdentity &&
-              current.width > candidate.width &&
-              current.width <= resolution.width
-            ) {
-              return current;
-            }
-            return {
-              identity: thumbnailIdentity,
-              src,
-              width: candidate.width,
-              height: candidate.height,
-            };
-          });
-        },
-        () => undefined,
-      );
-      return request;
-    });
-    return () => {
-      active = false;
-      for (const request of requests) {
-        request.cancel();
-      }
-    };
-  }, [
-    assetId,
-    fingerprint,
-    priority,
-    resolution.width,
-    shot.start_us,
-    thumbnailIdentity,
-    videoPath,
-  ]);
-
-  useEffect(() => {
-    if (hoverTargetTimeUs === null) {
-      setHoverFrameReady(false);
-      return;
-    }
-    const video = hoverVideoRef.current;
-    if (video && video.readyState >= HTMLMediaElement.HAVE_METADATA) {
-      seekHoverVideo(video);
-    }
-  }, [hoverTargetTimeUs]);
-
-  function seekHoverVideo(video: HTMLVideoElement) {
-    if (hoverTargetTimeUs === null) {
-      return;
-    }
-    const targetSeconds = hoverTargetTimeUs / 1_000_000;
-    const latestTime = Number.isFinite(video.duration)
-      ? Math.max(0, video.duration - 0.001)
-      : targetSeconds;
-    const clampedTime = Math.min(targetSeconds, latestTime);
-    if (Math.abs(video.currentTime - clampedTime) > 0.001) {
-      video.currentTime = clampedTime;
-    } else if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-      setHoverFrameReady(true);
-    }
-  }
-
-  function updateHoverPreview(event: ReactPointerEvent<HTMLButtonElement>) {
-    if (event.buttons !== 0) {
-      return;
-    }
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const progress = clamp((event.clientX - bounds.left) / bounds.width, 0, 1);
-    setHoverProgress((current) => (current === progress ? current : progress));
-  }
-
-  function currentVideo(event: SyntheticEvent<HTMLVideoElement>) {
-    return event.currentTarget;
-  }
-
-  const visibleThumbnail = thumbnail?.identity === thumbnailIdentity ? thumbnail : null;
-
-  return (
-    <button
-      ref={thumbnailContainerRef}
-      type="button"
-      className="shot-frame-button"
-      onClick={onSelect}
-      onDoubleClick={(event) => event.stopPropagation()}
-      onPointerMove={updateHoverPreview}
-      onPointerLeave={() => setHoverProgress(null)}
-      aria-label={`从 ${formatDuration(shot.start_us)} 播放此镜头`}
-    >
-      {visibleThumbnail && (
-        <img
-          className="shot-frame"
-          src={visibleThumbnail.src}
-          alt=""
-          width={visibleThumbnail.width}
-          height={visibleThumbnail.height}
-          decoding="async"
-          draggable={false}
-        />
-      )}
-      {hoverTargetTimeUs !== null && (
-        <video
-          ref={hoverVideoRef}
-          className={`shot-frame shot-hover-frame ${hoverFrameReady ? "is-ready" : ""}`}
-          src={previewSrc}
-          muted
-          playsInline
-          preload="auto"
-          aria-hidden="true"
-          draggable={false}
-          onLoadedMetadata={(event) => seekHoverVideo(currentVideo(event))}
-          onLoadedData={(event) => seekHoverVideo(currentVideo(event))}
-          onSeeked={() => setHoverFrameReady(true)}
-        />
-      )}
-      {hoverProgress !== null && (
-        <span className="shot-hover-progress" aria-hidden="true">
-          <span style={{ width: `${hoverProgress * 100}%` }} />
-        </span>
-      )}
-      <Film className="shot-frame-placeholder" aria-hidden="true" />
-    </button>
-  );
-}
-
 export function StoryboardPanel() {
   const panelInstanceId = usePanelInstanceId();
   const panelActive = usePanelActive();
@@ -1001,7 +749,9 @@ export function StoryboardPanel() {
     selectedShotIds,
     shotAnnotations,
     detectingVideoContext,
+    viewMode,
     thumbnailSize,
+    gridSize,
     syncVideoContext,
     setQuery,
     setShowOnlySelected,
@@ -1010,8 +760,9 @@ export function StoryboardPanel() {
     setRatingComparator,
     setFlagFilters,
     setColorLabelFilters,
+    setViewMode,
     setThumbnailSize,
-    setShotTitle,
+    setGridSize,
     setShotRatings,
     adjustShotRatings,
     setShotFlags,
@@ -1036,13 +787,9 @@ export function StoryboardPanel() {
   const scrollAnimationRef = useRef<number | null>(null);
   const selectionAnchorRef = useRef<string | null>(null);
   const selectionFocusRef = useRef<string | null>(null);
-  const pendingTitleRenameRef = useRef<number | null>(null);
   const marqueeCleanupRef = useRef<(() => void) | null>(null);
   const hadShotsRef = useRef(shots.length > 0);
   const [shotSort, setShotSort] = useState<StoryboardSort>(defaultStoryboardSort);
-  const [activeCell, setActiveCell] = useState<ActiveStoryboardCell | null>(null);
-  const [editingShotId, setEditingShotId] = useState<string | null>(null);
-  const [renameValue, setRenameValue] = useState("");
   const [marqueeSelection, setMarqueeSelection] = useState<StoryboardMarqueeSelection | null>(null);
   const [contextMenu, setContextMenu] = useState<StoryboardContextMenuState | null>(null);
   const [annotationMenu, setAnnotationMenu] = useState<StoryboardAnnotationMenuState | null>(null);
@@ -1164,6 +911,8 @@ export function StoryboardPanel() {
   const thumbnailWidth = STORYBOARD_THUMBNAIL_WIDTH * thumbnailScale;
   const thumbnailHeight = STORYBOARD_THUMBNAIL_HEIGHT * thumbnailScale;
   const storyboardRowHeight = thumbnailHeight + STORYBOARD_ROW_VERTICAL_PADDING;
+  const gridScale = gridSize < 34 ? 1 : gridSize < 67 ? 1.3 : 1.6;
+  const gridCardWidth = 200 * gridScale;
   const thumbnailColumnWidth =
     Math.max(
       storyboardColumnWidths.thumbnail,
@@ -1199,7 +948,7 @@ export function StoryboardPanel() {
     return normalizeFrameRate(videoStream?.avg_frame_rate, videoStream?.r_frame_rate);
   }, [project]);
   const rowVirtualizer = useVirtualizer({
-    count: sortedShots.length,
+    count: viewMode === "list" ? sortedShots.length : 0,
     getScrollElement: () => listRef.current,
     estimateSize: () => storyboardRowHeight,
     getItemKey: (index) => sortedShots[index].id,
@@ -1305,14 +1054,13 @@ export function StoryboardPanel() {
   );
 
   useEffect(() => {
-    rowVirtualizer.measure();
-  }, [rowVirtualizer, storyboardRowHeight]);
+    if (viewMode === "list") {
+      rowVirtualizer.measure();
+    }
+  }, [rowVirtualizer, storyboardRowHeight, viewMode]);
 
   useEffect(() => {
     syncVideoContext(videoContext);
-    cancelPendingTitleRename();
-    setEditingShotId(null);
-    setActiveCell(null);
     setContextMenu(null);
     setAnnotationMenu(null);
   }, [syncVideoContext, videoContext]);
@@ -1405,12 +1153,21 @@ export function StoryboardPanel() {
       if (target !== panel && !target?.closest("[data-storyboard-shot-id]")) {
         return;
       }
+      const grid = listRef.current?.querySelector<HTMLElement>(".storyboard-icon-grid");
+      const gridColumnCount =
+        viewMode === "grid" && grid
+          ? Math.max(1, getComputedStyle(grid).gridTemplateColumns.split(" ").length)
+          : 1;
       const direction =
-        event.key === "ArrowUp" || event.key === "ArrowLeft"
+        event.key === "ArrowLeft"
           ? -1
-          : event.key === "ArrowDown" || event.key === "ArrowRight"
+          : event.key === "ArrowRight"
             ? 1
-            : 0;
+            : event.key === "ArrowUp"
+              ? -gridColumnCount
+              : event.key === "ArrowDown"
+                ? gridColumnCount
+                : 0;
       if (direction === 0 || (!event.shiftKey && (event.ctrlKey || event.metaKey))) {
         return;
       }
@@ -1429,11 +1186,22 @@ export function StoryboardPanel() {
           : clamp(currentIndex + direction, 0, sortedShots.length - 1);
       const targetId = sortedShots[targetIndex].id;
       selectionFocusRef.current = targetId;
+      const scrollToTarget = () => {
+        if (viewMode === "list") {
+          rowVirtualizer.scrollToIndex(targetIndex, { align: "auto" });
+          return;
+        }
+        Array.from(
+          listRef.current?.querySelectorAll<HTMLElement>("[data-storyboard-shot-id]") ?? [],
+        )
+          .find((element) => element.dataset.storyboardShotId === targetId)
+          ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      };
 
       if (!event.shiftKey) {
         selectionAnchorRef.current = targetId;
         shotSelectionReplaced([targetId], targetId);
-        rowVirtualizer.scrollToIndex(targetIndex, { align: "auto" });
+        scrollToTarget();
         return;
       }
 
@@ -1451,12 +1219,12 @@ export function StoryboardPanel() {
         nextSelection.add(shot.id);
       }
       shotSelectionReplaced(Array.from(nextSelection), targetId);
-      rowVirtualizer.scrollToIndex(targetIndex, { align: "auto" });
+      scrollToTarget();
     };
 
     panel.addEventListener("keydown", handleSelectionKeyDown);
     return () => panel.removeEventListener("keydown", handleSelectionKeyDown);
-  }, [rowVirtualizer, selectedShotIds, shotSelectionReplaced, sortedShots]);
+  }, [rowVirtualizer, selectedShotIds, shotSelectionReplaced, sortedShots, viewMode]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1502,9 +1270,6 @@ export function StoryboardPanel() {
       if (scrollAnimationRef.current !== null) {
         cancelAnimationFrame(scrollAnimationRef.current);
       }
-      if (pendingTitleRenameRef.current !== null) {
-        window.clearTimeout(pendingTitleRenameRef.current);
-      }
       marqueeCleanupRef.current?.();
       document.body.classList.remove("is-resizing-storyboard-column");
     },
@@ -1518,6 +1283,12 @@ export function StoryboardPanel() {
     const list = listRef.current;
     const shot = sortedShots[followShotIndex];
     if (!list || !shot || followShotIndex < 0) {
+      return;
+    }
+    if (viewMode === "grid") {
+      Array.from(list.querySelectorAll<HTMLElement>("[data-storyboard-shot-id]"))
+        .find((element) => element.dataset.storyboardShotId === shot.id)
+        ?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
       return;
     }
     const offsetInfo = rowVirtualizer.getOffsetForIndex(followShotIndex, "center");
@@ -1580,10 +1351,14 @@ export function StoryboardPanel() {
         scrollAnimationRef.current = null;
       }
     };
-  }, [followShotId, followShotIndex, frameRate, isPlaying, rowVirtualizer, sortedShots]);
+  }, [followShotId, followShotIndex, frameRate, isPlaying, rowVirtualizer, sortedShots, viewMode]);
 
   useEffect(() => {
-    if (!thumbnailVideoPath || thumbnailPrefetchStart >= thumbnailPrefetchEnd) {
+    if (
+      viewMode !== "list" ||
+      !thumbnailVideoPath ||
+      thumbnailPrefetchStart >= thumbnailPrefetchEnd
+    ) {
       return;
     }
     const requests = sortedShots
@@ -1616,11 +1391,10 @@ export function StoryboardPanel() {
     thumbnailPrefetchStart,
     thumbnailPriorityCenterIndex,
     thumbnailVideoPath,
+    viewMode,
   ]);
 
   function clearShotSelection() {
-    cancelPendingTitleRename();
-    setActiveCell(null);
     selectionAnchorRef.current = null;
     selectionFocusRef.current = null;
     shotSelectionCleared();
@@ -1642,8 +1416,6 @@ export function StoryboardPanel() {
     }
 
     event.preventDefault();
-    cancelPendingTitleRename();
-    setActiveCell(null);
     marqueeCleanupRef.current?.();
 
     const pointerId = event.pointerId;
@@ -1790,13 +1562,6 @@ export function StoryboardPanel() {
     );
   }
 
-  function annotationTargetShotIds(shotId: string) {
-    return annotationShotIdsForSelection(
-      selectedShotIds.has(shotId) ? selectedShotIds : [shotId],
-      shotStacksByShotId,
-    );
-  }
-
   function openAnnotationMenu(
     event: ReactMouseEvent<HTMLButtonElement>,
     shotId: string,
@@ -1804,8 +1569,6 @@ export function StoryboardPanel() {
   ) {
     event.preventDefault();
     event.stopPropagation();
-    cancelPendingTitleRename();
-    setActiveCell(null);
     panelRef.current?.focus({ preventScroll: true });
     setContextMenu(null);
     setAnnotationMenu({
@@ -1827,8 +1590,6 @@ export function StoryboardPanel() {
       selectionFocusRef.current = shotId;
       shotSelectionReplaced([shotId], shotId);
     }
-    cancelPendingTitleRename();
-    setActiveCell(null);
     panelRef.current?.focus({ preventScroll: true });
     setAnnotationMenu(null);
     setContextMenu({
@@ -1840,77 +1601,6 @@ export function StoryboardPanel() {
       colorSubmenuOpen: false,
       stackSubmenuOpen: false,
     });
-  }
-
-  function cancelPendingTitleRename() {
-    if (pendingTitleRenameRef.current === null) {
-      return;
-    }
-    window.clearTimeout(pendingTitleRenameRef.current);
-    pendingTitleRenameRef.current = null;
-  }
-
-  function activateCell(shotId: string, columnId: StoryboardResizableColumnId) {
-    cancelPendingTitleRename();
-    setActiveCell({ shotId, columnId });
-  }
-
-  function storyboardCellClassName(
-    shotId: string,
-    columnId: StoryboardResizableColumnId,
-    selected: boolean,
-    baseClassName = "",
-  ) {
-    return [
-      baseClassName,
-      selected && activeCell?.shotId === shotId && activeCell.columnId === columnId
-        ? "storyboard-active-cell"
-        : "",
-    ]
-      .filter(Boolean)
-      .join(" ");
-  }
-
-  function beginTitleRename(shot: StoryboardShot) {
-    cancelPendingTitleRename();
-    setRenameValue(storyboardShotTitle(shot, shotCount, shotAnnotations[shot.id]));
-    setEditingShotId(shot.id);
-  }
-
-  function scheduleTitleRename(shot: StoryboardShot) {
-    cancelPendingTitleRename();
-    pendingTitleRenameRef.current = window.setTimeout(() => {
-      pendingTitleRenameRef.current = null;
-      beginTitleRename(shot);
-    }, TITLE_RENAME_DELAY_MS);
-  }
-
-  function handleTitleCellClick(
-    event: ReactMouseEvent<HTMLElement>,
-    shot: StoryboardShot,
-    selected: boolean,
-  ) {
-    activateCell(shot.id, "title");
-    if (selected && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
-      if (event.detail === 1) {
-        scheduleTitleRename(shot);
-      } else {
-        cancelPendingTitleRename();
-      }
-    }
-  }
-
-  function finishTitleRename(shot: StoryboardShot, commit: boolean) {
-    cancelPendingTitleRename();
-    if (editingShotId !== shot.id) {
-      return;
-    }
-    const nextTitle = renameValue.trim();
-    const currentTitle = storyboardShotTitle(shot, shotCount, shotAnnotations[shot.id]);
-    if (commit && nextTitle && nextTitle !== currentTitle) {
-      setShotTitle(shot.id, nextTitle);
-    }
-    setEditingShotId(null);
   }
 
   function selectVisibleShots() {
@@ -2365,343 +2055,56 @@ export function StoryboardPanel() {
           }
         }}
       >
-        <div
-          className="storyboard-list-frame"
-          role="table"
-          aria-label="分镜列表"
-          style={tableStyle}
-        >
-          <div className="storyboard-list-header-viewport">
-            <div ref={tableHeaderRef} className="storyboard-list-header" role="row">
-              {storyboardTableHeaders.map(renderTableHeader)}
-            </div>
-            <div className="storyboard-list-header-fixed-overlay" aria-hidden="true">
-              <span className="storyboard-column-header storyboard-column-thumbnail" />
-            </div>
-          </div>
-
-          <div
-            ref={listRef}
-            className="shot-list"
+        {viewMode === "list" ? (
+          <StoryboardListView
+            shots={sortedShots}
+            currentShotIndex={currentShotIndex}
+            tableStyle={tableStyle}
+            headerContent={storyboardTableHeaders.map(renderTableHeader)}
+            rowVirtualizer={rowVirtualizer}
+            virtualRows={virtualRows}
+            thumbnailPriorityCenterIndex={thumbnailPriorityCenterIndex}
+            assetId={thumbnailAssetId}
+            fingerprint={thumbnailFingerprint}
+            videoPath={thumbnailVideoPath}
+            previewVideoPath={thumbnailPreviewVideoPath}
+            frameRate={frameRate}
+            resetKey={videoContext}
+            headerRef={tableHeaderRef}
+            scrollRef={listRef}
             onScroll={syncTableHeaderScroll}
             onPointerDown={startMarqueeSelection}
             onContextMenu={openContextMenu}
-          >
-            {sortedShots.length > 0 && (
-              <div
-                className="virtual-spacer"
-                role="rowgroup"
-                style={{
-                  height: `${rowVirtualizer.getTotalSize() + TABLE_SCROLLBAR_SPACER_PX}px`,
-                }}
-              >
-                {virtualRows.map((virtualRow) => {
-                  const shot = sortedShots[virtualRow.index];
-                  const selected = selectedShotIds.has(shot.id);
-                  const isPrimaryShot = selected && shot.id === activeShotId;
-                  const isCurrentShot = virtualRow.index === currentShotIndex;
-                  const annotation = shotAnnotations[shot.id];
-                  const title = storyboardShotTitle(shot, shotCount, annotation);
-                  const rating = annotation?.rating ?? 0;
-                  const flag = storyboardShotFlag(annotation);
-                  const colorLabel = annotation?.colorLabel;
-                  const shotStack = shotStacksByShotId.get(shot.id);
-                  const shotStackIndex = shotStack?.shotIds.indexOf(shot.id) ?? -1;
-                  return (
-                    <div
-                      key={shot.id}
-                      ref={rowVirtualizer.measureElement}
-                      data-index={virtualRow.index}
-                      data-storyboard-shot-id={shot.id}
-                      className={`shot-row ${selected ? "is-selected" : ""} ${
-                        isPrimaryShot ? "is-primary" : ""
-                      } ${isCurrentShot ? "is-current" : ""} ${
-                        colorLabel ? "has-color-label" : ""
-                      } ${shotStack ? "has-shot-stack" : ""} ${
-                        shotStack?.expanded ? "is-expanded-stack-member" : ""
-                      }`}
-                      style={
-                        {
-                          transform: `translateY(${virtualRow.start}px)`,
-                          ...(colorLabel
-                            ? {
-                                "--storyboard-color-label":
-                                  storyboardShotColorLabelValues[colorLabel],
-                              }
-                            : {}),
-                        } as CSSProperties
-                      }
-                      role="row"
-                      onClick={(event) => handleShotSelection(event, shot)}
-                      onDoubleClick={(event) => handleShotDoubleClick(event, shot)}
-                    >
-                      <div className="shot-thumbnail-cell" role="cell">
-                        <div className="shot-thumbnail-topline">
-                          <span className="shot-thumbnail-row-number" aria-hidden="true">
-                            {virtualRow.index + 1}
-                          </span>
-                          <button
-                            type="button"
-                            className={`shot-thumbnail-flag is-${flag}`}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              setShotFlags(
-                                annotationTargetShotIds(shot.id),
-                                flag === "none" ? "retained" : "none",
-                              );
-                            }}
-                            onContextMenu={(event) => openAnnotationMenu(event, shot.id, "flag")}
-                            onDoubleClick={(event) => event.stopPropagation()}
-                            title={
-                              flag === "none"
-                                ? "设为留用旗标"
-                                : `取消${storyboardShotFlagLabels[flag]}`
-                            }
-                            aria-label={
-                              flag === "none"
-                                ? "设为留用旗标"
-                                : `取消${storyboardShotFlagLabels[flag]}`
-                            }
-                            aria-pressed={flag !== "none"}
-                          />
-                        </div>
-                        {shotStack && (
-                          <StoryboardStackBadge
-                            stack={shotStack}
-                            shotIndex={shotStackIndex}
-                            onToggle={() => setShotStackExpanded(shot.id, !shotStack.expanded)}
-                          />
-                        )}
-                        {thumbnailVideoPath && (
-                          <ShotFrameButton
-                            shot={shot}
-                            assetId={thumbnailAssetId}
-                            fingerprint={thumbnailFingerprint}
-                            videoPath={thumbnailVideoPath}
-                            previewVideoPath={thumbnailPreviewVideoPath}
-                            frameRate={frameRate}
-                            priority={Math.abs(virtualRow.index - thumbnailPriorityCenterIndex)}
-                            onSelect={(event) => {
-                              event.stopPropagation();
-                              cancelPendingTitleRename();
-                              setActiveCell(null);
-                              handleShotSelection(event, shot, true);
-                            }}
-                          />
-                        )}
-                        <button
-                          type="button"
-                          className={`shot-thumbnail-color-label ${
-                            colorLabel ? "has-color-label" : "is-none"
-                          }`}
-                          onClick={(event) => openAnnotationMenu(event, shot.id, "color")}
-                          onDoubleClick={(event) => event.stopPropagation()}
-                          title={colorLabel ? "更改色标" : "设置色标"}
-                          aria-label={colorLabel ? "更改色标" : "设置色标"}
-                        />
-                        <div
-                          className="shot-thumbnail-rating"
-                          role="group"
-                          aria-label={`${rating} 星`}
-                        >
-                          {[1, 2, 3, 4, 5].map((star) => {
-                            const filled = star <= rating;
-                            return (
-                              <button
-                                key={star}
-                                type="button"
-                                className={`shot-thumbnail-rating-slot ${
-                                  filled ? "is-filled" : "is-empty"
-                                }`}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  setShotRatings(
-                                    annotationTargetShotIds(shot.id),
-                                    rating === star ? 0 : star,
-                                  );
-                                }}
-                                onDoubleClick={(event) => event.stopPropagation()}
-                                title={`${star} 星`}
-                                aria-label={`${star} 星`}
-                                aria-pressed={rating === star}
-                              >
-                                {filled ? (
-                                  <Star aria-hidden="true" />
-                                ) : (
-                                  <span aria-hidden="true">·</span>
-                                )}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                      <span
-                        className={storyboardCellClassName(
-                          shot.id,
-                          "title",
-                          selected,
-                          "shot-title-cell",
-                        )}
-                        role="cell"
-                        onClick={(event) => handleTitleCellClick(event, shot, selected)}
-                      >
-                        {editingShotId === shot.id ? (
-                          <input
-                            className="shot-title-editor"
-                            value={renameValue}
-                            aria-label="重命名分镜"
-                            autoFocus
-                            onFocus={(event) => event.currentTarget.select()}
-                            onChange={(event) => setRenameValue(event.currentTarget.value)}
-                            onPointerDown={(event) => event.stopPropagation()}
-                            onClick={(event) => event.stopPropagation()}
-                            onDoubleClick={(event) => event.stopPropagation()}
-                            onBlur={() => finishTitleRename(shot, true)}
-                            onKeyDown={(event) => {
-                              event.stopPropagation();
-                              if (event.key === "Enter") {
-                                event.preventDefault();
-                                event.currentTarget.blur();
-                              } else if (event.key === "Escape") {
-                                event.preventDefault();
-                                finishTitleRename(shot, false);
-                              }
-                            }}
-                          />
-                        ) : (
-                          <span
-                            className="shot-title-copy"
-                            title={title}
-                            onDoubleClick={(event) => {
-                              event.stopPropagation();
-                              beginTitleRename(shot);
-                            }}
-                          >
-                            {title}
-                          </span>
-                        )}
-                      </span>
-                      <span
-                        className={storyboardCellClassName(
-                          shot.id,
-                          "mediaStart",
-                          selected,
-                          "shot-time-cell",
-                        )}
-                        role="cell"
-                        onClick={() => activateCell(shot.id, "mediaStart")}
-                      >
-                        {formatMonitorTime(shot.start_us, frameRate)}
-                      </span>
-                      <span
-                        className={storyboardCellClassName(
-                          shot.id,
-                          "mediaEnd",
-                          selected,
-                          "shot-time-cell",
-                        )}
-                        role="cell"
-                        onClick={() => activateCell(shot.id, "mediaEnd")}
-                      >
-                        {formatMonitorTime(shot.end_us, frameRate)}
-                      </span>
-                      <span
-                        className={storyboardCellClassName(
-                          shot.id,
-                          "duration",
-                          selected,
-                          "shot-duration-cell",
-                        )}
-                        role="cell"
-                        onClick={() => activateCell(shot.id, "duration")}
-                      >
-                        {formatMonitorFrame(
-                          Math.max(0, shot.end_frame - shot.start_frame + 1),
-                          frameRate,
-                        )}
-                      </span>
-                      <div className="shot-rating-cell" role="cell" aria-label={`${rating} 星`}>
-                        {[1, 2, 3, 4, 5].map((star) => (
-                          <button
-                            key={star}
-                            type="button"
-                            className="shot-rating-button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              setShotRatings(
-                                annotationTargetShotIds(shot.id),
-                                rating === star ? 0 : star,
-                              );
-                            }}
-                            onDoubleClick={(event) => event.stopPropagation()}
-                            title={`${star} 星`}
-                            aria-label={`${star} 星`}
-                            aria-pressed={rating === star}
-                          >
-                            <Star
-                              className={star <= rating ? "is-filled" : ""}
-                              aria-hidden="true"
-                            />
-                          </button>
-                        ))}
-                      </div>
-                      <div className="shot-retain-cell" role="cell">
-                        <div className="shot-flag-controls">
-                          {(["retained", "excluded"] as const).map((nextFlag) => {
-                            const active = flag === nextFlag;
-                            const label = storyboardShotFlagLabels[nextFlag];
-                            return (
-                              <button
-                                key={nextFlag}
-                                type="button"
-                                className={`shot-flag-button ${active ? "active" : ""}`}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  setShotFlags(
-                                    annotationTargetShotIds(shot.id),
-                                    active ? "none" : nextFlag,
-                                  );
-                                }}
-                                onDoubleClick={(event) => event.stopPropagation()}
-                                title={active ? `取消${label}` : `设为${label}`}
-                                aria-label={active ? `取消${label}` : `设为${label}`}
-                                aria-pressed={active}
-                              >
-                                <StoryboardFlagIcon flag={nextFlag} />
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
+            onSelectShot={handleShotSelection}
+            onDoubleClickShot={handleShotDoubleClick}
+            onOpenAnnotationMenu={openAnnotationMenu}
+            shotTitle={(shot) => storyboardShotTitle(shot, shotCount, shotAnnotations[shot.id])}
+            renderFlagIcon={(flag) => <StoryboardFlagIcon flag={flag} />}
+          />
+        ) : (
+          <StoryboardIconView
+            shots={sortedShots}
+            currentShotId={currentShotId}
+            assetId={thumbnailAssetId}
+            fingerprint={thumbnailFingerprint}
+            videoPath={thumbnailVideoPath}
+            previewVideoPath={thumbnailPreviewVideoPath}
+            frameRate={frameRate}
+            gridCardWidth={gridCardWidth}
+            scrollRef={listRef}
+            onPointerDown={startMarqueeSelection}
+            onContextMenu={openContextMenu}
+            onSelectShot={handleShotSelection}
+            onDoubleClickShot={handleShotDoubleClick}
+            onOpenAnnotationMenu={openAnnotationMenu}
+          />
+        )}
       </div>
 
       {renderMarqueeOverlay()}
 
       <footer className="storyboard-footer">
         <div className="storyboard-selection-tools">
-          <button
-            type="button"
-            onClick={selectVisibleShots}
-            disabled={sortedShots.length === 0}
-            title="全选分镜"
-          >
-            <CheckCheck aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            onClick={clearShotSelection}
-            disabled={selectedCount === 0}
-            title="清空选择"
-          >
-            <X aria-hidden="true" />
-          </button>
           <button
             type="button"
             className={showOnlySelected ? "active" : ""}
@@ -2712,13 +2115,38 @@ export function StoryboardPanel() {
           >
             <ListFilter aria-hidden="true" />
           </button>
+          <button
+            type="button"
+            className={viewMode === "list" ? "active" : ""}
+            onClick={() => setViewMode("list")}
+            title="标签视图"
+            aria-pressed={viewMode === "list"}
+          >
+            <List aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className={viewMode === "grid" ? "active" : ""}
+            onClick={() => setViewMode("grid")}
+            title="图标视图"
+            aria-pressed={viewMode === "grid"}
+          >
+            <Grid2X2 aria-hidden="true" />
+          </button>
           <input
             type="range"
             min="0"
             max="100"
-            value={thumbnailSize}
-            aria-label="分镜缩略图大小"
-            onChange={(event) => setThumbnailSize(Number(event.currentTarget.value))}
+            value={viewMode === "list" ? thumbnailSize : gridSize}
+            aria-label={viewMode === "list" ? "分镜缩略图大小" : "分镜图标大小"}
+            onChange={(event) => {
+              const size = Number(event.currentTarget.value);
+              if (viewMode === "list") {
+                setThumbnailSize(size);
+              } else {
+                setGridSize(size);
+              }
+            }}
           />
         </div>
         <span>
