@@ -1,6 +1,20 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Film, Grid2X2, List, ListFilter, Loader2, Scissors, Search, Star } from "lucide-react";
 import {
+  ArrowDownAZ,
+  ArrowDownZA,
+  ChevronDown,
+  ChevronsUpDown,
+  Film,
+  Grid2X2,
+  List,
+  ListFilter,
+  Loader2,
+  Scissors,
+  Search,
+  Star,
+} from "lucide-react";
+import {
+  Fragment,
   useEffect,
   useMemo,
   useRef,
@@ -33,6 +47,11 @@ import { usePanelManagerState } from "../DockLayout";
 import { PopupMenu, PopupMenuItem, PopupMenuSeparator, PopupMenuSubmenu } from "../PopupMenu";
 import { SelectDropdown, selectDropdownItems, type SelectDropdownItem } from "../SelectDropdown";
 import "./StoryboardPanel.css";
+import {
+  StoryboardColorLabelButtons,
+  storyboardShotColorFilterLabels,
+  storyboardShotColorLabels,
+} from "./StoryboardColorLabelButtons";
 import { StoryboardIconView } from "./StoryboardIconView";
 import { StoryboardListView } from "./StoryboardListView";
 import {
@@ -44,6 +63,7 @@ import {
   type StoryboardShotFilter,
   type StoryboardShotFlag,
   type StoryboardShotStack,
+  type StoryboardViewMode,
 } from "./storyboardPanelState";
 
 const storyboardEventSource = eventSource("storyboard-panel");
@@ -60,7 +80,7 @@ const STORYBOARD_STATUS_GUTTER_WIDTH = 16;
 type StoryboardResizableColumnId =
   "thumbnail" | "title" | "mediaStart" | "mediaEnd" | "duration" | "rating" | "retained";
 type StoryboardSortableColumnId =
-  "title" | "mediaStart" | "mediaEnd" | "duration" | "rating" | "retained";
+  "title" | "mediaStart" | "mediaEnd" | "duration" | "rating" | "retained" | "colorLabel";
 type StoryboardTableColumnId = StoryboardResizableColumnId | "trailing";
 type StoryboardSortDirection = "ascending" | "descending";
 
@@ -71,6 +91,11 @@ interface StoryboardSort {
 
 const defaultStoryboardSort: StoryboardSort = {
   columnId: "title",
+  direction: "ascending",
+};
+
+const defaultStoryboardGridSort: StoryboardSort = {
+  columnId: "mediaStart",
   direction: "ascending",
 };
 
@@ -94,6 +119,28 @@ const storyboardTableHeaders: Array<{
   { id: "retained", label: "留用", resizeColumn: "rating" },
   { id: "trailing", label: "", resizeColumn: "retained" },
 ];
+
+const storyboardGridSortOptions: Array<{
+  id: StoryboardSortableColumnId;
+  label: string;
+  defaultDirection: StoryboardSortDirection;
+}> = [
+  { id: "title", label: "标题", defaultDirection: "ascending" },
+  { id: "mediaStart", label: "媒体开始", defaultDirection: "ascending" },
+  { id: "mediaEnd", label: "媒体结束", defaultDirection: "ascending" },
+  { id: "duration", label: "媒体持续时间", defaultDirection: "ascending" },
+  { id: "rating", label: "星级", defaultDirection: "descending" },
+  { id: "retained", label: "留用", defaultDirection: "ascending" },
+  { id: "colorLabel", label: "标签颜色", defaultDirection: "ascending" },
+];
+
+const storyboardColorSortOrder: Record<StoryboardShotColorLabel, number> = {
+  red: 0,
+  yellow: 1,
+  green: 2,
+  blue: 3,
+  purple: 4,
+};
 
 type StoryboardResizableColumnWidths = Record<StoryboardResizableColumnId, number>;
 
@@ -160,28 +207,6 @@ const storyboardShotFlagLabels: Record<StoryboardShotFlag, string> = {
   none: "无旗标",
   excluded: "排除旗标",
 };
-const storyboardShotColorLabels: Array<readonly [StoryboardShotColorLabel, string]> = [
-  ["red", "红色"],
-  ["yellow", "黄色"],
-  ["green", "绿色"],
-  ["blue", "蓝色"],
-  ["purple", "紫色"],
-];
-const storyboardShotColorLabelValues: Record<StoryboardShotColorLabel, string> = {
-  red: "#ef4444",
-  yellow: "#eab308",
-  green: "#22c55e",
-  blue: "#3b82f6",
-  purple: "#a855f7",
-};
-const storyboardShotColorFilterLabels: Array<readonly [StoryboardShotColorLabelFilter, string]> = [
-  ...storyboardShotColorLabels,
-  ["none", "无"],
-];
-const storyboardShotColorFilterValues: Record<StoryboardShotColorLabelFilter, string> = {
-  ...storyboardShotColorLabelValues,
-  none: "#7f7f7f",
-};
 const storyboardFilterOptions: Array<readonly [StoryboardShotFilter, string]> = [
   ["all", "关闭过滤器"],
   ["retained", "留用"],
@@ -222,6 +247,34 @@ interface StoryboardAnnotationMenuState {
   y: number;
   shotId: string;
 }
+
+interface StoryboardMenuAnchor {
+  x: number;
+  y: number;
+}
+
+interface StoryboardFooterAreaVisibility {
+  colorLabel: boolean;
+  flag: boolean;
+  rating: boolean;
+  selection: boolean;
+  viewMode: boolean;
+  sort: Record<StoryboardViewMode, boolean>;
+  thumbnailSize: boolean;
+}
+
+const defaultStoryboardFooterAreaVisibility: StoryboardFooterAreaVisibility = {
+  colorLabel: false,
+  flag: false,
+  rating: false,
+  selection: true,
+  viewMode: true,
+  sort: {
+    list: false,
+    grid: true,
+  },
+  thumbnailSize: true,
+};
 
 const MARQUEE_DRAG_THRESHOLD = 4;
 
@@ -687,8 +740,13 @@ function storyboardShotSortValue(
   if (columnId === "rating") {
     return annotation?.rating ?? 0;
   }
+  if (columnId === "colorLabel") {
+    return annotation?.colorLabel === undefined
+      ? Number.MAX_SAFE_INTEGER
+      : storyboardColorSortOrder[annotation.colorLabel];
+  }
   const flag = storyboardShotFlag(annotation);
-  return flag === "retained" ? 1 : flag === "excluded" ? -1 : 0;
+  return flag === "retained" ? 0 : flag === "none" ? 1 : 2;
 }
 
 function sortStoryboardShots(
@@ -790,6 +848,12 @@ export function StoryboardPanel() {
   const marqueeCleanupRef = useRef<(() => void) | null>(null);
   const hadShotsRef = useRef(shots.length > 0);
   const [shotSort, setShotSort] = useState<StoryboardSort>(defaultStoryboardSort);
+  const [gridShotSort, setGridShotSort] = useState<StoryboardSort>(defaultStoryboardGridSort);
+  const [footerSortMenu, setFooterSortMenu] = useState<StoryboardMenuAnchor | null>(null);
+  const [footerOptionsMenu, setFooterOptionsMenu] = useState<StoryboardMenuAnchor | null>(null);
+  const [footerAreaVisibility, setFooterAreaVisibility] = useState(
+    defaultStoryboardFooterAreaVisibility,
+  );
   const [marqueeSelection, setMarqueeSelection] = useState<StoryboardMarqueeSelection | null>(null);
   const [contextMenu, setContextMenu] = useState<StoryboardContextMenuState | null>(null);
   const [annotationMenu, setAnnotationMenu] = useState<StoryboardAnnotationMenuState | null>(null);
@@ -848,10 +912,17 @@ export function StoryboardPanel() {
       showOnlySelected,
     ],
   );
+  const activeShotSort = viewMode === "grid" ? gridShotSort : shotSort;
+  const setActiveShotSort = viewMode === "grid" ? setGridShotSort : setShotSort;
   const sortedShots = useMemo(
-    () => sortStoryboardShots(filteredShots, shotSort, shotAnnotations, shotCount, sortShotsById),
-    [filteredShots, shotAnnotations, shotCount, shotSort, sortShotsById],
+    () =>
+      sortStoryboardShots(filteredShots, activeShotSort, shotAnnotations, shotCount, sortShotsById),
+    [activeShotSort, filteredShots, shotAnnotations, shotCount, sortShotsById],
   );
+  const footerSortLabel =
+    storyboardGridSortOptions.find((option) => option.id === activeShotSort.columnId)?.label ??
+    "标题";
+  const footerSortVisible = footerAreaVisibility.sort[viewMode];
   const currentFrame = playback?.currentFrame ?? 0;
   const isPlaying = playback?.isPlaying ?? false;
   const currentFrameRef = useRef(currentFrame);
@@ -1063,6 +1134,9 @@ export function StoryboardPanel() {
     syncVideoContext(videoContext);
     setContextMenu(null);
     setAnnotationMenu(null);
+    setFooterSortMenu(null);
+    setFooterOptionsMenu(null);
+    setGridShotSort(defaultStoryboardGridSort);
   }, [syncVideoContext, videoContext]);
 
   useEffect(() => {
@@ -1108,6 +1182,54 @@ export function StoryboardPanel() {
       window.removeEventListener("blur", close);
     };
   }, [annotationMenu]);
+
+  useEffect(() => {
+    if (!footerSortMenu) {
+      return;
+    }
+    const close = () => setFooterSortMenu(null);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        close();
+      }
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("resize", close);
+    window.addEventListener("blur", close);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("blur", close);
+    };
+  }, [footerSortMenu]);
+
+  useEffect(() => {
+    if (!footerOptionsMenu) {
+      return;
+    }
+    const close = () => setFooterOptionsMenu(null);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        close();
+      }
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("resize", close);
+    window.addEventListener("blur", close);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("blur", close);
+    };
+  }, [footerOptionsMenu]);
+
+  useEffect(() => {
+    setFooterSortMenu(null);
+  }, [viewMode]);
 
   useEffect(() => {
     if (showOnlySelected && selectedCount === 0) {
@@ -1915,18 +2037,6 @@ export function StoryboardPanel() {
         <span className="storyboard-video-name" title={videoLabel}>
           {videoLabel}
         </span>
-      </div>
-
-      <div className="storyboard-search-row">
-        <label className="storyboard-search">
-          <Search aria-hidden="true" />
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.currentTarget.value)}
-            placeholder="搜索分镜"
-            disabled={shots.length === 0}
-          />
-        </label>
         <button
           type="button"
           className={`storyboard-detect-button ${isDetecting ? "is-detecting" : ""}`}
@@ -1949,6 +2059,21 @@ export function StoryboardPanel() {
             <Scissors aria-hidden="true" />
           )}
         </button>
+      </div>
+
+      <div className="storyboard-search-row">
+        <label className="storyboard-search">
+          <Search aria-hidden="true" />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.currentTarget.value)}
+            placeholder="搜索分镜"
+            disabled={shots.length === 0}
+          />
+        </label>
+        <span className="storyboard-selection-summary">
+          {selectedCount} 条已选择，共 {sortedShots.length} 条
+        </span>
       </div>
 
       <div
@@ -2006,28 +2131,15 @@ export function StoryboardPanel() {
           ))}
         </div>
         <span className="storyboard-filter-separator" aria-hidden="true" />
-        <div className="storyboard-filter-colors" aria-label="按色标过滤">
-          {storyboardShotColorFilterLabels.map(([colorLabel, label]) => {
-            const active = colorLabelFilters.includes(colorLabel);
-            return (
-              <button
-                key={colorLabel}
-                type="button"
-                className={active ? "active" : ""}
-                style={
-                  {
-                    "--storyboard-filter-color": storyboardShotColorFilterValues[colorLabel],
-                  } as CSSProperties
-                }
-                onClick={() => toggleColorLabelFilter(colorLabel)}
-                disabled={shots.length === 0}
-                title={`${label}色标`}
-                aria-label={`按${label}色标过滤`}
-                aria-pressed={active}
-              />
-            );
-          })}
-        </div>
+        <StoryboardColorLabelButtons
+          className="storyboard-filter-colors"
+          activeValues={colorLabelFilters}
+          ariaLabel="按色标过滤"
+          buttonLabel={(_, label) => `按${label}色标过滤`}
+          includeNone
+          onSelect={toggleColorLabelFilter}
+          disabled={shots.length === 0}
+        />
         <span className="storyboard-filter-separator" aria-hidden="true" />
         <SelectDropdown
           ariaLabel="分镜过滤器"
@@ -2105,54 +2217,362 @@ export function StoryboardPanel() {
 
       <footer className="storyboard-footer">
         <div className="storyboard-selection-tools">
-          <button
-            type="button"
-            className={showOnlySelected ? "active" : ""}
-            onClick={() => setShowOnlySelected(!showOnlySelected)}
-            disabled={selectedCount === 0}
-            title="仅展示选中分镜"
-            aria-pressed={showOnlySelected}
-          >
-            <ListFilter aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            className={viewMode === "list" ? "active" : ""}
-            onClick={() => setViewMode("list")}
-            title="标签视图"
-            aria-pressed={viewMode === "list"}
-          >
-            <List aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            className={viewMode === "grid" ? "active" : ""}
-            onClick={() => setViewMode("grid")}
-            title="图标视图"
-            aria-pressed={viewMode === "grid"}
-          >
-            <Grid2X2 aria-hidden="true" />
-          </button>
-          <input
-            type="range"
-            min="0"
-            max="100"
-            value={viewMode === "list" ? thumbnailSize : gridSize}
-            aria-label={viewMode === "list" ? "分镜缩略图大小" : "分镜图标大小"}
-            onChange={(event) => {
-              const size = Number(event.currentTarget.value);
-              if (viewMode === "list") {
-                setThumbnailSize(size);
-              } else {
-                setGridSize(size);
-              }
-            }}
-          />
+          {footerAreaVisibility.viewMode && (
+            <div className="storyboard-footer-area storyboard-footer-view-area">
+              <button
+                type="button"
+                className={viewMode === "list" ? "active" : ""}
+                onClick={() => setViewMode("list")}
+                title="标签视图"
+                aria-pressed={viewMode === "list"}
+              >
+                <List aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                className={viewMode === "grid" ? "active" : ""}
+                onClick={() => setViewMode("grid")}
+                title="图标视图"
+                aria-pressed={viewMode === "grid"}
+              >
+                <Grid2X2 aria-hidden="true" />
+              </button>
+              <span className="storyboard-filter-separator storyboard-footer-separator" />
+            </div>
+          )}
+          {footerAreaVisibility.selection && (
+            <div className="storyboard-footer-area storyboard-footer-selection-area">
+              <button
+                type="button"
+                className={showOnlySelected ? "active" : ""}
+                onClick={() => setShowOnlySelected(!showOnlySelected)}
+                disabled={selectedCount === 0}
+                title="仅展示选中分镜"
+                aria-pressed={showOnlySelected}
+              >
+                <ListFilter aria-hidden="true" />
+              </button>
+              <span className="storyboard-filter-separator storyboard-footer-separator" />
+            </div>
+          )}
+          {footerSortVisible && (
+            <div className="storyboard-footer-area storyboard-footer-sort-area">
+              <div className="storyboard-footer-sort-control">
+                <button
+                  type="button"
+                  className="storyboard-footer-sort-direction"
+                  onClick={() => {
+                    setFooterSortMenu(null);
+                    setActiveShotSort((current) => ({
+                      ...current,
+                      direction: current.direction === "ascending" ? "descending" : "ascending",
+                    }));
+                  }}
+                  disabled={displayShots.length === 0}
+                  title={activeShotSort.direction === "ascending" ? "切换为降序" : "切换为升序"}
+                  aria-label={
+                    activeShotSort.direction === "ascending"
+                      ? "当前升序，切换为降序"
+                      : "当前降序，切换为升序"
+                  }
+                >
+                  {activeShotSort.direction === "ascending" ? (
+                    <ArrowDownAZ aria-hidden="true" />
+                  ) : (
+                    <ArrowDownZA aria-hidden="true" />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  className={`storyboard-footer-sort-trigger ${footerSortMenu ? "active" : ""}`}
+                  aria-haspopup="menu"
+                  aria-expanded={Boolean(footerSortMenu)}
+                  disabled={displayShots.length === 0}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setContextMenu(null);
+                    setAnnotationMenu(null);
+                    setFooterOptionsMenu(null);
+                    if (footerSortMenu) {
+                      setFooterSortMenu(null);
+                      return;
+                    }
+                    const bounds = event.currentTarget.getBoundingClientRect();
+                    setFooterSortMenu({ x: bounds.left, y: bounds.top });
+                  }}
+                >
+                  <span className="storyboard-footer-sort-label">排序依据：</span>
+                  <span className="storyboard-footer-sort-value">{footerSortLabel}</span>
+                  <ChevronsUpDown aria-hidden="true" />
+                </button>
+              </div>
+              <span className="storyboard-filter-separator storyboard-footer-separator" />
+            </div>
+          )}
+          {footerAreaVisibility.flag && (
+            <div className="storyboard-footer-area storyboard-footer-flag-area">
+              <div className="storyboard-footer-flag-controls" aria-label="设置所选分镜旗标">
+                {(["retained", "excluded"] as const).map((flag) => {
+                  const active = contextMenuFlag === flag;
+                  return (
+                    <button
+                      key={flag}
+                      type="button"
+                      className={`storyboard-footer-flag-button ${active ? "active" : ""}`}
+                      onClick={() => setShotFlags(contextMenuShotIds, active ? "none" : flag)}
+                      disabled={contextMenuShotIds.length === 0}
+                      title={
+                        active
+                          ? `取消${storyboardShotFlagLabels[flag]}`
+                          : `设置${storyboardShotFlagLabels[flag]}`
+                      }
+                      aria-label={
+                        active
+                          ? `取消${storyboardShotFlagLabels[flag]}`
+                          : `设置${storyboardShotFlagLabels[flag]}`
+                      }
+                      aria-pressed={active}
+                    >
+                      <span className={`shot-thumbnail-flag is-${flag}`} aria-hidden="true" />
+                    </button>
+                  );
+                })}
+              </div>
+              <span className="storyboard-filter-separator storyboard-footer-separator" />
+            </div>
+          )}
+          {footerAreaVisibility.rating && (
+            <div className="storyboard-footer-area storyboard-footer-rating-area">
+              <div className="storyboard-footer-rating-controls" aria-label="设置所选分镜星级">
+                {storyboardRatingFilters.map((rating) => {
+                  const active = contextMenuRating !== null && rating <= contextMenuRating;
+                  return (
+                    <button
+                      key={rating}
+                      type="button"
+                      className={active ? "active" : ""}
+                      onClick={() =>
+                        setShotRatings(
+                          contextMenuShotIds,
+                          contextMenuRating === rating ? 0 : rating,
+                        )
+                      }
+                      disabled={contextMenuShotIds.length === 0}
+                      title={contextMenuRating === rating ? "取消星级" : `设为 ${rating} 星`}
+                      aria-label={contextMenuRating === rating ? "取消星级" : `设为 ${rating} 星`}
+                      aria-pressed={contextMenuRating === rating}
+                    >
+                      <Star aria-hidden="true" />
+                    </button>
+                  );
+                })}
+              </div>
+              <span className="storyboard-filter-separator storyboard-footer-separator" />
+            </div>
+          )}
+          {footerAreaVisibility.colorLabel && (
+            <div className="storyboard-footer-area storyboard-footer-color-area">
+              <StoryboardColorLabelButtons
+                className="storyboard-footer-colors"
+                activeValues={contextMenuColorLabel ? [contextMenuColorLabel] : []}
+                ariaLabel="设置所选分镜色标"
+                buttonLabel={(_, label, active) =>
+                  active ? `清除${label}色标` : `设置${label}色标`
+                }
+                onSelect={(colorLabel) =>
+                  setShotColorLabels(
+                    contextMenuShotIds,
+                    colorLabel === "none" || contextMenuColorLabel === colorLabel
+                      ? null
+                      : colorLabel,
+                  )
+                }
+                disabled={contextMenuShotIds.length === 0}
+              />
+              <span className="storyboard-filter-separator storyboard-footer-separator" />
+            </div>
+          )}
         </div>
-        <span>
-          {selectedCount} 条已选择，共 {sortedShots.length} 条
-        </span>
+        <div className="storyboard-thumbnail-tools">
+          {footerAreaVisibility.thumbnailSize && (
+            <>
+              <span className="storyboard-thumbnail-size-label">缩略图：</span>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={viewMode === "list" ? thumbnailSize : gridSize}
+                aria-label={viewMode === "list" ? "分镜缩略图大小" : "分镜图标大小"}
+                onChange={(event) => {
+                  const size = Number(event.currentTarget.value);
+                  if (viewMode === "list") {
+                    setThumbnailSize(size);
+                  } else {
+                    setGridSize(size);
+                  }
+                }}
+              />
+            </>
+          )}
+          <span className="storyboard-filter-separator storyboard-footer-separator" />
+          <button
+            type="button"
+            className={`storyboard-footer-options-trigger ${footerOptionsMenu ? "active" : ""}`}
+            aria-haspopup="menu"
+            aria-expanded={Boolean(footerOptionsMenu)}
+            title="更多选项"
+            onClick={(event) => {
+              event.stopPropagation();
+              setContextMenu(null);
+              setAnnotationMenu(null);
+              setFooterSortMenu(null);
+              if (footerOptionsMenu) {
+                setFooterOptionsMenu(null);
+                return;
+              }
+              const bounds = event.currentTarget.getBoundingClientRect();
+              setFooterOptionsMenu({ x: bounds.left, y: bounds.top });
+            }}
+          >
+            <ChevronDown aria-hidden="true" />
+          </button>
+        </div>
       </footer>
+
+      {footerSortMenu &&
+        createPortal(
+          <PopupMenu
+            className="storyboard-footer-sort-menu"
+            contextMenuAnchor={footerSortMenu}
+            ariaLabel="分镜排序依据"
+            style={{
+              position: "fixed",
+              left: footerSortMenu.x,
+              top: footerSortMenu.y,
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            {storyboardGridSortOptions.map((option) => (
+              <Fragment key={option.id}>
+                {option.id === "rating" && <PopupMenuSeparator />}
+                <PopupMenuItem
+                  checked={activeShotSort.columnId === option.id}
+                  onSelect={() => {
+                    setActiveShotSort((current) =>
+                      current.columnId === option.id
+                        ? current
+                        : { columnId: option.id, direction: option.defaultDirection },
+                    );
+                    setFooterSortMenu(null);
+                  }}
+                >
+                  {option.label}
+                </PopupMenuItem>
+              </Fragment>
+            ))}
+          </PopupMenu>,
+          document.body,
+        )}
+
+      {footerOptionsMenu &&
+        createPortal(
+          <PopupMenu
+            className="storyboard-footer-options-menu"
+            contextMenuAnchor={footerOptionsMenu}
+            ariaLabel="分镜面板更多选项"
+            style={{
+              position: "fixed",
+              left: footerOptionsMenu.x,
+              top: footerOptionsMenu.y,
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            <PopupMenuItem
+              checked={footerAreaVisibility.viewMode}
+              onSelect={() =>
+                setFooterAreaVisibility((current) => ({
+                  ...current,
+                  viewMode: !current.viewMode,
+                }))
+              }
+            >
+              视图模式
+            </PopupMenuItem>
+            <PopupMenuSeparator />
+            <PopupMenuItem
+              checked={footerAreaVisibility.selection}
+              onSelect={() =>
+                setFooterAreaVisibility((current) => ({
+                  ...current,
+                  selection: !current.selection,
+                }))
+              }
+            >
+              选中
+            </PopupMenuItem>
+            <PopupMenuItem
+              checked={footerSortVisible}
+              onSelect={() =>
+                setFooterAreaVisibility((current) => ({
+                  ...current,
+                  sort: {
+                    ...current.sort,
+                    [viewMode]: !current.sort[viewMode],
+                  },
+                }))
+              }
+            >
+              排序
+            </PopupMenuItem>
+            <PopupMenuItem
+              checked={footerAreaVisibility.flag}
+              onSelect={() =>
+                setFooterAreaVisibility((current) => ({
+                  ...current,
+                  flag: !current.flag,
+                }))
+              }
+            >
+              旗标
+            </PopupMenuItem>
+            <PopupMenuItem
+              checked={footerAreaVisibility.rating}
+              onSelect={() =>
+                setFooterAreaVisibility((current) => ({
+                  ...current,
+                  rating: !current.rating,
+                }))
+              }
+            >
+              星级
+            </PopupMenuItem>
+            <PopupMenuItem
+              checked={footerAreaVisibility.colorLabel}
+              onSelect={() =>
+                setFooterAreaVisibility((current) => ({
+                  ...current,
+                  colorLabel: !current.colorLabel,
+                }))
+              }
+            >
+              色标
+            </PopupMenuItem>
+            <PopupMenuItem
+              checked={footerAreaVisibility.thumbnailSize}
+              onSelect={() =>
+                setFooterAreaVisibility((current) => ({
+                  ...current,
+                  thumbnailSize: !current.thumbnailSize,
+                }))
+              }
+            >
+              缩略图大小
+            </PopupMenuItem>
+          </PopupMenu>,
+          document.body,
+        )}
 
       {contextMenu &&
         createPortal(

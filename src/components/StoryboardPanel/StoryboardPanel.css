@@ -88,6 +88,16 @@
   border-radius: 4px;
 }
 
+.storyboard-selection-summary {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  color: #aaa;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .storyboard-detect-button {
   position: relative;
   display: grid;
@@ -284,7 +294,7 @@
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 1px;
+  gap: 0;
   transform: translateY(-0.6px);
 }
 
@@ -328,16 +338,19 @@
   fill: currentColor;
 }
 
-.storyboard-filter-colors {
-  margin-right: 3.5px;
-  margin-left: 5.7px;
+.storyboard-color-label-buttons {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
   gap: 4px;
 }
 
-.storyboard-filter-colors button {
+.storyboard-filter-colors {
+  margin-right: 3.5px;
+  margin-left: 5.7px;
+}
+
+.storyboard-color-label-buttons button {
   position: relative;
   flex: 0 0 14px;
   width: 14px;
@@ -351,47 +364,47 @@
   cursor: pointer;
 }
 
-.storyboard-filter-colors button::before,
-.storyboard-filter-colors button::after {
+.storyboard-color-label-buttons button::before,
+.storyboard-color-label-buttons button::after {
   position: absolute;
   left: 0;
   width: 14px;
   content: "";
 }
 
-.storyboard-filter-colors button::before {
+.storyboard-color-label-buttons button::before {
   top: 0;
   box-sizing: border-box;
   height: 13px;
-  background: color-mix(in srgb, var(--storyboard-filter-color) 50%, transparent);
+  background: color-mix(in srgb, var(--storyboard-color-label-color) 50%, transparent);
   border: 1px solid #212121;
 }
 
-.storyboard-filter-colors button::after {
+.storyboard-color-label-buttons button::after {
   bottom: 0;
   height: 1px;
   background: #3f3f3f;
 }
 
-.storyboard-filter-colors button:hover:not(:disabled)::before,
-.storyboard-filter-colors button:focus-visible::before {
-  background: var(--storyboard-filter-color);
+.storyboard-color-label-buttons button:hover:not(:disabled)::before,
+.storyboard-color-label-buttons button:focus-visible::before {
+  background: var(--storyboard-color-label-color);
   border-color: #333;
   box-shadow: inset 0 0 0 1px #ffffffaa;
 }
 
-.storyboard-filter-colors button:hover:not(:disabled)::after,
-.storyboard-filter-colors button:focus-visible::after,
-.storyboard-filter-colors button.active::after {
+.storyboard-color-label-buttons button:hover:not(:disabled)::after,
+.storyboard-color-label-buttons button:focus-visible::after,
+.storyboard-color-label-buttons button.active::after {
   background: transparent;
 }
 
-.storyboard-filter-colors button:focus-visible {
+.storyboard-color-label-buttons button:focus-visible {
   outline: none;
 }
 
-.storyboard-filter-colors button.active::before {
-  background: var(--storyboard-filter-color);
+.storyboard-color-label-buttons button.active::before {
+  background: var(--storyboard-color-label-color);
   border-color: #333;
   outline: 1px solid #ccc;
   box-shadow:
@@ -399,7 +412,7 @@
     inset 0 1px 0 #ffffff80;
 }
 
-.storyboard-filter-colors button.active:hover:not(:disabled)::before {
+.storyboard-color-label-buttons button.active:hover:not(:disabled)::before {
   box-shadow: inset 0 0 0 1px #ffffffaa;
 }
 
@@ -499,7 +512,8 @@
   height: 100%;
   min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   scrollbar-color: #555 var(--color-surface);
   scrollbar-gutter: stable;
   background: var(--color-surface);
@@ -567,7 +581,7 @@
   position: absolute;
   z-index: 10;
   inset: 0;
-  box-shadow: inset 0 0 0 0.8px #ffffff80;
+  box-shadow: inset 0 0 0 1px #ffffff2e;
   content: "";
   pointer-events: none;
 }
@@ -616,7 +630,7 @@
   top: 2px;
   left: 4px;
   z-index: 5;
-  transform: scale(2.5);
+  transform: scale(2);
   transform-origin: top left;
 }
 
@@ -1488,29 +1502,105 @@ body.is-resizing-storyboard-column {
   justify-content: space-between;
   gap: 10px;
   height: 32px;
+  width: 100%;
+  min-width: 0;
   min-height: 32px;
   padding: 5px 8px;
+  overflow: hidden;
   background: var(--color-surface);
   border-top: 1px solid #0e0e0e;
 }
 
-.storyboard-footer > span {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  color: #aaa;
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.storyboard-selection-tools {
+.storyboard-selection-tools,
+.storyboard-thumbnail-tools {
   display: flex;
   align-items: center;
   gap: 5px;
 }
 
-.storyboard-selection-tools input[type="range"] {
+.storyboard-selection-tools {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.storyboard-thumbnail-tools {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.storyboard-footer-area {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+}
+
+.storyboard-thumbnail-size-label {
+  color: #777;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.storyboard-footer-separator {
+  flex: 0 0 1px;
+  margin: 0 0;
+}
+
+.storyboard-thumbnail-tools > input + .storyboard-footer-separator {
+  margin-left: 6px;
+}
+
+.storyboard-footer-sort-control {
+  display: flex;
+  flex: 0 0 187px;
+  align-items: center;
+  gap: 1px;
+}
+
+.storyboard-footer .storyboard-footer-sort-trigger {
+  display: grid;
+  grid-template-columns: max-content max-content 12px;
+  width: auto;
+  min-width: 0;
+  max-width: 184px;
+  padding: 0 4px 0 6px;
+  gap: 4px;
+  color: #aaa;
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.storyboard-footer-sort-label {
+  color: #777;
+}
+
+.storyboard-footer-sort-value {
+  overflow: hidden;
+  color: #bbb;
+  text-overflow: ellipsis;
+}
+
+.storyboard-footer .storyboard-footer-sort-trigger > svg {
+  width: 12px;
+  height: 12px;
+  color: #777;
+}
+
+.storyboard-footer-sort-menu {
+  position: fixed;
+  z-index: 1000;
+  width: 176px;
+}
+
+.storyboard-footer-options-menu {
+  position: fixed;
+  z-index: 1000;
+  width: 176px;
+}
+
+.storyboard-thumbnail-tools input[type="range"] {
   width: 72px;
   height: 2px;
   min-height: 0;
@@ -1521,13 +1611,13 @@ body.is-resizing-storyboard-column {
   appearance: none;
 }
 
-.storyboard-selection-tools input[type="range"]::-webkit-slider-runnable-track {
+.storyboard-thumbnail-tools input[type="range"]::-webkit-slider-runnable-track {
   height: 2px;
   background: #555;
   border-radius: 1px;
 }
 
-.storyboard-selection-tools input[type="range"]::-webkit-slider-thumb {
+.storyboard-thumbnail-tools input[type="range"]::-webkit-slider-thumb {
   appearance: none;
   box-sizing: border-box;
   width: 13.5px;
@@ -1540,7 +1630,7 @@ body.is-resizing-storyboard-column {
   cursor: default;
 }
 
-.storyboard-selection-tools input[type="range"]::-webkit-slider-thumb:active {
+.storyboard-thumbnail-tools input[type="range"]::-webkit-slider-thumb:active {
   box-shadow: inset 0 0 0 3px #d0d0d0;
   cursor: default;
 }
@@ -1556,10 +1646,132 @@ body.is-resizing-storyboard-column {
   border-radius: 4px;
 }
 
+.storyboard-footer button.storyboard-footer-sort-direction {
+  width: 26px;
+}
+
+.storyboard-footer button.storyboard-footer-sort-direction > svg {
+  width: 17px;
+  height: 17px;
+}
+
 .storyboard-footer button:hover:not(:disabled),
 .storyboard-footer button.active {
   color: #eee;
   background: #444;
+}
+
+.storyboard-footer button.storyboard-footer-options-trigger {
+  width: 22px;
+}
+
+.storyboard-footer button.storyboard-footer-options-trigger:hover:not(:disabled),
+.storyboard-footer button.storyboard-footer-options-trigger.active {
+  color: #eee;
+  background: transparent;
+}
+
+.storyboard-footer-flag-controls,
+.storyboard-footer-rating-controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.storyboard-footer-flag-controls {
+  margin: 0 2px;
+  margin-top: 1px;
+  gap: 0;
+}
+
+.storyboard-footer button.storyboard-footer-flag-button {
+  width: 18px;
+  background: transparent;
+}
+
+.storyboard-footer-flag-button .shot-thumbnail-flag {
+  opacity: 1;
+  transform: scale(1.5);
+  pointer-events: none;
+}
+
+.storyboard-footer-flag-button:not(.active) .shot-thumbnail-flag::before {
+  background: #696969;
+}
+
+.storyboard-footer-flag-button:not(.active) .shot-thumbnail-flag::after {
+  background-color: #808080;
+}
+
+.storyboard-footer button.storyboard-footer-flag-button:hover:not(:disabled),
+.storyboard-footer button.storyboard-footer-flag-button.active {
+  background: transparent;
+}
+
+.storyboard-footer-rating-controls {
+  margin: 0 2px;
+  margin-top: -1px;
+  gap: 1px;
+}
+
+.storyboard-footer .storyboard-footer-rating-controls button {
+  flex: 0 0 16px;
+  width: 16px;
+  min-width: 16px;
+  color: #4d4d4d;
+  background: transparent;
+  border-radius: 2px;
+}
+
+.storyboard-footer .storyboard-footer-rating-controls button.active {
+  color: #ccc;
+  background: transparent;
+}
+
+.storyboard-footer .storyboard-footer-rating-controls button:hover:not(:disabled) {
+  color: #808080;
+  background: transparent;
+}
+
+.storyboard-footer .storyboard-footer-rating-controls button.active:hover:not(:disabled) {
+  color: #b4b4b4;
+}
+
+.storyboard-footer-rating-controls button.active svg,
+.storyboard-footer-rating-controls button:hover:not(:disabled) svg {
+  fill: currentColor;
+}
+
+.storyboard-footer .storyboard-color-label-buttons button {
+  flex: 0 0 14px;
+  width: 14px;
+  min-width: 14px;
+  height: 14px;
+  background: transparent;
+  border-radius: 0;
+}
+
+.storyboard-footer .storyboard-color-label-buttons button:hover:not(:disabled),
+.storyboard-footer .storyboard-color-label-buttons button.active {
+  background: transparent;
+}
+
+.storyboard-footer-colors {
+  margin: 0 5px;
+}
+
+.storyboard-footer .storyboard-footer-sort-trigger:hover:not(:disabled),
+.storyboard-footer .storyboard-footer-sort-trigger.active {
+  background: transparent;
+}
+
+.storyboard-footer
+  .storyboard-footer-sort-trigger:hover:not(:disabled)
+  .storyboard-footer-sort-value,
+.storyboard-footer .storyboard-footer-sort-trigger.active .storyboard-footer-sort-value,
+.storyboard-footer .storyboard-footer-sort-trigger:hover:not(:disabled) > svg,
+.storyboard-footer .storyboard-footer-sort-trigger.active > svg {
+  color: #eee;
 }
 
 .storyboard-footer button svg {
@@ -1578,7 +1790,7 @@ body.is-resizing-storyboard-column {
     gap: 8px;
   }
 
-  .storyboard-selection-tools input[type="range"] {
+  .storyboard-thumbnail-tools input[type="range"] {
     width: 54px;
   }
 }
