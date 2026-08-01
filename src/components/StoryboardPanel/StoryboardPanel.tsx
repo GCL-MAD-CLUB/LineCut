@@ -873,6 +873,8 @@ export function StoryboardPanel() {
   const videoLabel = project?.asset.file_name ?? "未选择视频";
   const canDetect = isTauriRuntime() && Boolean(project) && hasVideo && !isDetecting;
   const selectedCount = selectedShotIds.size;
+  const hasSecondarySelection =
+    selectedCount > (activeShotId && selectedShotIds.has(activeShotId) ? 1 : 0);
   const shotCount = shots.length;
   const shotStacksByShotId = useMemo(() => stackByShotId(shotStacks), [shotStacks]);
   const sortShotsById = useMemo(
@@ -1517,8 +1519,16 @@ export function StoryboardPanel() {
   ]);
 
   function clearShotSelection() {
-    selectionAnchorRef.current = null;
-    selectionFocusRef.current = null;
+    const primaryShotId =
+      activeShotId && selectedShotIds.has(activeShotId)
+        ? activeShotId
+        : (selectedShotIds.values().next().value ?? null);
+    selectionAnchorRef.current = primaryShotId;
+    selectionFocusRef.current = primaryShotId;
+    if (primaryShotId) {
+      shotSelectionReplaced([primaryShotId], primaryShotId);
+      return;
+    }
     shotSelectionCleared();
   }
 
@@ -1728,10 +1738,15 @@ export function StoryboardPanel() {
   function selectVisibleShots() {
     selectionAnchorRef.current = null;
     selectionFocusRef.current = null;
-    shotSelectionReplaced(
-      sortedShots.map((shot) => shot.id),
-      null,
-    );
+    const nextSelection = new Set(selectedShotIds);
+    for (const shot of sortedShots) {
+      nextSelection.add(shot.id);
+    }
+    const primaryShotId =
+      activeShotId && nextSelection.has(activeShotId)
+        ? activeShotId
+        : (nextSelection.values().next().value ?? null);
+    shotSelectionReplaced(Array.from(nextSelection), primaryShotId);
   }
 
   function handleShotSelection(
@@ -1939,7 +1954,7 @@ export function StoryboardPanel() {
     visibleCount: sortedShots.length,
     handlers: {
       selectAll: selectVisibleShots,
-      clearSelection: clearShotSelection,
+      clearSelection: hasSecondarySelection ? clearShotSelection : undefined,
     },
   });
 
@@ -2191,7 +2206,6 @@ export function StoryboardPanel() {
             onDoubleClickShot={handleShotDoubleClick}
             onOpenAnnotationMenu={openAnnotationMenu}
             shotTitle={(shot) => storyboardShotTitle(shot, shotCount, shotAnnotations[shot.id])}
-            renderFlagIcon={(flag) => <StoryboardFlagIcon flag={flag} />}
           />
         ) : (
           <StoryboardIconView
@@ -2209,6 +2223,7 @@ export function StoryboardPanel() {
             onSelectShot={handleShotSelection}
             onDoubleClickShot={handleShotDoubleClick}
             onOpenAnnotationMenu={openAnnotationMenu}
+            shotTitle={(shot) => storyboardShotTitle(shot, shotCount, shotAnnotations[shot.id])}
           />
         )}
       </div>

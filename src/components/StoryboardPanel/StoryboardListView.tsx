@@ -14,11 +14,7 @@ import { Star } from "lucide-react";
 import { formatMonitorFrame, formatMonitorTime } from "../../time";
 import type { StoryboardShot } from "../../types";
 import { StoryboardShotThumbnail } from "./StoryboardShotThumbnail";
-import {
-  useStoryboardPanelState,
-  type StoryboardShotFlag,
-  type StoryboardShotStack,
-} from "./storyboardPanelState";
+import { useStoryboardPanelState, type StoryboardShotStack } from "./storyboardPanelState";
 
 const titleRenameDelayMs = 350;
 
@@ -61,7 +57,6 @@ interface StoryboardListViewProps {
     kind: StoryboardAnnotationMenuKind,
   ) => void;
   shotTitle: (shot: StoryboardShot) => string;
-  renderFlagIcon: (flag: StoryboardShotFlag) => ReactNode;
 }
 
 function stacksByShotId(stacks: readonly StoryboardShotStack[]) {
@@ -117,7 +112,6 @@ export function StoryboardListView({
   onDoubleClickShot,
   onOpenAnnotationMenu,
   shotTitle,
-  renderFlagIcon,
 }: StoryboardListViewProps) {
   const {
     activeShotId,
@@ -417,7 +411,7 @@ export function StoryboardListView({
                           <button
                             key={nextFlag}
                             type="button"
-                            className={`shot-flag-button ${active ? "active" : ""}`}
+                            className={`shot-flag-button storyboard-footer-flag-button ${active ? "active" : ""}`}
                             onClick={(event) => {
                               event.stopPropagation();
                               setShotFlags(targetShotIds(), active ? "none" : nextFlag);
@@ -427,7 +421,10 @@ export function StoryboardListView({
                             aria-label={active ? `取消${label}` : `设为${label}`}
                             aria-pressed={active}
                           >
-                            {renderFlagIcon(nextFlag)}
+                            <span
+                              className={`shot-thumbnail-flag is-${nextFlag}`}
+                              aria-hidden="true"
+                            />
                           </button>
                         );
                       })}

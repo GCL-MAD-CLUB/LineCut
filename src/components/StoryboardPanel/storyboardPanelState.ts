@@ -19,6 +19,16 @@ export type StoryboardRatingComparator = "gte" | "lte" | "eq";
 export type StoryboardShotFlag = "retained" | "none" | "excluded";
 export type StoryboardShotColorLabelFilter = StoryboardShotColorLabel | "none";
 export type StoryboardViewMode = "list" | "grid";
+export type StoryboardIconMetadataMode =
+  | "none"
+  | "ratingAndColorLabel"
+  | "index"
+  | "title"
+  | "mediaStart"
+  | "mediaEnd"
+  | "duration"
+  | "rating"
+  | "colorLabel";
 
 interface StoryboardVideoSessionState {
   query: string;
@@ -38,6 +48,7 @@ interface StoryboardPanelUiState extends StoryboardVideoSessionState {
   sessions: Record<string, StoryboardVideoSessionState>;
   detectingVideoContext: string | null;
   viewMode: StoryboardViewMode;
+  iconMetadataMode: StoryboardIconMetadataMode;
   thumbnailSize: number;
   gridSize: number;
   syncVideoContext: (videoContext: string) => void;
@@ -49,6 +60,7 @@ interface StoryboardPanelUiState extends StoryboardVideoSessionState {
   setFlagFilters: (flags: StoryboardShotFlag[]) => void;
   setColorLabelFilters: (colorLabels: StoryboardShotColorLabelFilter[]) => void;
   setViewMode: (viewMode: StoryboardViewMode) => void;
+  setIconMetadataMode: (mode: StoryboardIconMetadataMode) => void;
   setThumbnailSize: (size: number) => void;
   setGridSize: (size: number) => void;
   detectionStarted: (videoContext: string) => void;
@@ -177,6 +189,7 @@ const useStoryboardPanelUiState = createPanelState<StoryboardPanelUiState>(() =>
   ...defaultVideoSessionState(),
   detectingVideoContext: null,
   viewMode: "list",
+  iconMetadataMode: "ratingAndColorLabel",
   thumbnailSize: 0,
   gridSize: 0,
   syncVideoContext: (videoContext) =>
@@ -205,6 +218,7 @@ const useStoryboardPanelUiState = createPanelState<StoryboardPanelUiState>(() =>
   setColorLabelFilters: (colorLabelFilters) =>
     set({ colorLabelFilters: Array.from(new Set(colorLabelFilters)) }),
   setViewMode: (viewMode) => set({ viewMode }),
+  setIconMetadataMode: (iconMetadataMode) => set({ iconMetadataMode }),
   setThumbnailSize: (thumbnailSize) =>
     set({
       thumbnailSize: Number.isFinite(thumbnailSize) ? Math.min(100, Math.max(0, thumbnailSize)) : 0,
@@ -223,7 +237,9 @@ const useStoryboardPanelUiState = createPanelState<StoryboardPanelUiState>(() =>
     set(() => {
       const selectedShotIds = new Set(shotIds);
       const activeShotId =
-        primaryShotId && selectedShotIds.has(primaryShotId) ? primaryShotId : null;
+        primaryShotId && selectedShotIds.has(primaryShotId)
+          ? primaryShotId
+          : (selectedShotIds.values().next().value ?? null);
       return { selectedShotIds, activeShotId };
     }),
   setExpandedStackIds: (stackIds) => set({ expandedStackIds: new Set(stackIds) }),
@@ -558,7 +574,12 @@ export function useStoryboardPanelState<Selection>(
         videoContext,
       );
       if (uiState.videoContext === videoContext) {
-        uiState.shotSelectionCleared();
+        const firstShotId = shots[0]?.id;
+        if (firstShotId) {
+          uiState.shotSelectionReplaced([firstShotId], firstShotId);
+        } else {
+          uiState.shotSelectionCleared();
+        }
         uiState.setShowOnlySelected(false);
         uiState.setExpandedStackIds([]);
       }

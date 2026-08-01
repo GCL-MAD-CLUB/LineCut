@@ -1836,7 +1836,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                 <PopupMenuSubmenu
                   label="代理"
                   open={contextMenu.proxySubmenuOpen}
-                  menuClassName="media-bin-context-menu media-bin-proxy-context-menu"
+                  menuClassName="media-bin-context-menu"
                   onOpenChange={(open) =>
                     setContextMenu((current) =>
                       current
