@@ -1,5 +1,6 @@
 import {
   Captions,
+  Clapperboard,
   CircleCheck,
   CircleOff,
   Cloud,
@@ -65,6 +66,8 @@ function historyOperationIcon(category: ProjectHistoryCategory) {
       return <SplitSquareVertical />;
     case "subtitle":
       return <Captions />;
+    case "storyboard":
+      return <Clapperboard />;
     case "selection":
       return <ListChecks />;
     case "proxy":

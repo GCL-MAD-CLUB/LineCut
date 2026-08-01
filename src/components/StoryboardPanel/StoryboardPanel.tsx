@@ -741,7 +741,7 @@ function storyboardShotSortValue(
     return annotation?.rating ?? 0;
   }
   if (columnId === "colorLabel") {
-    return annotation?.colorLabel === undefined
+    return annotation?.colorLabel == null
       ? Number.MAX_SAFE_INTEGER
       : storyboardColorSortOrder[annotation.colorLabel];
   }

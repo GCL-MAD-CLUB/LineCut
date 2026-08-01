@@ -71,6 +71,27 @@ export interface StoryboardShot {
   end_us: number;
 }
 
+export type StoryboardShotColorLabel = "red" | "yellow" | "green" | "blue" | "purple";
+
+export interface StoryboardShotAnnotation {
+  rating: number;
+  retained: boolean;
+  excluded?: boolean;
+  title?: string | null;
+  colorLabel?: StoryboardShotColorLabel | null;
+}
+
+export interface StoryboardShotStackState {
+  id: string;
+  shotIds: string[];
+}
+
+export interface StoryboardState {
+  shots: StoryboardShot[];
+  shotStacks: StoryboardShotStackState[];
+  shotAnnotations: Record<string, StoryboardShotAnnotation>;
+}
+
 export interface StoryboardCut {
   cut_frame: number;
   confidence: number;
@@ -155,6 +176,7 @@ export interface ProjectWorkspace {
   projects: Project[];
   media_bin: ProjectMediaBinState;
   editor: ProjectEditorState;
+  storyboards?: Record<string, StoryboardState>;
 }
 
 export interface DemuxedAudioTrack {

@@ -189,6 +189,7 @@ mod tests {
                 detached_video_ids: Vec::new(),
                 preview: ProjectPreviewState { use_proxy: false },
             },
+            storyboards: HashMap::new(),
         }
     }
 

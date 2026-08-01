@@ -348,10 +348,60 @@ struct ProjectEditorState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProjectStoryboardShot {
+    id: String,
+    sequence: usize,
+    start_frame: usize,
+    end_frame: usize,
+    start_us: i64,
+    end_us: i64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ProjectStoryboardColorLabel {
+    Red,
+    Yellow,
+    Green,
+    Blue,
+    Purple,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectStoryboardAnnotation {
+    rating: u8,
+    retained: bool,
+    #[serde(default)]
+    excluded: bool,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    color_label: Option<ProjectStoryboardColorLabel>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectStoryboardStack {
+    id: String,
+    shot_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectStoryboardState {
+    shots: Vec<ProjectStoryboardShot>,
+    shot_stacks: Vec<ProjectStoryboardStack>,
+    shot_annotations: HashMap<String, ProjectStoryboardAnnotation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ProjectWorkspace {
     projects: Vec<Project>,
     media_bin: ProjectMediaBinState,
     editor: ProjectEditorState,
+    #[serde(default)]
+    storyboards: HashMap<String, ProjectStoryboardState>,
 }
 
 #[derive(Debug, Clone, Serialize)]

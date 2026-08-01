@@ -257,7 +257,7 @@ export function StoryboardListView({
                 : annotation?.excluded
                   ? "excluded"
                   : "none";
-              const colorLabel = annotation?.colorLabel;
+              const colorLabel = annotation?.colorLabel ?? undefined;
               const stack = stackMap.get(shot.id);
               const stackIndex = stack?.shotIds.indexOf(shot.id) ?? -1;
               const targetShotIds = () => annotationTargets(shot.id, selectedShotIds, stackMap);

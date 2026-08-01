@@ -1,4 +1,4 @@
-import type { MediaBinFolder, MediaBinItem, Project } from "../../types";
+import type { MediaBinFolder, MediaBinItem, Project, StoryboardState } from "../../types";
 
 export const projectHistoryRowLimit = 40;
 
@@ -21,6 +21,7 @@ export type ProjectHistoryCategory =
   | "delete"
   | "demux"
   | "subtitle"
+  | "storyboard"
   | "selection"
   | "proxy"
   | "default";
@@ -36,6 +37,7 @@ export interface ProjectFileState {
   subtitleSelections: SubtitleSelections;
   detachedVideoIds: Set<string>;
   useProxy: boolean;
+  storyboards: Record<string, StoryboardState>;
 }
 
 interface ProjectSetOperation {
@@ -80,6 +82,12 @@ interface BooleanSetOperation {
   value: boolean;
 }
 
+interface StoryboardSetOperation {
+  type: "storyboard.set";
+  videoContext: string;
+  value: StoryboardState | null;
+}
+
 export type ProjectFileOperation =
   | ProjectSetOperation
   | MediaFolderSetOperation
@@ -87,7 +95,8 @@ export type ProjectFileOperation =
   | StringSetOperation
   | StringSetSetOperation
   | SubtitleSelectionSetOperation
-  | BooleanSetOperation;
+  | BooleanSetOperation
+  | StoryboardSetOperation;
 
 export interface ProjectFileEvent {
   id: string;
@@ -307,6 +316,27 @@ export function createProjectHistoryEntry(
     before.useProxy,
     after.useProxy,
   );
+  const videoContexts = new Set([
+    ...Object.keys(before.storyboards),
+    ...Object.keys(after.storyboards),
+  ]);
+  for (const videoContext of videoContexts) {
+    const previousStoryboard = before.storyboards[videoContext] ?? null;
+    const nextStoryboard = after.storyboards[videoContext] ?? null;
+    if (previousStoryboard === nextStoryboard) {
+      continue;
+    }
+    eventOperations.push({
+      type: "storyboard.set",
+      videoContext,
+      value: nextStoryboard,
+    });
+    inverseOperations.push({
+      type: "storyboard.set",
+      videoContext,
+      value: previousStoryboard,
+    });
+  }
   if (eventOperations.length === 0) {
     return null;
   }
@@ -377,6 +407,7 @@ export function applyProjectFileEvent(
     mediaFolders,
     mediaItems,
     subtitleSelections: { ...current.subtitleSelections },
+    storyboards: { ...current.storyboards },
   };
 
   for (const operation of event.operations) {
@@ -406,6 +437,13 @@ export function applyProjectFileEvent(
         break;
       case "editor.use-proxy.set":
         next.useProxy = operation.value;
+        break;
+      case "storyboard.set":
+        if (operation.value) {
+          next.storyboards[operation.videoContext] = operation.value;
+        } else {
+          delete next.storyboards[operation.videoContext];
+        }
         break;
     }
   }

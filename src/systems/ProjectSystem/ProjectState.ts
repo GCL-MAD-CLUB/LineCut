@@ -22,6 +22,7 @@ import type {
   Preferences,
   Project,
   ProjectWorkspace,
+  StoryboardState,
   SubtitleCue,
   SubtitleTrack,
   UserNotice,
@@ -92,6 +93,11 @@ interface ProjectCommands {
   warningsAppended: (warnings: UserNotice[]) => void;
   exportResultChanged: (result: ExportResult | null) => void;
   mediaBinReadOnlyChanged: (readOnly: boolean) => void;
+  storyboardUpdated: (
+    videoContext: string,
+    historyLabel: string,
+    recipe: (storyboard: StoryboardState) => StoryboardState,
+  ) => void;
   projectHistoryJumped: (cursor: number) => boolean;
   projectHistoryFutureDiscarded: () => void;
 }
@@ -116,6 +122,7 @@ interface ProjectSystemState {
   warnings: UserNotice[];
   exportResult: ExportResult | null;
   mediaBinReadOnly: boolean;
+  storyboards: Record<string, StoryboardState>;
   projectHistory: ProjectHistoryState;
   commands: ProjectCommands;
 }
@@ -426,6 +433,7 @@ function initialProjectState(project: Project | null) {
       subtitleSelections: {},
       selectedCueIds: new Set<string>(),
       proxyPath: null,
+      storyboards: {},
     };
   }
   const mediaItems = [projectMediaItem(project), ...externalSubtitleItems(project)];
@@ -445,6 +453,7 @@ function initialProjectState(project: Project | null) {
     subtitleSelections: {},
     selectedCueIds: new Set<string>(),
     proxyPath: project.proxy_path,
+    storyboards: {},
   };
 }
 
@@ -554,6 +563,7 @@ function openedProjectState(workspace: ProjectWorkspace) {
       (workspace.editor.preview.use_proxy ||
         Boolean(activeVideo && isMediaItemOffline(activeVideo))),
     mediaBinReadOnly: false,
+    storyboards: workspace.storyboards ?? {},
   };
 }
 
@@ -578,6 +588,7 @@ function projectFileStateFromStore(state: ProjectSystemState): ProjectFileState 
     subtitleSelections: state.subtitleSelections,
     detachedVideoIds: state.detachedVideoIds,
     useProxy: state.useProxy,
+    storyboards: state.storyboards,
   };
 }
 
@@ -655,12 +666,18 @@ function removedMediaItemsState(
   for (const videoId of removedVideoIds) {
     delete subtitleSelections[videoId];
   }
+  const storyboards = Object.fromEntries(
+    Object.entries(state.storyboards).filter(([videoContext]) =>
+      Array.from(removedVideoIds).every((videoId) => !videoContext.startsWith(`${videoId}:`)),
+    ),
+  );
   return {
     projects,
     mediaItems,
     detachedVideoIds,
     project,
     subtitleSelections,
+    storyboards,
     ...subtitleContextState(subtitleSelections, nextVideoId, activeTrackId),
     proxyPath: project?.proxy_path ?? null,
     useProxy: Boolean(nextVideo && isMediaItemOffline(nextVideo) && project?.proxy_path),
@@ -1689,6 +1706,30 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
       set((state) => ({ warnings: [...state.warnings, ...warnings] })),
     exportResultChanged: (exportResult) => set({ exportResult }),
     mediaBinReadOnlyChanged: (mediaBinReadOnly) => set({ mediaBinReadOnly }),
+    storyboardUpdated: (videoContext, historyLabel, recipe) =>
+      commitProjectEvent(set, historyLabel, "storyboard", (state) => {
+        const videoExists = state.mediaItems.some(
+          (item) => item.kind === "video" && videoContext.startsWith(`${item.id}:`),
+        );
+        if (!videoContext || !videoExists) {
+          return state;
+        }
+        const currentStoryboard = state.storyboards[videoContext] ?? {
+          shots: [],
+          shotStacks: [],
+          shotAnnotations: {},
+        };
+        const storyboard = recipe(currentStoryboard);
+        if (storyboard === currentStoryboard) {
+          return state;
+        }
+        return {
+          storyboards: {
+            ...state.storyboards,
+            [videoContext]: storyboard,
+          },
+        };
+      }),
     projectHistoryJumped: (targetCursor) => {
       let changed = false;
       set((state) => {
@@ -1782,5 +1823,6 @@ export function getProjectWorkspaceSnapshot(): ProjectWorkspace {
         use_proxy: state.useProxy,
       },
     },
+    storyboards: state.storyboards,
   };
 }
