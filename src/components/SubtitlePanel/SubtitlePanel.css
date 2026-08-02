@@ -479,7 +479,7 @@
   --subtitle-status-gutter-width: 16px;
   --subtitle-fixed-left-width: var(--subtitle-fixed-thumbnail-width);
   --subtitle-col-thumbnail: 120px;
-  --subtitle-col-subtitle: 320px;
+  --subtitle-col-subtitle: 128px;
   --subtitle-col-media-start: 128px;
   --subtitle-col-media-end: 128px;
   --subtitle-col-duration: 140px;
@@ -492,7 +492,7 @@
   --subtitle-table-columns: var(--subtitle-col-thumbnail) var(--subtitle-col-subtitle)
     var(--subtitle-col-media-start) var(--subtitle-col-media-end) var(--subtitle-col-duration)
     var(--subtitle-col-rating) var(--subtitle-col-retained) var(--subtitle-col-label) minmax(0, 1fr);
-  --subtitle-table-min-width: 1204px;
+  --subtitle-table-min-width: 1012px;
 }
 
 .subtitle-list-header-viewport {
@@ -1010,6 +1010,27 @@ body.is-marquee-selecting * {
   background: color-mix(in srgb, var(--color-text) 14%, transparent);
   border: 1px solid var(--color-text);
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 5%);
+}
+
+.cue-row > .cue-subtitle-cell,
+.cue-row > .cue-time-cell,
+.cue-row > .cue-duration-cell,
+.cue-row > .cue-label-cell,
+.cue-row > .cue-rating-cell,
+.cue-row > .cue-retain-cell {
+  position: relative;
+  display: flex;
+  height: 100%;
+  min-width: 0;
+  align-self: stretch;
+  align-items: center;
+  justify-self: stretch;
+  padding: 0 8px;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 16px;
+  text-overflow: clip;
+  white-space: nowrap;
 }
 
 .cue-time-cell {
@@ -1540,43 +1561,28 @@ body.is-resizing-subtitle-column {
   background: #292929;
 }
 
-.cue-row > .cue-subtitle-cell,
-.cue-row > .cue-time-cell,
-.cue-row > .cue-duration-cell,
-.cue-row > .cue-label-cell,
-.cue-row > .cue-rating-cell,
-.cue-row > .cue-retain-cell {
-  position: relative;
-  display: flex;
-  height: 100%;
-  min-width: 0;
-  align-self: stretch;
-  align-items: center;
-  justify-self: stretch;
-  padding: 0 8px;
-  overflow: hidden;
-  font-size: 12px;
-  line-height: 16px;
-  text-overflow: clip;
-}
-
 .cue-row > .subtitle-active-cell {
   box-shadow: inset 0 0 0 1px #d0d0d0;
 }
 
+.cue-row > .cue-subtitle-cell {
+  align-items: center;
+}
+
 .cue-subtitle-copy {
+  align-self: center;
   display: -webkit-box;
   min-width: 0;
   overflow: hidden;
   color: #d0d0d0;
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 500;
-  line-height: 17px;
+  line-height: 16px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
 }
 
 .cue-label-cell {

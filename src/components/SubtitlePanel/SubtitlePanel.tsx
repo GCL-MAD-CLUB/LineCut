@@ -153,35 +153,35 @@ type SubtitleColumnWidths = Record<SubtitleResizableColumnId, number>;
 
 const initialSubtitleColumnWidths: SubtitleColumnWidths = {
   thumbnail: 104,
-  subtitle: 320,
+  subtitle: 128,
   mediaStart: 128,
   mediaEnd: 128,
   duration: 140,
+  label: 128,
   rating: 112,
   retained: 128,
-  label: 128,
 };
 
 const minimumSubtitleColumnWidths: SubtitleColumnWidths = {
   thumbnail: 60,
-  subtitle: 120,
-  mediaStart: 64,
-  mediaEnd: 64,
-  duration: 72,
-  rating: 64,
-  retained: 64,
-  label: 72,
+  subtitle: 38,
+  mediaStart: 21,
+  mediaEnd: 21,
+  duration: 21,
+  label: 38,
+  rating: 30,
+  retained: 21,
 };
 
 const maximumSubtitleColumnWidths: SubtitleColumnWidths = {
   thumbnail: 720,
-  subtitle: 960,
+  subtitle: 720,
   mediaStart: 300,
   mediaEnd: 300,
   duration: 320,
+  label: 720,
   rating: 180,
   retained: 300,
-  label: 720,
 };
 
 const subtitleResizableColumnLabels: Record<SubtitleResizableColumnId, string> = {
@@ -1789,10 +1789,13 @@ export function SubtitlePanel() {
   }
 
   function toggleCueSort(columnId: SubtitleSortableColumnId) {
+    if (allCues.length === 0) {
+      return;
+    }
     setCueSort((current) =>
       current.columnId === columnId
         ? {
-            ...current,
+            columnId,
             direction: current.direction === "ascending" ? "descending" : "ascending",
           }
         : { columnId, direction: "ascending" },
@@ -1828,7 +1831,14 @@ export function SubtitlePanel() {
       minimumSubtitleColumnWidths[resize.columnId],
       maximumSubtitleColumnWidths[resize.columnId],
     );
-    setSubtitleColumnWidths((current) => ({ ...current, [resize.columnId]: width }));
+    setSubtitleColumnWidths((current) =>
+      current[resize.columnId] === width
+        ? current
+        : {
+            ...current,
+            [resize.columnId]: width,
+          },
+    );
   }
 
   function finishColumnResize(event: ReactPointerEvent<HTMLButtonElement>) {
@@ -1841,6 +1851,13 @@ export function SubtitlePanel() {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     document.body.classList.remove("is-resizing-subtitle-column");
+  }
+
+  function resetColumnWidth(columnId: SubtitleResizableColumnId) {
+    setSubtitleColumnWidths((current) => ({
+      ...current,
+      [columnId]: initialSubtitleColumnWidths[columnId],
+    }));
   }
 
   function renderTableHeader(header: (typeof subtitleTableHeaders)[number]) {
@@ -1868,6 +1885,8 @@ export function SubtitlePanel() {
             <span className="subtitle-column-label-text">{header.label}</span>
             {isActive && <SortArrow direction={cueSort.direction} />}
           </button>
+        ) : header.label ? (
+          <span className="subtitle-column-label-text">{header.label}</span>
         ) : null}
         {header.resizeColumn && (
           <button
@@ -1879,12 +1898,7 @@ export function SubtitlePanel() {
             onPointerMove={updateColumnResize}
             onPointerUp={finishColumnResize}
             onPointerCancel={finishColumnResize}
-            onDoubleClick={() =>
-              setSubtitleColumnWidths((current) => ({
-                ...current,
-                [header.resizeColumn!]: initialSubtitleColumnWidths[header.resizeColumn!],
-              }))
-            }
+            onDoubleClick={() => resetColumnWidth(header.resizeColumn!)}
           />
         )}
       </span>
