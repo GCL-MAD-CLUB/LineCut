@@ -13,12 +13,18 @@ import {
 import { Star } from "lucide-react";
 import { formatMonitorFrame, formatMonitorTime } from "../../time";
 import type { StoryboardShot } from "../../types";
+import { storyboardShotColorLabels } from "./StoryboardColorLabelButtons";
 import { StoryboardShotThumbnail } from "./StoryboardShotThumbnail";
-import { useStoryboardPanelState, type StoryboardShotStack } from "./storyboardPanelState";
+import {
+  useStoryboardPanelState,
+  type StoryboardShotStack,
+  type StoryboardShotVisualLabel,
+} from "./storyboardPanelState";
 
-const titleRenameDelayMs = 350;
+const cellEditDelayMs = 350;
 
-type ActiveColumn = "title" | "mediaStart" | "mediaEnd" | "duration";
+type EditableColumn = "title" | "label";
+type ActiveColumn = EditableColumn | "mediaStart" | "mediaEnd" | "duration";
 type StoryboardAnnotationMenuKind = "flag" | "color";
 
 interface ActiveCell {
@@ -57,6 +63,7 @@ interface StoryboardListViewProps {
     kind: StoryboardAnnotationMenuKind,
   ) => void;
   shotTitle: (shot: StoryboardShot) => string;
+  shotLabel: (shot: StoryboardShot) => string;
 }
 
 function stacksByShotId(stacks: readonly StoryboardShotStack[]) {
@@ -112,6 +119,7 @@ export function StoryboardListView({
   onDoubleClickShot,
   onOpenAnnotationMenu,
   shotTitle,
+  shotLabel,
 }: StoryboardListViewProps) {
   const {
     activeShotId,
@@ -119,39 +127,41 @@ export function StoryboardListView({
     shotAnnotations,
     shotStacks,
     setShotTitle,
+    setShotCustomLabels,
     setShotRatings,
     setShotFlags,
+    setShotColorLabels,
     setShotStackExpanded,
   } = useStoryboardPanelState((state) => state);
   const [activeCell, setActiveCell] = useState<ActiveCell | null>(null);
-  const [editingShotId, setEditingShotId] = useState<string | null>(null);
-  const [renameValue, setRenameValue] = useState("");
-  const pendingTitleRenameRef = useRef<number | null>(null);
+  const [editingCell, setEditingCell] = useState<ActiveCell | null>(null);
+  const [editValue, setEditValue] = useState("");
+  const pendingCellEditRef = useRef<number | null>(null);
   const stackMap = stacksByShotId(shotStacks);
 
   useEffect(() => {
-    cancelPendingTitleRename();
-    setEditingShotId(null);
+    cancelPendingCellEdit();
+    setEditingCell(null);
     setActiveCell(null);
   }, [resetKey]);
 
   useEffect(
     () => () => {
-      cancelPendingTitleRename();
+      cancelPendingCellEdit();
     },
     [],
   );
 
-  function cancelPendingTitleRename() {
-    if (pendingTitleRenameRef.current === null) {
+  function cancelPendingCellEdit() {
+    if (pendingCellEditRef.current === null) {
       return;
     }
-    window.clearTimeout(pendingTitleRenameRef.current);
-    pendingTitleRenameRef.current = null;
+    window.clearTimeout(pendingCellEditRef.current);
+    pendingCellEditRef.current = null;
   }
 
   function activateCell(shotId: string, columnId: ActiveColumn) {
-    cancelPendingTitleRename();
+    cancelPendingCellEdit();
     setActiveCell({ shotId, columnId });
   }
 
@@ -171,46 +181,104 @@ export function StoryboardListView({
       .join(" ");
   }
 
-  function beginTitleRename(shot: StoryboardShot) {
-    cancelPendingTitleRename();
-    setRenameValue(shotTitle(shot));
-    setEditingShotId(shot.id);
+  function editableCellValue(shot: StoryboardShot, columnId: EditableColumn) {
+    return columnId === "title" ? shotTitle(shot) : shotLabel(shot);
   }
 
-  function scheduleTitleRename(shot: StoryboardShot) {
-    cancelPendingTitleRename();
-    pendingTitleRenameRef.current = window.setTimeout(() => {
-      pendingTitleRenameRef.current = null;
-      beginTitleRename(shot);
-    }, titleRenameDelayMs);
+  function beginCellEdit(shot: StoryboardShot, columnId: EditableColumn) {
+    cancelPendingCellEdit();
+    setEditValue(editableCellValue(shot, columnId));
+    setEditingCell({ shotId: shot.id, columnId });
   }
 
-  function handleTitleCellClick(
+  function scheduleCellEdit(shot: StoryboardShot, columnId: EditableColumn) {
+    cancelPendingCellEdit();
+    pendingCellEditRef.current = window.setTimeout(() => {
+      pendingCellEditRef.current = null;
+      beginCellEdit(shot, columnId);
+    }, cellEditDelayMs);
+  }
+
+  function handleEditableCellClick(
     event: ReactMouseEvent<HTMLElement>,
     shot: StoryboardShot,
+    columnId: EditableColumn,
     selected: boolean,
   ) {
-    activateCell(shot.id, "title");
+    activateCell(shot.id, columnId);
     if (selected && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
       if (event.detail === 1) {
-        scheduleTitleRename(shot);
+        scheduleCellEdit(shot, columnId);
       } else {
-        cancelPendingTitleRename();
+        cancelPendingCellEdit();
       }
     }
   }
 
-  function finishTitleRename(shot: StoryboardShot, commit: boolean) {
-    cancelPendingTitleRename();
-    if (editingShotId !== shot.id) {
+  function finishCellEdit(shot: StoryboardShot, columnId: EditableColumn, commit: boolean) {
+    cancelPendingCellEdit();
+    if (editingCell?.shotId !== shot.id || editingCell.columnId !== columnId) {
       return;
     }
-    const nextTitle = renameValue.trim();
-    const currentTitle = shotTitle(shot);
-    if (commit && nextTitle && nextTitle !== currentTitle) {
-      setShotTitle(shot.id, nextTitle);
+    const nextValue = editValue.trim();
+    const currentValue = editableCellValue(shot, columnId);
+    if (commit && nextValue !== currentValue) {
+      if (columnId === "title") {
+        if (nextValue) {
+          setShotTitle(shot.id, nextValue);
+        }
+      } else {
+        const colorLabel = storyboardShotColorLabels.find(([, label]) => label === nextValue)?.[0];
+        const targetShotIds = annotationTargets(shot.id, new Set([shot.id]), stackMap);
+        if (colorLabel) {
+          setShotColorLabels(targetShotIds, colorLabel);
+        } else {
+          setShotCustomLabels(targetShotIds, nextValue);
+        }
+      }
     }
-    setEditingShotId(null);
+    setEditingCell(null);
+  }
+
+  function renderEditableCell(shot: StoryboardShot, columnId: EditableColumn) {
+    const value = editableCellValue(shot, columnId);
+    const editing = editingCell?.shotId === shot.id && editingCell.columnId === columnId;
+    const ariaLabel = columnId === "title" ? "重命名分镜" : "编辑分镜标签";
+    return editing ? (
+      <input
+        className="shot-title-editor"
+        value={editValue}
+        aria-label={ariaLabel}
+        autoFocus
+        onFocus={(event) => event.currentTarget.select()}
+        onChange={(event) => setEditValue(event.currentTarget.value)}
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
+        onDoubleClick={(event) => event.stopPropagation()}
+        onBlur={() => finishCellEdit(shot, columnId, true)}
+        onKeyDown={(event) => {
+          event.stopPropagation();
+          if (event.key === "Enter") {
+            event.preventDefault();
+            event.currentTarget.blur();
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            finishCellEdit(shot, columnId, false);
+          }
+        }}
+      />
+    ) : (
+      <span
+        className={columnId === "title" ? "shot-title-copy" : "shot-label-copy"}
+        title={value || undefined}
+        onDoubleClick={(event) => {
+          event.stopPropagation();
+          beginCellEdit(shot, columnId);
+        }}
+      >
+        {columnId === "label" && !value ? "无" : value}
+      </span>
+    );
   }
 
   return (
@@ -230,7 +298,7 @@ export function StoryboardListView({
         onScroll={onScroll}
         onPointerDown={onPointerDown}
         onContextMenu={(event) => {
-          cancelPendingTitleRename();
+          cancelPendingCellEdit();
           setActiveCell(null);
           onContextMenu(event);
         }}
@@ -252,6 +320,8 @@ export function StoryboardListView({
                   ? "excluded"
                   : "none";
               const colorLabel = annotation?.colorLabel ?? undefined;
+              const visualLabel: StoryboardShotVisualLabel | undefined =
+                annotation?.customLabel?.trim() ? "custom" : colorLabel;
               const stack = stackMap.get(shot.id);
               const stackIndex = stack?.shotIds.indexOf(shot.id) ?? -1;
               const targetShotIds = () => annotationTargets(shot.id, selectedShotIds, stackMap);
@@ -264,14 +334,14 @@ export function StoryboardListView({
                   className={`shot-row ${selected ? "is-selected" : ""} ${
                     selected && shot.id === activeShotId ? "is-primary" : ""
                   } ${virtualRow.index === currentShotIndex ? "is-current" : ""} ${
-                    colorLabel ? "has-color-label" : ""
+                    visualLabel ? "has-color-label" : ""
                   } ${stack ? "has-shot-stack" : ""} ${
                     stack?.expanded ? "is-expanded-stack-member" : ""
                   }`}
                   style={
                     {
                       transform: `translateY(${virtualRow.start}px)`,
-                      ...(colorLabel
+                      ...(visualLabel
                         ? {
                             "--storyboard-color-label": {
                               red: "#ef4444",
@@ -279,14 +349,19 @@ export function StoryboardListView({
                               green: "#22c55e",
                               blue: "#3b82f6",
                               purple: "#a855f7",
-                            }[colorLabel],
+                              custom: "#ffffff",
+                            }[visualLabel],
                           }
                         : {}),
                     } as CSSProperties
                   }
                   role="row"
                   onClick={(event) => {
-                    cancelPendingTitleRename();
+                    if (
+                      !(event.target as HTMLElement).closest(".shot-title-cell, .shot-label-cell")
+                    ) {
+                      cancelPendingCellEdit();
+                    }
                     onSelectShot(event, shot);
                   }}
                   onDoubleClick={(event) => onDoubleClickShot(event, shot)}
@@ -297,7 +372,7 @@ export function StoryboardListView({
                       rowNumber={virtualRow.index + 1}
                       rating={rating}
                       flag={flag}
-                      colorLabel={colorLabel}
+                      colorLabel={visualLabel}
                       stack={stack}
                       stackIndex={stackIndex}
                       assetId={assetId}
@@ -307,7 +382,7 @@ export function StoryboardListView({
                       frameRate={frameRate}
                       priority={Math.abs(virtualRow.index - thumbnailPriorityCenterIndex)}
                       onSelectFrame={(event) => {
-                        cancelPendingTitleRename();
+                        cancelPendingCellEdit();
                         setActiveCell(null);
                         onSelectShot(event, shot, true);
                       }}
@@ -321,43 +396,9 @@ export function StoryboardListView({
                   <span
                     className={cellClassName(shot.id, "title", selected, "shot-title-cell")}
                     role="cell"
-                    onClick={(event) => handleTitleCellClick(event, shot, selected)}
+                    onClick={(event) => handleEditableCellClick(event, shot, "title", selected)}
                   >
-                    {editingShotId === shot.id ? (
-                      <input
-                        className="shot-title-editor"
-                        value={renameValue}
-                        aria-label="重命名分镜"
-                        autoFocus
-                        onFocus={(event) => event.currentTarget.select()}
-                        onChange={(event) => setRenameValue(event.currentTarget.value)}
-                        onPointerDown={(event) => event.stopPropagation()}
-                        onClick={(event) => event.stopPropagation()}
-                        onDoubleClick={(event) => event.stopPropagation()}
-                        onBlur={() => finishTitleRename(shot, true)}
-                        onKeyDown={(event) => {
-                          event.stopPropagation();
-                          if (event.key === "Enter") {
-                            event.preventDefault();
-                            event.currentTarget.blur();
-                          } else if (event.key === "Escape") {
-                            event.preventDefault();
-                            finishTitleRename(shot, false);
-                          }
-                        }}
-                      />
-                    ) : (
-                      <span
-                        className="shot-title-copy"
-                        title={shotTitle(shot)}
-                        onDoubleClick={(event) => {
-                          event.stopPropagation();
-                          beginTitleRename(shot);
-                        }}
-                      >
-                        {shotTitle(shot)}
-                      </span>
-                    )}
+                    {renderEditableCell(shot, "title")}
                   </span>
                   <span
                     className={cellClassName(shot.id, "mediaStart", selected, "shot-time-cell")}
@@ -430,6 +471,13 @@ export function StoryboardListView({
                       })}
                     </div>
                   </div>
+                  <span
+                    className={cellClassName(shot.id, "label", selected, "shot-label-cell")}
+                    role="cell"
+                    onClick={(event) => handleEditableCellClick(event, shot, "label", selected)}
+                  >
+                    {renderEditableCell(shot, "label")}
+                  </span>
                 </div>
               );
             })}

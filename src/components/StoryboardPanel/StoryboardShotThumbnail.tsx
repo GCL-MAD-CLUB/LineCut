@@ -19,9 +19,9 @@ import {
 } from "../../timelineThumbnailResolution";
 import type { StoryboardShot } from "../../types";
 import type {
-  StoryboardShotColorLabel,
   StoryboardShotFlag,
   StoryboardShotStack,
+  StoryboardShotVisualLabel,
 } from "./storyboardPanelState";
 
 const storyboardShotFlagLabels: Record<StoryboardShotFlag, string> = {
@@ -279,7 +279,7 @@ export interface StoryboardShotThumbnailProps {
   rowNumber: number;
   rating: number;
   flag: StoryboardShotFlag;
-  colorLabel: StoryboardShotColorLabel | undefined;
+  colorLabel: StoryboardShotVisualLabel | undefined;
   stack: StoryboardShotStack | undefined;
   stackIndex: number;
   assetId: string;
@@ -360,8 +360,8 @@ export function StoryboardShotThumbnail({
         className={`shot-thumbnail-color-label ${colorLabel ? "has-color-label" : "is-none"}`}
         onClick={onOpenColorMenu}
         onDoubleClick={(event) => event.stopPropagation()}
-        title={colorLabel ? "更改色标" : "设置色标"}
-        aria-label={colorLabel ? "更改色标" : "设置色标"}
+        title={colorLabel ? "更改标签" : "设置标签"}
+        aria-label={colorLabel ? "更改标签" : "设置标签"}
       />
       <div className="shot-thumbnail-rating" role="group" aria-label={`${rating} 星`}>
         {[1, 2, 3, 4, 5].map((star) => {

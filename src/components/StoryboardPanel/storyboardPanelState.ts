@@ -14,10 +14,11 @@ export interface StoryboardShotStack extends StoryboardShotStackState {
   expanded: boolean;
 }
 
-export type StoryboardShotFilter = "all" | "rated" | "unrated" | "retained" | "custom";
 export type StoryboardRatingComparator = "gte" | "lte" | "eq";
 export type StoryboardShotFlag = "retained" | "none" | "excluded";
-export type StoryboardShotColorLabelFilter = StoryboardShotColorLabel | "none";
+export type StoryboardShotEditFilter = "edited" | "unedited";
+export type StoryboardShotVisualLabel = StoryboardShotColorLabel | "custom";
+export type StoryboardShotColorLabelFilter = StoryboardShotVisualLabel | "none";
 export type StoryboardViewMode = "list" | "grid";
 export type StoryboardIconMetadataMode =
   | "none"
@@ -33,10 +34,10 @@ export type StoryboardIconMetadataMode =
 interface StoryboardVideoSessionState {
   query: string;
   showOnlySelected: boolean;
-  shotFilter: StoryboardShotFilter;
   minimumRating: number;
   ratingComparator: StoryboardRatingComparator;
   flagFilters: StoryboardShotFlag[];
+  editFilters: StoryboardShotEditFilter[];
   colorLabelFilters: StoryboardShotColorLabelFilter[];
   activeShotId: string | null;
   selectedShotIds: Set<string>;
@@ -54,10 +55,10 @@ interface StoryboardPanelUiState extends StoryboardVideoSessionState {
   syncVideoContext: (videoContext: string) => void;
   setQuery: (query: string) => void;
   setShowOnlySelected: (value: boolean) => void;
-  setShotFilter: (filter: StoryboardShotFilter) => void;
   setMinimumRating: (rating: number) => void;
   setRatingComparator: (comparator: StoryboardRatingComparator) => void;
   setFlagFilters: (flags: StoryboardShotFlag[]) => void;
+  setEditFilters: (editFilters: StoryboardShotEditFilter[]) => void;
   setColorLabelFilters: (colorLabels: StoryboardShotColorLabelFilter[]) => void;
   setViewMode: (viewMode: StoryboardViewMode) => void;
   setIconMetadataMode: (mode: StoryboardIconMetadataMode) => void;
@@ -74,6 +75,12 @@ interface StoryboardPanelState
   extends Omit<StoryboardPanelUiState, "sessions">, Omit<StoryboardState, "shotStacks"> {
   shotStacks: StoryboardShotStack[];
   setShotTitle: (shotId: string, title: string) => void;
+  setShotCustomLabel: (shotId: string, customLabel: string) => void;
+  setShotCustomLabels: (
+    shotIds: Iterable<string>,
+    customLabel: string,
+    historyGroupId?: string,
+  ) => void;
   setShotRating: (shotId: string, rating: number) => void;
   setShotRatings: (shotIds: Iterable<string>, rating: number, historyGroupId?: string) => void;
   adjustShotRatings: (shotIds: Iterable<string>, delta: number) => void;
@@ -100,10 +107,10 @@ function defaultVideoSessionState(): StoryboardVideoSessionState {
   return {
     query: "",
     showOnlySelected: false,
-    shotFilter: "all",
     minimumRating: 0,
     ratingComparator: "gte",
-    flagFilters: ["retained"],
+    flagFilters: [],
+    editFilters: [],
     colorLabelFilters: [],
     activeShotId: null,
     selectedShotIds: new Set<string>(),
@@ -115,10 +122,10 @@ function videoSessionFromState(state: StoryboardPanelUiState): StoryboardVideoSe
   return {
     query: state.query,
     showOnlySelected: state.showOnlySelected,
-    shotFilter: state.shotFilter,
     minimumRating: state.minimumRating,
     ratingComparator: state.ratingComparator,
     flagFilters: state.flagFilters,
+    editFilters: state.editFilters,
     colorLabelFilters: state.colorLabelFilters,
     activeShotId: state.activeShotId,
     selectedShotIds: state.selectedShotIds,
@@ -216,10 +223,10 @@ const useStoryboardPanelUiState = createPanelState<StoryboardPanelUiState>(() =>
     }),
   setQuery: (query) => set({ query }),
   setShowOnlySelected: (showOnlySelected) => set({ showOnlySelected }),
-  setShotFilter: (shotFilter) => set({ shotFilter }),
   setMinimumRating: (minimumRating) => set({ minimumRating: normalizedRating(minimumRating) }),
   setRatingComparator: (ratingComparator) => set({ ratingComparator }),
   setFlagFilters: (flagFilters) => set({ flagFilters: Array.from(new Set(flagFilters)) }),
+  setEditFilters: (editFilters) => set({ editFilters: Array.from(new Set(editFilters)) }),
   setColorLabelFilters: (colorLabelFilters) =>
     set({ colorLabelFilters: Array.from(new Set(colorLabelFilters)) }),
   setViewMode: (viewMode) => set({ viewMode }),
@@ -298,6 +305,39 @@ export function useStoryboardPanelState<Selection>(
     );
   };
 
+  const setShotCustomLabels = (
+    shotIds: Iterable<string>,
+    customLabel: string,
+    historyGroupId?: string,
+  ) => {
+    const uniqueShotIds = Array.from(new Set(shotIds));
+    const normalized = customLabel.trim();
+    if (uniqueShotIds.length === 0) {
+      return;
+    }
+    commitStoryboard(
+      "设置分镜标签",
+      (current) => {
+        const shotAnnotations = { ...current.shotAnnotations };
+        let changed = false;
+        for (const shotId of uniqueShotIds) {
+          const previous = shotAnnotations[shotId];
+          if ((previous?.customLabel ?? "") === normalized && previous?.colorLabel == null) {
+            continue;
+          }
+          shotAnnotations[shotId] = annotationWithDefaults(previous, {
+            customLabel: normalized || undefined,
+            colorLabel: undefined,
+          });
+          changed = true;
+        }
+        return changed ? { ...current, shotAnnotations } : current;
+      },
+      uiState.videoContext,
+      historyGroupId,
+    );
+  };
+
   const state: StoryboardPanelState = {
     ...uiState,
     ...storyboard,
@@ -316,6 +356,8 @@ export function useStoryboardPanelState<Selection>(
           },
         };
       }),
+    setShotCustomLabel: (shotId, customLabel) => setShotCustomLabels([shotId], customLabel),
+    setShotCustomLabels,
     setShotRating: (shotId, rating) => setShotRatings([shotId], rating),
     setShotRatings,
     adjustShotRatings: (shotIds, delta) => {
@@ -384,11 +426,16 @@ export function useStoryboardPanelState<Selection>(
           const shotAnnotations = { ...current.shotAnnotations };
           let changed = false;
           for (const shotId of uniqueShotIds) {
-            if ((shotAnnotations[shotId]?.colorLabel ?? null) === colorLabel) {
+            const previous = shotAnnotations[shotId];
+            if (
+              (previous?.colorLabel ?? null) === colorLabel &&
+              !(previous?.customLabel?.trim() ?? "")
+            ) {
               continue;
             }
-            shotAnnotations[shotId] = annotationWithDefaults(shotAnnotations[shotId], {
+            shotAnnotations[shotId] = annotationWithDefaults(previous, {
               colorLabel: colorLabel ?? undefined,
+              customLabel: undefined,
             });
             changed = true;
           }

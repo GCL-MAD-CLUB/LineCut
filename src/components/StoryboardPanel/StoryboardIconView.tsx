@@ -17,26 +17,19 @@ import { StoryboardShotThumbnail } from "./StoryboardShotThumbnail";
 import {
   useStoryboardPanelState,
   type StoryboardIconMetadataMode,
-  type StoryboardShotColorLabel,
   type StoryboardShotStack,
+  type StoryboardShotVisualLabel,
 } from "./storyboardPanelState";
 
 type StoryboardAnnotationMenuKind = "flag" | "color";
 
-const storyboardColorValues: Record<StoryboardShotColorLabel, string> = {
+const storyboardColorValues: Record<StoryboardShotVisualLabel, string> = {
   red: "#ef4444",
   yellow: "#eab308",
   green: "#22c55e",
   blue: "#3b82f6",
   purple: "#a855f7",
-};
-
-const storyboardColorNames: Record<StoryboardShotColorLabel, string> = {
-  red: "红色",
-  yellow: "黄色",
-  green: "绿色",
-  blue: "蓝色",
-  purple: "紫色",
+  custom: "#ffffff",
 };
 
 const storyboardIconMetadataOptions: Array<
@@ -81,6 +74,7 @@ interface StoryboardIconViewProps {
     kind: StoryboardAnnotationMenuKind,
   ) => void;
   shotTitle: (shot: StoryboardShot) => string;
+  shotLabel: (shot: StoryboardShot) => string;
 }
 
 interface StoryboardGridLayout {
@@ -160,7 +154,7 @@ function metadataText(
   rowNumber: number,
   title: string,
   frameRate: number,
-  colorLabel: StoryboardShotColorLabel | undefined,
+  label: string,
 ) {
   if (mode === "index") {
     return String(rowNumber);
@@ -178,7 +172,7 @@ function metadataText(
     return formatMonitorFrame(Math.max(0, shot.end_frame - shot.start_frame + 1), frameRate);
   }
   if (mode === "colorLabel") {
-    return colorLabel ? storyboardColorNames[colorLabel] : null;
+    return label || null;
   }
   return null;
 }
@@ -199,6 +193,7 @@ export function StoryboardIconView({
   onDoubleClickShot,
   onOpenAnnotationMenu,
   shotTitle,
+  shotLabel,
 }: StoryboardIconViewProps) {
   const {
     activeShotId,
@@ -315,6 +310,9 @@ export function StoryboardIconView({
                 ? "excluded"
                 : "none";
             const colorLabel = annotation?.colorLabel ?? undefined;
+            const visualLabel: StoryboardShotVisualLabel | undefined =
+              annotation?.customLabel?.trim() ? "custom" : colorLabel;
+            const label = shotLabel(shot);
             const stack = stackMap.get(shot.id);
             const stackIndex = stack?.shotIds.indexOf(shot.id) ?? -1;
             const targetShotIds = () => annotationTargets(shot.id, selectedShotIds, stackMap);
@@ -324,7 +322,7 @@ export function StoryboardIconView({
               index + 1,
               shotTitle(shot),
               frameRate,
-              colorLabel,
+              label,
             );
             return (
               <div
@@ -335,14 +333,14 @@ export function StoryboardIconView({
                 className={`storyboard-icon-card ${selected ? "is-selected" : ""} ${
                   selected && shot.id === activeShotId ? "is-primary" : ""
                 } ${shot.id === currentShotId ? "is-current" : ""} ${
-                  colorLabel ? "has-color-label" : ""
+                  visualLabel ? "has-color-label" : ""
                 } ${stack ? "has-shot-stack" : ""} ${
                   stack?.expanded ? "is-expanded-stack-member" : ""
                 }`}
                 style={
-                  colorLabel
+                  visualLabel
                     ? ({
-                        "--storyboard-color-label": storyboardColorValues[colorLabel],
+                        "--storyboard-color-label": storyboardColorValues[visualLabel],
                       } as CSSProperties)
                     : undefined
                 }
@@ -355,7 +353,7 @@ export function StoryboardIconView({
                     rowNumber={index + 1}
                     rating={rating}
                     flag={flag}
-                    colorLabel={colorLabel}
+                    colorLabel={visualLabel}
                     stack={stack}
                     stackIndex={stackIndex}
                     assetId={assetId}
@@ -391,12 +389,12 @@ export function StoryboardIconView({
                       <button
                         type="button"
                         className={`shot-thumbnail-color-label ${
-                          colorLabel ? "has-color-label" : "is-none"
+                          visualLabel ? "has-color-label" : "is-none"
                         }`}
                         onClick={(event) => onOpenAnnotationMenu(event, shot.id, "color")}
                         onDoubleClick={(event) => event.stopPropagation()}
-                        title={colorLabel ? "更改色标" : "设置色标"}
-                        aria-label={colorLabel ? "更改色标" : "设置色标"}
+                        title={visualLabel ? "更改标签" : "设置标签"}
+                        aria-label={visualLabel ? "更改标签" : "设置标签"}
                       />
                     )}
                     {text !== null && (

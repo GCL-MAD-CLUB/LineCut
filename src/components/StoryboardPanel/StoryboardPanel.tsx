@@ -45,7 +45,6 @@ import { normalizeFrameRate } from "../../timeline";
 import type { StoryboardDetectionResult, StoryboardShot } from "../../types";
 import { usePanelManagerState } from "../DockLayout";
 import { PopupMenu, PopupMenuItem, PopupMenuSeparator, PopupMenuSubmenu } from "../PopupMenu";
-import { SelectDropdown, selectDropdownItems, type SelectDropdownItem } from "../SelectDropdown";
 import "./StoryboardPanel.css";
 import {
   StoryboardColorLabelButtons,
@@ -61,9 +60,10 @@ import {
   type StoryboardShotAnnotation,
   type StoryboardShotColorLabel,
   type StoryboardShotColorLabelFilter,
-  type StoryboardShotFilter,
+  type StoryboardShotEditFilter,
   type StoryboardShotFlag,
   type StoryboardShotStack,
+  type StoryboardShotVisualLabel,
   type StoryboardViewMode,
 } from "./storyboardPanelState";
 
@@ -79,7 +79,7 @@ const STORYBOARD_THUMBNAIL_COLUMN_PADDING = 16;
 const STORYBOARD_STATUS_GUTTER_WIDTH = 16;
 
 type StoryboardResizableColumnId =
-  "thumbnail" | "title" | "mediaStart" | "mediaEnd" | "duration" | "rating" | "retained";
+  "thumbnail" | "title" | "mediaStart" | "mediaEnd" | "duration" | "label" | "rating" | "retained";
 type StoryboardSortableColumnId =
   "title" | "mediaStart" | "mediaEnd" | "duration" | "rating" | "retained" | "colorLabel";
 type StoryboardTableColumnId = StoryboardResizableColumnId | "trailing";
@@ -118,7 +118,8 @@ const storyboardTableHeaders: Array<{
   },
   { id: "rating", label: "星级", sortColumnId: "rating", resizeColumn: "duration" },
   { id: "retained", label: "留用", resizeColumn: "rating" },
-  { id: "trailing", label: "", resizeColumn: "retained" },
+  { id: "label", label: "标签", sortColumnId: "colorLabel", resizeColumn: "retained" },
+  { id: "trailing", label: "", resizeColumn: "label" },
 ];
 
 const storyboardGridSortOptions: Array<{
@@ -132,16 +133,8 @@ const storyboardGridSortOptions: Array<{
   { id: "duration", label: "媒体持续时间", defaultDirection: "ascending" },
   { id: "rating", label: "星级", defaultDirection: "descending" },
   { id: "retained", label: "留用", defaultDirection: "ascending" },
-  { id: "colorLabel", label: "标签颜色", defaultDirection: "ascending" },
+  { id: "colorLabel", label: "标签", defaultDirection: "ascending" },
 ];
-
-const storyboardColorSortOrder: Record<StoryboardShotColorLabel, number> = {
-  red: 0,
-  yellow: 1,
-  green: 2,
-  blue: 3,
-  purple: 4,
-};
 
 type StoryboardResizableColumnWidths = Record<StoryboardResizableColumnId, number>;
 
@@ -151,6 +144,7 @@ const initialStoryboardColumnWidths: StoryboardResizableColumnWidths = {
   mediaStart: 128,
   mediaEnd: 128,
   duration: 140,
+  label: 128,
   rating: 112,
   retained: 128,
 };
@@ -161,6 +155,7 @@ const minimumStoryboardColumnWidths: StoryboardResizableColumnWidths = {
   mediaStart: 21,
   mediaEnd: 21,
   duration: 21,
+  label: 38,
   rating: 30,
   retained: 21,
 };
@@ -171,6 +166,7 @@ const maximumStoryboardColumnWidths: StoryboardResizableColumnWidths = {
   mediaStart: 300,
   mediaEnd: 300,
   duration: 320,
+  label: 720,
   rating: 180,
   retained: 300,
 };
@@ -181,6 +177,7 @@ const storyboardResizableColumnLabels: Record<StoryboardResizableColumnId, strin
   mediaStart: "媒体开始",
   mediaEnd: "媒体结束",
   duration: "媒体持续时间",
+  label: "标签",
   rating: "星级",
   retained: "留用",
 };
@@ -202,27 +199,20 @@ const storyboardRatingComparatorLabels: Record<StoryboardRatingComparator, strin
   eq: "星级等于",
 };
 const storyboardShotFlags: StoryboardShotFlag[] = ["retained", "none", "excluded"];
+const storyboardShotEditFilters: StoryboardShotEditFilter[] = ["edited", "unedited"];
 const storyboardShotFlagLabels: Record<StoryboardShotFlag, string> = {
   retained: "留用旗标",
   none: "无旗标",
   excluded: "排除旗标",
 };
-const storyboardFilterOptions: Array<readonly [StoryboardShotFilter, string]> = [
-  ["all", "关闭过滤器"],
-  ["retained", "留用"],
-  ["rated", "有星级"],
-  ["unrated", "无星级"],
-];
-const storyboardFilterItems = selectDropdownItems(storyboardFilterOptions);
-const storyboardCustomFilterItems: Array<SelectDropdownItem<StoryboardShotFilter>> = [
-  { type: "option", value: "custom", label: "自定义过滤" },
-  { type: "separator" },
-  ...storyboardFilterItems,
-];
 const storyboardTitleCollator = new Intl.Collator(undefined, {
   numeric: true,
   sensitivity: "base",
 });
+const storyboardColorLabelNames = Object.fromEntries(storyboardShotColorLabels) as Record<
+  StoryboardShotColorLabel,
+  string
+>;
 
 interface StoryboardMarqueeSelection {
   startX: number;
@@ -320,6 +310,20 @@ function storyboardShotTitle(
   return annotation?.title || defaultShotTitle(shot, shotCount);
 }
 
+function storyboardShotLabel(annotation: StoryboardShotAnnotation | undefined) {
+  const customLabel = annotation?.customLabel?.trim() ?? "";
+  if (customLabel) {
+    return customLabel;
+  }
+  return annotation?.colorLabel ? storyboardColorLabelNames[annotation.colorLabel] : "";
+}
+
+function storyboardShotVisualLabel(
+  annotation: StoryboardShotAnnotation | undefined,
+): StoryboardShotVisualLabel | undefined {
+  return annotation?.customLabel?.trim() ? "custom" : annotation?.colorLabel || undefined;
+}
+
 function storyboardShotFlag(annotation: StoryboardShotAnnotation | undefined): StoryboardShotFlag {
   if (annotation?.retained) {
     return "retained";
@@ -328,6 +332,18 @@ function storyboardShotFlag(annotation: StoryboardShotAnnotation | undefined): S
     return "excluded";
   }
   return "none";
+}
+
+function storyboardShotIsEdited(annotation: StoryboardShotAnnotation | undefined) {
+  return Boolean(
+    annotation &&
+    ((annotation.rating ?? 0) > 0 ||
+      annotation.retained ||
+      annotation.excluded ||
+      annotation.title?.trim() ||
+      annotation.colorLabel ||
+      annotation.customLabel?.trim()),
+  );
 }
 
 function shotMatches(title: string, query: string) {
@@ -344,15 +360,15 @@ function shotMatches(title: string, query: string) {
 
 function shotMatchesFilter(
   annotation: StoryboardShotAnnotation | undefined,
-  filter: StoryboardShotFilter,
   minimumRating: number,
   ratingComparator: StoryboardRatingComparator,
   flagFilters: readonly StoryboardShotFlag[],
+  editFilters: readonly StoryboardShotEditFilter[],
   colorLabelFilters: readonly StoryboardShotColorLabelFilter[],
 ) {
   const rating = annotation?.rating ?? 0;
   const flag = storyboardShotFlag(annotation);
-  const colorLabel = annotation?.colorLabel ?? "none";
+  const colorLabel = storyboardShotVisualLabel(annotation) ?? "none";
   const matchesRating =
     minimumRating === 0 ||
     (ratingComparator === "gte"
@@ -364,19 +380,11 @@ function shotMatchesFilter(
   const matchesColorLabel =
     colorLabelFilters.length === 0 || colorLabelFilters.includes(colorLabel);
   const matchesFlag = flagFilters.length === 0 || flagFilters.includes(flag);
-  const matchesBaseFilter =
-    filter === "all"
-      ? matchesRating
-      : filter === "retained"
-        ? matchesFlag && matchesRating
-        : filter === "rated"
-          ? minimumRating > 0
-            ? matchesRating
-            : rating > 0
-          : filter === "unrated"
-            ? rating === 0
-            : matchesFlag && matchesRating;
-  return matchesBaseFilter && matchesColorLabel;
+  const editState: StoryboardShotEditFilter = storyboardShotIsEdited(annotation)
+    ? "edited"
+    : "unedited";
+  const matchesEdit = editFilters.length === 0 || editFilters.includes(editState);
+  return matchesFlag && matchesEdit && matchesRating && matchesColorLabel;
 }
 
 function stackByShotId(shotStacks: readonly StoryboardShotStack[]) {
@@ -606,7 +614,11 @@ function storyboardSprayBottleMarkSvg(
   mode: StoryboardSprayMode,
   flag: StoryboardShotFlag,
   rating: number,
+  customLabel: boolean,
 ) {
+  if (mode === "colorLabel" && customLabel) {
+    return '<text x="10" y="17.8" fill="#fff" font-family="Arial,sans-serif" font-size="7.5" font-weight="700" text-anchor="middle">T</text>';
+  }
   if (mode === "flag" && flag !== "none") {
     const excludedMark =
       flag === "excluded"
@@ -625,8 +637,9 @@ function storyboardSprayCursor(
   mode: StoryboardSprayMode,
   flag: StoryboardShotFlag,
   rating: number,
+  customLabel: boolean,
 ) {
-  const mark = storyboardSprayBottleMarkSvg(mode, flag, rating);
+  const mark = storyboardSprayBottleMarkSvg(mode, flag, rating, customLabel);
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="17" height="20" viewBox="0 0 20 24"><path d="M8.25 1.5h3.5v2h-3.5zM9 3.5h2v2H9zM6.5 5.5h7v2.25h-7z" fill="#d0d0d0"/><path d="M6.25 8.25h7.5l1.5 2.25v10.25H4.75V10.5l1.5-2.25Z" fill="${fillColor}" stroke="#d0d0d0" stroke-width="1.25" stroke-linejoin="round"/><path d="M4 21.25h12v1.5H4z" fill="${fillColor}" stroke="#d0d0d0"/><path d="M6.25 11h7.5M6.25 18.75h7.5" stroke="#686868" stroke-width=".75"/>${mark}</svg>`;
   return `url("data:image/svg+xml,${encodeURIComponent(svg)}") 8 2, crosshair`;
 }
@@ -636,6 +649,7 @@ interface StoryboardSprayBottleIconProps {
   mode: StoryboardSprayMode;
   flag: StoryboardShotFlag;
   rating: number;
+  customLabel: boolean;
 }
 
 function StoryboardSprayBottleIcon({
@@ -643,6 +657,7 @@ function StoryboardSprayBottleIcon({
   mode,
   flag,
   rating,
+  customLabel,
 }: StoryboardSprayBottleIconProps) {
   return (
     <svg
@@ -663,6 +678,19 @@ function StoryboardSprayBottleIcon({
       />
       <path d="M4 21.25h12v1.5H4z" fill={fillColor} stroke="currentColor" strokeWidth="1" />
       <path d="M6.25 11h7.5M6.25 18.75h7.5" stroke="#686868" strokeWidth="0.75" />
+      {mode === "colorLabel" && customLabel && (
+        <text
+          x="10"
+          y="17.8"
+          fill="#fff"
+          fontFamily="Arial, sans-serif"
+          fontSize="7.5"
+          fontWeight="700"
+          textAnchor="middle"
+        >
+          T
+        </text>
+      )}
       {mode === "flag" && flag !== "none" && (
         <>
           <path d="M7.2 11v7" stroke="#d9d9d9" strokeWidth="0.9" />
@@ -763,6 +791,18 @@ function StoryboardFlagIcon({ flag }: { flag: StoryboardShotFlag }) {
   );
 }
 
+function StoryboardEditFilterIcon({ edited }: { edited: boolean }) {
+  return (
+    <svg className="storyboard-edit-filter-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <g stroke="currentColor" strokeWidth="1.35" shapeRendering="crispEdges">
+        <path d="M2 6h5m4 0h11M2 12h10m4 0h6M2 18h3m4 0h13" />
+        <path d="M9 3.5v5M14 9.5v5M7 15.5v5" />
+        {!edited && <path d="M3 3l18 18" strokeWidth="2" shapeRendering="auto" />}
+      </g>
+    </svg>
+  );
+}
+
 interface StoryboardFlagMenuItemsProps {
   checkedFlag: StoryboardShotFlag | null;
   onSelect: (flag: StoryboardShotFlag) => void;
@@ -797,7 +837,7 @@ function StoryboardFlagMenuItems({ checkedFlag, onSelect }: StoryboardFlagMenuIt
 }
 
 interface StoryboardColorMenuItemsProps {
-  checkedColorLabel: StoryboardShotColorLabel | null | undefined;
+  checkedColorLabel: StoryboardShotVisualLabel | null | undefined;
   onSelect: (colorLabel: StoryboardShotColorLabel | null) => void;
 }
 
@@ -844,9 +884,7 @@ function storyboardShotSortValue(
     return annotation?.rating ?? 0;
   }
   if (columnId === "colorLabel") {
-    return annotation?.colorLabel == null
-      ? Number.MAX_SAFE_INTEGER
-      : storyboardColorSortOrder[annotation.colorLabel];
+    return storyboardShotLabel(annotation);
   }
   const flag = storyboardShotFlag(annotation);
   return flag === "retained" ? 0 : flag === "none" ? 1 : 2;
@@ -899,10 +937,10 @@ export function StoryboardPanel() {
   const {
     query,
     showOnlySelected,
-    shotFilter,
     minimumRating,
     ratingComparator,
     flagFilters,
+    editFilters,
     colorLabelFilters,
     activeShotId,
     shots,
@@ -916,10 +954,10 @@ export function StoryboardPanel() {
     syncVideoContext,
     setQuery,
     setShowOnlySelected,
-    setShotFilter,
     setMinimumRating,
     setRatingComparator,
     setFlagFilters,
+    setEditFilters,
     setColorLabelFilters,
     setViewMode,
     setThumbnailSize,
@@ -928,6 +966,7 @@ export function StoryboardPanel() {
     adjustShotRatings,
     setShotFlags,
     setShotColorLabels,
+    setShotCustomLabels,
     createShotStack,
     cancelShotStack,
     removeShotFromStack,
@@ -962,6 +1001,7 @@ export function StoryboardPanel() {
   const [sprayActive, setSprayActive] = useState(false);
   const [sprayMode, setSprayMode] = useState<StoryboardSprayMode>("colorLabel");
   const [sprayColorLabel, setSprayColorLabel] = useState<StoryboardShotColorLabel | null>(null);
+  const [sprayCustomLabel, setSprayCustomLabel] = useState("");
   const [sprayFlag, setSprayFlag] = useState<StoryboardShotFlag>("none");
   const [sprayRating, setSprayRating] = useState(0);
   const [footerAreaVisibility, setFooterAreaVisibility] = useState(
@@ -1006,16 +1046,17 @@ export function StoryboardPanel() {
           shotMatches(storyboardShotTitle(shot, shotCount, shotAnnotations[shot.id]), query) &&
           shotMatchesFilter(
             shotAnnotations[shot.id],
-            shotFilter,
             minimumRating,
             ratingComparator,
             flagFilters,
+            editFilters,
             colorLabelFilters,
           ),
       ),
     [
       displayShots,
       colorLabelFilters,
+      editFilters,
       flagFilters,
       minimumRating,
       query,
@@ -1023,7 +1064,6 @@ export function StoryboardPanel() {
       selectedShotIds,
       shotCount,
       shotAnnotations,
-      shotFilter,
       showOnlySelected,
     ],
   );
@@ -1038,6 +1078,7 @@ export function StoryboardPanel() {
     storyboardGridSortOptions.find((option) => option.id === activeShotSort.columnId)?.label ??
     "标题";
   const footerSortVisible = footerAreaVisibility.sort[viewMode];
+  const sprayUsesCustomLabel = sprayMode === "colorLabel" && sprayCustomLabel.trim().length > 0;
   const sprayBottleFillColor =
     sprayMode === "colorLabel" && sprayColorLabel
       ? storyboardShotColorLabelValues[sprayColorLabel]
@@ -1048,6 +1089,7 @@ export function StoryboardPanel() {
       sprayMode,
       sprayFlag,
       sprayRating,
+      sprayUsesCustomLabel,
     ),
   } as CSSProperties;
   const currentFrame = playback?.currentFrame ?? 0;
@@ -1122,6 +1164,7 @@ export function StoryboardPanel() {
     storyboardColumnWidths.mediaStart +
     storyboardColumnWidths.mediaEnd +
     storyboardColumnWidths.duration +
+    storyboardColumnWidths.label +
     storyboardColumnWidths.rating +
     storyboardColumnWidths.retained;
   const tableStyle = {
@@ -1132,6 +1175,7 @@ export function StoryboardPanel() {
     "--storyboard-col-media-start": `${storyboardColumnWidths.mediaStart}px`,
     "--storyboard-col-media-end": `${storyboardColumnWidths.mediaEnd}px`,
     "--storyboard-col-duration": `${storyboardColumnWidths.duration}px`,
+    "--storyboard-col-label": `${storyboardColumnWidths.label}px`,
     "--storyboard-col-rating": `${storyboardColumnWidths.rating}px`,
     "--storyboard-col-retained": `${storyboardColumnWidths.retained}px`,
     "--storyboard-table-min-width": `${tableMinWidth}px`,
@@ -1191,7 +1235,7 @@ export function StoryboardPanel() {
       ? contextMenuFlags[0]
       : null;
   const contextMenuColorLabels = contextMenuShotIds.map(
-    (shotId) => shotAnnotations[shotId]?.colorLabel ?? null,
+    (shotId) => storyboardShotVisualLabel(shotAnnotations[shotId]) ?? null,
   );
   const contextMenuColorLabel =
     contextMenuColorLabels.length > 0 &&
@@ -1215,7 +1259,7 @@ export function StoryboardPanel() {
       ? annotationMenuFlags[0]
       : null;
   const annotationMenuColorLabels = annotationMenuShotIds.map(
-    (shotId) => shotAnnotations[shotId]?.colorLabel ?? null,
+    (shotId) => storyboardShotVisualLabel(shotAnnotations[shotId]) ?? null,
   );
   const annotationMenuColorLabel =
     annotationMenuColorLabels.length > 0 &&
@@ -1724,7 +1768,12 @@ export function StoryboardPanel() {
   function applySprayToShot(shotId: string, historyGroupId: string) {
     const targetShotIds = annotationShotIdsForSelection([shotId], shotStacksByShotId);
     if (sprayMode === "colorLabel") {
-      setShotColorLabels(targetShotIds, sprayColorLabel, historyGroupId);
+      const customLabel = sprayCustomLabel.trim();
+      if (customLabel) {
+        setShotCustomLabels(targetShotIds, customLabel, historyGroupId);
+      } else {
+        setShotColorLabels(targetShotIds, sprayColorLabel, historyGroupId);
+      }
       return;
     }
     if (sprayMode === "flag") {
@@ -2136,20 +2185,7 @@ export function StoryboardPanel() {
 
   function setRatingFilter(minimum: number) {
     const nextMinimum = minimumRating === minimum ? 0 : minimum;
-
-    if (shotFilter === "retained") {
-      setMinimumRating(nextMinimum);
-      setShotFilter(nextMinimum > 0 ? "custom" : "retained");
-      return;
-    }
-    if (shotFilter === "custom") {
-      setMinimumRating(nextMinimum);
-      setShotFilter(nextMinimum > 0 ? "custom" : "retained");
-      return;
-    }
-
     setMinimumRating(nextMinimum);
-    setShotFilter(nextMinimum > 0 ? "rated" : "all");
   }
 
   function toggleFlagFilter(flag: StoryboardShotFlag) {
@@ -2157,7 +2193,15 @@ export function StoryboardPanel() {
       ? flagFilters.filter((current) => current !== flag)
       : storyboardShotFlags.filter((current) => current === flag || flagFilters.includes(current));
     setFlagFilters(nextFlagFilters);
-    setShotFilter(minimumRating > 0 ? "custom" : "retained");
+  }
+
+  function toggleEditFilter(editFilter: StoryboardShotEditFilter) {
+    const nextEditFilters = editFilters.includes(editFilter)
+      ? editFilters.filter((current) => current !== editFilter)
+      : storyboardShotEditFilters.filter(
+          (current) => current === editFilter || editFilters.includes(current),
+        );
+    setEditFilters(nextEditFilters);
   }
 
   function toggleColorLabelFilter(colorLabel: StoryboardShotColorLabelFilter) {
@@ -2167,18 +2211,6 @@ export function StoryboardPanel() {
           .map(([current]) => current)
           .filter((current) => current === colorLabel || colorLabelFilters.includes(current));
     setColorLabelFilters(nextColorLabelFilters);
-  }
-
-  function handleShotFilterChange(filter: StoryboardShotFilter) {
-    if (filter === "custom") {
-      return;
-    }
-    setShotFilter(filter);
-    setColorLabelFilters([]);
-    if (filter === "retained") {
-      setFlagFilters(["retained"]);
-    }
-    setMinimumRating(filter === "rated" ? Math.max(1, minimumRating) : 0);
   }
 
   function startColumnResize(
@@ -2385,31 +2417,67 @@ export function StoryboardPanel() {
 
       <div
         className={`storyboard-filter-row ${
-          shotFilter === "all" && colorLabelFilters.length === 0 ? "is-filter-closed" : ""
+          flagFilters.length === 0 &&
+          editFilters.length === 0 &&
+          minimumRating === 0 &&
+          colorLabelFilters.length === 0
+            ? "is-filter-closed"
+            : ""
         }`}
       >
-        <span className="storyboard-filter-label">过滤器：</span>
-        {(shotFilter === "retained" || shotFilter === "custom") && (
-          <>
-            <div className="storyboard-filter-flags" aria-label="按旗标过滤">
-              {storyboardShotFlags.map((flag) => (
-                <button
-                  key={flag}
-                  type="button"
-                  className={flagFilters.includes(flag) ? "active" : ""}
-                  onClick={() => toggleFlagFilter(flag)}
-                  disabled={shots.length === 0}
-                  title={storyboardShotFlagLabels[flag]}
-                  aria-label={storyboardShotFlagLabels[flag]}
-                  aria-pressed={flagFilters.includes(flag)}
-                >
-                  <StoryboardFlagIcon flag={flag} />
-                </button>
-              ))}
-            </div>
-            <span className="storyboard-filter-separator" aria-hidden="true" />
-          </>
-        )}
+        <span className="storyboard-filter-label">过滤器</span>
+        <span className="storyboard-filter-separator" aria-hidden="true" />
+        <span
+          className={`storyboard-filter-section-label ${flagFilters.length > 0 ? "is-active" : ""}`}
+        >
+          旗标
+        </span>
+        <div className="storyboard-filter-flags" aria-label="按旗标过滤">
+          {storyboardShotFlags.map((flag) => (
+            <button
+              key={flag}
+              type="button"
+              className={flagFilters.includes(flag) ? "active" : ""}
+              onClick={() => toggleFlagFilter(flag)}
+              disabled={shots.length === 0}
+              title={storyboardShotFlagLabels[flag]}
+              aria-label={storyboardShotFlagLabels[flag]}
+              aria-pressed={flagFilters.includes(flag)}
+            >
+              <StoryboardFlagIcon flag={flag} />
+            </button>
+          ))}
+        </div>
+        <span className="storyboard-filter-separator" aria-hidden="true" />
+        <span
+          className={`storyboard-filter-section-label ${editFilters.length > 0 ? "is-active" : ""}`}
+        >
+          编辑
+        </span>
+        <div className="storyboard-filter-edits" aria-label="按编辑状态过滤">
+          {storyboardShotEditFilters.map((editFilter) => {
+            const edited = editFilter === "edited";
+            const label = edited ? "已编辑" : "未编辑";
+            return (
+              <button
+                key={editFilter}
+                type="button"
+                className={editFilters.includes(editFilter) ? "active" : ""}
+                onClick={() => toggleEditFilter(editFilter)}
+                disabled={shots.length === 0}
+                title={label}
+                aria-label={label}
+                aria-pressed={editFilters.includes(editFilter)}
+              >
+                <StoryboardEditFilterIcon edited={edited} />
+              </button>
+            );
+          })}
+        </div>
+        <span className="storyboard-filter-separator" aria-hidden="true" />
+        <span className={`storyboard-filter-section-label ${minimumRating > 0 ? "is-active" : ""}`}>
+          星级
+        </span>
         <button
           type="button"
           className={`storyboard-filter-comparator is-${ratingComparator} ${
@@ -2455,6 +2523,11 @@ export function StoryboardPanel() {
           ))}
         </div>
         <span className="storyboard-filter-separator" aria-hidden="true" />
+        <span
+          className={`storyboard-filter-section-label ${colorLabelFilters.length > 0 ? "is-active" : ""}`}
+        >
+          颜色
+        </span>
         <StoryboardColorLabelButtons
           className="storyboard-filter-colors"
           activeValues={colorLabelFilters}
@@ -2462,23 +2535,6 @@ export function StoryboardPanel() {
           buttonLabel={(_, label) => `按${label}色标过滤`}
           includeNone
           onSelect={toggleColorLabelFilter}
-          disabled={shots.length === 0}
-        />
-        <span className="storyboard-filter-separator" aria-hidden="true" />
-        <SelectDropdown
-          ariaLabel="分镜过滤器"
-          className="storyboard-filter-dropdown"
-          menuClassName="storyboard-filter-menu"
-          value={shotFilter}
-          selectedLabel={
-            shotFilter === "custom" || colorLabelFilters.length > 0 ? "自定义过滤" : undefined
-          }
-          items={
-            shotFilter === "custom" || colorLabelFilters.length > 0
-              ? storyboardCustomFilterItems
-              : storyboardFilterItems
-          }
-          onChange={handleShotFilterChange}
           disabled={shots.length === 0}
         />
       </div>
@@ -2518,6 +2574,7 @@ export function StoryboardPanel() {
             onDoubleClickShot={handleShotDoubleClick}
             onOpenAnnotationMenu={openAnnotationMenu}
             shotTitle={(shot) => storyboardShotTitle(shot, shotCount, shotAnnotations[shot.id])}
+            shotLabel={(shot) => storyboardShotLabel(shotAnnotations[shot.id])}
           />
         ) : (
           <StoryboardIconView
@@ -2536,6 +2593,7 @@ export function StoryboardPanel() {
             onDoubleClickShot={handleShotDoubleClick}
             onOpenAnnotationMenu={openAnnotationMenu}
             shotTitle={(shot) => storyboardShotTitle(shot, shotCount, shotAnnotations[shot.id])}
+            shotLabel={(shot) => storyboardShotLabel(shotAnnotations[shot.id])}
           />
         )}
       </div>
@@ -2628,19 +2686,39 @@ export function StoryboardPanel() {
                   </div>
                   <span className="storyboard-filter-separator storyboard-footer-separator" />
                   {sprayMode === "colorLabel" && (
-                    <StoryboardColorLabelButtons
-                      className="storyboard-footer-colors storyboard-footer-spray-colors"
-                      activeValues={sprayColorLabel ? [sprayColorLabel] : []}
-                      ariaLabel="选择喷涂标签"
-                      buttonLabel={(_, label, active) =>
-                        active ? `清除${label}喷涂标签` : `喷涂${label}标签`
-                      }
-                      onSelect={(colorLabel) =>
-                        setSprayColorLabel((current) =>
-                          current === colorLabel ? null : (colorLabel as StoryboardShotColorLabel),
-                        )
-                      }
-                    />
+                    <div className="storyboard-footer-spray-label-controls">
+                      <StoryboardColorLabelButtons
+                        className="storyboard-footer-colors storyboard-footer-spray-colors"
+                        activeValues={sprayColorLabel ? [sprayColorLabel] : []}
+                        ariaLabel="选择喷涂标签"
+                        buttonLabel={(_, label, active) =>
+                          active ? `清除${label}喷涂标签` : `喷涂${label}标签`
+                        }
+                        onSelect={(colorLabel) => {
+                          setSprayCustomLabel("");
+                          setSprayColorLabel((current) =>
+                            current === colorLabel
+                              ? null
+                              : (colorLabel as StoryboardShotColorLabel),
+                          );
+                        }}
+                      />
+                      <input
+                        className="shot-title-editor storyboard-footer-spray-label-input"
+                        value={sprayCustomLabel}
+                        aria-label="自定义喷涂标签"
+                        title="自定义喷涂标签"
+                        autoComplete="off"
+                        spellCheck={false}
+                        onChange={(event) => {
+                          const value = event.currentTarget.value;
+                          setSprayCustomLabel(value);
+                          if (value.trim()) {
+                            setSprayColorLabel(null);
+                          }
+                        }}
+                      />
+                    </div>
                   )}
                   {sprayMode === "flag" && (
                     <div className="storyboard-footer-flag-controls" aria-label="选择喷涂旗标">
@@ -2707,6 +2785,7 @@ export function StoryboardPanel() {
                       mode={sprayMode}
                       flag={sprayFlag}
                       rating={sprayRating}
+                      customLabel={sprayUsesCustomLabel}
                     />
                   </span>
                 </button>
@@ -2843,7 +2922,9 @@ export function StoryboardPanel() {
                 onSelect={(colorLabel) =>
                   setShotColorLabels(
                     contextMenuShotIds,
-                    colorLabel === "none" || contextMenuColorLabel === colorLabel
+                    colorLabel === "none" ||
+                      colorLabel === "custom" ||
+                      contextMenuColorLabel === colorLabel
                       ? null
                       : colorLabel,
                   )

@@ -22,10 +22,11 @@ export const storyboardShotColorLabelValues: Record<StoryboardShotColorLabel, st
 
 export const storyboardShotColorFilterLabels: Array<
   readonly [StoryboardShotColorLabelFilter, string]
-> = [...storyboardShotColorLabels, ["none", "无"]];
+> = [...storyboardShotColorLabels, ["custom", "自定义"], ["none", "无"]];
 
 const storyboardShotColorFilterValues: Record<StoryboardShotColorLabelFilter, string> = {
   ...storyboardShotColorLabelValues,
+  custom: "#ffffff",
   none: "#7f7f7f",
 };
 

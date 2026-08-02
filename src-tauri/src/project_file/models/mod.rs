@@ -169,6 +169,7 @@ mod tests {
                         excluded: false,
                         title: Some("Opening".to_string()),
                         color_label: Some(ProjectStoryboardColorLabel::Red),
+                        custom_label: Some("Hero shot".to_string()),
                     },
                 )]),
             },
@@ -194,6 +195,7 @@ mod tests {
         assert_eq!(annotation.rating, 4);
         assert!(annotation.retained);
         assert_eq!(annotation.title.as_deref(), Some("Opening"));
+        assert_eq!(annotation.custom_label.as_deref(), Some("Hero shot"));
         assert!(matches!(
             annotation.color_label,
             Some(ProjectStoryboardColorLabel::Red)

@@ -79,6 +79,7 @@ export interface StoryboardShotAnnotation {
   excluded?: boolean;
   title?: string | null;
   colorLabel?: StoryboardShotColorLabel | null;
+  customLabel?: string | null;
 }
 
 export interface StoryboardShotStackState {

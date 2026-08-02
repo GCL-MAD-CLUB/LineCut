@@ -214,6 +214,8 @@ struct StoryboardAnnotation {
     excluded: bool,
     title: Option<String>,
     color_label: Option<StoryboardColorLabel>,
+    #[serde(default)]
+    custom_label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

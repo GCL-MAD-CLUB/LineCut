@@ -378,6 +378,8 @@ struct ProjectStoryboardAnnotation {
     title: Option<String>,
     #[serde(default)]
     color_label: Option<ProjectStoryboardColorLabel>,
+    #[serde(default)]
+    custom_label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

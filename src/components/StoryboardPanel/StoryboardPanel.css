@@ -158,28 +158,45 @@
 }
 
 .storyboard-filter-label {
-  display: flex;
+  display: grid;
   flex: 0 0 auto;
   height: 24px;
-  align-items: center;
-  font-size: 12.5px;
-  line-height: 24px;
+  place-items: center;
+  color: #4d4d4d;
+  font-size: 12.2px;
+  margin-right: 10px;
+  font-weight: 700;
+  line-height: 1;
   white-space: nowrap;
 }
 
-.storyboard-filter-row.is-filter-closed .storyboard-filter-label,
-.storyboard-filter-row.is-filter-closed
-  .storyboard-filter-dropdown
-  .select-dropdown-trigger
-  > span {
+.storyboard-filter-row:not(.is-filter-closed) .storyboard-filter-label {
+  color: #aaa;
+}
+
+.storyboard-filter-section-label {
+  display: grid;
+  flex: 0 0 auto;
+  height: 24px;
+  place-items: center;
   color: #4d4d4d;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  margin-left: 6px;
+  margin-right: 10px;
+}
+
+.storyboard-filter-section-label.is-active {
+  color: #aaa;
 }
 
 .storyboard-filter-comparator {
   display: grid;
   flex: 0 0 22px;
   width: 22px;
-  min-height: 22px;
+  height: 24px;
+  min-height: 24px;
   place-items: center;
   margin-right: -5px;
   margin-left: -2px;
@@ -203,7 +220,7 @@
 .storyboard-filter-comparator > span {
   display: block;
   font-size: 12.5px;
-  line-height: 20px;
+  line-height: 1;
   text-align: center;
 }
 
@@ -226,13 +243,23 @@
 .storyboard-filter-flags {
   display: flex;
   flex: 0 0 auto;
+  height: 24px;
   align-items: center;
   gap: 4px;
   margin-right: 2px;
-  margin-left: -2px;
+  margin-left: 3px;
+}
+
+.storyboard-filter-edits {
+  display: flex;
+  flex: 0 0 auto;
+  height: 24px;
+  align-items: center;
+  gap: 1px;
 }
 
 .storyboard-filter-flags button,
+.storyboard-filter-edits button,
 .shot-flag-button {
   display: grid;
   place-items: center;
@@ -249,23 +276,36 @@
   height: 24px;
 }
 
+.storyboard-filter-edits button {
+  display: grid;
+  flex: 0 0 22px;
+  width: 22px;
+  min-width: 22px;
+  height: 24px;
+  place-items: center;
+}
+
 .storyboard-filter-flags button:hover:not(:disabled),
+.storyboard-filter-edits button:hover:not(:disabled),
 .shot-flag-button:hover:not(:disabled) {
   color: #808080;
   background: transparent;
 }
 
 .storyboard-filter-flags button.active,
+.storyboard-filter-edits button.active,
 .shot-flag-button.active {
   color: #cccccc;
 }
 
 .storyboard-filter-flags button.active:hover:not(:disabled),
+.storyboard-filter-edits button.active:hover:not(:disabled),
 .shot-flag-button.active:hover:not(:disabled) {
   color: #b4b4b4;
 }
 
 .storyboard-filter-flags button:focus-visible,
+.storyboard-filter-edits button:focus-visible,
 .shot-flag-button:focus-visible {
   color: #cccccc;
   outline: 1px solid #808080;
@@ -276,6 +316,15 @@
   height: 20px;
   width: auto;
   overflow: visible;
+}
+
+.storyboard-edit-filter-icon {
+  display: block;
+  align-self: center;
+  margin-top: -1px;
+  margin-left: 2px;
+  width: 16px;
+  height: 16px;
 }
 
 .storyboard-flag-strokes {
@@ -290,9 +339,9 @@
 .storyboard-filter-stars {
   display: flex;
   flex: 0 0 auto;
+  height: 24px;
   align-items: center;
   gap: 0;
-  transform: translateY(-0.6px);
 }
 
 .storyboard-filter-stars button {
@@ -300,7 +349,7 @@
   flex: 0 0 18px;
   width: 18px;
   min-width: 18px;
-  height: 22px;
+  height: 24px;
   place-items: center;
   padding: 0;
   color: #4d4d4d;
@@ -338,6 +387,7 @@
 .storyboard-color-label-buttons {
   display: flex;
   flex: 0 0 auto;
+  height: 24px;
   align-items: center;
   gap: 4px;
 }
@@ -416,8 +466,7 @@
 .storyboard-filter-separator {
   width: 1px;
   height: 17px;
-  margin: 0 2px;
-  margin-left: 4px;
+  margin-left: 6px;
   background: repeating-linear-gradient(
     to bottom,
     #4d4d4d 0,
@@ -427,42 +476,8 @@
   );
 }
 
-.storyboard-filter-dropdown {
-  display: grid;
-  flex: 0 0 128px;
-  align-items: center;
-  width: 128px;
-  min-height: 24px;
-  color: #d0d0d0;
-  background: #111;
-  border: 1px solid #555;
-  border-radius: 0;
-  margin-left: 6px;
-}
-
-.storyboard-filter-dropdown .select-dropdown-trigger {
-  min-height: 19px;
-  height: 19px;
-  font-size: 12px;
-  line-height: 16px;
-}
-
-.storyboard-filter-dropdown .select-dropdown-trigger > span {
-  padding: 0 6px;
-  font-size: 12px;
-  line-height: 16px;
-}
-
-.storyboard-filter-dropdown .select-dropdown-trigger svg {
-  width: 14px;
-  height: 14px;
-}
-
-.storyboard-filter-menu .select-dropdown-option {
-  font-size: 12px;
-}
-
-.storyboard-filter-stars button:disabled {
+.storyboard-filter-stars button:disabled,
+.storyboard-filter-edits button:disabled {
   color: #4d4d4d;
 }
 
@@ -515,6 +530,7 @@
   --storyboard-col-media-start: 128px;
   --storyboard-col-media-end: 128px;
   --storyboard-col-duration: 140px;
+  --storyboard-col-label: 128px;
   --storyboard-col-rating: 112px;
   --storyboard-col-retained: 128px;
   --storyboard-thumbnail-width: 88px;
@@ -522,8 +538,9 @@
   --storyboard-row-height: 82px;
   --storyboard-table-columns: var(--storyboard-col-thumbnail) var(--storyboard-col-title)
     var(--storyboard-col-media-start) var(--storyboard-col-media-end) var(--storyboard-col-duration)
-    var(--storyboard-col-rating) var(--storyboard-col-retained) minmax(0, 1fr);
-  --storyboard-table-min-width: 884px;
+    var(--storyboard-col-rating) var(--storyboard-col-retained) var(--storyboard-col-label)
+    minmax(0, 1fr);
+  --storyboard-table-min-width: 1012px;
 }
 
 .storyboard-icon-view {
@@ -1401,6 +1418,7 @@
 .shot-row > .shot-time-cell,
 .shot-row > .shot-duration-cell,
 .shot-row > .shot-title-cell,
+.shot-row > .shot-label-cell,
 .shot-row > .shot-rating-cell,
 .shot-row > .shot-retain-cell {
   position: relative;
@@ -1422,11 +1440,13 @@
   box-shadow: inset 0 0 0 1px #d0d0d0;
 }
 
-.shot-title-cell {
+.shot-title-cell,
+.shot-label-cell {
   gap: 6px;
 }
 
-.shot-title-copy {
+.shot-title-copy,
+.shot-label-copy {
   display: block;
   flex: 0 1 auto;
   min-width: 0;
@@ -1783,6 +1803,28 @@ body.is-resizing-storyboard-column {
 .storyboard-footer-spray-colors {
   margin-right: 1px;
   margin-left: 1px;
+}
+
+.storyboard-footer-spray-label-controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+}
+
+.storyboard-footer .storyboard-footer-spray-label-input {
+  flex: 0 0 92px;
+  width: 92px;
+  margin: 0 1px 0 0;
+  background: #000;
+}
+
+.storyboard-footer .storyboard-footer-spray-label-input:hover,
+.storyboard-footer .storyboard-footer-spray-label-input:focus,
+.storyboard-footer .storyboard-footer-spray-label-input:active {
+  background: #000;
+  border: 0;
+  box-shadow: none;
 }
 
 .storyboard-footer button.storyboard-footer-spray-confirm {
