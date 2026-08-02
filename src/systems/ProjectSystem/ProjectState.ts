@@ -97,6 +97,7 @@ interface ProjectCommands {
     videoContext: string,
     historyLabel: string,
     recipe: (storyboard: StoryboardState) => StoryboardState,
+    historyGroupId?: string,
   ) => void;
   projectHistoryJumped: (cursor: number) => boolean;
   projectHistoryFutureDiscarded: () => void;
@@ -829,6 +830,7 @@ function commitProjectEvent(
   label: string,
   category: ProjectHistoryCategory,
   recipe: (state: ProjectSystemState) => Partial<ProjectSystemState> | ProjectSystemState,
+  historyGroupId?: string,
 ) {
   set((state) => {
     const update = recipe(state);
@@ -841,6 +843,7 @@ function commitProjectEvent(
       category,
       projectFileStateFromStore(state),
       projectFileStateFromStore(candidate),
+      historyGroupId,
     );
     if (!entry) {
       return candidate;
@@ -1706,30 +1709,36 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
       set((state) => ({ warnings: [...state.warnings, ...warnings] })),
     exportResultChanged: (exportResult) => set({ exportResult }),
     mediaBinReadOnlyChanged: (mediaBinReadOnly) => set({ mediaBinReadOnly }),
-    storyboardUpdated: (videoContext, historyLabel, recipe) =>
-      commitProjectEvent(set, historyLabel, "storyboard", (state) => {
-        const videoExists = state.mediaItems.some(
-          (item) => item.kind === "video" && videoContext.startsWith(`${item.id}:`),
-        );
-        if (!videoContext || !videoExists) {
-          return state;
-        }
-        const currentStoryboard = state.storyboards[videoContext] ?? {
-          shots: [],
-          shotStacks: [],
-          shotAnnotations: {},
-        };
-        const storyboard = recipe(currentStoryboard);
-        if (storyboard === currentStoryboard) {
-          return state;
-        }
-        return {
-          storyboards: {
-            ...state.storyboards,
-            [videoContext]: storyboard,
-          },
-        };
-      }),
+    storyboardUpdated: (videoContext, historyLabel, recipe, historyGroupId) =>
+      commitProjectEvent(
+        set,
+        historyLabel,
+        "storyboard",
+        (state) => {
+          const videoExists = state.mediaItems.some(
+            (item) => item.kind === "video" && videoContext.startsWith(`${item.id}:`),
+          );
+          if (!videoContext || !videoExists) {
+            return state;
+          }
+          const currentStoryboard = state.storyboards[videoContext] ?? {
+            shots: [],
+            shotStacks: [],
+            shotAnnotations: {},
+          };
+          const storyboard = recipe(currentStoryboard);
+          if (storyboard === currentStoryboard) {
+            return state;
+          }
+          return {
+            storyboards: {
+              ...state.storyboards,
+              [videoContext]: storyboard,
+            },
+          };
+        },
+        historyGroupId,
+      ),
     projectHistoryJumped: (targetCursor) => {
       let changed = false;
       set((state) => {

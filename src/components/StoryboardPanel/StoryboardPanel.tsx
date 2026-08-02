@@ -49,6 +49,7 @@ import { SelectDropdown, selectDropdownItems, type SelectDropdownItem } from "..
 import "./StoryboardPanel.css";
 import {
   StoryboardColorLabelButtons,
+  storyboardShotColorLabelValues,
   storyboardShotColorFilterLabels,
   storyboardShotColorLabels,
 } from "./StoryboardColorLabelButtons";
@@ -190,7 +191,6 @@ const storyboardRatingComparatorOptions: Array<readonly [StoryboardRatingCompara
   ["lte", "星级小于等于"],
   ["eq", "星级等于"],
 ];
-const storyboardRatingComparatorItems = selectDropdownItems(storyboardRatingComparatorOptions);
 const storyboardRatingComparatorSymbols: Record<StoryboardRatingComparator, string> = {
   gte: "≥",
   lte: "≤",
@@ -253,11 +253,25 @@ interface StoryboardMenuAnchor {
   y: number;
 }
 
+type StoryboardSprayMode = "colorLabel" | "flag" | "rating";
+
+const storyboardSprayModeOptions: Array<readonly [StoryboardSprayMode, string]> = [
+  ["colorLabel", "标签"],
+  ["flag", "旗标"],
+  ["rating", "星级"],
+];
+
+const storyboardSprayModeLabels = Object.fromEntries(storyboardSprayModeOptions) as Record<
+  StoryboardSprayMode,
+  string
+>;
+
 interface StoryboardFooterAreaVisibility {
   colorLabel: boolean;
   flag: boolean;
   rating: boolean;
   selection: boolean;
+  sprayTool: boolean;
   viewMode: boolean;
   sort: Record<StoryboardViewMode, boolean>;
   thumbnailSize: boolean;
@@ -268,6 +282,7 @@ const defaultStoryboardFooterAreaVisibility: StoryboardFooterAreaVisibility = {
   flag: false,
   rating: false,
   selection: true,
+  sprayTool: true,
   viewMode: true,
   sort: {
     list: false,
@@ -348,18 +363,19 @@ function shotMatchesFilter(
 
   const matchesColorLabel =
     colorLabelFilters.length === 0 || colorLabelFilters.includes(colorLabel);
+  const matchesFlag = flagFilters.length === 0 || flagFilters.includes(flag);
   const matchesBaseFilter =
     filter === "all"
       ? matchesRating
       : filter === "retained"
-        ? flagFilters.includes(flag) && matchesRating
+        ? matchesFlag && matchesRating
         : filter === "rated"
           ? minimumRating > 0
             ? matchesRating
             : rating > 0
           : filter === "unrated"
             ? rating === 0
-            : flagFilters.includes(flag) && matchesRating;
+            : matchesFlag && matchesRating;
   return matchesBaseFilter && matchesColorLabel;
 }
 
@@ -582,6 +598,93 @@ function SortArrow({ direction }: { direction: StoryboardSortDirection }) {
         strokeLinejoin="round"
         strokeWidth="2.75"
       />
+    </svg>
+  );
+}
+
+function storyboardSprayBottleMarkSvg(
+  mode: StoryboardSprayMode,
+  flag: StoryboardShotFlag,
+  rating: number,
+) {
+  if (mode === "flag" && flag !== "none") {
+    const excludedMark =
+      flag === "excluded"
+        ? '<path d="M8.4 12.2l3.5 2.6m0-2.6-3.5 2.6" stroke="#1d1d1d" stroke-width=".75"/>'
+        : "";
+    return `<path d="M7.2 11v7" stroke="#d9d9d9" stroke-width=".9"/><rect x="8" y="11.7" width="4.4" height="3.6" fill="#fff"/>${excludedMark}`;
+  }
+  if (mode === "rating") {
+    return `<text x="10" y="17.8" fill="#fff" font-family="Arial,sans-serif" font-size="7.5" font-weight="700" text-anchor="middle">${rating}</text>`;
+  }
+  return "";
+}
+
+function storyboardSprayCursor(
+  fillColor: string,
+  mode: StoryboardSprayMode,
+  flag: StoryboardShotFlag,
+  rating: number,
+) {
+  const mark = storyboardSprayBottleMarkSvg(mode, flag, rating);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="17" height="20" viewBox="0 0 20 24"><path d="M8.25 1.5h3.5v2h-3.5zM9 3.5h2v2H9zM6.5 5.5h7v2.25h-7z" fill="#d0d0d0"/><path d="M6.25 8.25h7.5l1.5 2.25v10.25H4.75V10.5l1.5-2.25Z" fill="${fillColor}" stroke="#d0d0d0" stroke-width="1.25" stroke-linejoin="round"/><path d="M4 21.25h12v1.5H4z" fill="${fillColor}" stroke="#d0d0d0"/><path d="M6.25 11h7.5M6.25 18.75h7.5" stroke="#686868" stroke-width=".75"/>${mark}</svg>`;
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}") 8 2, crosshair`;
+}
+
+interface StoryboardSprayBottleIconProps {
+  fillColor: string;
+  mode: StoryboardSprayMode;
+  flag: StoryboardShotFlag;
+  rating: number;
+}
+
+function StoryboardSprayBottleIcon({
+  fillColor,
+  mode,
+  flag,
+  rating,
+}: StoryboardSprayBottleIconProps) {
+  return (
+    <svg
+      className="storyboard-spray-bottle-icon"
+      viewBox="0 0 20 24"
+      fill="none"
+      aria-hidden="true"
+    >
+      <path d="M8.25 1.5h3.5v2h-3.5z" fill="currentColor" />
+      <path d="M9 3.5h2v2H9z" fill="currentColor" />
+      <path d="M6.5 5.5h7v2.25h-7z" fill="currentColor" />
+      <path
+        d="M6.25 8.25h7.5l1.5 2.25v10.25H4.75V10.5l1.5-2.25Z"
+        fill={fillColor}
+        stroke="currentColor"
+        strokeLinejoin="round"
+        strokeWidth="1.25"
+      />
+      <path d="M4 21.25h12v1.5H4z" fill={fillColor} stroke="currentColor" strokeWidth="1" />
+      <path d="M6.25 11h7.5M6.25 18.75h7.5" stroke="#686868" strokeWidth="0.75" />
+      {mode === "flag" && flag !== "none" && (
+        <>
+          <path d="M7.2 11v7" stroke="#d9d9d9" strokeWidth="0.9" />
+          <rect x="8" y="11.7" width="4.4" height="3.6" fill="#fff" />
+          {flag === "excluded" && (
+            <path d="M8.4 12.2l3.5 2.6m0-2.6-3.5 2.6" stroke="#1d1d1d" strokeWidth="0.75" />
+          )}
+        </>
+      )}
+      {mode === "rating" && (
+        <text
+          x="10"
+          y="17.8"
+          fill="#fff"
+          fontFamily="Arial, sans-serif"
+          fontSize="7.5"
+          fontWeight="700"
+          textAnchor="middle"
+        >
+          {rating}
+        </text>
+      )}
     </svg>
   );
 }
@@ -846,11 +949,21 @@ export function StoryboardPanel() {
   const selectionAnchorRef = useRef<string | null>(null);
   const selectionFocusRef = useRef<string | null>(null);
   const marqueeCleanupRef = useRef<(() => void) | null>(null);
+  const sprayGestureCleanupRef = useRef<(() => void) | null>(null);
   const hadShotsRef = useRef(shots.length > 0);
   const [shotSort, setShotSort] = useState<StoryboardSort>(defaultStoryboardSort);
   const [gridShotSort, setGridShotSort] = useState<StoryboardSort>(defaultStoryboardGridSort);
+  const [ratingComparatorMenu, setRatingComparatorMenu] = useState<StoryboardMenuAnchor | null>(
+    null,
+  );
   const [footerSortMenu, setFooterSortMenu] = useState<StoryboardMenuAnchor | null>(null);
+  const [footerSprayMenu, setFooterSprayMenu] = useState<StoryboardMenuAnchor | null>(null);
   const [footerOptionsMenu, setFooterOptionsMenu] = useState<StoryboardMenuAnchor | null>(null);
+  const [sprayActive, setSprayActive] = useState(false);
+  const [sprayMode, setSprayMode] = useState<StoryboardSprayMode>("colorLabel");
+  const [sprayColorLabel, setSprayColorLabel] = useState<StoryboardShotColorLabel | null>(null);
+  const [sprayFlag, setSprayFlag] = useState<StoryboardShotFlag>("none");
+  const [sprayRating, setSprayRating] = useState(0);
   const [footerAreaVisibility, setFooterAreaVisibility] = useState(
     defaultStoryboardFooterAreaVisibility,
   );
@@ -925,6 +1038,18 @@ export function StoryboardPanel() {
     storyboardGridSortOptions.find((option) => option.id === activeShotSort.columnId)?.label ??
     "标题";
   const footerSortVisible = footerAreaVisibility.sort[viewMode];
+  const sprayBottleFillColor =
+    sprayMode === "colorLabel" && sprayColorLabel
+      ? storyboardShotColorLabelValues[sprayColorLabel]
+      : "#252525";
+  const panelStyle = {
+    "--storyboard-spray-cursor": storyboardSprayCursor(
+      sprayBottleFillColor,
+      sprayMode,
+      sprayFlag,
+      sprayRating,
+    ),
+  } as CSSProperties;
   const currentFrame = playback?.currentFrame ?? 0;
   const isPlaying = playback?.isPlaying ?? false;
   const currentFrameRef = useRef(currentFrame);
@@ -1134,9 +1259,13 @@ export function StoryboardPanel() {
 
   useEffect(() => {
     syncVideoContext(videoContext);
+    sprayGestureCleanupRef.current?.();
+    setSprayActive(false);
     setContextMenu(null);
     setAnnotationMenu(null);
+    setRatingComparatorMenu(null);
     setFooterSortMenu(null);
+    setFooterSprayMenu(null);
     setFooterOptionsMenu(null);
     setGridShotSort(defaultStoryboardGridSort);
   }, [syncVideoContext, videoContext]);
@@ -1186,6 +1315,28 @@ export function StoryboardPanel() {
   }, [annotationMenu]);
 
   useEffect(() => {
+    if (!ratingComparatorMenu) {
+      return;
+    }
+    const close = () => setRatingComparatorMenu(null);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        close();
+      }
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("resize", close);
+    window.addEventListener("blur", close);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("blur", close);
+    };
+  }, [ratingComparatorMenu]);
+
+  useEffect(() => {
     if (!footerSortMenu) {
       return;
     }
@@ -1206,6 +1357,28 @@ export function StoryboardPanel() {
       window.removeEventListener("blur", close);
     };
   }, [footerSortMenu]);
+
+  useEffect(() => {
+    if (!footerSprayMenu) {
+      return;
+    }
+    const close = () => setFooterSprayMenu(null);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        close();
+      }
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("resize", close);
+    window.addEventListener("blur", close);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("blur", close);
+    };
+  }, [footerSprayMenu]);
 
   useEffect(() => {
     if (!footerOptionsMenu) {
@@ -1231,7 +1404,16 @@ export function StoryboardPanel() {
 
   useEffect(() => {
     setFooterSortMenu(null);
+    setFooterSprayMenu(null);
   }, [viewMode]);
+
+  useEffect(() => {
+    if (sprayActive) {
+      return;
+    }
+    sprayGestureCleanupRef.current?.();
+    setFooterSprayMenu(null);
+  }, [sprayActive]);
 
   useEffect(() => {
     if (showOnlySelected && selectedCount === 0) {
@@ -1395,6 +1577,7 @@ export function StoryboardPanel() {
         cancelAnimationFrame(scrollAnimationRef.current);
       }
       marqueeCleanupRef.current?.();
+      sprayGestureCleanupRef.current?.();
       document.body.classList.remove("is-resizing-storyboard-column");
     },
     [],
@@ -1530,6 +1713,115 @@ export function StoryboardPanel() {
       return;
     }
     shotSelectionCleared();
+  }
+
+  function deactivateSprayTool() {
+    sprayGestureCleanupRef.current?.();
+    setFooterSprayMenu(null);
+    setSprayActive(false);
+  }
+
+  function applySprayToShot(shotId: string, historyGroupId: string) {
+    const targetShotIds = annotationShotIdsForSelection([shotId], shotStacksByShotId);
+    if (sprayMode === "colorLabel") {
+      setShotColorLabels(targetShotIds, sprayColorLabel, historyGroupId);
+      return;
+    }
+    if (sprayMode === "flag") {
+      setShotFlags(targetShotIds, sprayFlag, historyGroupId);
+      return;
+    }
+    setShotRatings(targetShotIds, sprayRating, historyGroupId);
+  }
+
+  function sprayShotIdFromPoint(target: EventTarget | null, clientX: number, clientY: number) {
+    const element = target instanceof Element ? target : null;
+    if (!element || !panelRef.current?.contains(element)) {
+      return null;
+    }
+    const shotElement = element.closest<HTMLElement>("[data-storyboard-shot-id]");
+    const thumbnail = shotElement?.querySelector<HTMLElement>(".shot-frame-button");
+    if (!shotElement || !thumbnail) {
+      return null;
+    }
+    const bounds = thumbnail.getBoundingClientRect();
+    return clientX >= bounds.left &&
+      clientX <= bounds.right &&
+      clientY >= bounds.top &&
+      clientY <= bounds.bottom
+      ? (shotElement.dataset.storyboardShotId ?? null)
+      : null;
+  }
+
+  function startSprayGesture(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!sprayActive || event.button !== 0 || !event.isPrimary) {
+      return;
+    }
+    const initialShotId = sprayShotIdFromPoint(event.target, event.clientX, event.clientY);
+    if (!initialShotId) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    panelRef.current?.focus({ preventScroll: true });
+    sprayGestureCleanupRef.current?.();
+
+    const pointerId = event.pointerId;
+    const historyGroupId = `storyboard-spray-${Date.now()}-${pointerId}`;
+    const paintedShotIds = new Set<string>();
+    const paintTarget = (target: EventTarget | null, clientX: number, clientY: number) => {
+      const shotId = sprayShotIdFromPoint(target, clientX, clientY);
+      if (!shotId || paintedShotIds.has(shotId)) {
+        return;
+      }
+      paintedShotIds.add(shotId);
+      applySprayToShot(shotId, historyGroupId);
+    };
+    const cleanup = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onFinish);
+      window.removeEventListener("pointercancel", onFinish);
+      window.removeEventListener("blur", cleanup);
+      if (sprayGestureCleanupRef.current === cleanup) {
+        sprayGestureCleanupRef.current = null;
+      }
+    };
+    const onMove = (moveEvent: globalThis.PointerEvent) => {
+      if (moveEvent.pointerId !== pointerId) {
+        return;
+      }
+      moveEvent.preventDefault();
+      paintTarget(
+        document.elementFromPoint(moveEvent.clientX, moveEvent.clientY),
+        moveEvent.clientX,
+        moveEvent.clientY,
+      );
+    };
+    const onFinish = (finishEvent: globalThis.PointerEvent) => {
+      if (finishEvent.pointerId === pointerId) {
+        cleanup();
+      }
+    };
+
+    sprayGestureCleanupRef.current = cleanup;
+    paintedShotIds.add(initialShotId);
+    applySprayToShot(initialShotId, historyGroupId);
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onFinish);
+    window.addEventListener("pointercancel", onFinish);
+    window.addEventListener("blur", cleanup);
+  }
+
+  function suppressSprayClick(event: ReactMouseEvent<HTMLDivElement>) {
+    if (
+      !sprayActive ||
+      event.button !== 0 ||
+      !sprayShotIdFromPoint(event.target, event.clientX, event.clientY)
+    ) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
   }
 
   function startMarqueeSelection(event: ReactPointerEvent<HTMLDivElement>) {
@@ -2045,7 +2337,7 @@ export function StoryboardPanel() {
   }
 
   return (
-    <section ref={panelRef} className="storyboard-panel" tabIndex={-1}>
+    <section ref={panelRef} className="storyboard-panel" style={panelStyle} tabIndex={-1}>
       <div className="storyboard-project-row">
         <Film aria-hidden="true" />
         <span>分镜</span>
@@ -2118,17 +2410,34 @@ export function StoryboardPanel() {
             <span className="storyboard-filter-separator" aria-hidden="true" />
           </>
         )}
-        <SelectDropdown
-          ariaLabel="星级比较方式"
-          className={`storyboard-filter-comparator is-${ratingComparator}`}
-          menuClassName="storyboard-rating-comparator-menu"
-          value={ratingComparator}
-          selectedLabel={storyboardRatingComparatorSymbols[ratingComparator]}
+        <button
+          type="button"
+          className={`storyboard-filter-comparator is-${ratingComparator} ${
+            ratingComparatorMenu ? "open" : ""
+          }`}
+          aria-label="星级比较方式"
+          aria-haspopup="menu"
+          aria-expanded={Boolean(ratingComparatorMenu)}
           title={storyboardRatingComparatorLabels[ratingComparator]}
-          items={storyboardRatingComparatorItems}
-          onChange={setRatingComparator}
           disabled={shots.length === 0}
-        />
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            if (ratingComparatorMenu) {
+              setRatingComparatorMenu(null);
+              return;
+            }
+            setContextMenu(null);
+            setAnnotationMenu(null);
+            setFooterSortMenu(null);
+            setFooterSprayMenu(null);
+            setFooterOptionsMenu(null);
+            const bounds = event.currentTarget.getBoundingClientRect();
+            setRatingComparatorMenu({ x: bounds.left, y: bounds.bottom });
+          }}
+        >
+          <span>{storyboardRatingComparatorSymbols[ratingComparator]}</span>
+        </button>
         <div className="storyboard-filter-stars" aria-label="按星级过滤">
           {storyboardRatingFilters.map((rating) => (
             <button
@@ -2175,7 +2484,10 @@ export function StoryboardPanel() {
       </div>
 
       <div
-        className="storyboard-content"
+        className={`storyboard-content ${sprayActive ? "is-spraying" : ""}`}
+        onPointerDownCapture={startSprayGesture}
+        onClickCapture={suppressSprayClick}
+        onDoubleClickCapture={suppressSprayClick}
         onPointerDown={(event) => {
           if (!isEditableKeyboardTarget(event.target)) {
             panelRef.current?.focus({ preventScroll: true });
@@ -2270,7 +2582,141 @@ export function StoryboardPanel() {
               <span className="storyboard-filter-separator storyboard-footer-separator" />
             </div>
           )}
-          {footerSortVisible && (
+          {footerAreaVisibility.sprayTool && (
+            <div
+              className={`storyboard-footer-area storyboard-footer-spray-area ${
+                sprayActive ? "is-active" : ""
+              }`}
+            >
+              {sprayActive ? (
+                <>
+                  <button
+                    type="button"
+                    className="storyboard-footer-spray-button is-empty"
+                    onClick={deactivateSprayTool}
+                    title="放回喷瓶并退出喷涂"
+                    aria-label="放回喷瓶并退出喷涂"
+                  >
+                    <span className="storyboard-footer-spray-icon-background" aria-hidden="true" />
+                  </button>
+                  <div className="storyboard-footer-sort-control storyboard-footer-spray-control">
+                    <button
+                      type="button"
+                      className={`storyboard-footer-sort-trigger storyboard-footer-spray-trigger ${footerSprayMenu ? "active" : ""}`}
+                      aria-haspopup="menu"
+                      aria-expanded={Boolean(footerSprayMenu)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setContextMenu(null);
+                        setAnnotationMenu(null);
+                        setFooterSortMenu(null);
+                        setFooterOptionsMenu(null);
+                        if (footerSprayMenu) {
+                          setFooterSprayMenu(null);
+                          return;
+                        }
+                        const bounds = event.currentTarget.getBoundingClientRect();
+                        setFooterSprayMenu({ x: bounds.left, y: bounds.top });
+                      }}
+                    >
+                      <span className="storyboard-footer-sort-label">喷涂：</span>
+                      <span className="storyboard-footer-sort-value">
+                        {storyboardSprayModeLabels[sprayMode]}
+                      </span>
+                      <ChevronsUpDown aria-hidden="true" />
+                    </button>
+                  </div>
+                  <span className="storyboard-filter-separator storyboard-footer-separator" />
+                  {sprayMode === "colorLabel" && (
+                    <StoryboardColorLabelButtons
+                      className="storyboard-footer-colors storyboard-footer-spray-colors"
+                      activeValues={sprayColorLabel ? [sprayColorLabel] : []}
+                      ariaLabel="选择喷涂标签"
+                      buttonLabel={(_, label, active) =>
+                        active ? `清除${label}喷涂标签` : `喷涂${label}标签`
+                      }
+                      onSelect={(colorLabel) =>
+                        setSprayColorLabel((current) =>
+                          current === colorLabel ? null : (colorLabel as StoryboardShotColorLabel),
+                        )
+                      }
+                    />
+                  )}
+                  {sprayMode === "flag" && (
+                    <div className="storyboard-footer-flag-controls" aria-label="选择喷涂旗标">
+                      {(["retained", "excluded"] as const).map((flag) => {
+                        const active = sprayFlag === flag;
+                        return (
+                          <button
+                            key={flag}
+                            type="button"
+                            className={`storyboard-footer-flag-button ${active ? "active" : ""}`}
+                            onClick={() => setSprayFlag(active ? "none" : flag)}
+                            title={active ? "喷涂无旗标" : `喷涂${storyboardShotFlagLabels[flag]}`}
+                            aria-label={
+                              active ? "喷涂无旗标" : `喷涂${storyboardShotFlagLabels[flag]}`
+                            }
+                            aria-pressed={active}
+                          >
+                            <span className={`shot-thumbnail-flag is-${flag}`} aria-hidden="true" />
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {sprayMode === "rating" && (
+                    <div className="storyboard-footer-rating-controls" aria-label="选择喷涂星级">
+                      {storyboardRatingFilters.map((rating) => {
+                        const active = rating <= sprayRating;
+                        return (
+                          <button
+                            key={rating}
+                            type="button"
+                            className={active ? "active" : ""}
+                            onClick={() => setSprayRating(sprayRating === rating ? 0 : rating)}
+                            title={sprayRating === rating ? "喷涂零星" : `喷涂 ${rating} 星`}
+                            aria-label={sprayRating === rating ? "喷涂零星" : `喷涂 ${rating} 星`}
+                            aria-pressed={sprayRating === rating}
+                          >
+                            <Star aria-hidden="true" />
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="storyboard-footer-spray-button"
+                  onClick={() => {
+                    setContextMenu(null);
+                    setAnnotationMenu(null);
+                    setFooterSortMenu(null);
+                    setFooterSprayMenu(null);
+                    setFooterOptionsMenu(null);
+                    setSprayActive(true);
+                  }}
+                  disabled={shots.length === 0}
+                  title="喷涂工具"
+                  aria-label="启用喷涂工具"
+                >
+                  <span className="storyboard-footer-spray-icon-background">
+                    <StoryboardSprayBottleIcon
+                      fillColor={sprayBottleFillColor}
+                      mode={sprayMode}
+                      flag={sprayFlag}
+                      rating={sprayRating}
+                    />
+                  </span>
+                </button>
+              )}
+              {!sprayActive && (
+                <span className="storyboard-filter-separator storyboard-footer-separator" />
+              )}
+            </div>
+          )}
+          {!sprayActive && footerSortVisible && (
             <div className="storyboard-footer-area storyboard-footer-sort-area">
               <div className="storyboard-footer-sort-control">
                 <button
@@ -2324,7 +2770,7 @@ export function StoryboardPanel() {
               <span className="storyboard-filter-separator storyboard-footer-separator" />
             </div>
           )}
-          {footerAreaVisibility.flag && (
+          {!sprayActive && footerAreaVisibility.flag && (
             <div className="storyboard-footer-area storyboard-footer-flag-area">
               <div className="storyboard-footer-flag-controls" aria-label="设置所选分镜旗标">
                 {(["retained", "excluded"] as const).map((flag) => {
@@ -2356,7 +2802,7 @@ export function StoryboardPanel() {
               <span className="storyboard-filter-separator storyboard-footer-separator" />
             </div>
           )}
-          {footerAreaVisibility.rating && (
+          {!sprayActive && footerAreaVisibility.rating && (
             <div className="storyboard-footer-area storyboard-footer-rating-area">
               <div className="storyboard-footer-rating-controls" aria-label="设置所选分镜星级">
                 {storyboardRatingFilters.map((rating) => {
@@ -2385,7 +2831,7 @@ export function StoryboardPanel() {
               <span className="storyboard-filter-separator storyboard-footer-separator" />
             </div>
           )}
-          {footerAreaVisibility.colorLabel && (
+          {!sprayActive && footerAreaVisibility.colorLabel && (
             <div className="storyboard-footer-area storyboard-footer-color-area">
               <StoryboardColorLabelButtons
                 className="storyboard-footer-colors"
@@ -2409,50 +2855,123 @@ export function StoryboardPanel() {
           )}
         </div>
         <div className="storyboard-thumbnail-tools">
-          {footerAreaVisibility.thumbnailSize && (
+          {sprayActive ? (
+            <button
+              type="button"
+              className="storyboard-footer-spray-confirm"
+              onClick={deactivateSprayTool}
+            >
+              完成
+            </button>
+          ) : (
             <>
-              <span className="storyboard-thumbnail-size-label">缩略图：</span>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                value={viewMode === "list" ? thumbnailSize : gridSize}
-                aria-label={viewMode === "list" ? "分镜缩略图大小" : "分镜图标大小"}
-                onChange={(event) => {
-                  const size = Number(event.currentTarget.value);
-                  if (viewMode === "list") {
-                    setThumbnailSize(size);
-                  } else {
-                    setGridSize(size);
+              {footerAreaVisibility.thumbnailSize && (
+                <>
+                  <span className="storyboard-thumbnail-size-label">缩略图：</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    value={viewMode === "list" ? thumbnailSize : gridSize}
+                    aria-label={viewMode === "list" ? "分镜缩略图大小" : "分镜图标大小"}
+                    onChange={(event) => {
+                      const size = Number(event.currentTarget.value);
+                      if (viewMode === "list") {
+                        setThumbnailSize(size);
+                      } else {
+                        setGridSize(size);
+                      }
+                    }}
+                  />
+                </>
+              )}
+              <span className="storyboard-filter-separator storyboard-footer-separator" />
+              <button
+                type="button"
+                className={`storyboard-footer-options-trigger ${footerOptionsMenu ? "active" : ""}`}
+                aria-haspopup="menu"
+                aria-expanded={Boolean(footerOptionsMenu)}
+                title="更多选项"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setContextMenu(null);
+                  setAnnotationMenu(null);
+                  setFooterSortMenu(null);
+                  if (footerOptionsMenu) {
+                    setFooterOptionsMenu(null);
+                    return;
                   }
+                  const bounds = event.currentTarget.getBoundingClientRect();
+                  setFooterOptionsMenu({ x: bounds.left, y: bounds.top });
                 }}
-              />
+              >
+                <ChevronDown aria-hidden="true" />
+              </button>
             </>
           )}
-          <span className="storyboard-filter-separator storyboard-footer-separator" />
-          <button
-            type="button"
-            className={`storyboard-footer-options-trigger ${footerOptionsMenu ? "active" : ""}`}
-            aria-haspopup="menu"
-            aria-expanded={Boolean(footerOptionsMenu)}
-            title="更多选项"
-            onClick={(event) => {
-              event.stopPropagation();
-              setContextMenu(null);
-              setAnnotationMenu(null);
-              setFooterSortMenu(null);
-              if (footerOptionsMenu) {
-                setFooterOptionsMenu(null);
-                return;
-              }
-              const bounds = event.currentTarget.getBoundingClientRect();
-              setFooterOptionsMenu({ x: bounds.left, y: bounds.top });
-            }}
-          >
-            <ChevronDown aria-hidden="true" />
-          </button>
         </div>
       </footer>
+
+      {footerSprayMenu &&
+        createPortal(
+          <PopupMenu
+            className="storyboard-footer-spray-menu"
+            contextMenuAnchor={footerSprayMenu}
+            ariaLabel="喷涂属性"
+            style={{
+              position: "fixed",
+              left: footerSprayMenu.x,
+              top: footerSprayMenu.y,
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            {storyboardSprayModeOptions.map(([mode, label]) => (
+              <PopupMenuItem
+                key={mode}
+                checked={sprayMode === mode}
+                onSelect={() => {
+                  setSprayMode(mode);
+                  setFooterSprayMenu(null);
+                }}
+              >
+                {label}
+              </PopupMenuItem>
+            ))}
+          </PopupMenu>,
+          document.body,
+        )}
+
+      {ratingComparatorMenu &&
+        createPortal(
+          <PopupMenu
+            className="storyboard-rating-comparator-menu"
+            contextMenuAnchor={ratingComparatorMenu}
+            ariaLabel="星级比较方式"
+            style={{
+              position: "fixed",
+              left: ratingComparatorMenu.x,
+              top: ratingComparatorMenu.y,
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            {storyboardRatingComparatorOptions.map(([comparator, label]) => (
+              <PopupMenuItem
+                key={comparator}
+                checked={ratingComparator === comparator}
+                onSelect={() => {
+                  setRatingComparator(comparator);
+                  setRatingComparatorMenu(null);
+                }}
+              >
+                {label}
+              </PopupMenuItem>
+            ))}
+          </PopupMenu>,
+          document.body,
+        )}
 
       {footerSortMenu &&
         createPortal(
@@ -2526,6 +3045,17 @@ export function StoryboardPanel() {
               }
             >
               选中
+            </PopupMenuItem>
+            <PopupMenuItem
+              checked={footerAreaVisibility.sprayTool}
+              onSelect={() =>
+                setFooterAreaVisibility((current) => ({
+                  ...current,
+                  sprayTool: !current.sprayTool,
+                }))
+              }
+            >
+              喷涂工具
             </PopupMenuItem>
             <PopupMenuItem
               checked={footerSortVisible}

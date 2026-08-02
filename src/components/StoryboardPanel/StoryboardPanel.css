@@ -178,52 +178,49 @@
 .storyboard-filter-comparator {
   display: grid;
   flex: 0 0 22px;
-  align-items: center;
   width: 22px;
   min-height: 22px;
+  place-items: center;
   margin-right: -5px;
   margin-left: -2px;
+  padding: 0;
   color: #4d4d4d;
+  font: inherit;
   background: transparent;
   border: 1px solid transparent;
   border-radius: 2px;
+  appearance: none;
+  cursor: pointer;
 }
 
-.storyboard-filter-comparator:hover:not(.disabled),
+.storyboard-filter-comparator:hover:not(:disabled),
 .storyboard-filter-comparator.open {
   color: #808080;
   background: transparent;
   border-color: transparent;
 }
 
-.storyboard-filter-comparator .select-dropdown-trigger {
-  grid-template-columns: 1fr;
-  min-height: 20px;
-  height: 20px;
+.storyboard-filter-comparator > span {
+  display: block;
   font-size: 12.5px;
   line-height: 20px;
   text-align: center;
 }
 
-.storyboard-filter-comparator .select-dropdown-trigger > span {
-  padding: 0;
-}
-
-.storyboard-filter-comparator.is-eq .select-dropdown-trigger > span {
+.storyboard-filter-comparator.is-eq > span {
   font-size: 15.5px;
   transform: scaleX(1.2);
 }
 
-.storyboard-filter-comparator .select-dropdown-trigger svg {
-  display: none;
+.storyboard-filter-comparator:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .storyboard-rating-comparator-menu {
-  min-width: 136px;
-}
-
-.storyboard-rating-comparator-menu .select-dropdown-option {
-  font-size: 12px;
+  position: fixed;
+  z-index: 1000;
+  width: 176px;
 }
 
 .storyboard-filter-flags {
@@ -474,6 +471,28 @@
   min-height: 0;
   padding: 2px 8px 5px;
   overflow: hidden;
+}
+
+.storyboard-content.is-spraying .shot-frame-button,
+.storyboard-content.is-spraying .shot-frame-button *,
+.storyboard-content.is-spraying .storyboard-stack-badge,
+.storyboard-content.is-spraying .storyboard-stack-badge *,
+.storyboard-footer .storyboard-footer-spray-button.is-empty,
+.storyboard-footer .storyboard-footer-spray-button.is-empty * {
+  cursor: var(--storyboard-spray-cursor, crosshair) !important;
+}
+
+.storyboard-content.is-spraying {
+  user-select: none;
+}
+
+.storyboard-content.is-spraying .shot-frame-button::after {
+  position: absolute;
+  z-index: 5;
+  inset: 0;
+  box-shadow: inset 0 0 0 1px #fff;
+  content: "";
+  pointer-events: none;
 }
 
 .storyboard-list-frame {
@@ -1648,6 +1667,12 @@ body.is-resizing-storyboard-column {
   width: 176px;
 }
 
+.storyboard-footer-spray-menu {
+  position: fixed;
+  z-index: 1000;
+  width: 120px;
+}
+
 .storyboard-footer-options-menu {
   position: fixed;
   z-index: 1000;
@@ -1707,6 +1732,75 @@ body.is-resizing-storyboard-column {
 .storyboard-footer button.storyboard-footer-sort-direction > svg {
   width: 17px;
   height: 17px;
+}
+
+.storyboard-footer-spray-area {
+  gap: 5px;
+}
+
+.storyboard-footer button.storyboard-footer-spray-button {
+  width: 28px;
+  background: transparent;
+}
+
+.storyboard-footer button.storyboard-footer-spray-button:hover:not(:disabled),
+.storyboard-footer button.storyboard-footer-spray-button:focus-visible {
+  background: transparent;
+}
+
+.storyboard-footer-spray-icon-background {
+  display: grid;
+  width: 21px;
+  height: 21px;
+  place-items: center;
+  color: #b8b8b8;
+  background: #59595980;
+  border-radius: 50%;
+}
+
+.storyboard-footer
+  button.storyboard-footer-spray-button:hover:not(:disabled)
+  .storyboard-footer-spray-icon-background {
+  background: #595959;
+}
+
+.storyboard-footer button .storyboard-spray-bottle-icon {
+  width: 17px;
+  height: 20px;
+  overflow: visible;
+  transform: translateY(-1px);
+}
+
+.storyboard-footer-spray-control {
+  flex-basis: 126px;
+}
+
+.storyboard-footer .storyboard-footer-spray-trigger {
+  grid-template-columns: max-content max-content 12px;
+  max-width: 123px;
+}
+
+.storyboard-footer-spray-colors {
+  margin-right: 1px;
+  margin-left: 1px;
+}
+
+.storyboard-footer button.storyboard-footer-spray-confirm {
+  width: 48px;
+  height: 20px;
+  min-height: 20px;
+  align-self: center;
+  color: #d8d8d8;
+  line-height: 18px;
+  background: #1d1d1d;
+  border: 1px solid #555;
+  border-radius: 2px;
+}
+
+.storyboard-footer button.storyboard-footer-spray-confirm:hover:not(:disabled),
+.storyboard-footer button.storyboard-footer-spray-confirm:focus-visible {
+  color: #fff;
+  background: #3b3b3b;
 }
 
 .storyboard-footer button:hover:not(:disabled),

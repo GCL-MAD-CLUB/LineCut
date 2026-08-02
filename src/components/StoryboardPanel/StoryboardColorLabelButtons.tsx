@@ -12,7 +12,7 @@ export const storyboardShotColorLabels: Array<readonly [StoryboardShotColorLabel
   ["purple", "紫色"],
 ];
 
-const storyboardShotColorLabelValues: Record<StoryboardShotColorLabel, string> = {
+export const storyboardShotColorLabelValues: Record<StoryboardShotColorLabel, string> = {
   red: "#ef4444",
   yellow: "#eab308",
   green: "#22c55e",

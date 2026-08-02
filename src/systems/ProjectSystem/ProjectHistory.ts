@@ -111,6 +111,7 @@ export interface ProjectHistoryEntry {
   category: ProjectHistoryCategory;
   event: ProjectFileEvent;
   inverseEvent: ProjectFileEvent;
+  groupId?: string;
 }
 
 export interface ProjectHistoryState {
@@ -186,6 +187,7 @@ export function createProjectHistoryEntry(
   category: ProjectHistoryCategory,
   before: ProjectFileState,
   after: ProjectFileState,
+  groupId?: string,
 ): ProjectHistoryEntry | null {
   const eventOperations: ProjectFileOperation[] = [];
   const inverseOperations: ProjectFileOperation[] = [];
@@ -346,6 +348,7 @@ export function createProjectHistoryEntry(
     id,
     label,
     category,
+    groupId,
     event: { id, label, category, operations: eventOperations },
     inverseEvent: {
       id: `${id}-inverse`,
@@ -471,7 +474,22 @@ export function appendProjectHistoryEntry(
 ): ProjectHistoryState {
   const source = current.active ? current : createProjectHistory(true);
   let savedCursor = source.savedCursor > source.cursor ? -1 : source.savedCursor;
-  const entries = [...source.entries.slice(0, source.cursor), entry];
+  const previousEntry = source.entries[source.cursor - 1];
+  const shouldMerge =
+    Boolean(entry.groupId) &&
+    entry.groupId === previousEntry?.groupId &&
+    source.cursor === source.entries.length;
+  const nextEntry = shouldMerge
+    ? {
+        ...entry,
+        id: previousEntry.id,
+        inverseEvent: previousEntry.inverseEvent,
+      }
+    : entry;
+  const entries = [
+    ...source.entries.slice(0, shouldMerge ? source.cursor - 1 : source.cursor),
+    nextEntry,
+  ];
   let cursor = entries.length;
   let baseLabel = source.baseLabel;
 

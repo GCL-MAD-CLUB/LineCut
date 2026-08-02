@@ -75,12 +75,17 @@ interface StoryboardPanelState
   shotStacks: StoryboardShotStack[];
   setShotTitle: (shotId: string, title: string) => void;
   setShotRating: (shotId: string, rating: number) => void;
-  setShotRatings: (shotIds: Iterable<string>, rating: number) => void;
+  setShotRatings: (shotIds: Iterable<string>, rating: number, historyGroupId?: string) => void;
   adjustShotRatings: (shotIds: Iterable<string>, delta: number) => void;
-  setShotFlags: (shotIds: Iterable<string>, flag: StoryboardShotFlag) => void;
+  setShotFlags: (
+    shotIds: Iterable<string>,
+    flag: StoryboardShotFlag,
+    historyGroupId?: string,
+  ) => void;
   setShotColorLabels: (
     shotIds: Iterable<string>,
     colorLabel: StoryboardShotColorLabel | null,
+    historyGroupId?: string,
   ) => void;
   createShotStack: (shotIds: string[]) => void;
   cancelShotStack: (shotId: string) => void;
@@ -263,28 +268,34 @@ export function useStoryboardPanelState<Selection>(
     historyLabel: string,
     recipe: (current: StoryboardState) => StoryboardState,
     videoContext = uiState.videoContext,
-  ) => storyboardUpdated(videoContext, historyLabel, recipe);
+    historyGroupId?: string,
+  ) => storyboardUpdated(videoContext, historyLabel, recipe, historyGroupId);
 
-  const setShotRatings = (shotIds: Iterable<string>, rating: number) => {
+  const setShotRatings = (shotIds: Iterable<string>, rating: number, historyGroupId?: string) => {
     const normalized = normalizedRating(rating);
     const uniqueShotIds = Array.from(new Set(shotIds));
     if (uniqueShotIds.length === 0) {
       return;
     }
-    commitStoryboard("设置分镜星级", (current) => {
-      const shotAnnotations = { ...current.shotAnnotations };
-      let changed = false;
-      for (const shotId of uniqueShotIds) {
-        if ((shotAnnotations[shotId]?.rating ?? 0) === normalized) {
-          continue;
+    commitStoryboard(
+      "设置分镜星级",
+      (current) => {
+        const shotAnnotations = { ...current.shotAnnotations };
+        let changed = false;
+        for (const shotId of uniqueShotIds) {
+          if ((shotAnnotations[shotId]?.rating ?? 0) === normalized) {
+            continue;
+          }
+          shotAnnotations[shotId] = annotationWithDefaults(shotAnnotations[shotId], {
+            rating: normalized,
+          });
+          changed = true;
         }
-        shotAnnotations[shotId] = annotationWithDefaults(shotAnnotations[shotId], {
-          rating: normalized,
-        });
-        changed = true;
-      }
-      return changed ? { ...current, shotAnnotations } : current;
-    });
+        return changed ? { ...current, shotAnnotations } : current;
+      },
+      uiState.videoContext,
+      historyGroupId,
+    );
   };
 
   const state: StoryboardPanelState = {
@@ -330,52 +341,62 @@ export function useStoryboardPanelState<Selection>(
         return changed ? { ...current, shotAnnotations } : current;
       });
     },
-    setShotFlags: (shotIds, flag) => {
+    setShotFlags: (shotIds, flag, historyGroupId) => {
       const uniqueShotIds = Array.from(new Set(shotIds));
       if (uniqueShotIds.length === 0) {
         return;
       }
-      commitStoryboard("设置分镜旗标", (current) => {
-        const shotAnnotations = { ...current.shotAnnotations };
-        let changed = false;
-        for (const shotId of uniqueShotIds) {
-          const previous = shotAnnotations[shotId];
-          const previousFlag = previous?.retained
-            ? "retained"
-            : previous?.excluded
-              ? "excluded"
-              : "none";
-          if (previousFlag === flag) {
-            continue;
+      commitStoryboard(
+        "设置分镜旗标",
+        (current) => {
+          const shotAnnotations = { ...current.shotAnnotations };
+          let changed = false;
+          for (const shotId of uniqueShotIds) {
+            const previous = shotAnnotations[shotId];
+            const previousFlag = previous?.retained
+              ? "retained"
+              : previous?.excluded
+                ? "excluded"
+                : "none";
+            if (previousFlag === flag) {
+              continue;
+            }
+            shotAnnotations[shotId] = annotationWithDefaults(shotAnnotations[shotId], {
+              retained: flag === "retained",
+              excluded: flag === "excluded",
+            });
+            changed = true;
           }
-          shotAnnotations[shotId] = annotationWithDefaults(shotAnnotations[shotId], {
-            retained: flag === "retained",
-            excluded: flag === "excluded",
-          });
-          changed = true;
-        }
-        return changed ? { ...current, shotAnnotations } : current;
-      });
+          return changed ? { ...current, shotAnnotations } : current;
+        },
+        uiState.videoContext,
+        historyGroupId,
+      );
     },
-    setShotColorLabels: (shotIds, colorLabel) => {
+    setShotColorLabels: (shotIds, colorLabel, historyGroupId) => {
       const uniqueShotIds = Array.from(new Set(shotIds));
       if (uniqueShotIds.length === 0) {
         return;
       }
-      commitStoryboard("设置分镜色标", (current) => {
-        const shotAnnotations = { ...current.shotAnnotations };
-        let changed = false;
-        for (const shotId of uniqueShotIds) {
-          if ((shotAnnotations[shotId]?.colorLabel ?? null) === colorLabel) {
-            continue;
+      commitStoryboard(
+        "设置分镜色标",
+        (current) => {
+          const shotAnnotations = { ...current.shotAnnotations };
+          let changed = false;
+          for (const shotId of uniqueShotIds) {
+            if ((shotAnnotations[shotId]?.colorLabel ?? null) === colorLabel) {
+              continue;
+            }
+            shotAnnotations[shotId] = annotationWithDefaults(shotAnnotations[shotId], {
+              colorLabel: colorLabel ?? undefined,
+            });
+            changed = true;
           }
-          shotAnnotations[shotId] = annotationWithDefaults(shotAnnotations[shotId], {
-            colorLabel: colorLabel ?? undefined,
-          });
-          changed = true;
-        }
-        return changed ? { ...current, shotAnnotations } : current;
-      });
+          return changed ? { ...current, shotAnnotations } : current;
+        },
+        uiState.videoContext,
+        historyGroupId,
+      );
     },
     createShotStack: (shotIds) => {
       const flattenedShotIds = new Set(shotIds);
