@@ -1,0 +1,30 @@
+{
+  "model_name": "TransNetV2 Temporal Residual Refiner",
+  "model_version": "0.1.0-bootstrap",
+  "model_origin": "bootstrap_uncalibrated",
+  "feature_schema_version": 1,
+  "label_semantics": "frame_t_is_first_frame_of_new_shot",
+  "input_name": "raw_features",
+  "input_shape": [1, 8, 100],
+  "output_names": ["final_logits", "base_logits", "delta_logits"],
+  "output_shape": [1, 50],
+  "transnet_model_version": "elya5-transnetv2-onnx",
+  "transnet_model_sha256": "c4d54a682bace32f25136ef83ca2c9d403e8f8193775efeb995172a0d95a8e0c",
+  "calibrator": {
+    "a_single": 0.5,
+    "a_all": 0.5,
+    "bias": 0.0,
+    "base_threshold": 0.0
+  },
+  "low_level_normalization": {
+    "median": [0.0, 0.0, 0.0, 0.0, 0.0],
+    "iqr": [1.0, 1.0, 1.0, 1.0, 1.0],
+    "clip_min": -8.0,
+    "clip_max": 8.0
+  },
+  "decision_thresholds": {
+    "conservative": 0.0,
+    "balanced": 0.0,
+    "sensitive": 0.0
+  }
+}

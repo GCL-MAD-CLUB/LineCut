@@ -2,15 +2,17 @@ use crate::*;
 
 mod commands;
 mod export;
+mod low_level_features;
 mod media;
 mod native_drag_drop;
 mod proxy;
+mod scene_cut_refiner;
 mod storage;
 mod storyboard;
-mod storyboard_decision;
 mod subtitles;
 mod tasks;
 mod thumbnail;
+mod transnet;
 mod workspace;
 
 pub(crate) use commands::*;

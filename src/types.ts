@@ -95,13 +95,11 @@ export interface StoryboardState {
 
 export interface StoryboardCut {
   cut_frame: number;
-  confidence: number;
-  event_start: number;
-  event_end: number;
-  peak_probability: number;
-  robust_prominence: number;
-  event_area: number;
-  event_width: number;
+  pts: number;
+  base_logit: number;
+  delta_logit: number;
+  final_logit: number;
+  probability: number;
 }
 
 export interface StoryboardDetectionResult {

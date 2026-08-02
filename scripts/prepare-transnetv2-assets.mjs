@@ -38,6 +38,11 @@ const localModelCandidates = [
     : undefined,
 ].filter(Boolean);
 
+const localRefinerCandidates = [
+  process.env.SCENE_CUT_REFINER_ONNX_PATH,
+  join(cacheDir, "scene_cut_refiner.onnx"),
+].filter(Boolean);
+
 function ensureDirectory(path) {
   mkdirSync(path, { recursive: true });
 }
@@ -163,6 +168,10 @@ async function prepareModel() {
   await downloadWithRetry(downloads.model.url, downloads.model.path);
 }
 
+function prepareOptionalRefiner() {
+  copyFirstPresent(localRefinerCandidates, join(resourcesDir, "scene_cut_refiner.onnx"));
+}
+
 function prepareOnnxRuntime(extracted) {
   copyRequired(
     join(extracted, "runtimes", "win-x64", "native", "onnxruntime.dll"),
@@ -195,6 +204,7 @@ async function main() {
   ensureDirectory(cacheDir);
   ensureDirectory(resourcesDir);
   await prepareModel();
+  prepareOptionalRefiner();
   await downloadWithRetry(downloads.onnxRuntime.url, downloads.onnxRuntime.path);
   await downloadWithRetry(downloads.directMl.url, downloads.directMl.path);
 
@@ -205,7 +215,7 @@ async function main() {
 
   for (const file of [
     "transnetv2.onnx",
-    "storyboard-event-model.json",
+    "scene_cut_refiner.manifest.json",
     "onnxruntime.dll",
     "DirectML.dll",
   ]) {
