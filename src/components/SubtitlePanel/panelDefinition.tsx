@@ -1,4 +1,8 @@
-import { useProjectPort, visibleSubtitleTracks } from "../../systems/ProjectSystem";
+import {
+  mediaDisplayName,
+  useProjectPort,
+  visibleSubtitleTracks,
+} from "../../systems/ProjectSystem";
 import { definePanel } from "../DockLayout";
 import { SubtitlePanel } from "./SubtitlePanel";
 
@@ -17,6 +21,6 @@ export const subtitlePanelDefinition = definePanel({
     }
     const hasSubtitles =
       visibleSubtitleTracks(project, mediaItems, activeVideoId, projects).length > 0;
-    return `字幕：${hasSubtitles ? project.asset.file_name : "（无字幕）"}`;
+    return `字幕：${hasSubtitles ? mediaDisplayName(project, mediaItems, activeVideoId) : "（无字幕）"}`;
   },
 });

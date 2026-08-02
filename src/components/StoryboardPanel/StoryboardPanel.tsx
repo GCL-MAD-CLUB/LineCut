@@ -37,7 +37,7 @@ import {
   createFfmpegTaskId,
   listenToFfmpegTaskProgress,
 } from "../../ffmpegProgress";
-import { useProjectPort } from "../../systems/ProjectSystem";
+import { mediaDisplayName, useProjectPort } from "../../systems/ProjectSystem";
 import { createTaskProgress, useTaskProgressStatus } from "../../systems/TaskSystem";
 import { requestStoryboardThumbnail } from "../../storyboardThumbnail";
 import { isTauriRuntime } from "../../tauriRuntime";
@@ -939,7 +939,10 @@ export function StoryboardPanel() {
   const panelActive = usePanelActive();
   const focusedPanelId = usePanelManagerState((state) => state.focusedPanelId);
   const identity = useStableIdentity("storyboard-panel", panelInstanceId);
-  const { project, activeVideoId } = useProjectPort(["project", "activeVideoId"], []);
+  const { project, activeVideoId, mediaItems } = useProjectPort(
+    ["project", "activeVideoId", "mediaItems"],
+    [],
+  );
   const {
     query,
     showOnlySelected,
@@ -1029,7 +1032,7 @@ export function StoryboardPanel() {
   const hasVideo = Boolean(
     project?.asset.video_stream_index !== null && project?.asset.video_stream_index !== undefined,
   );
-  const videoLabel = project?.asset.file_name ?? "未选择视频";
+  const videoLabel = mediaDisplayName(project, mediaItems, activeVideoId) || "未选择视频";
   const canDetect = isTauriRuntime() && Boolean(project) && hasVideo && !isDetecting;
   const selectedCount = selectedShotIds.size;
   const hasSecondarySelection =
@@ -2308,7 +2311,7 @@ export function StoryboardPanel() {
     detectionStarted(context);
     const task = await createTaskProgress({
       operation: "storyboard.detect",
-      label: `分镜拆分 ${project.asset.file_name}`,
+      label: `分镜拆分 ${videoLabel}`,
       current: 0,
       total: 1,
       listener: listenToFfmpegTaskProgress(taskId),
@@ -2333,7 +2336,7 @@ export function StoryboardPanel() {
       if (cancelled) {
         task.remove();
       } else {
-        task.fail(error, { displayName: project.asset.file_name, resourceKind: "media" });
+        task.fail(error, { displayName: videoLabel, resourceKind: "media" });
       }
       detectionFinished(context);
     }

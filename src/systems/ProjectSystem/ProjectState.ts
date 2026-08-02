@@ -152,6 +152,18 @@ export function isMediaItemOffline(item: MediaBinItem) {
   return item.offline === true;
 }
 
+export function mediaDisplayName(
+  project: Project | null,
+  mediaItems: MediaBinItem[],
+  itemId?: string,
+) {
+  const item = itemId ? mediaItems.find((candidate) => candidate.id === itemId) : undefined;
+  const projectItem = project
+    ? mediaItems.find((candidate) => candidate.id === project.asset.id)
+    : undefined;
+  return item?.file_name ?? projectItem?.file_name ?? project?.asset.file_name ?? "";
+}
+
 export function isVirtualMediaItem(
   item: MediaBinItem,
 ): item is MediaBinItem & { source_video_id: string; stream_index: number } {

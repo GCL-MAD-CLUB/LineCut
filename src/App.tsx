@@ -43,7 +43,11 @@ import {
   runOperation,
   type OperationKey,
 } from "./errors";
-import { getProjectWorkspaceSnapshot, useProjectPort } from "./systems/ProjectSystem";
+import {
+  getProjectWorkspaceSnapshot,
+  mediaDisplayName,
+  useProjectPort,
+} from "./systems/ProjectSystem";
 import { isTauriRuntime } from "./tauriRuntime";
 import type { MediaBinFolder, MediaBinItem, OpenProjectResult, Preferences } from "./types";
 
@@ -245,6 +249,7 @@ function AppContent() {
 
   const {
     project,
+    activeVideoId,
     mediaFolders,
     mediaItems,
     projectFilePath,
@@ -270,6 +275,7 @@ function AppContent() {
   } = useProjectPort(
     [
       "project",
+      "activeVideoId",
       "mediaFolders",
       "mediaItems",
       "projectFilePath",
@@ -303,10 +309,10 @@ function AppContent() {
   const activeEditCapability = editCapabilities.find(
     (projection) => projection.value.active,
   )?.value;
+  const activeMediaDisplayName = mediaDisplayName(project, mediaItems, activeVideoId);
   const autoSaveProjectName = projectFilePath
     ? fileName(projectFilePath).replace(/\.lcp$/i, "")
-    : (project?.asset.file_name ?? mediaItems[0]?.file_name)?.replace(/\.[^.]+$/, "") ||
-      "未命名项目";
+    : (activeMediaDisplayName || mediaItems[0]?.file_name)?.replace(/\.[^.]+$/, "") || "未命名项目";
   const autoSaveProjectNameRef = useRef(autoSaveProjectName);
   autoSaveProjectNameRef.current = autoSaveProjectName;
   const { tasks: runningTasks } = useTaskProgressStatus();
@@ -633,8 +639,7 @@ function AppContent() {
       return projectFilePath;
     }
     const mediaName =
-      (project?.asset.file_name ?? mediaItems[0]?.file_name)?.replace(/\.[^.]+$/, "") ||
-      "未命名项目";
+      (activeMediaDisplayName || mediaItems[0]?.file_name)?.replace(/\.[^.]+$/, "") || "未命名项目";
     return `${mediaName}.lcp`;
   }
 

@@ -28,6 +28,7 @@ import { publishEvent } from "../../runtime/events/react";
 import { useStableIdentity } from "../../runtime/state/react";
 import { usePanelActive, usePanelInstanceId } from "../../runtime/systems/PanelState";
 import {
+  isMediaItemEnabled,
   subtitleTrackCues,
   useProjectPort,
   visibleSubtitleTracks,
@@ -1028,10 +1029,19 @@ export function SubtitlePanel() {
     contextMenu &&
     (contextMenu.flagSubmenuOpen || contextMenu.ratingSubmenuOpen || contextMenu.colorSubmenuOpen),
   );
-  const trackOptions = visibleTracks.map((track) => ({
-    id: track.id,
-    label: `${track.title || track.language || track.codec} · ${track.cue_count} 条`,
-  }));
+  const trackOptions = visibleTracks.map((track) => {
+    const mediaItem = mediaItems.find(
+      (item) =>
+        item.kind === "subtitle" &&
+        item.bound_to_video_id === activeVideoId &&
+        item.subtitle_track_id === track.id &&
+        isMediaItemEnabled(item),
+    );
+    return {
+      id: track.id,
+      label: `${mediaItem?.file_name || track.title || track.language || track.codec} · ${track.cue_count} 条`,
+    };
+  });
   const activeTrackLabel =
     trackOptions.find((option) => option.id === activeTrack?.id)?.label ??
     (project ? "无可用字幕" : "未选择视频");

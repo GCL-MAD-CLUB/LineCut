@@ -8,6 +8,7 @@ export {
   isMediaItemOffline,
   isMediaVideoDetached,
   isVirtualMediaItem,
+  mediaDisplayName,
   mediaItemProject,
   subtitleTrackContext,
   subtitleTrackCues,
