@@ -24,6 +24,11 @@ import "./PopupMenu.css";
 
 const popupViewportMargin = 8;
 
+/** Returns whether an event originated inside a PopupMenu, including portal-based submenus. */
+export function isPopupMenuEventTarget(target: EventTarget | null) {
+  return target instanceof Element && target.closest(".popup-menu") !== null;
+}
+
 interface PopupMenuViewportLayout {
   maxHeight: number | undefined;
   translateX: number;

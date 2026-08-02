@@ -36,8 +36,13 @@ import { requestSubtitleThumbnail } from "../../subtitleThumbnail";
 import { normalizeFrameRate, timeUsToFrame } from "../../timeline";
 import type { SubtitleCue } from "../../types";
 import { usePanelManagerState } from "../DockLayout";
-import { PopupMenu, PopupMenuItem, PopupMenuSeparator, PopupMenuSubmenu } from "../PopupMenu";
-import { SelectDropdown } from "../SelectDropdown";
+import {
+  isPopupMenuEventTarget,
+  PopupMenu,
+  PopupMenuItem,
+  PopupMenuSeparator,
+  PopupMenuSubmenu,
+} from "../PopupMenu";
 import "./SubtitlePanel.css";
 import {
   SubtitleColorLabelButtons,
@@ -767,6 +772,7 @@ export function SubtitlePanel() {
   const marqueeCleanupRef = useRef<(() => void) | null>(null);
   const sprayGestureCleanupRef = useRef<(() => void) | null>(null);
   const [cueSort, setCueSort] = useState<SubtitleSort>(defaultSubtitleSort);
+  const [trackMenu, setTrackMenu] = useState<SubtitleMenuAnchor | null>(null);
   const [ratingComparatorMenu, setRatingComparatorMenu] = useState<SubtitleMenuAnchor | null>(null);
   const [footerSortMenu, setFooterSortMenu] = useState<SubtitleMenuAnchor | null>(null);
   const [footerSprayMenu, setFooterSprayMenu] = useState<SubtitleMenuAnchor | null>(null);
@@ -1022,13 +1028,15 @@ export function SubtitlePanel() {
     contextMenu &&
     (contextMenu.flagSubmenuOpen || contextMenu.ratingSubmenuOpen || contextMenu.colorSubmenuOpen),
   );
-  const trackItems = visibleTracks.map((track) => ({
-    type: "option" as const,
-    value: track.id,
+  const trackOptions = visibleTracks.map((track) => ({
+    id: track.id,
     label: `${track.source_type === "embedded" ? `流 ${track.stream_index}` : "外挂"} · ${
       track.title || track.language || track.codec
     } · ${track.cue_count} 条`,
   }));
+  const activeTrackLabel =
+    trackOptions.find((option) => option.id === activeTrack?.id)?.label ??
+    (project ? "无可用字幕" : "未选择视频");
 
   useEffect(() => {
     rowVirtualizer.measure();
@@ -1038,6 +1046,7 @@ export function SubtitlePanel() {
     syncTrackContext(trackContext);
     sprayGestureCleanupRef.current?.();
     setSprayActive(false);
+    setTrackMenu(null);
     setContextMenu(null);
     setAnnotationMenu(null);
     setRatingComparatorMenu(null);
@@ -1062,18 +1071,35 @@ export function SubtitlePanel() {
   }, [sprayActive]);
 
   useEffect(() => {
+    if (!contextMenu && !annotationMenu) {
+      return;
+    }
+    const closeContextMenus = (event: PointerEvent) => {
+      if (isPopupMenuEventTarget(event.target)) {
+        return;
+      }
+      setContextMenu(null);
+      setAnnotationMenu(null);
+    };
+    window.addEventListener("pointerdown", closeContextMenus, true);
+    return () => window.removeEventListener("pointerdown", closeContextMenus, true);
+  }, [annotationMenu, contextMenu]);
+
+  useEffect(() => {
     const closeMenus = (event?: KeyboardEvent) => {
       if (event && event.key !== "Escape") {
         return;
       }
       setContextMenu(null);
       setAnnotationMenu(null);
+      setTrackMenu(null);
       setRatingComparatorMenu(null);
       setFooterSortMenu(null);
       setFooterSprayMenu(null);
       setFooterOptionsMenu(null);
     };
     const anyMenu =
+      trackMenu ||
       contextMenu ||
       annotationMenu ||
       ratingComparatorMenu ||
@@ -1101,6 +1127,7 @@ export function SubtitlePanel() {
     footerSortMenu,
     footerSprayMenu,
     ratingComparatorMenu,
+    trackMenu,
   ]);
 
   useEffect(() => {
@@ -1452,6 +1479,7 @@ export function SubtitlePanel() {
       selectionFocusRef.current = cueId;
     }
     panelRef.current?.focus({ preventScroll: true });
+    setTrackMenu(null);
     setAnnotationMenu(null);
     setContextMenu({
       x: event.clientX,
@@ -1471,6 +1499,7 @@ export function SubtitlePanel() {
     event.preventDefault();
     event.stopPropagation();
     panelRef.current?.focus({ preventScroll: true });
+    setTrackMenu(null);
     setContextMenu(null);
     setAnnotationMenu({
       x: event.clientX,
@@ -1878,17 +1907,34 @@ export function SubtitlePanel() {
       <div className="subtitle-project-row">
         <Captions aria-hidden="true" />
         <span>字幕</span>
-        <div className="track-select">
-          <SelectDropdown
-            ariaLabel="字幕"
-            className="track-select-dropdown"
-            menuClassName="track-select-menu"
-            disabled={!project}
-            value={activeTrack?.id ?? ""}
-            items={trackItems}
-            onChange={activeTrackChanged}
-          />
-        </div>
+        <button
+          type="button"
+          className={`subtitle-track-trigger ${trackMenu ? "active" : ""}`}
+          disabled={trackOptions.length === 0}
+          title={activeTrackLabel}
+          aria-label={`选择字幕，当前为${activeTrackLabel}`}
+          aria-haspopup="menu"
+          aria-expanded={Boolean(trackMenu)}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            if (trackMenu) {
+              setTrackMenu(null);
+              return;
+            }
+            setContextMenu(null);
+            setAnnotationMenu(null);
+            setRatingComparatorMenu(null);
+            setFooterSortMenu(null);
+            setFooterSprayMenu(null);
+            setFooterOptionsMenu(null);
+            const bounds = event.currentTarget.getBoundingClientRect();
+            setTrackMenu({ x: bounds.left, y: bounds.bottom });
+          }}
+        >
+          <span className="subtitle-track-name">{activeTrackLabel}</span>
+          <ChevronsUpDown aria-hidden="true" />
+        </button>
       </div>
 
       <div className="subtitle-search-row">
@@ -1984,6 +2030,7 @@ export function SubtitlePanel() {
             }
             setContextMenu(null);
             setAnnotationMenu(null);
+            setTrackMenu(null);
             setFooterSortMenu(null);
             setFooterSprayMenu(null);
             setFooterOptionsMenu(null);
@@ -2118,10 +2165,12 @@ export function SubtitlePanel() {
                       }`}
                       aria-haspopup="menu"
                       aria-expanded={Boolean(footerSprayMenu)}
+                      onPointerDown={(event) => event.stopPropagation()}
                       onClick={(event) => {
                         event.stopPropagation();
                         setContextMenu(null);
                         setAnnotationMenu(null);
+                        setTrackMenu(null);
                         setFooterSortMenu(null);
                         setFooterOptionsMenu(null);
                         if (footerSprayMenu) {
@@ -2219,6 +2268,7 @@ export function SubtitlePanel() {
                   onClick={() => {
                     setContextMenu(null);
                     setAnnotationMenu(null);
+                    setTrackMenu(null);
                     setFooterSortMenu(null);
                     setFooterSprayMenu(null);
                     setFooterOptionsMenu(null);
@@ -2277,10 +2327,12 @@ export function SubtitlePanel() {
                   aria-haspopup="menu"
                   aria-expanded={Boolean(footerSortMenu)}
                   disabled={allCues.length === 0}
+                  onPointerDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
                     setContextMenu(null);
                     setAnnotationMenu(null);
+                    setTrackMenu(null);
                     setFooterOptionsMenu(null);
                     if (footerSortMenu) {
                       setFooterSortMenu(null);
@@ -2416,6 +2468,7 @@ export function SubtitlePanel() {
                   event.stopPropagation();
                   setContextMenu(null);
                   setAnnotationMenu(null);
+                  setTrackMenu(null);
                   setFooterSortMenu(null);
                   const bounds = event.currentTarget.getBoundingClientRect();
                   setFooterOptionsMenu(
@@ -2429,6 +2482,32 @@ export function SubtitlePanel() {
           )}
         </div>
       </footer>
+
+      {trackMenu &&
+        createPortal(
+          <PopupMenu
+            className="subtitle-track-menu"
+            contextMenuAnchor={trackMenu}
+            ariaLabel="选择字幕"
+            style={{ position: "fixed", left: trackMenu.x, top: trackMenu.y }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            {trackOptions.map((option) => (
+              <PopupMenuItem
+                key={option.id}
+                checked={activeTrack?.id === option.id}
+                onSelect={() => {
+                  activeTrackChanged(option.id);
+                  setTrackMenu(null);
+                }}
+              >
+                {option.label}
+              </PopupMenuItem>
+            ))}
+          </PopupMenu>,
+          document.body,
+        )}
 
       {ratingComparatorMenu &&
         createPortal(

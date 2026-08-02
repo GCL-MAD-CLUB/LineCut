@@ -55,7 +55,13 @@ import type {
 import { runMediaImportTask } from "../../mediaImportTask";
 import { MediaLinkDialog, type MediaLinkCandidate, type MediaLinkMode } from "../MediaLinkDialog";
 import { ModalDialog } from "../ModalDialog";
-import { PopupMenu, PopupMenuItem, PopupMenuSeparator, PopupMenuSubmenu } from "../PopupMenu";
+import {
+  isPopupMenuEventTarget,
+  PopupMenu,
+  PopupMenuItem,
+  PopupMenuSeparator,
+  PopupMenuSubmenu,
+} from "../PopupMenu";
 import { SelectDropdown, selectDropdownItems } from "../SelectDropdown";
 import { createTaskProgress, useTaskProgressStatus } from "../../systems/TaskSystem";
 import "./MediaBin.css";
@@ -576,18 +582,23 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     if (!contextMenu) {
       return;
     }
-    const close = () => setContextMenu(null);
+    const close = (event?: Event) => {
+      if (event && isPopupMenuEventTarget(event.target)) {
+        return;
+      }
+      setContextMenu(null);
+    };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         close();
       }
     };
-    window.addEventListener("pointerdown", close);
+    window.addEventListener("pointerdown", close, true);
     window.addEventListener("keydown", closeOnEscape);
     window.addEventListener("resize", close);
     window.addEventListener("blur", close);
     return () => {
-      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("pointerdown", close, true);
       window.removeEventListener("keydown", closeOnEscape);
       window.removeEventListener("resize", close);
       window.removeEventListener("blur", close);
