@@ -1510,7 +1510,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                 <Link2 aria-hidden="true" />
                 <div>
                   <strong>关联所选媒体与目标视频</strong>
-                  <span>绑定后，音频和字幕会归入目标视频，方便集中预览和导出。</span>
+                  <span>绑定后，音频和字幕会归入目标视频，方便集中预览和整理。</span>
                 </div>
               </div>
               <div className="media-bin-bind-dialog-field">

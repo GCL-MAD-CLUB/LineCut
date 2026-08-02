@@ -213,7 +213,6 @@ const operationPolicies = {
   "app.event": modal("操作失败"),
   "dragDrop.listen": silent("文件拖放监听失败"),
   "dragDrop.region": silent("文件拖放区域更新失败"),
-  "export.clips": modal("导出失败"),
   "feedback.audio": silent("警告音效播放失败"),
   "media.bindSubtitles": modal("字幕绑定失败"),
   "media.closeBackend": modal("关闭后台媒体失败"),

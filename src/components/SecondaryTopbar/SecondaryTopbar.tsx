@@ -42,7 +42,7 @@ export function SecondaryTopbar<WorkspaceId extends string>({
           <TaskProgress>
             <div className="secondary-topbar-brand-copy">
               <strong>LineCut</strong>
-              <span>对白检索与片段导出</span>
+              <span>对白检索与片段整理</span>
             </div>
           </TaskProgress>
         </div>

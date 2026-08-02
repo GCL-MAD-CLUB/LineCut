@@ -1,8 +1,5 @@
 export type SubtitleSourceType = "embedded" | "external";
 export type SubtitleKind = "text" | "bitmap";
-export type ExportMode = "fast_copy" | "precise_encode";
-export type ExportLayout = "individual" | "merged";
-export type ExportNameRule = "source_time_range" | "source_dialogue" | "time_range" | "dialogue";
 
 export interface MediaAsset {
   id: string;
@@ -60,6 +57,20 @@ export interface SubtitleCue {
   speaker: string | null;
   style: string | null;
   layer: number | null;
+}
+
+export type SubtitleCueColorLabel = "red" | "yellow" | "green" | "blue" | "purple";
+
+export interface SubtitleCueAnnotation {
+  rating: number;
+  retained: boolean;
+  excluded?: boolean;
+  colorLabel?: SubtitleCueColorLabel | null;
+  customLabel?: string | null;
+}
+
+export interface SubtitleState {
+  cueAnnotations: Record<string, SubtitleCueAnnotation>;
 }
 
 export interface StoryboardShot {
@@ -168,7 +179,6 @@ export interface ProjectPreviewState {
 export interface ProjectEditorState {
   active_video_id: string;
   active_track_id: string;
-  subtitle_selections: Record<string, Record<string, string[]>>;
   detached_video_ids: string[];
   preview: ProjectPreviewState;
 }
@@ -177,6 +187,7 @@ export interface ProjectWorkspace {
   projects: Project[];
   media_bin: ProjectMediaBinState;
   editor: ProjectEditorState;
+  subtitles?: Record<string, SubtitleState>;
   storyboards?: Record<string, StoryboardState>;
 }
 
@@ -192,13 +203,6 @@ export interface DemuxedAudioTrack {
 export interface DemuxMediaResult {
   audio_tracks: DemuxedAudioTrack[];
   subtitle_tracks: SubtitleTrack[];
-}
-
-export interface ExportBoundMedia {
-  kind: "audio" | "subtitle";
-  source: "file" | "embedded_stream";
-  path: string;
-  stream_index: number | null;
 }
 
 export interface ImportResult {
@@ -228,37 +232,8 @@ export interface AddExternalSubtitlesResult {
   warnings: UserNotice[];
 }
 
-export interface ExportOptions {
-  head_padding_ms: number;
-  tail_padding_ms: number;
-  merge_gap_ms: number;
-  mode: ExportMode;
-  layout: ExportLayout;
-  output_dir: string;
-  output_dir_explicit: boolean;
-  export_name_rule: ExportNameRule;
-  dialogue_line_indexes: number[];
-}
-
-export interface ClipRange {
-  index: number;
-  start_us: number;
-  end_us: number;
-  cue_ids: string[];
-  head_padding_us: number;
-  tail_padding_us: number;
-}
-
-export interface ExportResult {
-  ranges: ClipRange[];
-  files: string[];
-  output_dir: string;
-  log: UserNotice[];
-}
-
 export interface Preferences {
   cache_dir: string;
-  default_export_dir: string;
   ffmpeg_path: string;
   ffprobe_path: string;
   auto_save_interval_minutes: number;

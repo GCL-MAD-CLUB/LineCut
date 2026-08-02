@@ -185,10 +185,10 @@ mod tests {
             editor: ProjectEditorState {
                 active_video_id: marker.to_string(),
                 active_track_id: String::new(),
-                subtitle_selections: HashMap::new(),
                 detached_video_ids: Vec::new(),
                 preview: ProjectPreviewState { use_proxy: false },
             },
+            subtitles: HashMap::new(),
             storyboards: HashMap::new(),
         }
     }

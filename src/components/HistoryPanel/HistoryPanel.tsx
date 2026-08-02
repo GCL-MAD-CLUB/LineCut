@@ -12,7 +12,6 @@ import {
   FileVideo,
   FolderOpen,
   Link2,
-  ListChecks,
   ListRestart,
   Pencil,
   RefreshCw,
@@ -68,8 +67,6 @@ function historyOperationIcon(category: ProjectHistoryCategory) {
       return <Captions />;
     case "storyboard":
       return <Clapperboard />;
-    case "selection":
-      return <ListChecks />;
     case "proxy":
       return <FileVideo />;
     default:

@@ -141,16 +141,9 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
     mediaItemsAdded,
     messagePublished,
     warningsAppended,
-    exportResultChanged,
   } = useProjectPort(
     ["mediaItems", "mediaBinReadOnly"],
-    [
-      "mediaProjectsAdded",
-      "mediaItemsAdded",
-      "messagePublished",
-      "warningsAppended",
-      "exportResultChanged",
-    ],
+    ["mediaProjectsAdded", "mediaItemsAdded", "messagePublished", "warningsAppended"],
   );
   const { isRunning: isImporting } = useTaskProgressStatus("media.import");
   const pendingItems = useMemo<PendingMediaItem[]>(
@@ -249,7 +242,6 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
     }
 
     const probeItems = pendingItems.filter((item) => item.kind !== "subtitle");
-    exportResultChanged(null);
     if (subtitlePaths.length > 0) {
       mediaItemsAdded(subtitlePaths.map(standaloneSubtitleItem));
       setSubtitlePaths([]);

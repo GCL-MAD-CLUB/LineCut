@@ -1,4 +1,10 @@
-import type { MediaBinFolder, MediaBinItem, Project, StoryboardState } from "../../types";
+import type {
+  MediaBinFolder,
+  MediaBinItem,
+  Project,
+  StoryboardState,
+  SubtitleState,
+} from "../../types";
 
 export const projectHistoryRowLimit = 40;
 
@@ -22,11 +28,8 @@ export type ProjectHistoryCategory =
   | "demux"
   | "subtitle"
   | "storyboard"
-  | "selection"
   | "proxy"
   | "default";
-
-export type SubtitleSelections = Record<string, Record<string, Set<string>>>;
 
 export interface ProjectFileState {
   projects: Record<string, Project>;
@@ -34,9 +37,9 @@ export interface ProjectFileState {
   mediaItems: MediaBinItem[];
   activeVideoId: string;
   activeTrackId: string;
-  subtitleSelections: SubtitleSelections;
   detachedVideoIds: Set<string>;
   useProxy: boolean;
+  subtitles: Record<string, SubtitleState>;
   storyboards: Record<string, StoryboardState>;
 }
 
@@ -70,13 +73,6 @@ interface StringSetSetOperation {
   value: string[];
 }
 
-interface SubtitleSelectionSetOperation {
-  type: "editor.subtitle-selection.set";
-  videoId: string;
-  trackId: string;
-  value: string[];
-}
-
 interface BooleanSetOperation {
   type: "editor.use-proxy.set";
   value: boolean;
@@ -88,14 +84,20 @@ interface StoryboardSetOperation {
   value: StoryboardState | null;
 }
 
+interface SubtitleSetOperation {
+  type: "subtitle.set";
+  trackContext: string;
+  value: SubtitleState | null;
+}
+
 export type ProjectFileOperation =
   | ProjectSetOperation
   | MediaFolderSetOperation
   | MediaItemSetOperation
   | StringSetOperation
   | StringSetSetOperation
-  | SubtitleSelectionSetOperation
   | BooleanSetOperation
+  | SubtitleSetOperation
   | StoryboardSetOperation;
 
 export interface ProjectFileEvent {
@@ -273,37 +275,6 @@ export function createProjectHistoryEntry(
     before.activeTrackId,
     after.activeTrackId,
   );
-  const selectionVideoIds = new Set([
-    ...Object.keys(before.subtitleSelections),
-    ...Object.keys(after.subtitleSelections),
-  ]);
-  for (const videoId of selectionVideoIds) {
-    const previousVideoSelections = before.subtitleSelections[videoId] ?? {};
-    const nextVideoSelections = after.subtitleSelections[videoId] ?? {};
-    const trackIds = new Set([
-      ...Object.keys(previousVideoSelections),
-      ...Object.keys(nextVideoSelections),
-    ]);
-    for (const trackId of trackIds) {
-      const previousSelection = previousVideoSelections[trackId] ?? new Set<string>();
-      const nextSelection = nextVideoSelections[trackId] ?? new Set<string>();
-      if (setsEqual(previousSelection, nextSelection)) {
-        continue;
-      }
-      eventOperations.push({
-        type: "editor.subtitle-selection.set",
-        videoId,
-        trackId,
-        value: [...nextSelection],
-      });
-      inverseOperations.push({
-        type: "editor.subtitle-selection.set",
-        videoId,
-        trackId,
-        value: [...previousSelection],
-      });
-    }
-  }
   addSetOperation(
     eventOperations,
     inverseOperations,
@@ -318,6 +289,27 @@ export function createProjectHistoryEntry(
     before.useProxy,
     after.useProxy,
   );
+  const trackContexts = new Set([
+    ...Object.keys(before.subtitles),
+    ...Object.keys(after.subtitles),
+  ]);
+  for (const trackContext of trackContexts) {
+    const previousSubtitle = before.subtitles[trackContext] ?? null;
+    const nextSubtitle = after.subtitles[trackContext] ?? null;
+    if (previousSubtitle === nextSubtitle) {
+      continue;
+    }
+    eventOperations.push({
+      type: "subtitle.set",
+      trackContext,
+      value: nextSubtitle,
+    });
+    inverseOperations.push({
+      type: "subtitle.set",
+      trackContext,
+      value: previousSubtitle,
+    });
+  }
   const videoContexts = new Set([
     ...Object.keys(before.storyboards),
     ...Object.keys(after.storyboards),
@@ -409,7 +401,7 @@ export function applyProjectFileEvent(
     projects,
     mediaFolders,
     mediaItems,
-    subtitleSelections: { ...current.subtitleSelections },
+    subtitles: { ...current.subtitles },
     storyboards: { ...current.storyboards },
   };
 
@@ -421,20 +413,13 @@ export function applyProjectFileEvent(
       case "editor.active-track.set":
         next.activeTrackId = operation.value;
         break;
-      case "editor.subtitle-selection.set": {
-        const videoSelections = { ...(next.subtitleSelections[operation.videoId] ?? {}) };
-        if (operation.value.length > 0) {
-          videoSelections[operation.trackId] = new Set(operation.value);
+      case "subtitle.set":
+        if (operation.value) {
+          next.subtitles[operation.trackContext] = operation.value;
         } else {
-          delete videoSelections[operation.trackId];
-        }
-        if (Object.keys(videoSelections).length > 0) {
-          next.subtitleSelections[operation.videoId] = videoSelections;
-        } else {
-          delete next.subtitleSelections[operation.videoId];
+          delete next.subtitles[operation.trackContext];
         }
         break;
-      }
       case "editor.detached-videos.set":
         next.detachedVideoIds = new Set(operation.value);
         break;

@@ -3,7 +3,6 @@ export type OperationKey =
   | "app.event"
   | "dragDrop.listen"
   | "dragDrop.region"
-  | "export.clips"
   | "feedback.audio"
   | "media.bindSubtitles"
   | "media.closeBackend"
@@ -123,8 +122,6 @@ const clientErrorDefinitions = {
   PANEL_REGISTRY_CONTEXT_MISSING: { category: "state", retryable: false },
   POPUP_MENU_VALUE_DUPLICATE: { category: "validation", retryable: false },
   POPUP_MENU_GROUP_CONTEXT_MISSING: { category: "state", retryable: false },
-  EXPORT_VIRTUAL_MEDIA_SOURCE_MISSING: { category: "resource", retryable: false },
-  EXPORT_BOUND_MEDIA_PATH_MISSING: { category: "resource", retryable: false },
 } as const satisfies Record<string, { category: ErrorCategory; retryable: boolean }>;
 
 export type ClientErrorCode = keyof typeof clientErrorDefinitions;
