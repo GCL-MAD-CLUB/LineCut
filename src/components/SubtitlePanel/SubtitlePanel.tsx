@@ -1030,9 +1030,7 @@ export function SubtitlePanel() {
   );
   const trackOptions = visibleTracks.map((track) => ({
     id: track.id,
-    label: `${track.source_type === "embedded" ? `流 ${track.stream_index}` : "外挂"} · ${
-      track.title || track.language || track.codec
-    } · ${track.cue_count} 条`,
+    label: `${track.title || track.language || track.codec} · ${track.cue_count} 条`,
   }));
   const activeTrackLabel =
     trackOptions.find((option) => option.id === activeTrack?.id)?.label ??
