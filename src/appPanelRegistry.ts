@@ -4,7 +4,6 @@ import {
   type DockLayoutNode,
   type PanelManagerInitialState,
 } from "./components/DockLayout";
-import { exportPanelDefinition, exportPanelType } from "./components/ExportPanel";
 import { historyPanelDefinition, historyPanelType } from "./components/HistoryPanel";
 import { mediaBinPanelDefinition, mediaBinPanelType } from "./components/MediaBin";
 import { sourcePanelDefinition, sourcePanelType } from "./components/SourceMonitor";
@@ -14,7 +13,6 @@ import { subtitlePanelDefinition, subtitlePanelType } from "./components/Subtitl
 export const appPanelRegistry = new PanelRegistry([
   sourcePanelDefinition,
   mediaBinPanelDefinition,
-  exportPanelDefinition,
   subtitlePanelDefinition,
   storyboardPanelDefinition,
   historyPanelDefinition,
@@ -24,7 +22,6 @@ export const initialAppPanelState: PanelManagerInitialState = {
   instances: [
     { id: "source", type: sourcePanelType, params: {} },
     { id: "media", type: mediaBinPanelType, params: { rootFolderId: null } },
-    { id: "export", type: exportPanelType, params: {} },
     { id: "subtitles", type: subtitlePanelType, params: {} },
     { id: "storyboard", type: storyboardPanelType, params: {} },
     { id: "history", type: historyPanelType, params: {} },
@@ -56,7 +53,7 @@ export const initialAppPanelState: PanelManagerInitialState = {
       leftTop: { tabs: ["source"], activePanelId: "source" },
       leftBottom: { tabs: ["media"], activePanelId: "media" },
       middle: { tabs: ["subtitles", "storyboard"], activePanelId: "subtitles" },
-      right: { tabs: ["export", "history"], activePanelId: "export" },
+      right: { tabs: ["history"], activePanelId: "history" },
     },
   },
   focusedPanelId: "source",
@@ -137,4 +134,34 @@ function ensureDefaultPanelAfterAnchor(
 
 export function withAppPanelDefaults(state: PanelManagerInitialState): PanelManagerInitialState {
   return ensureDefaultPanelAfterAnchor(state, "storyboard", "subtitles", "middle");
+}
+
+export function withoutUnavailableAppPanels(
+  state: PanelManagerInitialState,
+): PanelManagerInitialState {
+  const instances = state.instances.filter((instance) => appPanelRegistry.get(instance.type));
+  const instanceIds = new Set(instances.map((instance) => instance.id));
+  const areas = Object.fromEntries(
+    Object.entries(state.layout.areas).map(([areaId, area]) => {
+      const tabs = area.tabs.filter((panelId) => instanceIds.has(panelId));
+      return [
+        areaId,
+        {
+          tabs,
+          activePanelId:
+            area.activePanelId && tabs.includes(area.activePanelId)
+              ? area.activePanelId
+              : (tabs[0] ?? null),
+        },
+      ];
+    }),
+  );
+  return {
+    instances,
+    layout: { ...state.layout, areas },
+    focusedPanelId:
+      state.focusedPanelId && instanceIds.has(state.focusedPanelId)
+        ? state.focusedPanelId
+        : (instances[0]?.id ?? null),
+  };
 }

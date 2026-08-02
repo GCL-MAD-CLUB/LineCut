@@ -12,7 +12,7 @@ import {
 import { createPortal } from "react-dom";
 import { formatMonitorFrame, formatMonitorTime } from "../../time";
 import type { StoryboardShot } from "../../types";
-import { PopupMenu, PopupMenuItem, PopupMenuSeparator } from "../PopupMenu";
+import { isPopupMenuEventTarget, PopupMenu, PopupMenuItem, PopupMenuSeparator } from "../PopupMenu";
 import { StoryboardShotThumbnail } from "./StoryboardShotThumbnail";
 import {
   useStoryboardPanelState,
@@ -271,18 +271,23 @@ export function StoryboardIconView({
     if (!metadataMenu) {
       return;
     }
-    const close = () => setMetadataMenu(null);
+    const close = (event?: Event) => {
+      if (event && isPopupMenuEventTarget(event.target)) {
+        return;
+      }
+      setMetadataMenu(null);
+    };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         close();
       }
     };
-    window.addEventListener("pointerdown", close);
+    window.addEventListener("pointerdown", close, true);
     window.addEventListener("keydown", closeOnEscape);
     window.addEventListener("resize", close);
     window.addEventListener("blur", close);
     return () => {
-      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("pointerdown", close, true);
       window.removeEventListener("keydown", closeOnEscape);
       window.removeEventListener("resize", close);
       window.removeEventListener("blur", close);

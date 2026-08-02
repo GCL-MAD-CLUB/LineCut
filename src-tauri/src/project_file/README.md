@@ -20,7 +20,7 @@
 - `models/mod.rs` 是唯一的升级链编排器。导入任何版本都必须逐级得到当前模型，之后才允许转换为软件的 `ProjectWorkspace`。
 - 保存永远从当前 `ProjectWorkspace` 创建当前模型。旧项目正常保存后自然成为最新版。
 
-当前内容模型为 V3，新增了完整分镜状态。V1 与 V2 会依次迁移到 V3，旧项目保存后使用 V3。新增 V4 时，在 `models/v4.rs` 复制相同组织并实现 `ProjectModel`、`UpgradeFrom<v3::Model>`；在 `models/mod.rs` 中让所有旧版本逐级走到 V4，并把 `Current` 切为 V4。不得修改 `handle_v1.rs`、既有版本模型或既有迁移。
+当前内容模型为尚未发布的 V3，新增了完整分镜状态与字幕标注；字幕的临时勾选、搜索和过滤状态不写入项目文件。V3 发布前直接收敛其模型，发布后即冻结。V1 与 V2 会依次迁移到 V3，旧项目保存后使用 V3。新增 V4 时，在 `models/v4.rs` 复制相同组织并实现 `ProjectModel`、`UpgradeFrom<v3::Model>`；在 `models/mod.rs` 中让所有旧版本逐级走到 V4，并把 `Current` 切为 V4。不得修改 `handle_v1.rs`、既有已发布版本模型或既有迁移。
 
 ## 固定加密协议
 

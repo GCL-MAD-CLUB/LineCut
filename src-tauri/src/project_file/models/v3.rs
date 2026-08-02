@@ -19,6 +19,8 @@ struct Workspace {
     projects: Vec<Project>,
     media_bin: MediaBinState,
     editor: EditorState,
+    #[serde(default)]
+    subtitles: BTreeMap<String, SubtitleState>,
     storyboards: BTreeMap<String, StoryboardState>,
 }
 
@@ -180,9 +182,36 @@ struct PreviewState {
 struct EditorState {
     active_video_id: String,
     active_track_id: String,
-    subtitle_selections: BTreeMap<String, BTreeMap<String, Vec<String>>>,
+    #[serde(default, skip_serializing, rename = "subtitle_selections")]
+    _legacy_subtitle_selections: Option<Value>,
     detached_video_ids: Vec<String>,
     preview: PreviewState,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SubtitleColorLabel {
+    Red,
+    Yellow,
+    Green,
+    Blue,
+    Purple,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SubtitleAnnotation {
+    rating: u8,
+    retained: bool,
+    excluded: bool,
+    color_label: Option<SubtitleColorLabel>,
+    custom_label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SubtitleState {
+    cue_annotations: BTreeMap<String, SubtitleAnnotation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -282,6 +311,20 @@ impl UpgradeFrom<v2::Model> for Model {
                 "The V2 project workspace is not an object",
             )
         })?;
+        let editor_object = workspace_object
+            .get_mut("editor")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| {
+                app_error(
+                    ErrorCode::ProjectMigrationFailed,
+                    "The V2 project editor is not an object",
+                )
+            })?;
+        editor_object.remove("subtitle_selections");
+        workspace_object.insert(
+            "subtitles".to_string(),
+            Value::Object(serde_json::Map::new()),
+        );
         workspace_object.insert(
             "storyboards".to_string(),
             Value::Object(serde_json::Map::new()),

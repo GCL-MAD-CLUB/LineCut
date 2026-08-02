@@ -423,28 +423,6 @@ pub(crate) async fn run_output(
     }
 }
 
-pub(crate) async fn run_status(program: &str, args: &[String]) -> AppResult<()> {
-    let output = hidden_command(program)
-        .args(args)
-        .output()
-        .await
-        .map_err(|error| {
-            app_error(
-                ErrorCode::ExternalToolStartFailed,
-                format!("Failed to start external tool {program}: {error}"),
-            )
-        })?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(app_error(
-            ErrorCode::ExternalToolExecutionFailed,
-            format!("External tool {program} exited unsuccessfully; stderr={stderr}"),
-        ))
-    }
-}
-
 pub(crate) async fn run_status_with_ffmpeg_progress(
     program: &str,
     args: &[String],

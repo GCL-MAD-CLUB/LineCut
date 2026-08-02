@@ -49,6 +49,17 @@ struct StoryboardRuntimePaths {
     event_model: Option<PathBuf>,
 }
 
+struct StoryboardDetectionRequest<'a> {
+    app: &'a tauri::AppHandle,
+    state: &'a AppState,
+    task_id: &'a str,
+    project: &'a Project,
+    stream_index: i32,
+    preferences: &'a Preferences,
+    runtime: &'a StoryboardRuntimePaths,
+    cancel: Arc<AtomicBool>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct StoryboardShot {
     id: String,
@@ -91,16 +102,16 @@ pub(crate) async fn detect_storyboard_shots(
     init_storyboard_ort(&runtime)?;
     task.check_cancelled()?;
 
-    let result = run_storyboard_detection(
-        &app,
-        state.inner(),
-        &task_id,
-        &project,
+    let result = run_storyboard_detection(StoryboardDetectionRequest {
+        app: &app,
+        state: state.inner(),
+        task_id: &task_id,
+        project: &project,
         stream_index,
-        &preferences,
-        &runtime,
-        task.cancel_token(),
-    )
+        preferences: &preferences,
+        runtime: &runtime,
+        cancel: task.cancel_token(),
+    })
     .await?;
     task.check_cancelled()?;
     emit_ffmpeg_progress(&app, &task_id, 1.0);
@@ -258,14 +269,16 @@ fn storyboard_decision_config(model_path: Option<&PathBuf>) -> AppResult<Storybo
 }
 
 async fn run_storyboard_detection(
-    app: &tauri::AppHandle,
-    state: &AppState,
-    task_id: &str,
-    project: &Project,
-    stream_index: i32,
-    preferences: &Preferences,
-    runtime: &StoryboardRuntimePaths,
-    cancel: Arc<AtomicBool>,
+    StoryboardDetectionRequest {
+        app,
+        state,
+        task_id,
+        project,
+        stream_index,
+        preferences,
+        runtime,
+        cancel,
+    }: StoryboardDetectionRequest<'_>,
 ) -> AppResult<StoryboardDetectionResult> {
     let decision_config = storyboard_decision_config(runtime.event_model.as_ref())?;
     let frame_rate = storyboard_frame_rate(project);

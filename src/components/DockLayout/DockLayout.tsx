@@ -8,7 +8,7 @@ import {
   type WheelEvent,
 } from "react";
 import "./DockLayout.css";
-import { PopupMenu, PopupMenuItem, PopupMenuSeparator } from "../PopupMenu";
+import { isPopupMenuEventTarget, PopupMenu, PopupMenuItem, PopupMenuSeparator } from "../PopupMenu";
 import { dockAreaIds, normalizeArea, usePanelManagerState } from "./PanelManager";
 import { PanelActions, PanelHost, PanelMenuItems, PanelTitle } from "./PanelRegistry";
 import type { DockAreaId, DockDropPosition, DockLayoutNode, DockSplitNode } from "./types";
@@ -62,6 +62,7 @@ interface DockPanelMenu {
   panelId: string;
   x: number;
   y: number;
+  openedByContext: boolean;
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -281,11 +282,18 @@ export function DockLayout() {
       setOverflowMenu(null);
       setPanelMenu(null);
     };
-    window.addEventListener("pointerdown", closeMenus);
+    const closeOnPointerDown = (event: globalThis.PointerEvent) => {
+      if (panelMenu?.openedByContext && isPopupMenuEventTarget(event.target)) {
+        return;
+      }
+      closeMenus();
+    };
+    const usePointerCapture = panelMenu?.openedByContext === true;
+    window.addEventListener("pointerdown", closeOnPointerDown, usePointerCapture);
     window.addEventListener("keydown", closeMenus);
     window.addEventListener("resize", closeMenus);
     return () => {
-      window.removeEventListener("pointerdown", closeMenus);
+      window.removeEventListener("pointerdown", closeOnPointerDown, usePointerCapture);
       window.removeEventListener("keydown", closeMenus);
       window.removeEventListener("resize", closeMenus);
     };
@@ -648,16 +656,30 @@ export function DockLayout() {
     areaId: DockAreaId,
     panelId: string,
   ) {
+    if (event.button !== 0) {
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     const rect = event.currentTarget.getBoundingClientRect();
-    showPanelMenu(areaId, panelId, rect.left, rect.bottom);
+    showPanelMenu(areaId, panelId, rect.left, rect.bottom, true, false);
   }
 
-  function showPanelMenu(areaId: DockAreaId, panelId: string, x: number, y: number) {
+  function showPanelMenu(
+    areaId: DockAreaId,
+    panelId: string,
+    x: number,
+    y: number,
+    toggle = false,
+    openedByContext = false,
+  ) {
     setActivePanel(areaId, panelId);
     setOverflowMenu(null);
-    setPanelMenu({ areaId, panelId, x, y });
+    setPanelMenu((current) =>
+      toggle && current?.areaId === areaId && current.panelId === panelId
+        ? null
+        : { areaId, panelId, x, y, openedByContext },
+    );
   }
 
   function openPanelMenuFromTitleContext(
@@ -667,7 +689,7 @@ export function DockLayout() {
   ) {
     event.preventDefault();
     event.stopPropagation();
-    showPanelMenu(areaId, panelId, event.clientX, event.clientY);
+    showPanelMenu(areaId, panelId, event.clientX, event.clientY, false, true);
   }
 
   function renderDockWindow(areaId: DockAreaId) {

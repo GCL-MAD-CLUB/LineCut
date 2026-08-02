@@ -98,7 +98,8 @@ mod tests {
     use crate::{
         ProjectEditorState, ProjectMediaBinState, ProjectPreviewState, ProjectStoryboardAnnotation,
         ProjectStoryboardColorLabel, ProjectStoryboardShot, ProjectStoryboardStack,
-        ProjectStoryboardState, ProjectWorkspace,
+        ProjectStoryboardState, ProjectSubtitleAnnotation, ProjectSubtitleColorLabel,
+        ProjectSubtitleState, ProjectWorkspace,
     };
     use std::collections::HashMap;
 
@@ -112,10 +113,10 @@ mod tests {
             editor: ProjectEditorState {
                 active_video_id: String::new(),
                 active_track_id: String::new(),
-                subtitle_selections: HashMap::new(),
                 detached_video_ids: Vec::new(),
                 preview: ProjectPreviewState { use_proxy: false },
             },
+            subtitles: HashMap::new(),
             storyboards: HashMap::new(),
         }
     }
@@ -140,12 +141,28 @@ mod tests {
 
         assert_eq!(current_version(), 3);
         let workspace = into_runtime(decode_current(2, payload).unwrap()).unwrap();
+        assert!(workspace.subtitles.is_empty());
         assert!(workspace.storyboards.is_empty());
     }
 
     #[test]
-    fn v3_round_trip_preserves_storyboards() {
+    fn v3_round_trip_preserves_annotations_without_subtitle_selection() {
         let mut workspace = empty_workspace();
+        workspace.subtitles.insert(
+            "video:asset:fingerprint:track".to_string(),
+            ProjectSubtitleState {
+                cue_annotations: HashMap::from([(
+                    "cue-1".to_string(),
+                    ProjectSubtitleAnnotation {
+                        rating: 5,
+                        retained: true,
+                        excluded: false,
+                        color_label: Some(ProjectSubtitleColorLabel::Blue),
+                        custom_label: None,
+                    },
+                )]),
+            },
+        );
         workspace.storyboards.insert(
             "video:asset:fingerprint".to_string(),
             ProjectStoryboardState {
@@ -178,6 +195,13 @@ mod tests {
         let model = from_runtime(&workspace, 10, "0.2.0").unwrap();
         let encoded = model.encode().unwrap();
         let encoded_json: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+        assert!(encoded_json["workspace"]["editor"]
+            .get("subtitle_selections")
+            .is_none());
+        let encoded_subtitle =
+            &encoded_json["workspace"]["subtitles"]["video:asset:fingerprint:track"];
+        assert!(encoded_subtitle.get("selectedCueIds").is_none());
+        assert!(encoded_subtitle.get("query").is_none());
         let encoded_storyboard =
             &encoded_json["workspace"]["storyboards"]["video:asset:fingerprint"];
         assert!(encoded_storyboard.get("selectedShotIds").is_none());
@@ -187,6 +211,17 @@ mod tests {
             .get("expanded")
             .is_none());
         let restored = into_runtime(decode_current(3, &encoded).unwrap()).unwrap();
+        let subtitle = restored
+            .subtitles
+            .get("video:asset:fingerprint:track")
+            .unwrap();
+        let subtitle_annotation = subtitle.cue_annotations.get("cue-1").unwrap();
+        assert_eq!(subtitle_annotation.rating, 5);
+        assert!(subtitle_annotation.retained);
+        assert!(matches!(
+            subtitle_annotation.color_label,
+            Some(ProjectSubtitleColorLabel::Blue)
+        ));
         let storyboard = restored.storyboards.get("video:asset:fingerprint").unwrap();
 
         assert_eq!(storyboard.shots.len(), 1);
@@ -200,5 +235,21 @@ mod tests {
             annotation.color_label,
             Some(ProjectStoryboardColorLabel::Red)
         ));
+    }
+
+    #[test]
+    fn v3_reader_discards_unreleased_subtitle_selection_state() {
+        let model = from_runtime(&empty_workspace(), 10, "0.2.0").unwrap();
+        let mut encoded: serde_json::Value =
+            serde_json::from_slice(&model.encode().unwrap()).unwrap();
+        let workspace = encoded["workspace"].as_object_mut().unwrap();
+        workspace.remove("subtitles");
+        workspace["editor"]["subtitle_selections"] = serde_json::json!({
+            "video": { "track": ["cue-1"] }
+        });
+
+        let encoded = serde_json::to_vec(&encoded).unwrap();
+        let restored = into_runtime(decode_current(3, &encoded).unwrap()).unwrap();
+        assert!(restored.subtitles.is_empty());
     }
 }

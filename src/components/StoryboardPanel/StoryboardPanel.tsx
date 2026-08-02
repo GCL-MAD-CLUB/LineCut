@@ -44,7 +44,13 @@ import { isTauriRuntime } from "../../tauriRuntime";
 import { normalizeFrameRate } from "../../timeline";
 import type { StoryboardDetectionResult, StoryboardShot } from "../../types";
 import { usePanelManagerState } from "../DockLayout";
-import { PopupMenu, PopupMenuItem, PopupMenuSeparator, PopupMenuSubmenu } from "../PopupMenu";
+import {
+  isPopupMenuEventTarget,
+  PopupMenu,
+  PopupMenuItem,
+  PopupMenuSeparator,
+  PopupMenuSubmenu,
+} from "../PopupMenu";
 import "./StoryboardPanel.css";
 import {
   StoryboardColorLabelButtons,
@@ -1318,18 +1324,23 @@ export function StoryboardPanel() {
     if (!contextMenu) {
       return;
     }
-    const close = () => setContextMenu(null);
+    const close = (event?: Event) => {
+      if (event && isPopupMenuEventTarget(event.target)) {
+        return;
+      }
+      setContextMenu(null);
+    };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         close();
       }
     };
-    window.addEventListener("pointerdown", close);
+    window.addEventListener("pointerdown", close, true);
     window.addEventListener("keydown", closeOnEscape);
     window.addEventListener("resize", close);
     window.addEventListener("blur", close);
     return () => {
-      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("pointerdown", close, true);
       window.removeEventListener("keydown", closeOnEscape);
       window.removeEventListener("resize", close);
       window.removeEventListener("blur", close);
@@ -1340,18 +1351,23 @@ export function StoryboardPanel() {
     if (!annotationMenu) {
       return;
     }
-    const close = () => setAnnotationMenu(null);
+    const close = (event?: Event) => {
+      if (event && isPopupMenuEventTarget(event.target)) {
+        return;
+      }
+      setAnnotationMenu(null);
+    };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         close();
       }
     };
-    window.addEventListener("pointerdown", close);
+    window.addEventListener("pointerdown", close, true);
     window.addEventListener("keydown", closeOnEscape);
     window.addEventListener("resize", close);
     window.addEventListener("blur", close);
     return () => {
-      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("pointerdown", close, true);
       window.removeEventListener("keydown", closeOnEscape);
       window.removeEventListener("resize", close);
       window.removeEventListener("blur", close);
@@ -2663,6 +2679,7 @@ export function StoryboardPanel() {
                       className={`storyboard-footer-sort-trigger storyboard-footer-spray-trigger ${footerSprayMenu ? "active" : ""}`}
                       aria-haspopup="menu"
                       aria-expanded={Boolean(footerSprayMenu)}
+                      onPointerDown={(event) => event.stopPropagation()}
                       onClick={(event) => {
                         event.stopPropagation();
                         setContextMenu(null);
@@ -2828,6 +2845,7 @@ export function StoryboardPanel() {
                   aria-haspopup="menu"
                   aria-expanded={Boolean(footerSortMenu)}
                   disabled={displayShots.length === 0}
+                  onPointerDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
                     setContextMenu(null);

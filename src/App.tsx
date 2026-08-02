@@ -2,7 +2,12 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 import { Loader2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { appPanelRegistry, initialAppPanelState, withAppPanelDefaults } from "./appPanelRegistry";
+import {
+  appPanelRegistry,
+  initialAppPanelState,
+  withoutUnavailableAppPanels,
+  withAppPanelDefaults,
+} from "./appPanelRegistry";
 import { publishEvent, useBroadcastEvent } from "./runtime/events/react";
 import { useProjections } from "./runtime/state/StateHub";
 import {
@@ -20,7 +25,6 @@ import {
   type OpenPanelRequest,
   type PanelManagerInitialState,
 } from "./components/DockLayout";
-import { exportPanelType } from "./components/ExportPanel";
 import { HistoryPanelServicesProvider, historyPanelType } from "./components/HistoryPanel";
 import { ImportWorkspace } from "./components/ImportWorkspace";
 import { mediaBinPanelType, type MediaBinPanelParams } from "./components/MediaBin";
@@ -247,7 +251,6 @@ function AppContent() {
     projectDirty,
     message,
     warnings,
-    exportResult,
     projectHistory,
     projectOpened,
     projectCreated,
@@ -260,7 +263,6 @@ function AppContent() {
     messagePublished,
     warningsReplaced,
     warningsAppended,
-    exportResultChanged,
     projectHistoryJumped,
     projectHistoryFutureDiscarded,
     preferences,
@@ -275,7 +277,6 @@ function AppContent() {
       "preferences",
       "message",
       "warnings",
-      "exportResult",
       "mediaBinReadOnly",
       "projectHistory",
     ],
@@ -291,7 +292,6 @@ function AppContent() {
       "messagePublished",
       "warningsReplaced",
       "warningsAppended",
-      "exportResultChanged",
       "projectHistoryJumped",
       "projectHistoryFutureDiscarded",
     ],
@@ -728,7 +728,6 @@ function AppContent() {
 
     const subtitlePaths = paths.filter((path) => subtitleExtensions.has(fileExtension(path)));
     const probePaths = paths.filter((path) => !subtitleExtensions.has(fileExtension(path)));
-    exportResultChanged(null);
     if (subtitlePaths.length > 0) {
       const subtitleItems = subtitlePaths.map(standaloneSubtitleItem);
       mediaItemsAdded(subtitleItems);
@@ -1062,16 +1061,9 @@ function AppContent() {
         enabled: projectWindowItems.length > 0,
         items: projectWindowItems,
       },
-      export: {
-        id: "export",
-        label: "导出设置",
-        checked: Boolean(panelInstances.export),
-        enabled: true,
-        execute: () => showSingletonPanel("export", exportPanelType, {}, "right"),
-      },
       subtitles: {
         id: "subtitles",
-        label: "字幕轨",
+        label: "字幕",
         checked: Boolean(panelInstances.subtitles),
         enabled: true,
         execute: () => showSingletonPanel("subtitles", subtitlePanelType, {}, "middle"),
@@ -1130,19 +1122,13 @@ function AppContent() {
             )}
           </span>
           {warnings.length > 0 && <span>{warnings.length} 条导入提示</span>}
-          {exportResult && <span>导出结果已生成</span>}
         </footer>
 
-        {(warnings.length > 0 || exportResult) && (
+        {warnings.length > 0 && (
           <aside className="event-drawer">
             {warnings.map((warning) => (
               <div key={`${warning.code}:${warning.message}`} className="event warning">
                 {warning.message}
-              </div>
-            ))}
-            {exportResult?.log.map((item) => (
-              <div key={`${item.code}:${item.message}`} className="event">
-                {item.message}
               </div>
             ))}
           </aside>
@@ -1237,11 +1223,13 @@ function RestoredPanelManager() {
       if (!mounted) {
         return;
       }
+      const availableState =
+        outcome.status === "success" && outcome.value
+          ? withoutUnavailableAppPanels(outcome.value)
+          : null;
       const restoredState =
-        outcome.status === "success" &&
-        outcome.value &&
-        outcome.value.instances.every((instance) => appPanelRegistry.get(instance.type))
-          ? restoreAppPanelDefaults(outcome.value)
+        availableState && availableState.instances.length > 0
+          ? restoreAppPanelDefaults(availableState)
           : initialAppPanelState;
       setInitialState(restoredState);
     });
