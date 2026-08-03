@@ -15,6 +15,16 @@ export interface StoryboardShotStack extends StoryboardShotStackState {
 }
 
 export type StoryboardRatingComparator = "gte" | "lte" | "eq";
+export type StoryboardSearchScope = "any" | "title" | "keywords";
+export type StoryboardSearchRule =
+  | "contains"
+  | "containsAll"
+  | "containsWords"
+  | "doesNotContain"
+  | "startsWith"
+  | "endsWith"
+  | "isEmpty"
+  | "isNotEmpty";
 export type StoryboardShotFlag = "retained" | "none" | "excluded";
 export type StoryboardShotEditFilter = "edited" | "unedited";
 export type StoryboardShotVisualLabel = StoryboardShotColorLabel | "custom";
@@ -33,6 +43,8 @@ export type StoryboardIconMetadataMode =
 
 interface StoryboardVideoSessionState {
   query: string;
+  searchScope: StoryboardSearchScope;
+  searchRule: StoryboardSearchRule;
   showOnlySelected: boolean;
   minimumRating: number;
   ratingComparator: StoryboardRatingComparator;
@@ -54,6 +66,8 @@ interface StoryboardPanelUiState extends StoryboardVideoSessionState {
   gridSize: number;
   syncVideoContext: (videoContext: string) => void;
   setQuery: (query: string) => void;
+  setSearchScope: (scope: StoryboardSearchScope) => void;
+  setSearchRule: (rule: StoryboardSearchRule) => void;
   setShowOnlySelected: (value: boolean) => void;
   setMinimumRating: (rating: number) => void;
   setRatingComparator: (comparator: StoryboardRatingComparator) => void;
@@ -116,6 +130,8 @@ interface StoryboardPanelState
 function defaultVideoSessionState(): StoryboardVideoSessionState {
   return {
     query: "",
+    searchScope: "any",
+    searchRule: "contains",
     showOnlySelected: false,
     minimumRating: 0,
     ratingComparator: "gte",
@@ -131,6 +147,8 @@ function defaultVideoSessionState(): StoryboardVideoSessionState {
 function videoSessionFromState(state: StoryboardPanelUiState): StoryboardVideoSessionState {
   return {
     query: state.query,
+    searchScope: state.searchScope,
+    searchRule: state.searchRule,
     showOnlySelected: state.showOnlySelected,
     minimumRating: state.minimumRating,
     ratingComparator: state.ratingComparator,
@@ -255,6 +273,8 @@ const useStoryboardPanelUiState = createPanelState<StoryboardPanelUiState>(() =>
       };
     }),
   setQuery: (query) => set({ query }),
+  setSearchScope: (searchScope) => set({ searchScope }),
+  setSearchRule: (searchRule) => set({ searchRule }),
   setShowOnlySelected: (showOnlySelected) => set({ showOnlySelected }),
   setMinimumRating: (minimumRating) => set({ minimumRating: normalizedRating(minimumRating) }),
   setRatingComparator: (ratingComparator) => set({ ratingComparator }),
