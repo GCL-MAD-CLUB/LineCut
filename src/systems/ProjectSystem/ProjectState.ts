@@ -1631,6 +1631,7 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
             shots: [],
             shotStacks: [],
             keywordNodes: [],
+            recentKeywordIds: [],
             shotAnnotations: {},
           };
           const storyboard = recipe(currentStoryboard);

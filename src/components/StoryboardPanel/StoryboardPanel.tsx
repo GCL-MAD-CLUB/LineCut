@@ -59,6 +59,7 @@ import {
   storyboardShotColorLabels,
 } from "./StoryboardColorLabelButtons";
 import { StoryboardIconView } from "./StoryboardIconView";
+import { StoryboardKeywordPanel } from "./StoryboardKeywordPanel";
 import {
   formatParsedStoryboardKeywords,
   parseStoryboardKeywordInput,
@@ -1160,6 +1161,7 @@ export function StoryboardPanel() {
   const { isRunning: isDetecting } = useTaskProgressStatus("storyboard.detect");
   const playback = usePlaybackStatus();
   const panelRef = useRef<HTMLElement | null>(null);
+  const contentLayoutRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const tableHeaderRef = useRef<HTMLDivElement | null>(null);
   const scrollAnimationRef = useRef<number | null>(null);
@@ -1167,6 +1169,7 @@ export function StoryboardPanel() {
   const selectionFocusRef = useRef<string | null>(null);
   const marqueeCleanupRef = useRef<(() => void) | null>(null);
   const sprayGestureCleanupRef = useRef<(() => void) | null>(null);
+  const keywordResizeCleanupRef = useRef<(() => void) | null>(null);
   const hadShotsRef = useRef(shots.length > 0);
   const [shotSort, setShotSort] = useState<StoryboardSort>(defaultStoryboardSort);
   const [gridShotSort, setGridShotSort] = useState<StoryboardSort>(defaultStoryboardGridSort);
@@ -1185,6 +1188,8 @@ export function StoryboardPanel() {
   const [sprayCustomLabel, setSprayCustomLabel] = useState("");
   const [sprayFlag, setSprayFlag] = useState<StoryboardShotFlag>("none");
   const [sprayRating, setSprayRating] = useState(0);
+  const [storyboardViewRatio, setStoryboardViewRatio] = useState(2 / 3);
+  const [keywordPanelOpen, setKeywordPanelOpen] = useState(true);
   const [footerAreaVisibility, setFooterAreaVisibility] = useState(
     defaultStoryboardFooterAreaVisibility,
   );
@@ -1423,6 +1428,7 @@ export function StoryboardPanel() {
     [selectedShotIds, shotStacksByShotId],
   );
   const contextMenuShotIds = Array.from(selectedAnnotationShotIds);
+  const keywordPanelShotIds = contextMenuShotIds;
   const contextMenuRatings = contextMenuShotIds.map(
     (shotId) => shotAnnotations[shotId]?.rating ?? 0,
   );
@@ -1863,7 +1869,9 @@ export function StoryboardPanel() {
       }
       marqueeCleanupRef.current?.();
       sprayGestureCleanupRef.current?.();
+      keywordResizeCleanupRef.current?.();
       document.body.classList.remove("is-resizing-storyboard-column");
+      document.body.classList.remove("is-resizing-storyboard-keyword-panel");
     },
     [],
   );
@@ -2278,6 +2286,54 @@ export function StoryboardPanel() {
       />,
       document.body,
     );
+  }
+
+  function startKeywordPanelResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) {
+      return;
+    }
+    const layout = contentLayoutRef.current;
+    if (!layout) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    keywordResizeCleanupRef.current?.();
+    document.body.classList.add("is-resizing-storyboard-keyword-panel");
+    const bounds = layout.getBoundingClientRect();
+    const layoutStyle = getComputedStyle(layout);
+    const paddingLeft = Number.parseFloat(layoutStyle.paddingLeft) || 0;
+    const paddingRight = Number.parseFloat(layoutStyle.paddingRight) || 0;
+    const resizeHandleWidth = 4;
+    const availableWidth = Math.max(
+      1,
+      bounds.width - paddingLeft - paddingRight - resizeHandleWidth,
+    );
+    const update = (clientX: number) => {
+      const ratio = (clientX - bounds.left - paddingLeft - resizeHandleWidth / 2) / availableWidth;
+      setStoryboardViewRatio(Math.min(0.8, Math.max(0.35, ratio)));
+    };
+    const cleanup = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      document.body.classList.remove("is-resizing-storyboard-keyword-panel");
+      if (keywordResizeCleanupRef.current === cleanup) {
+        keywordResizeCleanupRef.current = null;
+      }
+    };
+    const onMove = (moveEvent: globalThis.PointerEvent) => {
+      moveEvent.preventDefault();
+      update(moveEvent.clientX);
+    };
+    const onUp = (upEvent: globalThis.PointerEvent) => {
+      update(upEvent.clientX);
+      cleanup();
+    };
+    keywordResizeCleanupRef.current = cleanup;
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
   }
 
   function openAnnotationMenu(
@@ -2843,7 +2899,15 @@ export function StoryboardPanel() {
       </div>
 
       <div
-        className={`storyboard-content ${sprayActive ? "is-spraying" : ""}`}
+        ref={contentLayoutRef}
+        className={`storyboard-content ${sprayActive ? "is-spraying" : ""} ${
+          keywordPanelOpen ? "" : "is-keyword-panel-closed"
+        }`.trim()}
+        style={{
+          gridTemplateColumns: keywordPanelOpen
+            ? `minmax(0, ${storyboardViewRatio}fr) 4px minmax(0, ${1 - storyboardViewRatio}fr)`
+            : "minmax(0, 1fr) 0 0",
+        }}
         onPointerDownCapture={startSprayGesture}
         onClickCapture={suppressSprayClick}
         onDoubleClickCapture={suppressSprayClick}
@@ -2853,52 +2917,75 @@ export function StoryboardPanel() {
           }
         }}
       >
-        {viewMode === "list" ? (
-          <StoryboardListView
-            shots={sortedShots}
-            currentShotIndex={currentShotIndex}
-            tableStyle={tableStyle}
-            headerContent={storyboardTableHeaders.map(renderTableHeader)}
-            rowVirtualizer={rowVirtualizer}
-            virtualRows={virtualRows}
-            thumbnailPriorityCenterIndex={thumbnailPriorityCenterIndex}
-            assetId={thumbnailAssetId}
-            fingerprint={thumbnailFingerprint}
-            videoPath={thumbnailVideoPath}
-            previewVideoPath={thumbnailPreviewVideoPath}
-            frameRate={frameRate}
-            resetKey={videoContext}
-            headerRef={tableHeaderRef}
-            scrollRef={listRef}
-            onScroll={syncTableHeaderScroll}
-            onPointerDown={startMarqueeSelection}
-            onContextMenu={openContextMenu}
-            onSelectShot={handleShotSelection}
-            onDoubleClickShot={handleShotDoubleClick}
-            onOpenAnnotationMenu={openAnnotationMenu}
-            shotTitle={(shot) => storyboardShotTitle(shot, shotCount, shotAnnotations[shot.id])}
-            shotLabel={(shot) => storyboardShotLabel(shotAnnotations[shot.id])}
-          />
-        ) : (
-          <StoryboardIconView
-            shots={sortedShots}
-            currentShotId={currentShotId}
-            assetId={thumbnailAssetId}
-            fingerprint={thumbnailFingerprint}
-            videoPath={thumbnailVideoPath}
-            previewVideoPath={thumbnailPreviewVideoPath}
-            frameRate={frameRate}
-            gridCardWidth={gridCardWidth}
-            scrollRef={listRef}
-            onPointerDown={startMarqueeSelection}
-            onContextMenu={openContextMenu}
-            onSelectShot={handleShotSelection}
-            onDoubleClickShot={handleShotDoubleClick}
-            onOpenAnnotationMenu={openAnnotationMenu}
-            shotTitle={(shot) => storyboardShotTitle(shot, shotCount, shotAnnotations[shot.id])}
-            shotLabel={(shot) => storyboardShotLabel(shotAnnotations[shot.id])}
+        <div className="storyboard-primary-view">
+          {viewMode === "list" ? (
+            <StoryboardListView
+              shots={sortedShots}
+              currentShotIndex={currentShotIndex}
+              tableStyle={tableStyle}
+              headerContent={storyboardTableHeaders.map(renderTableHeader)}
+              rowVirtualizer={rowVirtualizer}
+              virtualRows={virtualRows}
+              thumbnailPriorityCenterIndex={thumbnailPriorityCenterIndex}
+              assetId={thumbnailAssetId}
+              fingerprint={thumbnailFingerprint}
+              videoPath={thumbnailVideoPath}
+              previewVideoPath={thumbnailPreviewVideoPath}
+              frameRate={frameRate}
+              resetKey={videoContext}
+              headerRef={tableHeaderRef}
+              scrollRef={listRef}
+              onScroll={syncTableHeaderScroll}
+              onPointerDown={startMarqueeSelection}
+              onContextMenu={openContextMenu}
+              onSelectShot={handleShotSelection}
+              onDoubleClickShot={handleShotDoubleClick}
+              onOpenAnnotationMenu={openAnnotationMenu}
+              shotTitle={(shot) => storyboardShotTitle(shot, shotCount, shotAnnotations[shot.id])}
+              shotLabel={(shot) => storyboardShotLabel(shotAnnotations[shot.id])}
+            />
+          ) : (
+            <StoryboardIconView
+              shots={sortedShots}
+              currentShotId={currentShotId}
+              assetId={thumbnailAssetId}
+              fingerprint={thumbnailFingerprint}
+              videoPath={thumbnailVideoPath}
+              previewVideoPath={thumbnailPreviewVideoPath}
+              frameRate={frameRate}
+              gridCardWidth={gridCardWidth}
+              scrollRef={listRef}
+              onPointerDown={startMarqueeSelection}
+              onContextMenu={openContextMenu}
+              onSelectShot={handleShotSelection}
+              onDoubleClickShot={handleShotDoubleClick}
+              onOpenAnnotationMenu={openAnnotationMenu}
+              shotTitle={(shot) => storyboardShotTitle(shot, shotCount, shotAnnotations[shot.id])}
+              shotLabel={(shot) => storyboardShotLabel(shotAnnotations[shot.id])}
+            />
+          )}
+        </div>
+        {keywordPanelOpen && (
+          <div
+            className="storyboard-keyword-resize-handle"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="调整分镜表格和关键字面板宽度"
+            onPointerDown={startKeywordPanelResize}
           />
         )}
+        <StoryboardKeywordPanel shotIds={keywordPanelShotIds} resetKey={videoContext} />
+        <div className={`storyboard-keyword-collapse-rail ${keywordPanelOpen ? "is-open" : ""}`}>
+          <button
+            type="button"
+            onClick={() => setKeywordPanelOpen((current) => !current)}
+            title={keywordPanelOpen ? "关闭关键字面板" : "展开关键字面板"}
+            aria-label={keywordPanelOpen ? "关闭关键字面板" : "展开关键字面板"}
+            aria-expanded={keywordPanelOpen}
+          >
+            <span aria-hidden="true" />
+          </button>
+        </div>
       </div>
 
       {renderMarqueeOverlay()}

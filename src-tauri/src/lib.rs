@@ -421,6 +421,7 @@ struct ProjectStoryboardState {
     shots: Vec<ProjectStoryboardShot>,
     shot_stacks: Vec<ProjectStoryboardStack>,
     keyword_nodes: Vec<ProjectStoryboardKeywordNode>,
+    recent_keyword_ids: Vec<String>,
     shot_annotations: HashMap<String, ProjectStoryboardAnnotation>,
 }
 

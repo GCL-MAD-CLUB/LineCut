@@ -12,6 +12,7 @@ import {
   normalizeStoryboardKeywordIds,
   parseStoryboardKeywordInput,
   resolveStoryboardKeywordPaths,
+  storyboardKeywordDescendantIds,
 } from "./storyboardKeywords";
 
 export { formatStoryboardKeywords } from "./storyboardKeywords";
@@ -104,6 +105,12 @@ interface StoryboardPanelState
   appendShotKeywords: (
     shotIds: Iterable<string>,
     keywords: string | Iterable<string>,
+    historyGroupId?: string,
+  ) => void;
+  setShotKeywordActivation: (
+    shotIds: Iterable<string>,
+    keywordId: string,
+    active: boolean,
     historyGroupId?: string,
   ) => void;
   setShotCustomLabel: (shotId: string, customLabel: string) => void;
@@ -225,6 +232,24 @@ function keywordCollectionsEqual(
   return leftKeywords.size === right.length && right.every((keyword) => leftKeywords.has(keyword));
 }
 
+function orderedKeywordIdsEqual(left: readonly string[], right: readonly string[]) {
+  return (
+    left.length === right.length && left.every((keywordId, index) => keywordId === right[index])
+  );
+}
+
+function recentKeywordIdsAfterUse(currentIds: readonly string[], usedIds: readonly string[]) {
+  const recentIds = Array.from(new Set(currentIds));
+  for (const keywordId of usedIds) {
+    const existingIndex = recentIds.indexOf(keywordId);
+    if (existingIndex >= 0) {
+      recentIds.splice(existingIndex, 1);
+    }
+    recentIds.unshift(keywordId);
+  }
+  return recentIds;
+}
+
 function annotationWithDefaults(
   current: StoryboardShotAnnotation | undefined,
   update: Partial<StoryboardShotAnnotation>,
@@ -312,6 +337,7 @@ export function useStoryboardPanelState<Selection>(
     shots: [],
     shotStacks: [],
     keywordNodes: [],
+    recentKeywordIds: [],
     shotAnnotations: {},
   };
   const shotStacks = storyboard.shotStacks.map((stack) => ({
@@ -399,8 +425,14 @@ export function useStoryboardPanelState<Selection>(
       "设置分镜关键字",
       (current) => {
         const resolved = resolveStoryboardKeywordPaths(current.keywordNodes, parsed.paths);
+        const recentKeywordIds = recentKeywordIdsAfterUse(
+          current.recentKeywordIds,
+          resolved.keywordIds,
+        );
         const shotAnnotations = { ...current.shotAnnotations };
-        let changed = resolved.keywordNodes.length !== current.keywordNodes.length;
+        let changed =
+          resolved.keywordNodes.length !== current.keywordNodes.length ||
+          !orderedKeywordIdsEqual(current.recentKeywordIds, recentKeywordIds);
         for (const shotId of uniqueShotIds) {
           const previous = shotAnnotations[shotId];
           if (keywordCollectionsEqual(previous?.keywordIds, resolved.keywordIds)) {
@@ -412,7 +444,12 @@ export function useStoryboardPanelState<Selection>(
           changed = true;
         }
         return changed
-          ? { ...current, keywordNodes: resolved.keywordNodes, shotAnnotations }
+          ? {
+              ...current,
+              keywordNodes: resolved.keywordNodes,
+              recentKeywordIds,
+              shotAnnotations,
+            }
           : current;
       },
       uiState.videoContext,
@@ -434,8 +471,14 @@ export function useStoryboardPanelState<Selection>(
       "添加分镜关键字",
       (current) => {
         const resolved = resolveStoryboardKeywordPaths(current.keywordNodes, parsed.paths);
+        const recentKeywordIds = recentKeywordIdsAfterUse(
+          current.recentKeywordIds,
+          resolved.keywordIds,
+        );
         const shotAnnotations = { ...current.shotAnnotations };
-        let changed = resolved.keywordNodes.length !== current.keywordNodes.length;
+        let changed =
+          resolved.keywordNodes.length !== current.keywordNodes.length ||
+          !orderedKeywordIdsEqual(current.recentKeywordIds, recentKeywordIds);
         for (const shotId of uniqueShotIds) {
           const previous = shotAnnotations[shotId];
           const keywordIds = normalizeStoryboardKeywordIds([
@@ -449,7 +492,12 @@ export function useStoryboardPanelState<Selection>(
           changed = true;
         }
         return changed
-          ? { ...current, keywordNodes: resolved.keywordNodes, shotAnnotations }
+          ? {
+              ...current,
+              keywordNodes: resolved.keywordNodes,
+              recentKeywordIds,
+              shotAnnotations,
+            }
           : current;
       },
       uiState.videoContext,
@@ -477,6 +525,45 @@ export function useStoryboardPanelState<Selection>(
       }),
     setShotKeywords,
     appendShotKeywords,
+    setShotKeywordActivation: (shotIds, keywordId, active, historyGroupId) => {
+      const uniqueShotIds = Array.from(new Set(shotIds));
+      if (
+        uniqueShotIds.length === 0 ||
+        !storyboard.keywordNodes.some((node) => node.id === keywordId)
+      ) {
+        return;
+      }
+      commitStoryboard(
+        active ? "添加分镜关键字" : "移除分镜关键字",
+        (current) => {
+          const removableIds = active
+            ? null
+            : storyboardKeywordDescendantIds(keywordId, current.keywordNodes);
+          const recentKeywordIds = active
+            ? recentKeywordIdsAfterUse(current.recentKeywordIds, [keywordId])
+            : current.recentKeywordIds;
+          const shotAnnotations = { ...current.shotAnnotations };
+          let changed =
+            active && !orderedKeywordIdsEqual(current.recentKeywordIds, recentKeywordIds);
+          for (const shotId of uniqueShotIds) {
+            const previous = shotAnnotations[shotId];
+            const keywordIds = active
+              ? normalizeStoryboardKeywordIds([...(previous?.keywordIds ?? []), keywordId])
+              : normalizeStoryboardKeywordIds(previous?.keywordIds ?? []).filter(
+                  (candidateId) => !removableIds!.has(candidateId),
+                );
+            if (keywordCollectionsEqual(previous?.keywordIds, keywordIds)) {
+              continue;
+            }
+            shotAnnotations[shotId] = annotationWithDefaults(previous, { keywordIds });
+            changed = true;
+          }
+          return changed ? { ...current, recentKeywordIds, shotAnnotations } : current;
+        },
+        uiState.videoContext,
+        historyGroupId,
+      );
+    },
     setShotCustomLabel: (shotId, customLabel) => setShotCustomLabels([shotId], customLabel),
     setShotCustomLabels,
     setShotRating: (shotId, rating) => setShotRatings([shotId], rating),

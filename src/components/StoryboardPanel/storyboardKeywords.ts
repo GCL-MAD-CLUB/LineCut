@@ -1,4 +1,5 @@
-import type { StoryboardKeywordNode } from "../../types";
+import { createElement, type ReactNode } from "react";
+import type { StoryboardKeywordNode, StoryboardShotAnnotation } from "../../types";
 
 export interface StoryboardKeywordPath {
   names: string[];
@@ -142,10 +143,11 @@ export function normalizeStoryboardKeywordIds(keywordIds: Iterable<string>) {
   return Array.from(new Set(keywordIds));
 }
 
-function keywordPathForId(
+export function storyboardKeywordPathForId(
   keywordId: string,
-  nodesById: ReadonlyMap<string, StoryboardKeywordNode>,
+  keywordNodes: readonly StoryboardKeywordNode[],
 ) {
+  const nodesById = new Map(keywordNodes.map((node) => [node.id, node]));
   const names: string[] = [];
   const visited = new Set<string>();
   let currentId: string | null = keywordId;
@@ -161,10 +163,11 @@ function keywordPathForId(
   return currentId ? null : names;
 }
 
-function visibleKeywordIds(
+export function visibleStoryboardKeywordIds(
   keywordIds: Iterable<string> | null | undefined,
-  nodesById: ReadonlyMap<string, StoryboardKeywordNode>,
+  keywordNodes: readonly StoryboardKeywordNode[],
 ) {
+  const nodesById = new Map(keywordNodes.map((node) => [node.id, node]));
   const activated = new Set(normalizeStoryboardKeywordIds(keywordIds ?? []));
   const hiddenAncestors = new Set<string>();
   for (const keywordId of activated) {
@@ -181,13 +184,169 @@ function visibleKeywordIds(
   return Array.from(activated).filter((keywordId) => !hiddenAncestors.has(keywordId));
 }
 
-export function formatStoryboardKeywords(
+export function storyboardEffectiveKeywordIds(
   keywordIds: Iterable<string> | null | undefined,
   keywordNodes: readonly StoryboardKeywordNode[],
 ) {
   const nodesById = new Map(keywordNodes.map((node) => [node.id, node]));
-  return visibleKeywordIds(keywordIds, nodesById)
-    .map((keywordId) => keywordPathForId(keywordId, nodesById)?.join("<") ?? "")
+  const effectiveIds = new Set<string>();
+  for (const keywordId of normalizeStoryboardKeywordIds(keywordIds ?? [])) {
+    const visited = new Set<string>();
+    let currentId: string | null = keywordId;
+    while (currentId && !visited.has(currentId)) {
+      visited.add(currentId);
+      const node = nodesById.get(currentId);
+      if (!node) {
+        break;
+      }
+      effectiveIds.add(currentId);
+      currentId = node.parentId ?? null;
+    }
+  }
+  return effectiveIds;
+}
+
+export function storyboardKeywordDescendantIds(
+  keywordId: string,
+  keywordNodes: readonly StoryboardKeywordNode[],
+) {
+  const childIdsByParent = new Map<string, string[]>();
+  for (const node of keywordNodes) {
+    if (!node.parentId) {
+      continue;
+    }
+    const childIds = childIdsByParent.get(node.parentId) ?? [];
+    childIds.push(node.id);
+    childIdsByParent.set(node.parentId, childIds);
+  }
+  const descendantIds = new Set<string>([keywordId]);
+  const pendingIds = [keywordId];
+  while (pendingIds.length > 0) {
+    const currentId = pendingIds.pop()!;
+    for (const childId of childIdsByParent.get(currentId) ?? []) {
+      if (!descendantIds.has(childId)) {
+        descendantIds.add(childId);
+        pendingIds.push(childId);
+      }
+    }
+  }
+  return descendantIds;
+}
+
+export function storyboardKeywordLabel(
+  keywordId: string,
+  keywordNodes: readonly StoryboardKeywordNode[],
+) {
+  return storyboardKeywordPathForId(keywordId, keywordNodes)?.join("<") ?? "";
+}
+
+export function sanitizeStoryboardKeywordInput(value: string) {
+  const values = splitKeywordValues(value);
+  const sanitized: string[] = [];
+  for (const raw of values) {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const separators = keywordSeparators.filter((separator) => trimmed.includes(separator));
+    if (separators.length === 0) {
+      const name = trimmed.replace(/[<>|]/g, "").trim();
+      if (name) {
+        sanitized.push(name);
+      }
+      continue;
+    }
+    const separator = separators[0];
+    const names = trimmed
+      .split(separator)
+      .map((name) => name.replace(/[<>|]/g, "").trim())
+      .filter(Boolean);
+    if (names.length > 0) {
+      sanitized.push(names.join(separator));
+    }
+  }
+  return sanitized.join(", ");
+}
+
+export function renderStoryboardKeywordLabel(label: string): ReactNode {
+  if (!label.includes("<")) {
+    return label;
+  }
+  const parts = label.split("<");
+  return parts.map((part, index) =>
+    createElement(
+      "span",
+      { key: index },
+      part,
+      index < parts.length - 1
+        ? createElement("span", { key: "sep", className: "storyboard-keyword-separator" }, " < ")
+        : null,
+    ),
+  );
+}
+
+export function storyboardKeywordUsageCounts(
+  keywordNodes: readonly StoryboardKeywordNode[],
+  shotAnnotations: Readonly<Record<string, StoryboardShotAnnotation>>,
+  shotIds: Iterable<string> = Object.keys(shotAnnotations),
+) {
+  const usageCounts = new Map<string, number>();
+  for (const shotId of shotIds) {
+    const annotation = shotAnnotations[shotId];
+    if (!annotation) {
+      continue;
+    }
+    for (const keywordId of storyboardEffectiveKeywordIds(annotation.keywordIds, keywordNodes)) {
+      usageCounts.set(keywordId, (usageCounts.get(keywordId) ?? 0) + 1);
+    }
+  }
+  return usageCounts;
+}
+
+export function suggestedStoryboardKeywordIds(
+  recentKeywordIds: readonly string[],
+  keywordNodes: readonly StoryboardKeywordNode[],
+  shotAnnotations: Readonly<Record<string, StoryboardShotAnnotation>>,
+  shotIds: Iterable<string> = Object.keys(shotAnnotations),
+  limit = 18,
+) {
+  const validIds = new Set(keywordNodes.map((node) => node.id));
+  const candidates = Array.from(new Set(recentKeywordIds))
+    .filter((keywordId) => validIds.has(keywordId))
+    .slice(0, limit);
+  const recentRank = new Map(candidates.map((keywordId, index) => [keywordId, index + 1]));
+  const usageCounts = storyboardKeywordUsageCounts(keywordNodes, shotAnnotations, shotIds);
+  const byUsage = [...candidates].sort(
+    (left, right) =>
+      (usageCounts.get(right) ?? 0) - (usageCounts.get(left) ?? 0) ||
+      candidates.indexOf(left) - candidates.indexOf(right),
+  );
+  const usageRank = new Map<string, number>();
+  let previousCount: number | null = null;
+  for (const [index, keywordId] of byUsage.entries()) {
+    const count = usageCounts.get(keywordId) ?? 0;
+    if (count !== previousCount) {
+      previousCount = count;
+      usageRank.set(keywordId, index + 1);
+    } else {
+      usageRank.set(keywordId, usageRank.get(byUsage[index - 1])!);
+    }
+  }
+  return [...candidates].sort((left, right) => {
+    const leftRecentRank = recentRank.get(left)!;
+    const rightRecentRank = recentRank.get(right)!;
+    const leftAverageRank = ((usageRank.get(left) ?? limit) + leftRecentRank) / 2;
+    const rightAverageRank = ((usageRank.get(right) ?? limit) + rightRecentRank) / 2;
+    return leftAverageRank - rightAverageRank || leftRecentRank - rightRecentRank;
+  });
+}
+
+export function formatStoryboardKeywords(
+  keywordIds: Iterable<string> | null | undefined,
+  keywordNodes: readonly StoryboardKeywordNode[],
+) {
+  return visibleStoryboardKeywordIds(keywordIds, keywordNodes)
+    .map((keywordId) => storyboardKeywordLabel(keywordId, keywordNodes))
     .filter(Boolean)
     .sort()
     .join(", ");
@@ -197,10 +356,9 @@ export function storyboardKeywordSearchValues(
   keywordIds: Iterable<string> | null | undefined,
   keywordNodes: readonly StoryboardKeywordNode[],
 ) {
-  const nodesById = new Map(keywordNodes.map((node) => [node.id, node]));
   const values = new Set<string>();
   for (const keywordId of normalizeStoryboardKeywordIds(keywordIds ?? [])) {
-    const path = keywordPathForId(keywordId, nodesById);
+    const path = storyboardKeywordPathForId(keywordId, keywordNodes);
     if (!path) {
       continue;
     }

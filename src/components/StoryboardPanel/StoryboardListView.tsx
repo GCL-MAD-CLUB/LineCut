@@ -15,7 +15,7 @@ import { formatMonitorFrame, formatMonitorTime } from "../../time";
 import type { StoryboardShot } from "../../types";
 import { storyboardShotColorLabels } from "./StoryboardColorLabelButtons";
 import { StoryboardShotThumbnail } from "./StoryboardShotThumbnail";
-import { parseStoryboardKeywordInput } from "./storyboardKeywords";
+import { parseStoryboardKeywordInput, renderStoryboardKeywordLabel } from "./storyboardKeywords";
 import {
   formatStoryboardKeywords,
   useStoryboardPanelState,
@@ -318,7 +318,11 @@ export function StoryboardListView({
           beginCellEdit(shot, columnId);
         }}
       >
-        {columnId !== "title" && !value ? "无" : value}
+        {columnId !== "title" && !value
+          ? "无"
+          : columnId === "keywords"
+            ? renderStoryboardKeywordLabel(value)
+            : value}
       </span>
     );
   }

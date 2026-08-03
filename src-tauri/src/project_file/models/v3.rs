@@ -269,6 +269,7 @@ struct StoryboardState {
     shots: Vec<StoryboardShot>,
     shot_stacks: Vec<StoryboardStack>,
     keyword_nodes: Vec<StoryboardKeywordNode>,
+    recent_keyword_ids: Vec<String>,
     shot_annotations: BTreeMap<String, StoryboardAnnotation>,
 }
 

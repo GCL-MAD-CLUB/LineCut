@@ -190,6 +190,10 @@ mod tests {
                         parent_id: Some("keyword:close-up".to_string()),
                     },
                 ],
+                recent_keyword_ids: vec![
+                    "keyword:hero".to_string(),
+                    "keyword:close-up".to_string(),
+                ],
                 shot_annotations: HashMap::from([(
                     "shot:0:24".to_string(),
                     ProjectStoryboardAnnotation {
@@ -241,6 +245,10 @@ mod tests {
                 }
             ])
         );
+        assert_eq!(
+            encoded_storyboard["recentKeywordIds"],
+            serde_json::json!(["keyword:hero", "keyword:close-up"])
+        );
         let restored = into_runtime(decode_current(3, &encoded).unwrap()).unwrap();
         let subtitle = restored
             .subtitles
@@ -262,6 +270,10 @@ mod tests {
         assert!(annotation.retained);
         assert_eq!(annotation.title.as_deref(), Some("Opening"));
         assert_eq!(storyboard.keyword_nodes.len(), 2);
+        assert_eq!(
+            storyboard.recent_keyword_ids,
+            vec!["keyword:hero", "keyword:close-up"]
+        );
         assert_eq!(storyboard.keyword_nodes[0].name, "close-up");
         assert_eq!(
             storyboard.keyword_nodes[1].parent_id.as_deref(),

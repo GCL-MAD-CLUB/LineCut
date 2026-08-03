@@ -109,6 +109,7 @@ export interface StoryboardState {
   shots: StoryboardShot[];
   shotStacks: StoryboardShotStackState[];
   keywordNodes: StoryboardKeywordNode[];
+  recentKeywordIds: string[];
   shotAnnotations: Record<string, StoryboardShotAnnotation>;
 }
 
