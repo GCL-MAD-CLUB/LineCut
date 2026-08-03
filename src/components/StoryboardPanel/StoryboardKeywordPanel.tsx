@@ -1,7 +1,8 @@
-import { ChevronsUpDown, ChevronDown, ChevronRight, Plus, Search } from "lucide-react";
+import { ChevronsUpDown, ChevronDown, Plus, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { StoryboardKeywordNode } from "../../types";
 import {
+  normalizeStoryboardKeywordIds,
   parseStoryboardKeywordInput,
   renderStoryboardKeywordLabel,
   sanitizeStoryboardKeywordInput,
@@ -89,6 +90,7 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
   const [recentOpen, setRecentOpen] = useState(true);
   const [treeOpen, setTreeOpen] = useState(true);
   const [collapsedNodeIds, setCollapsedNodeIds] = useState<Set<string>>(() => new Set());
+  const [selectedTreeNodeId, setSelectedTreeNodeId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const keywordEditorRef = useRef<HTMLTextAreaElement | null>(null);
   const cancelKeywordEditRef = useRef(false);
@@ -102,6 +104,7 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
     setKeywordEditError(null);
     setFilter("");
     setCollapsedNodeIds(new Set());
+    setSelectedTreeNodeId(null);
   }, [resetKey]);
 
   const usageCounts = useMemo(
@@ -132,6 +135,18 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
     }
     return counts;
   }, [keywordNodes, shotAnnotations, targetShotIds]);
+
+  const directCountById = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const shotId of targetShotIds) {
+      for (const keywordId of normalizeStoryboardKeywordIds(
+        shotAnnotations[shotId]?.keywordIds ?? [],
+      )) {
+        counts.set(keywordId, (counts.get(keywordId) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [shotAnnotations, targetShotIds]);
 
   const selectedKeywordIds = useMemo(() => {
     const ids = new Set<string>();
@@ -219,12 +234,29 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
     };
   }
 
+  function keywordCheckState(keywordId: string) {
+    const directCount = directCountById.get(keywordId) ?? 0;
+    const effectiveCount = effectiveCountById.get(keywordId) ?? 0;
+    return {
+      checked: targetShotIds.length > 0 && directCount === targetShotIds.length,
+      mixed: directCount < targetShotIds.length && effectiveCount > 0,
+    };
+  }
+
   function toggleKeyword(keywordId: string) {
     if (targetShotIds.length === 0) {
       return;
     }
     const { active } = keywordActivationState(keywordId);
     setShotKeywordActivation(targetShotIds, keywordId, !active);
+  }
+
+  function toggleKeywordCheck(keywordId: string) {
+    if (targetShotIds.length === 0) {
+      return;
+    }
+    const { checked } = keywordCheckState(keywordId);
+    setShotKeywordActivation(targetShotIds, keywordId, !checked, undefined, false);
   }
 
   function submitKeywordInput() {
@@ -287,56 +319,70 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
       const childNodes = childrenByParent.get(node.id) ?? [];
       const hasChildren = childNodes.length > 0;
       const expanded = normalizedFilter ? true : !collapsedNodeIds.has(node.id);
-      const { active, mixed } = keywordActivationState(node.id);
+      const { checked, mixed } = keywordCheckState(node.id);
       return (
         <div key={node.id} className="storyboard-keyword-tree-branch">
           <div
-            className={`storyboard-keyword-tree-row ${active ? "is-active" : ""} ${
-              mixed ? "is-mixed" : ""
+            className={`storyboard-keyword-tree-row ${
+              selectedTreeNodeId === node.id ? "is-active" : ""
             }`.trim()}
-            style={{ paddingLeft: `${4 + depth * 16}px` }}
+            onClick={() => setSelectedTreeNodeId(node.id)}
           >
             <button
               type="button"
-              className="storyboard-keyword-tree-toggle"
-              disabled={!hasChildren}
-              onClick={() => {
-                setCollapsedNodeIds((current) => {
-                  const next = new Set(current);
-                  if (next.has(node.id)) {
-                    next.delete(node.id);
-                  } else {
-                    next.add(node.id);
-                  }
-                  return next;
-                });
+              className="storyboard-keyword-tree-check"
+              onClick={(event) => {
+                event.stopPropagation();
+                toggleKeywordCheck(node.id);
               }}
-              aria-label={expanded ? `折叠${node.name}` : `展开${node.name}`}
-              aria-expanded={hasChildren ? expanded : undefined}
-            >
-              {hasChildren ? (
-                expanded ? (
-                  <ChevronDown aria-hidden="true" />
-                ) : (
-                  <ChevronRight aria-hidden="true" />
-                )
-              ) : (
-                <span aria-hidden="true">·</span>
-              )}
-            </button>
-            <button
-              type="button"
-              className="storyboard-keyword-tree-name"
-              onClick={() => toggleKeyword(node.id)}
               disabled={targetShotIds.length === 0}
               title={storyboardKeywordLabel(node.id, keywordNodes)}
-              aria-pressed={active ? true : mixed ? "mixed" : false}
+              aria-pressed={checked ? true : mixed ? "mixed" : false}
+              aria-label={`勾选${node.name}`}
             >
-              <span className="storyboard-keyword-tree-check" aria-hidden="true">
-                {active ? "✓" : mixed ? "−" : ""}
+              <span className="storyboard-keyword-tree-check-box" aria-hidden="true">
+                <span className="storyboard-keyword-tree-check-mark">
+                  {checked ? "✓" : mixed ? "−" : ""}
+                </span>
               </span>
-              <span>{node.name}</span>
             </button>
+            <div
+              className="storyboard-keyword-tree-label"
+              style={{ paddingLeft: `${depth * 14}px` }}
+            >
+              <button
+                type="button"
+                className="storyboard-keyword-tree-toggle"
+                disabled={!hasChildren}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setCollapsedNodeIds((current) => {
+                    const next = new Set(current);
+                    if (next.has(node.id)) {
+                      next.delete(node.id);
+                    } else {
+                      next.add(node.id);
+                    }
+                    return next;
+                  });
+                }}
+                aria-label={expanded ? `折叠${node.name}` : `展开${node.name}`}
+                aria-expanded={hasChildren ? expanded : undefined}
+              >
+                <span
+                  className={`storyboard-keyword-tree-arrow ${
+                    hasChildren && expanded ? "is-expanded" : ""
+                  } ${hasChildren ? "" : "is-leaf"}`.trim()}
+                  aria-hidden="true"
+                />
+              </button>
+              <span
+                className="storyboard-keyword-tree-name"
+                title={storyboardKeywordLabel(node.id, keywordNodes)}
+              >
+                {node.name}
+              </span>
+            </div>
             <span className="storyboard-keyword-tree-count">{usageCounts.get(node.id) ?? 0}</span>
           </div>
           {hasChildren && expanded && renderTreeNodes(node.id, depth + 1)}
@@ -346,8 +392,10 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
   }
 
   return (
-    <aside className={`storyboard-keyword-panel ${panelOpen ? "" : "is-collapsed"}`.trim()}>
-      <header className="storyboard-keyword-panel-heading">
+    <aside className="storyboard-keyword-panel">
+      <header
+        className={`storyboard-keyword-panel-heading ${panelOpen ? "" : "is-collapsed"}`.trim()}
+      >
         <button
           type="button"
           className="storyboard-keyword-panel-heading-title"
@@ -485,50 +533,52 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
           >
             {renderKeywordGrid(visibleRecentIds)}
           </KeywordPanelSection>
-
-          <section className="storyboard-keyword-tree-section">
-            <header className="storyboard-keyword-tree-heading">
-              <button
-                type="button"
-                className="storyboard-keyword-add-button"
-                onClick={() => inputRef.current?.focus()}
-                title="添加关键字"
-                aria-label="添加关键字"
-              >
-                <Plus aria-hidden="true" />
-              </button>
-              <button
-                type="button"
-                className="storyboard-keyword-tree-title"
-                onClick={() => setTreeOpen((current) => !current)}
-                aria-expanded={treeOpen}
-              >
-                <span>关键字列表</span>
-                <ChevronDown className={treeOpen ? "" : "is-collapsed"} aria-hidden="true" />
-              </button>
-            </header>
-            {treeOpen && (
-              <div className="storyboard-keyword-tree-body">
-                <label className="storyboard-keyword-filter">
-                  <Search aria-hidden="true" />
-                  <input
-                    value={filter}
-                    onChange={(event) => setFilter(event.currentTarget.value)}
-                    placeholder="过滤关键字"
-                    aria-label="过滤关键字"
-                  />
-                </label>
-                <div className="storyboard-keyword-tree" role="tree">
-                  {renderTreeNodes(null, 0)}
-                  {keywordNodes.length === 0 && (
-                    <p className="storyboard-keyword-empty">尚未创建关键字</p>
-                  )}
-                </div>
-              </div>
-            )}
-          </section>
         </>
       )}
+
+      <section className="storyboard-keyword-tree-section">
+        <header
+          className={`storyboard-keyword-tree-heading ${treeOpen ? "" : "is-collapsed"}`.trim()}
+        >
+          <button
+            type="button"
+            className="storyboard-keyword-add-button"
+            onClick={() => inputRef.current?.focus()}
+            title="添加关键字"
+            aria-label="添加关键字"
+          >
+            <Plus aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className="storyboard-keyword-tree-title"
+            onClick={() => setTreeOpen((current) => !current)}
+            aria-expanded={treeOpen}
+          >
+            <span>关键字列表</span>
+            <ChevronDown className={treeOpen ? "" : "is-collapsed"} aria-hidden="true" />
+          </button>
+        </header>
+        {treeOpen && (
+          <div className="storyboard-keyword-tree-body">
+            <label className="storyboard-keyword-filter">
+              <Search aria-hidden="true" />
+              <input
+                value={filter}
+                onChange={(event) => setFilter(event.currentTarget.value)}
+                placeholder="过滤关键字"
+                aria-label="过滤关键字"
+              />
+            </label>
+            <div className="storyboard-keyword-tree" role="tree">
+              {renderTreeNodes(null, 0)}
+              {keywordNodes.length === 0 && (
+                <p className="storyboard-keyword-empty">尚未创建关键字</p>
+              )}
+            </div>
+          </div>
+        )}
+      </section>
     </aside>
   );
 }

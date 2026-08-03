@@ -165,23 +165,9 @@ export function storyboardKeywordPathForId(
 
 export function visibleStoryboardKeywordIds(
   keywordIds: Iterable<string> | null | undefined,
-  keywordNodes: readonly StoryboardKeywordNode[],
+  _keywordNodes: readonly StoryboardKeywordNode[],
 ) {
-  const nodesById = new Map(keywordNodes.map((node) => [node.id, node]));
-  const activated = new Set(normalizeStoryboardKeywordIds(keywordIds ?? []));
-  const hiddenAncestors = new Set<string>();
-  for (const keywordId of activated) {
-    const visited = new Set<string>();
-    let parentId = nodesById.get(keywordId)?.parentId ?? null;
-    while (parentId && !visited.has(parentId)) {
-      visited.add(parentId);
-      if (activated.has(parentId)) {
-        hiddenAncestors.add(parentId);
-      }
-      parentId = nodesById.get(parentId)?.parentId ?? null;
-    }
-  }
-  return Array.from(activated).filter((keywordId) => !hiddenAncestors.has(keywordId));
+  return normalizeStoryboardKeywordIds(keywordIds ?? []);
 }
 
 export function storyboardEffectiveKeywordIds(

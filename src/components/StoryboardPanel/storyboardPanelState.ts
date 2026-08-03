@@ -112,6 +112,7 @@ interface StoryboardPanelState
     keywordId: string,
     active: boolean,
     historyGroupId?: string,
+    removeDescendants?: boolean,
   ) => void;
   setShotCustomLabel: (shotId: string, customLabel: string) => void;
   setShotCustomLabels: (
@@ -525,7 +526,13 @@ export function useStoryboardPanelState<Selection>(
       }),
     setShotKeywords,
     appendShotKeywords,
-    setShotKeywordActivation: (shotIds, keywordId, active, historyGroupId) => {
+    setShotKeywordActivation: (
+      shotIds,
+      keywordId,
+      active,
+      historyGroupId,
+      removeDescendants = true,
+    ) => {
       const uniqueShotIds = Array.from(new Set(shotIds));
       if (
         uniqueShotIds.length === 0 ||
@@ -538,7 +545,9 @@ export function useStoryboardPanelState<Selection>(
         (current) => {
           const removableIds = active
             ? null
-            : storyboardKeywordDescendantIds(keywordId, current.keywordNodes);
+            : removeDescendants
+              ? storyboardKeywordDescendantIds(keywordId, current.keywordNodes)
+              : new Set([keywordId]);
           const recentKeywordIds = active
             ? recentKeywordIdsAfterUse(current.recentKeywordIds, [keywordId])
             : current.recentKeywordIds;

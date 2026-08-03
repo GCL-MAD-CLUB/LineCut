@@ -606,7 +606,10 @@ body.is-resizing-storyboard-keyword-panel * {
 .storyboard-keyword-panel-heading {
   display: flex;
   flex: 0 0 28px;
-  background: #303030;
+}
+
+.storyboard-keyword-panel-heading.is-collapsed {
+  box-shadow: inset 0 -1px 0 0 var(--color-border-panel);
 }
 
 .storyboard-keyword-panel-heading-title {
@@ -795,6 +798,7 @@ body.is-resizing-storyboard-keyword-panel * {
   padding: 7px 8px;
   overflow: auto;
   background: var(--color-surface);
+  border-top: 1px solid var(--color-border-panel);
 }
 
 .storyboard-keyword-section:not(.storyboard-keyword-assignment) .storyboard-keyword-section-body {
@@ -1042,7 +1046,10 @@ body.is-resizing-storyboard-keyword-panel * {
   display: grid;
   flex: 0 0 28px;
   grid-template-columns: 28px minmax(0, 1fr);
-  background: #303030;
+}
+
+.storyboard-keyword-tree-heading.is-collapsed {
+  box-shadow: inset 0 -1px 0 0 var(--color-border-panel);
 }
 
 .storyboard-keyword-add-button {
@@ -1084,6 +1091,7 @@ body.is-resizing-storyboard-keyword-panel * {
   flex-direction: column;
   padding: 7px 8px;
   overflow: hidden;
+  border-top: 1px solid var(--color-border-panel);
 }
 
 .storyboard-keyword-filter {
@@ -1119,7 +1127,7 @@ body.is-resizing-storyboard-keyword-panel * {
 
 .storyboard-keyword-tree-row {
   display: grid;
-  height: 28px;
+  height: 20px;
   align-items: center;
   grid-template-columns: 20px minmax(0, 1fr) 36px;
   padding-right: 8px;
@@ -1133,13 +1141,10 @@ body.is-resizing-storyboard-keyword-panel * {
   background: var(--color-surface-hover);
 }
 
-.storyboard-keyword-tree-row.is-mixed {
-  color: #c2b690;
-}
-
+.storyboard-keyword-tree-check,
 .storyboard-keyword-tree-toggle,
 .storyboard-keyword-tree-name {
-  height: 28px;
+  height: 20px;
   min-width: 0;
   padding: 0;
   color: inherit;
@@ -1148,9 +1153,45 @@ body.is-resizing-storyboard-keyword-panel * {
   border-radius: 0;
 }
 
+.storyboard-keyword-tree-check {
+  display: flex;
+  width: 20px;
+  align-items: center;
+  justify-content: center;
+}
+
+.storyboard-keyword-tree-check-box {
+  display: flex;
+  width: 10px;
+  height: 10px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  color: #d7d7d7;
+  font-size: 12.5px;
+  line-height: 10px;
+}
+
+.storyboard-keyword-tree-check-mark {
+  display: block;
+}
+
+.storyboard-keyword-tree-row:hover .storyboard-keyword-tree-check-box {
+  border-color: #000;
+  background: #141414;
+}
+
+.storyboard-keyword-tree-label {
+  display: flex;
+  min-width: 0;
+  height: 20px;
+  align-items: center;
+}
+
 .storyboard-keyword-tree-toggle {
   display: grid;
-  width: 20px;
+  width: 14px;
+  margin-right: 4px;
   place-items: center;
 }
 
@@ -1159,35 +1200,28 @@ body.is-resizing-storyboard-keyword-panel * {
   opacity: 1;
 }
 
-.storyboard-keyword-tree-toggle > svg {
-  width: 14px;
-  height: 14px;
+.storyboard-keyword-tree-arrow {
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 7px solid #999;
+}
+
+.storyboard-keyword-tree-arrow.is-expanded {
+  transform: rotate(90deg);
+}
+
+.storyboard-keyword-tree-arrow.is-leaf {
+  opacity: 0.5;
 }
 
 .storyboard-keyword-tree-name {
   display: flex;
   width: 100%;
   align-items: center;
-  gap: 5px;
   overflow: hidden;
   text-align: left;
-}
-
-.storyboard-keyword-tree-name:hover:not(:disabled) {
-  color: #fff;
-  background: transparent;
-}
-
-.storyboard-keyword-tree-check {
-  display: inline-block;
-  flex: 0 0 14px;
-  width: 14px;
-  color: #d7d7d7;
-  text-align: center;
-}
-
-.storyboard-keyword-tree-name > span:last-child {
-  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
