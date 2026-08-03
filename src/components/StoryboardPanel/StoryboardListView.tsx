@@ -16,6 +16,7 @@ import type { StoryboardShot } from "../../types";
 import { storyboardShotColorLabels } from "./StoryboardColorLabelButtons";
 import { StoryboardShotThumbnail } from "./StoryboardShotThumbnail";
 import {
+  formatStoryboardKeywords,
   useStoryboardPanelState,
   type StoryboardShotStack,
   type StoryboardShotVisualLabel,
@@ -23,7 +24,7 @@ import {
 
 const cellEditDelayMs = 350;
 
-type EditableColumn = "title" | "label";
+type EditableColumn = "title" | "keywords" | "label";
 type ActiveColumn = EditableColumn | "mediaStart" | "mediaEnd" | "duration";
 type StoryboardAnnotationMenuKind = "flag" | "color";
 
@@ -127,6 +128,7 @@ export function StoryboardListView({
     shotAnnotations,
     shotStacks,
     setShotTitle,
+    setShotKeywords,
     setShotCustomLabels,
     setShotRatings,
     setShotFlags,
@@ -182,7 +184,13 @@ export function StoryboardListView({
   }
 
   function editableCellValue(shot: StoryboardShot, columnId: EditableColumn) {
-    return columnId === "title" ? shotTitle(shot) : shotLabel(shot);
+    if (columnId === "title") {
+      return shotTitle(shot);
+    }
+    if (columnId === "keywords") {
+      return formatStoryboardKeywords(shotAnnotations[shot.id]?.keywords);
+    }
+    return shotLabel(shot);
   }
 
   function beginCellEdit(shot: StoryboardShot, columnId: EditableColumn) {
@@ -227,6 +235,9 @@ export function StoryboardListView({
         if (nextValue) {
           setShotTitle(shot.id, nextValue);
         }
+      } else if (columnId === "keywords") {
+        const targetShotIds = annotationTargets(shot.id, new Set([shot.id]), stackMap);
+        setShotKeywords(targetShotIds, editValue);
       } else {
         const colorLabel = storyboardShotColorLabels.find(([, label]) => label === nextValue)?.[0];
         const targetShotIds = annotationTargets(shot.id, new Set([shot.id]), stackMap);
@@ -243,7 +254,12 @@ export function StoryboardListView({
   function renderEditableCell(shot: StoryboardShot, columnId: EditableColumn) {
     const value = editableCellValue(shot, columnId);
     const editing = editingCell?.shotId === shot.id && editingCell.columnId === columnId;
-    const ariaLabel = columnId === "title" ? "重命名分镜" : "编辑分镜标签";
+    const ariaLabel =
+      columnId === "title"
+        ? "重命名分镜"
+        : columnId === "keywords"
+          ? "编辑分镜关键字"
+          : "编辑分镜标签";
     return editing ? (
       <input
         className="shot-title-editor"
@@ -269,14 +285,20 @@ export function StoryboardListView({
       />
     ) : (
       <span
-        className={columnId === "title" ? "shot-title-copy" : "shot-label-copy"}
+        className={
+          columnId === "title"
+            ? "shot-title-copy"
+            : columnId === "keywords"
+              ? "shot-keywords-copy"
+              : "shot-label-copy"
+        }
         title={value || undefined}
         onDoubleClick={(event) => {
           event.stopPropagation();
           beginCellEdit(shot, columnId);
         }}
       >
-        {columnId === "label" && !value ? "无" : value}
+        {columnId !== "title" && !value ? "无" : value}
       </span>
     );
   }
@@ -358,7 +380,9 @@ export function StoryboardListView({
                   role="row"
                   onClick={(event) => {
                     if (
-                      !(event.target as HTMLElement).closest(".shot-title-cell, .shot-label-cell")
+                      !(event.target as HTMLElement).closest(
+                        ".shot-title-cell, .shot-keywords-cell, .shot-label-cell",
+                      )
                     ) {
                       cancelPendingCellEdit();
                     }
@@ -423,6 +447,13 @@ export function StoryboardListView({
                       Math.max(0, shot.end_frame - shot.start_frame + 1),
                       frameRate,
                     )}
+                  </span>
+                  <span
+                    className={cellClassName(shot.id, "keywords", selected, "shot-keywords-cell")}
+                    role="cell"
+                    onClick={(event) => handleEditableCellClick(event, shot, "keywords", selected)}
+                  >
+                    {renderEditableCell(shot, "keywords")}
                   </span>
                   <div className="shot-rating-cell" role="cell" aria-label={`${rating} 星`}>
                     {[1, 2, 3, 4, 5].map((star) => (

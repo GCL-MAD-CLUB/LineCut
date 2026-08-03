@@ -1,7 +1,7 @@
 use crate::{app_error, AppResult, ErrorCode, ProjectWorkspace};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::{v2, CurrentProjectModel, ProjectModel, UpgradeFrom, UpgradeParts};
 
@@ -242,6 +242,8 @@ struct StoryboardAnnotation {
     retained: bool,
     excluded: bool,
     title: Option<String>,
+    #[serde(default)]
+    keywords: BTreeSet<String>,
     color_label: Option<StoryboardColorLabel>,
     #[serde(default)]
     custom_label: Option<String>,

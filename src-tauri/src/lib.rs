@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use std::os::windows::process::CommandExt;
 use std::process::Command as StdCommand;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     env, fs,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
@@ -392,6 +392,8 @@ struct ProjectStoryboardAnnotation {
     excluded: bool,
     #[serde(default)]
     title: Option<String>,
+    #[serde(default)]
+    keywords: BTreeSet<String>,
     #[serde(default)]
     color_label: Option<ProjectStoryboardColorLabel>,
     #[serde(default)]

@@ -530,6 +530,7 @@
   --storyboard-col-media-start: 128px;
   --storyboard-col-media-end: 128px;
   --storyboard-col-duration: 140px;
+  --storyboard-col-keywords: 128px;
   --storyboard-col-label: 128px;
   --storyboard-col-rating: 112px;
   --storyboard-col-retained: 128px;
@@ -538,9 +539,9 @@
   --storyboard-row-height: 82px;
   --storyboard-table-columns: var(--storyboard-col-thumbnail) var(--storyboard-col-title)
     var(--storyboard-col-media-start) var(--storyboard-col-media-end) var(--storyboard-col-duration)
-    var(--storyboard-col-rating) var(--storyboard-col-retained) var(--storyboard-col-label)
-    minmax(0, 1fr);
-  --storyboard-table-min-width: 1012px;
+    var(--storyboard-col-keywords) var(--storyboard-col-rating) var(--storyboard-col-retained)
+    var(--storyboard-col-label) minmax(0, 1fr);
+  --storyboard-table-min-width: 1140px;
 }
 
 .storyboard-icon-view {
@@ -1418,6 +1419,7 @@
 .shot-row > .shot-time-cell,
 .shot-row > .shot-duration-cell,
 .shot-row > .shot-title-cell,
+.shot-row > .shot-keywords-cell,
 .shot-row > .shot-label-cell,
 .shot-row > .shot-rating-cell,
 .shot-row > .shot-retain-cell {
@@ -1441,11 +1443,13 @@
 }
 
 .shot-title-cell,
+.shot-keywords-cell,
 .shot-label-cell {
   gap: 6px;
 }
 
 .shot-title-copy,
+.shot-keywords-copy,
 .shot-label-copy {
   display: block;
   flex: 0 1 auto;
@@ -1812,7 +1816,8 @@ body.is-resizing-storyboard-column {
   gap: 5px;
 }
 
-.storyboard-footer .storyboard-footer-spray-label-input {
+.storyboard-footer .storyboard-footer-spray-label-input,
+.storyboard-footer .storyboard-footer-spray-keyword-input {
   flex: 0 0 92px;
   width: 92px;
   margin: 0 1px 0 0;
@@ -1821,7 +1826,10 @@ body.is-resizing-storyboard-column {
 
 .storyboard-footer .storyboard-footer-spray-label-input:hover,
 .storyboard-footer .storyboard-footer-spray-label-input:focus,
-.storyboard-footer .storyboard-footer-spray-label-input:active {
+.storyboard-footer .storyboard-footer-spray-label-input:active,
+.storyboard-footer .storyboard-footer-spray-keyword-input:hover,
+.storyboard-footer .storyboard-footer-spray-keyword-input:focus,
+.storyboard-footer .storyboard-footer-spray-keyword-input:active {
   background: #000;
   border: 0;
   box-shadow: none;

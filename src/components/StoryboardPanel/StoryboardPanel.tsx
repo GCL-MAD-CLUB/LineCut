@@ -61,6 +61,8 @@ import {
 import { StoryboardIconView } from "./StoryboardIconView";
 import { StoryboardListView } from "./StoryboardListView";
 import {
+  formatStoryboardKeywords,
+  normalizeStoryboardKeywords,
   useStoryboardPanelState,
   type StoryboardRatingComparator,
   type StoryboardShotAnnotation,
@@ -85,9 +87,24 @@ const STORYBOARD_THUMBNAIL_COLUMN_PADDING = 16;
 const STORYBOARD_STATUS_GUTTER_WIDTH = 16;
 
 type StoryboardResizableColumnId =
-  "thumbnail" | "title" | "mediaStart" | "mediaEnd" | "duration" | "label" | "rating" | "retained";
+  | "thumbnail"
+  | "title"
+  | "mediaStart"
+  | "mediaEnd"
+  | "duration"
+  | "keywords"
+  | "label"
+  | "rating"
+  | "retained";
 type StoryboardSortableColumnId =
-  "title" | "mediaStart" | "mediaEnd" | "duration" | "rating" | "retained" | "colorLabel";
+  | "title"
+  | "mediaStart"
+  | "mediaEnd"
+  | "duration"
+  | "keywords"
+  | "rating"
+  | "retained"
+  | "colorLabel";
 type StoryboardTableColumnId = StoryboardResizableColumnId | "trailing";
 type StoryboardSortDirection = "ascending" | "descending";
 
@@ -122,7 +139,8 @@ const storyboardTableHeaders: Array<{
     sortColumnId: "duration",
     resizeColumn: "mediaEnd",
   },
-  { id: "rating", label: "星级", sortColumnId: "rating", resizeColumn: "duration" },
+  { id: "keywords", label: "关键字", sortColumnId: "keywords", resizeColumn: "duration" },
+  { id: "rating", label: "星级", sortColumnId: "rating", resizeColumn: "keywords" },
   { id: "retained", label: "留用", resizeColumn: "rating" },
   { id: "label", label: "标签", sortColumnId: "colorLabel", resizeColumn: "retained" },
   { id: "trailing", label: "", resizeColumn: "label" },
@@ -137,6 +155,7 @@ const storyboardGridSortOptions: Array<{
   { id: "mediaStart", label: "媒体开始", defaultDirection: "ascending" },
   { id: "mediaEnd", label: "媒体结束", defaultDirection: "ascending" },
   { id: "duration", label: "媒体持续时间", defaultDirection: "ascending" },
+  { id: "keywords", label: "关键字", defaultDirection: "ascending" },
   { id: "rating", label: "星级", defaultDirection: "descending" },
   { id: "retained", label: "留用", defaultDirection: "ascending" },
   { id: "colorLabel", label: "标签", defaultDirection: "ascending" },
@@ -150,6 +169,7 @@ const initialStoryboardColumnWidths: StoryboardResizableColumnWidths = {
   mediaStart: 128,
   mediaEnd: 128,
   duration: 140,
+  keywords: 128,
   label: 128,
   rating: 112,
   retained: 128,
@@ -161,6 +181,7 @@ const minimumStoryboardColumnWidths: StoryboardResizableColumnWidths = {
   mediaStart: 21,
   mediaEnd: 21,
   duration: 21,
+  keywords: 38,
   label: 38,
   rating: 30,
   retained: 21,
@@ -172,6 +193,7 @@ const maximumStoryboardColumnWidths: StoryboardResizableColumnWidths = {
   mediaStart: 300,
   mediaEnd: 300,
   duration: 320,
+  keywords: 720,
   label: 720,
   rating: 180,
   retained: 300,
@@ -183,6 +205,7 @@ const storyboardResizableColumnLabels: Record<StoryboardResizableColumnId, strin
   mediaStart: "媒体开始",
   mediaEnd: "媒体结束",
   duration: "媒体持续时间",
+  keywords: "关键字",
   label: "标签",
   rating: "星级",
   retained: "留用",
@@ -249,9 +272,10 @@ interface StoryboardMenuAnchor {
   y: number;
 }
 
-type StoryboardSprayMode = "colorLabel" | "flag" | "rating";
+type StoryboardSprayMode = "keywords" | "colorLabel" | "flag" | "rating";
 
 const storyboardSprayModeOptions: Array<readonly [StoryboardSprayMode, string]> = [
+  ["keywords", "关键字"],
   ["colorLabel", "标签"],
   ["flag", "旗标"],
   ["rating", "星级"],
@@ -347,6 +371,7 @@ function storyboardShotIsEdited(annotation: StoryboardShotAnnotation | undefined
       annotation.retained ||
       annotation.excluded ||
       annotation.title?.trim() ||
+      annotation.keywords?.length ||
       annotation.colorLabel ||
       annotation.customLabel?.trim()),
   );
@@ -622,6 +647,9 @@ function storyboardSprayBottleMarkSvg(
   rating: number,
   customLabel: boolean,
 ) {
+  if (mode === "keywords") {
+    return '<text x="10" y="17.8" fill="#fff" font-family="Arial,sans-serif" font-size="7.5" font-weight="700" text-anchor="middle">K</text>';
+  }
   if (mode === "colorLabel" && customLabel) {
     return '<text x="10" y="17.8" fill="#fff" font-family="Arial,sans-serif" font-size="7.5" font-weight="700" text-anchor="middle">T</text>';
   }
@@ -684,6 +712,19 @@ function StoryboardSprayBottleIcon({
       />
       <path d="M4 21.25h12v1.5H4z" fill={fillColor} stroke="currentColor" strokeWidth="1" />
       <path d="M6.25 11h7.5M6.25 18.75h7.5" stroke="#686868" strokeWidth="0.75" />
+      {mode === "keywords" && (
+        <text
+          x="10"
+          y="17.8"
+          fill="#fff"
+          fontFamily="Arial, sans-serif"
+          fontSize="7.5"
+          fontWeight="700"
+          textAnchor="middle"
+        >
+          K
+        </text>
+      )}
       {mode === "colorLabel" && customLabel && (
         <text
           x="10"
@@ -889,6 +930,9 @@ function storyboardShotSortValue(
   if (columnId === "rating") {
     return annotation?.rating ?? 0;
   }
+  if (columnId === "keywords") {
+    return formatStoryboardKeywords(annotation?.keywords);
+  }
   if (columnId === "colorLabel") {
     return storyboardShotLabel(annotation);
   }
@@ -976,6 +1020,7 @@ export function StoryboardPanel() {
     setShotFlags,
     setShotColorLabels,
     setShotCustomLabels,
+    appendShotKeywords,
     createShotStack,
     cancelShotStack,
     removeShotFromStack,
@@ -1009,6 +1054,7 @@ export function StoryboardPanel() {
   const [footerOptionsMenu, setFooterOptionsMenu] = useState<StoryboardMenuAnchor | null>(null);
   const [sprayActive, setSprayActive] = useState(false);
   const [sprayMode, setSprayMode] = useState<StoryboardSprayMode>("colorLabel");
+  const [sprayKeywordInput, setSprayKeywordInput] = useState("");
   const [sprayColorLabel, setSprayColorLabel] = useState<StoryboardShotColorLabel | null>(null);
   const [sprayCustomLabel, setSprayCustomLabel] = useState("");
   const [sprayFlag, setSprayFlag] = useState<StoryboardShotFlag>("none");
@@ -1087,6 +1133,8 @@ export function StoryboardPanel() {
     storyboardGridSortOptions.find((option) => option.id === activeShotSort.columnId)?.label ??
     "标题";
   const footerSortVisible = footerAreaVisibility.sort[viewMode];
+  const sprayKeywords = normalizeStoryboardKeywords(sprayKeywordInput);
+  const sprayKeywordsDisplay = formatStoryboardKeywords(sprayKeywords);
   const sprayUsesCustomLabel = sprayMode === "colorLabel" && sprayCustomLabel.trim().length > 0;
   const sprayBottleFillColor =
     sprayMode === "colorLabel" && sprayColorLabel
@@ -1173,6 +1221,7 @@ export function StoryboardPanel() {
     storyboardColumnWidths.mediaStart +
     storyboardColumnWidths.mediaEnd +
     storyboardColumnWidths.duration +
+    storyboardColumnWidths.keywords +
     storyboardColumnWidths.label +
     storyboardColumnWidths.rating +
     storyboardColumnWidths.retained;
@@ -1184,6 +1233,7 @@ export function StoryboardPanel() {
     "--storyboard-col-media-start": `${storyboardColumnWidths.mediaStart}px`,
     "--storyboard-col-media-end": `${storyboardColumnWidths.mediaEnd}px`,
     "--storyboard-col-duration": `${storyboardColumnWidths.duration}px`,
+    "--storyboard-col-keywords": `${storyboardColumnWidths.keywords}px`,
     "--storyboard-col-label": `${storyboardColumnWidths.label}px`,
     "--storyboard-col-rating": `${storyboardColumnWidths.rating}px`,
     "--storyboard-col-retained": `${storyboardColumnWidths.retained}px`,
@@ -1786,6 +1836,10 @@ export function StoryboardPanel() {
 
   function applySprayToShot(shotId: string, historyGroupId: string) {
     const targetShotIds = annotationShotIdsForSelection([shotId], shotStacksByShotId);
+    if (sprayMode === "keywords") {
+      appendShotKeywords(targetShotIds, sprayKeywords, historyGroupId);
+      return;
+    }
     if (sprayMode === "colorLabel") {
       const customLabel = sprayCustomLabel.trim();
       if (customLabel) {
@@ -2705,6 +2759,17 @@ export function StoryboardPanel() {
                     </button>
                   </div>
                   <span className="storyboard-filter-separator storyboard-footer-separator" />
+                  {sprayMode === "keywords" && (
+                    <input
+                      className="shot-title-editor storyboard-footer-spray-keyword-input"
+                      value={sprayKeywordInput}
+                      aria-label="喷涂关键字"
+                      title="喷涂关键字"
+                      autoComplete="off"
+                      spellCheck={false}
+                      onChange={(event) => setSprayKeywordInput(event.currentTarget.value)}
+                    />
+                  )}
                   {sprayMode === "colorLabel" && (
                     <div className="storyboard-footer-spray-label-controls">
                       <StoryboardColorLabelButtons
@@ -3366,6 +3431,19 @@ export function StoryboardPanel() {
                 }}
               />
             </PopupMenuSubmenu>
+
+            <PopupMenuItem
+              mnemonic="A"
+              onSelect={() => {
+                appendShotKeywords(contextMenuShotIds, sprayKeywords);
+                setContextMenu(null);
+              }}
+              disabled={contextMenuShotIds.length === 0 || sprayKeywords.length === 0}
+            >
+              {sprayKeywords.length > 0
+                ? `添加关键字“${sprayKeywordsDisplay}”(A)`
+                : "添加快捷关键字(A)"}
+            </PopupMenuItem>
 
             <PopupMenuSeparator />
 

@@ -89,6 +89,7 @@ export interface StoryboardShotAnnotation {
   retained: boolean;
   excluded?: boolean;
   title?: string | null;
+  keywords?: string[] | null;
   colorLabel?: StoryboardShotColorLabel | null;
   customLabel?: string | null;
 }

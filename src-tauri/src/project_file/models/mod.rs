@@ -101,7 +101,7 @@ mod tests {
         ProjectStoryboardState, ProjectSubtitleAnnotation, ProjectSubtitleColorLabel,
         ProjectSubtitleState, ProjectWorkspace,
     };
-    use std::collections::HashMap;
+    use std::collections::{BTreeSet, HashMap};
 
     fn empty_workspace() -> ProjectWorkspace {
         ProjectWorkspace {
@@ -185,6 +185,7 @@ mod tests {
                         retained: true,
                         excluded: false,
                         title: Some("Opening".to_string()),
+                        keywords: BTreeSet::from(["close-up".to_string(), "hero".to_string()]),
                         color_label: Some(ProjectStoryboardColorLabel::Red),
                         custom_label: Some("Hero shot".to_string()),
                     },
@@ -210,6 +211,23 @@ mod tests {
         assert!(encoded_storyboard["shotStacks"][0]
             .get("expanded")
             .is_none());
+        assert_eq!(
+            encoded_storyboard["shotAnnotations"]["shot:0:24"]["keywords"],
+            serde_json::json!(["close-up", "hero"])
+        );
+        let mut legacy_encoded_json = encoded_json.clone();
+        legacy_encoded_json["workspace"]["storyboards"]["video:asset:fingerprint"]
+            ["shotAnnotations"]["shot:0:24"]
+            .as_object_mut()
+            .unwrap()
+            .remove("keywords");
+        let legacy_encoded = serde_json::to_vec(&legacy_encoded_json).unwrap();
+        let legacy_restored = into_runtime(decode_current(3, &legacy_encoded).unwrap()).unwrap();
+        assert!(
+            legacy_restored.storyboards["video:asset:fingerprint"].shot_annotations["shot:0:24"]
+                .keywords
+                .is_empty()
+        );
         let restored = into_runtime(decode_current(3, &encoded).unwrap()).unwrap();
         let subtitle = restored
             .subtitles
@@ -230,6 +248,14 @@ mod tests {
         assert_eq!(annotation.rating, 4);
         assert!(annotation.retained);
         assert_eq!(annotation.title.as_deref(), Some("Opening"));
+        assert_eq!(
+            annotation
+                .keywords
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["close-up", "hero"]
+        );
         assert_eq!(annotation.custom_label.as_deref(), Some("Hero shot"));
         assert!(matches!(
             annotation.color_label,
