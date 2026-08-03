@@ -1,14 +1,21 @@
 import { createPanelState } from "../../runtime/systems/PanelState";
 import { useProjectPort } from "../../systems/ProjectSystem";
 import type {
+  StoryboardKeywordNode,
   StoryboardShot,
   StoryboardShotAnnotation,
   StoryboardShotColorLabel,
   StoryboardShotStackState,
   StoryboardState,
 } from "../../types";
+import {
+  normalizeStoryboardKeywordIds,
+  parseStoryboardKeywordInput,
+  resolveStoryboardKeywordPaths,
+} from "./storyboardKeywords";
 
-export type { StoryboardShotAnnotation, StoryboardShotColorLabel };
+export { formatStoryboardKeywords } from "./storyboardKeywords";
+export type { StoryboardKeywordNode, StoryboardShotAnnotation, StoryboardShotColorLabel };
 
 export interface StoryboardShotStack extends StoryboardShotStackState {
   expanded: boolean;
@@ -210,26 +217,12 @@ function normalizedRating(rating: number) {
   return Number.isFinite(rating) ? Math.min(5, Math.max(0, Math.round(rating))) : 0;
 }
 
-export function normalizeStoryboardKeywords(keywords: string | Iterable<string>) {
-  const values = typeof keywords === "string" ? keywords.split(/[,，]/) : keywords;
-  return Array.from(
-    new Set(Array.from(values, (keyword) => keyword.trim()).filter(Boolean)),
-  ).sort();
-}
-
-export function formatStoryboardKeywords(keywords: Iterable<string> | null | undefined) {
-  return normalizeStoryboardKeywords(keywords ?? []).join(", ");
-}
-
 function keywordCollectionsEqual(
   left: Iterable<string> | null | undefined,
   right: readonly string[],
 ) {
-  const leftKeywords = Array.from(left ?? []);
-  return (
-    leftKeywords.length === right.length &&
-    leftKeywords.every((keyword, index) => keyword === right[index])
-  );
+  const leftKeywords = new Set(left ?? []);
+  return leftKeywords.size === right.length && right.every((keyword) => leftKeywords.has(keyword));
 }
 
 function annotationWithDefaults(
@@ -241,7 +234,7 @@ function annotationWithDefaults(
     rating: current?.rating ?? 0,
     retained: current?.retained ?? false,
     excluded: current?.excluded ?? false,
-    keywords: normalizeStoryboardKeywords(current?.keywords ?? []),
+    keywordIds: normalizeStoryboardKeywordIds(current?.keywordIds ?? []),
     ...update,
   };
 }
@@ -318,6 +311,7 @@ export function useStoryboardPanelState<Selection>(
   const storyboard = storyboards[uiState.videoContext] ?? {
     shots: [],
     shotStacks: [],
+    keywordNodes: [],
     shotAnnotations: {},
   };
   const shotStacks = storyboard.shotStacks.map((stack) => ({
@@ -397,26 +391,29 @@ export function useStoryboardPanelState<Selection>(
     historyGroupId?: string,
   ) => {
     const uniqueShotIds = Array.from(new Set(shotIds));
-    const normalizedKeywords = normalizeStoryboardKeywords(keywords);
-    if (uniqueShotIds.length === 0) {
+    const parsed = parseStoryboardKeywordInput(keywords);
+    if (uniqueShotIds.length === 0 || parsed.error) {
       return;
     }
     commitStoryboard(
       "设置分镜关键字",
       (current) => {
+        const resolved = resolveStoryboardKeywordPaths(current.keywordNodes, parsed.paths);
         const shotAnnotations = { ...current.shotAnnotations };
-        let changed = false;
+        let changed = resolved.keywordNodes.length !== current.keywordNodes.length;
         for (const shotId of uniqueShotIds) {
           const previous = shotAnnotations[shotId];
-          if (keywordCollectionsEqual(previous?.keywords, normalizedKeywords)) {
+          if (keywordCollectionsEqual(previous?.keywordIds, resolved.keywordIds)) {
             continue;
           }
           shotAnnotations[shotId] = annotationWithDefaults(previous, {
-            keywords: normalizedKeywords,
+            keywordIds: resolved.keywordIds,
           });
           changed = true;
         }
-        return changed ? { ...current, shotAnnotations } : current;
+        return changed
+          ? { ...current, keywordNodes: resolved.keywordNodes, shotAnnotations }
+          : current;
       },
       uiState.videoContext,
       historyGroupId,
@@ -429,28 +426,31 @@ export function useStoryboardPanelState<Selection>(
     historyGroupId?: string,
   ) => {
     const uniqueShotIds = Array.from(new Set(shotIds));
-    const appendedKeywords = normalizeStoryboardKeywords(keywords);
-    if (uniqueShotIds.length === 0 || appendedKeywords.length === 0) {
+    const parsed = parseStoryboardKeywordInput(keywords);
+    if (uniqueShotIds.length === 0 || parsed.error || parsed.paths.length === 0) {
       return;
     }
     commitStoryboard(
       "添加分镜关键字",
       (current) => {
+        const resolved = resolveStoryboardKeywordPaths(current.keywordNodes, parsed.paths);
         const shotAnnotations = { ...current.shotAnnotations };
-        let changed = false;
+        let changed = resolved.keywordNodes.length !== current.keywordNodes.length;
         for (const shotId of uniqueShotIds) {
           const previous = shotAnnotations[shotId];
-          const keywords = normalizeStoryboardKeywords([
-            ...(previous?.keywords ?? []),
-            ...appendedKeywords,
+          const keywordIds = normalizeStoryboardKeywordIds([
+            ...(previous?.keywordIds ?? []),
+            ...resolved.keywordIds,
           ]);
-          if (keywordCollectionsEqual(previous?.keywords, keywords)) {
+          if (keywordCollectionsEqual(previous?.keywordIds, keywordIds)) {
             continue;
           }
-          shotAnnotations[shotId] = annotationWithDefaults(previous, { keywords });
+          shotAnnotations[shotId] = annotationWithDefaults(previous, { keywordIds });
           changed = true;
         }
-        return changed ? { ...current, shotAnnotations } : current;
+        return changed
+          ? { ...current, keywordNodes: resolved.keywordNodes, shotAnnotations }
+          : current;
       },
       uiState.videoContext,
       historyGroupId,

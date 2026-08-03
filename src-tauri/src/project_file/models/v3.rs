@@ -242,11 +242,18 @@ struct StoryboardAnnotation {
     retained: bool,
     excluded: bool,
     title: Option<String>,
-    #[serde(default)]
-    keywords: BTreeSet<String>,
+    keyword_ids: BTreeSet<String>,
     color_label: Option<StoryboardColorLabel>,
     #[serde(default)]
     custom_label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoryboardKeywordNode {
+    id: String,
+    name: String,
+    parent_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -261,6 +268,7 @@ struct StoryboardStack {
 struct StoryboardState {
     shots: Vec<StoryboardShot>,
     shot_stacks: Vec<StoryboardStack>,
+    keyword_nodes: Vec<StoryboardKeywordNode>,
     shot_annotations: BTreeMap<String, StoryboardAnnotation>,
 }
 

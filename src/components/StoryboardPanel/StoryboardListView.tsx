@@ -15,6 +15,7 @@ import { formatMonitorFrame, formatMonitorTime } from "../../time";
 import type { StoryboardShot } from "../../types";
 import { storyboardShotColorLabels } from "./StoryboardColorLabelButtons";
 import { StoryboardShotThumbnail } from "./StoryboardShotThumbnail";
+import { parseStoryboardKeywordInput } from "./storyboardKeywords";
 import {
   formatStoryboardKeywords,
   useStoryboardPanelState,
@@ -127,6 +128,7 @@ export function StoryboardListView({
     selectedShotIds,
     shotAnnotations,
     shotStacks,
+    keywordNodes,
     setShotTitle,
     setShotKeywords,
     setShotCustomLabels,
@@ -138,12 +140,14 @@ export function StoryboardListView({
   const [activeCell, setActiveCell] = useState<ActiveCell | null>(null);
   const [editingCell, setEditingCell] = useState<ActiveCell | null>(null);
   const [editValue, setEditValue] = useState("");
+  const [editError, setEditError] = useState<string | null>(null);
   const pendingCellEditRef = useRef<number | null>(null);
   const stackMap = stacksByShotId(shotStacks);
 
   useEffect(() => {
     cancelPendingCellEdit();
     setEditingCell(null);
+    setEditError(null);
     setActiveCell(null);
   }, [resetKey]);
 
@@ -188,7 +192,7 @@ export function StoryboardListView({
       return shotTitle(shot);
     }
     if (columnId === "keywords") {
-      return formatStoryboardKeywords(shotAnnotations[shot.id]?.keywords);
+      return formatStoryboardKeywords(shotAnnotations[shot.id]?.keywordIds, keywordNodes);
     }
     return shotLabel(shot);
   }
@@ -196,6 +200,7 @@ export function StoryboardListView({
   function beginCellEdit(shot: StoryboardShot, columnId: EditableColumn) {
     cancelPendingCellEdit();
     setEditValue(editableCellValue(shot, columnId));
+    setEditError(null);
     setEditingCell({ shotId: shot.id, columnId });
   }
 
@@ -230,6 +235,13 @@ export function StoryboardListView({
     }
     const nextValue = editValue.trim();
     const currentValue = editableCellValue(shot, columnId);
+    if (commit && columnId === "keywords") {
+      const parsed = parseStoryboardKeywordInput(editValue);
+      if (parsed.error) {
+        setEditError(parsed.error);
+        return;
+      }
+    }
     if (commit && nextValue !== currentValue) {
       if (columnId === "title") {
         if (nextValue) {
@@ -249,6 +261,7 @@ export function StoryboardListView({
       }
     }
     setEditingCell(null);
+    setEditError(null);
   }
 
   function renderEditableCell(shot: StoryboardShot, columnId: EditableColumn) {
@@ -265,9 +278,15 @@ export function StoryboardListView({
         className="shot-title-editor"
         value={editValue}
         aria-label={ariaLabel}
+        aria-invalid={columnId === "keywords" && Boolean(editError)}
+        title={editError ?? undefined}
         autoFocus
         onFocus={(event) => event.currentTarget.select()}
-        onChange={(event) => setEditValue(event.currentTarget.value)}
+        onChange={(event) => {
+          const value = event.currentTarget.value;
+          setEditValue(value);
+          setEditError(columnId === "keywords" ? parseStoryboardKeywordInput(value).error : null);
+        }}
         onPointerDown={(event) => event.stopPropagation()}
         onClick={(event) => event.stopPropagation()}
         onDoubleClick={(event) => event.stopPropagation()}
@@ -279,6 +298,7 @@ export function StoryboardListView({
             event.currentTarget.blur();
           } else if (event.key === "Escape") {
             event.preventDefault();
+            setEditError(null);
             finishCellEdit(shot, columnId, false);
           }
         }}

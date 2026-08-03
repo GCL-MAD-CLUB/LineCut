@@ -393,11 +393,19 @@ struct ProjectStoryboardAnnotation {
     #[serde(default)]
     title: Option<String>,
     #[serde(default)]
-    keywords: BTreeSet<String>,
+    keyword_ids: BTreeSet<String>,
     #[serde(default)]
     color_label: Option<ProjectStoryboardColorLabel>,
     #[serde(default)]
     custom_label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectStoryboardKeywordNode {
+    id: String,
+    name: String,
+    parent_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -412,6 +420,7 @@ struct ProjectStoryboardStack {
 struct ProjectStoryboardState {
     shots: Vec<ProjectStoryboardShot>,
     shot_stacks: Vec<ProjectStoryboardStack>,
+    keyword_nodes: Vec<ProjectStoryboardKeywordNode>,
     shot_annotations: HashMap<String, ProjectStoryboardAnnotation>,
 }
 

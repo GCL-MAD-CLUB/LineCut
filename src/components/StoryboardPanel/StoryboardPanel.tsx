@@ -59,11 +59,16 @@ import {
   storyboardShotColorLabels,
 } from "./StoryboardColorLabelButtons";
 import { StoryboardIconView } from "./StoryboardIconView";
+import {
+  formatParsedStoryboardKeywords,
+  parseStoryboardKeywordInput,
+  storyboardKeywordSearchValues,
+} from "./storyboardKeywords";
 import { StoryboardListView } from "./StoryboardListView";
 import {
   formatStoryboardKeywords,
-  normalizeStoryboardKeywords,
   useStoryboardPanelState,
+  type StoryboardKeywordNode,
   type StoryboardRatingComparator,
   type StoryboardSearchRule,
   type StoryboardSearchScope,
@@ -388,7 +393,7 @@ function storyboardShotIsEdited(annotation: StoryboardShotAnnotation | undefined
       annotation.retained ||
       annotation.excluded ||
       annotation.title?.trim() ||
-      annotation.keywords?.length ||
+      annotation.keywordIds?.length ||
       annotation.colorLabel ||
       annotation.customLabel?.trim()),
   );
@@ -411,6 +416,7 @@ function shotMatchesSearch(
   shot: StoryboardShot,
   annotation: StoryboardShotAnnotation | undefined,
   shotCount: number,
+  keywordNodes: readonly StoryboardKeywordNode[],
   query: string,
   scope: StoryboardSearchScope,
   rule: StoryboardSearchRule,
@@ -419,7 +425,9 @@ function shotMatchesSearch(
     ...(scope === "any" || scope === "title"
       ? [storyboardShotTitle(shot, shotCount, annotation)]
       : []),
-    ...(scope === "any" || scope === "keywords" ? (annotation?.keywords ?? []) : []),
+    ...(scope === "any" || scope === "keywords"
+      ? storyboardKeywordSearchValues(annotation?.keywordIds, keywordNodes)
+      : []),
   ].map((value) => value.trim().toLocaleLowerCase());
   const populatedValues = values.filter(Boolean);
   if (rule === "isEmpty") {
@@ -1009,6 +1017,7 @@ function storyboardShotSortValue(
   shot: StoryboardShot,
   columnId: StoryboardSortableColumnId,
   shotAnnotations: Record<string, StoryboardShotAnnotation>,
+  keywordNodes: readonly StoryboardKeywordNode[],
   shotCount: number,
 ) {
   const annotation = shotAnnotations[shot.id];
@@ -1028,7 +1037,7 @@ function storyboardShotSortValue(
     return annotation?.rating ?? 0;
   }
   if (columnId === "keywords") {
-    return formatStoryboardKeywords(annotation?.keywords);
+    return formatStoryboardKeywords(annotation?.keywordIds, keywordNodes);
   }
   if (columnId === "colorLabel") {
     return storyboardShotLabel(annotation);
@@ -1041,6 +1050,7 @@ function sortStoryboardShots(
   shots: readonly StoryboardShot[],
   sort: StoryboardSort,
   shotAnnotations: Record<string, StoryboardShotAnnotation>,
+  keywordNodes: readonly StoryboardKeywordNode[],
   shotCount: number,
   sortShotsById: ReadonlyMap<string, StoryboardShot>,
 ) {
@@ -1063,8 +1073,20 @@ function sortStoryboardShots(
       const leftSortShot = sortShotsById.get(left.shot.id) ?? left.shot;
       const rightSortShot = sortShotsById.get(right.shot.id) ?? right.shot;
       const valueDelta = compareSortValues(
-        storyboardShotSortValue(leftSortShot, sort.columnId, shotAnnotations, shotCount),
-        storyboardShotSortValue(rightSortShot, sort.columnId, shotAnnotations, shotCount),
+        storyboardShotSortValue(
+          leftSortShot,
+          sort.columnId,
+          shotAnnotations,
+          keywordNodes,
+          shotCount,
+        ),
+        storyboardShotSortValue(
+          rightSortShot,
+          sort.columnId,
+          shotAnnotations,
+          keywordNodes,
+          shotCount,
+        ),
       );
       return (
         valueDelta * direction ||
@@ -1097,6 +1119,7 @@ export function StoryboardPanel() {
     activeShotId,
     shots,
     shotStacks,
+    keywordNodes,
     selectedShotIds,
     shotAnnotations,
     detectingVideoContext,
@@ -1205,6 +1228,7 @@ export function StoryboardPanel() {
             shot,
             shotAnnotations[shot.id],
             shotCount,
+            keywordNodes,
             query,
             searchScope,
             searchRule,
@@ -1224,6 +1248,7 @@ export function StoryboardPanel() {
       editFilters,
       flagFilters,
       minimumRating,
+      keywordNodes,
       query,
       ratingComparator,
       searchRule,
@@ -1238,15 +1263,23 @@ export function StoryboardPanel() {
   const setActiveShotSort = viewMode === "grid" ? setGridShotSort : setShotSort;
   const sortedShots = useMemo(
     () =>
-      sortStoryboardShots(filteredShots, activeShotSort, shotAnnotations, shotCount, sortShotsById),
-    [activeShotSort, filteredShots, shotAnnotations, shotCount, sortShotsById],
+      sortStoryboardShots(
+        filteredShots,
+        activeShotSort,
+        shotAnnotations,
+        keywordNodes,
+        shotCount,
+        sortShotsById,
+      ),
+    [activeShotSort, filteredShots, keywordNodes, shotAnnotations, shotCount, sortShotsById],
   );
   const footerSortLabel =
     storyboardGridSortOptions.find((option) => option.id === activeShotSort.columnId)?.label ??
     "标题";
   const footerSortVisible = footerAreaVisibility.sort[viewMode];
-  const sprayKeywords = normalizeStoryboardKeywords(sprayKeywordInput);
-  const sprayKeywordsDisplay = formatStoryboardKeywords(sprayKeywords);
+  const sprayKeywordParseResult = parseStoryboardKeywordInput(sprayKeywordInput);
+  const sprayKeywords = sprayKeywordParseResult.paths;
+  const sprayKeywordsDisplay = formatParsedStoryboardKeywords(sprayKeywords);
   const sprayUsesCustomLabel = sprayMode === "colorLabel" && sprayCustomLabel.trim().length > 0;
   const sprayBottleFillColor =
     sprayMode === "colorLabel" && sprayColorLabel
@@ -1976,7 +2009,7 @@ export function StoryboardPanel() {
   function applySprayToShot(shotId: string, historyGroupId: string) {
     const targetShotIds = annotationShotIdsForSelection([shotId], shotStacksByShotId);
     if (sprayMode === "keywords") {
-      appendShotKeywords(targetShotIds, sprayKeywords, historyGroupId);
+      appendShotKeywords(targetShotIds, sprayKeywordInput, historyGroupId);
       return;
     }
     if (sprayMode === "colorLabel") {
@@ -2956,7 +2989,11 @@ export function StoryboardPanel() {
                       className="shot-title-editor storyboard-footer-spray-keyword-input"
                       value={sprayKeywordInput}
                       aria-label="喷涂关键字"
-                      title="喷涂关键字"
+                      aria-invalid={Boolean(sprayKeywordParseResult.error)}
+                      title={
+                        sprayKeywordParseResult.error ??
+                        "支持 父>子、子<父、父|子；多个关键字用逗号分隔"
+                      }
                       autoComplete="off"
                       spellCheck={false}
                       onChange={(event) => setSprayKeywordInput(event.currentTarget.value)}
@@ -3723,10 +3760,14 @@ export function StoryboardPanel() {
             <PopupMenuItem
               mnemonic="A"
               onSelect={() => {
-                appendShotKeywords(contextMenuShotIds, sprayKeywords);
+                appendShotKeywords(contextMenuShotIds, sprayKeywordInput);
                 setContextMenu(null);
               }}
-              disabled={contextMenuShotIds.length === 0 || sprayKeywords.length === 0}
+              disabled={
+                contextMenuShotIds.length === 0 ||
+                sprayKeywords.length === 0 ||
+                Boolean(sprayKeywordParseResult.error)
+              }
             >
               {sprayKeywords.length > 0
                 ? `添加关键字“${sprayKeywordsDisplay}”(A)`

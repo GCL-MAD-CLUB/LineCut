@@ -97,9 +97,9 @@ mod tests {
     use super::{current_version, decode_current, from_runtime, into_runtime, ProjectModel};
     use crate::{
         ProjectEditorState, ProjectMediaBinState, ProjectPreviewState, ProjectStoryboardAnnotation,
-        ProjectStoryboardColorLabel, ProjectStoryboardShot, ProjectStoryboardStack,
-        ProjectStoryboardState, ProjectSubtitleAnnotation, ProjectSubtitleColorLabel,
-        ProjectSubtitleState, ProjectWorkspace,
+        ProjectStoryboardColorLabel, ProjectStoryboardKeywordNode, ProjectStoryboardShot,
+        ProjectStoryboardStack, ProjectStoryboardState, ProjectSubtitleAnnotation,
+        ProjectSubtitleColorLabel, ProjectSubtitleState, ProjectWorkspace,
     };
     use std::collections::{BTreeSet, HashMap};
 
@@ -178,6 +178,18 @@ mod tests {
                     id: "stack-1".to_string(),
                     shot_ids: vec!["shot:0:24".to_string(), "shot:25:48".to_string()],
                 }],
+                keyword_nodes: vec![
+                    ProjectStoryboardKeywordNode {
+                        id: "keyword:close-up".to_string(),
+                        name: "close-up".to_string(),
+                        parent_id: None,
+                    },
+                    ProjectStoryboardKeywordNode {
+                        id: "keyword:hero".to_string(),
+                        name: "hero".to_string(),
+                        parent_id: Some("keyword:close-up".to_string()),
+                    },
+                ],
                 shot_annotations: HashMap::from([(
                     "shot:0:24".to_string(),
                     ProjectStoryboardAnnotation {
@@ -185,7 +197,10 @@ mod tests {
                         retained: true,
                         excluded: false,
                         title: Some("Opening".to_string()),
-                        keywords: BTreeSet::from(["close-up".to_string(), "hero".to_string()]),
+                        keyword_ids: BTreeSet::from([
+                            "keyword:close-up".to_string(),
+                            "keyword:hero".to_string(),
+                        ]),
                         color_label: Some(ProjectStoryboardColorLabel::Red),
                         custom_label: Some("Hero shot".to_string()),
                     },
@@ -212,21 +227,19 @@ mod tests {
             .get("expanded")
             .is_none());
         assert_eq!(
-            encoded_storyboard["shotAnnotations"]["shot:0:24"]["keywords"],
-            serde_json::json!(["close-up", "hero"])
+            encoded_storyboard["shotAnnotations"]["shot:0:24"]["keywordIds"],
+            serde_json::json!(["keyword:close-up", "keyword:hero"])
         );
-        let mut legacy_encoded_json = encoded_json.clone();
-        legacy_encoded_json["workspace"]["storyboards"]["video:asset:fingerprint"]
-            ["shotAnnotations"]["shot:0:24"]
-            .as_object_mut()
-            .unwrap()
-            .remove("keywords");
-        let legacy_encoded = serde_json::to_vec(&legacy_encoded_json).unwrap();
-        let legacy_restored = into_runtime(decode_current(3, &legacy_encoded).unwrap()).unwrap();
-        assert!(
-            legacy_restored.storyboards["video:asset:fingerprint"].shot_annotations["shot:0:24"]
-                .keywords
-                .is_empty()
+        assert_eq!(
+            encoded_storyboard["keywordNodes"],
+            serde_json::json!([
+                { "id": "keyword:close-up", "name": "close-up", "parentId": null },
+                {
+                    "id": "keyword:hero",
+                    "name": "hero",
+                    "parentId": "keyword:close-up"
+                }
+            ])
         );
         let restored = into_runtime(decode_current(3, &encoded).unwrap()).unwrap();
         let subtitle = restored
@@ -248,13 +261,19 @@ mod tests {
         assert_eq!(annotation.rating, 4);
         assert!(annotation.retained);
         assert_eq!(annotation.title.as_deref(), Some("Opening"));
+        assert_eq!(storyboard.keyword_nodes.len(), 2);
+        assert_eq!(storyboard.keyword_nodes[0].name, "close-up");
+        assert_eq!(
+            storyboard.keyword_nodes[1].parent_id.as_deref(),
+            Some("keyword:close-up")
+        );
         assert_eq!(
             annotation
-                .keywords
+                .keyword_ids
                 .iter()
                 .map(String::as_str)
                 .collect::<Vec<_>>(),
-            vec!["close-up", "hero"]
+            vec!["keyword:close-up", "keyword:hero"]
         );
         assert_eq!(annotation.custom_label.as_deref(), Some("Hero shot"));
         assert!(matches!(

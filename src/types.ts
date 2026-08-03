@@ -84,12 +84,18 @@ export interface StoryboardShot {
 
 export type StoryboardShotColorLabel = "red" | "yellow" | "green" | "blue" | "purple";
 
+export interface StoryboardKeywordNode {
+  id: string;
+  name: string;
+  parentId: string | null;
+}
+
 export interface StoryboardShotAnnotation {
   rating: number;
   retained: boolean;
   excluded?: boolean;
   title?: string | null;
-  keywords?: string[] | null;
+  keywordIds?: string[] | null;
   colorLabel?: StoryboardShotColorLabel | null;
   customLabel?: string | null;
 }
@@ -102,6 +108,7 @@ export interface StoryboardShotStackState {
 export interface StoryboardState {
   shots: StoryboardShot[];
   shotStacks: StoryboardShotStackState[];
+  keywordNodes: StoryboardKeywordNode[];
   shotAnnotations: Record<string, StoryboardShotAnnotation>;
 }
 
