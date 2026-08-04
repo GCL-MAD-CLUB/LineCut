@@ -143,6 +143,42 @@ export function normalizeStoryboardKeywordIds(keywordIds: Iterable<string>) {
   return Array.from(new Set(keywordIds));
 }
 
+interface EnsuredStoryboardKeywordNode {
+  keywordNodes: StoryboardKeywordNode[];
+  keywordId: string;
+}
+
+export function ensureStoryboardKeywordNode(
+  currentNodes: StoryboardKeywordNode[],
+  name: string,
+  parentId: string | null,
+  synonyms: readonly string[] = [],
+): EnsuredStoryboardKeywordNode {
+  const existing = currentNodes.find(
+    (node) => (node.parentId ?? null) === parentId && node.name === name,
+  );
+  if (existing) {
+    const currentSynonyms = existing.synonyms ?? [];
+    const mergedSynonyms = Array.from(new Set([...currentSynonyms, ...synonyms]));
+    if (mergedSynonyms.length === currentSynonyms.length) {
+      return { keywordNodes: currentNodes, keywordId: existing.id };
+    }
+    return {
+      keywordNodes: currentNodes.map((node) =>
+        node.id === existing.id ? { ...node, synonyms: mergedSynonyms } : node,
+      ),
+      keywordId: existing.id,
+    };
+  }
+  const node: StoryboardKeywordNode = {
+    id: nextKeywordId(),
+    name,
+    parentId,
+    ...(synonyms.length > 0 ? { synonyms: [...synonyms] } : {}),
+  };
+  return { keywordNodes: [...currentNodes, node], keywordId: node.id };
+}
+
 export function storyboardKeywordPathForId(
   keywordId: string,
   keywordNodes: readonly StoryboardKeywordNode[],
@@ -368,6 +404,7 @@ export function storyboardKeywordSearchValues(
   keywordIds: Iterable<string> | null | undefined,
   keywordNodes: readonly StoryboardKeywordNode[],
 ) {
+  const nodesById = new Map(keywordNodes.map((node) => [node.id, node]));
   const values = new Set<string>();
   for (const keywordId of normalizeStoryboardKeywordIds(keywordIds ?? [])) {
     const path = storyboardKeywordPathForId(keywordId, keywordNodes);
@@ -377,6 +414,21 @@ export function storyboardKeywordSearchValues(
     values.add(path.join("<"));
     for (const name of path) {
       values.add(name);
+    }
+    const visited = new Set<string>();
+    let currentId: string | null = keywordId;
+    while (currentId && !visited.has(currentId)) {
+      visited.add(currentId);
+      const node = nodesById.get(currentId);
+      if (!node) {
+        break;
+      }
+      for (const synonym of node.synonyms ?? []) {
+        if (synonym) {
+          values.add(synonym);
+        }
+      }
+      currentId = node.parentId ?? null;
     }
   }
   return Array.from(values);

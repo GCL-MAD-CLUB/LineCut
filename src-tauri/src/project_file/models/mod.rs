@@ -183,11 +183,13 @@ mod tests {
                         id: "keyword:close-up".to_string(),
                         name: "close-up".to_string(),
                         parent_id: None,
+                        synonyms: vec!["特写".to_string()],
                     },
                     ProjectStoryboardKeywordNode {
                         id: "keyword:hero".to_string(),
                         name: "hero".to_string(),
                         parent_id: Some("keyword:close-up".to_string()),
+                        synonyms: Vec::new(),
                     },
                 ],
                 recent_keyword_ids: vec![
@@ -237,7 +239,12 @@ mod tests {
         assert_eq!(
             encoded_storyboard["keywordNodes"],
             serde_json::json!([
-                { "id": "keyword:close-up", "name": "close-up", "parentId": null },
+                {
+                    "id": "keyword:close-up",
+                    "name": "close-up",
+                    "parentId": null,
+                    "synonyms": ["特写"]
+                },
                 {
                     "id": "keyword:hero",
                     "name": "hero",
@@ -275,6 +282,10 @@ mod tests {
             vec!["keyword:hero", "keyword:close-up"]
         );
         assert_eq!(storyboard.keyword_nodes[0].name, "close-up");
+        assert_eq!(
+            storyboard.keyword_nodes[0].synonyms,
+            vec!["特写".to_string()]
+        );
         assert_eq!(
             storyboard.keyword_nodes[1].parent_id.as_deref(),
             Some("keyword:close-up")

@@ -88,6 +88,7 @@ export interface StoryboardKeywordNode {
   id: string;
   name: string;
   parentId: string | null;
+  synonyms?: string[];
 }
 
 export interface StoryboardShotAnnotation {

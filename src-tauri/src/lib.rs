@@ -406,6 +406,8 @@ struct ProjectStoryboardKeywordNode {
     id: String,
     name: String,
     parent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    synonyms: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

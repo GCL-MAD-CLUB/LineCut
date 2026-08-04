@@ -17,7 +17,6 @@ import {
   suggestedStoryboardKeywordIds,
   visibleStoryboardKeywordIds,
 } from "./storyboardKeywords";
-import type { StoryboardKeywordEditorMode } from "./storyboardPanelState";
 import { useStoryboardPanelState } from "./storyboardPanelState";
 
 interface StoryboardKeywordPanelProps {
@@ -87,6 +86,7 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
     setShotKeywords,
     setShotKeywordActivation,
     removeStoryboardKeyword,
+    createStoryboardKeyword,
     keywordEditorMode,
     setKeywordEditorMode,
   } = useStoryboardPanelState((state) => state);
@@ -108,6 +108,12 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
     label: string;
     count: number;
   } | null>(null);
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [createName, setCreateName] = useState("");
+  const [createSynonyms, setCreateSynonyms] = useState("");
+  const [createNestIntoParent, setCreateNestIntoParent] = useState(false);
+  const [createAddToShots, setCreateAddToShots] = useState(false);
+  const [duplicateNameRequest, setDuplicateNameRequest] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const keywordEditorRef = useRef<HTMLTextAreaElement | null>(null);
   const cancelKeywordEditRef = useRef(false);
@@ -124,6 +130,8 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
     setCollapsedNodeIds(new Set());
     setSelectedTreeNodeId(null);
     setKeywordDeleteRequest(null);
+    setCreateDialogOpen(false);
+    setDuplicateNameRequest(null);
     setKeywordModeMenu(null);
   }, [resetKey]);
 
@@ -379,6 +387,61 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
 
   const handleCancelDelete = useCallback(() => setKeywordDeleteRequest(null), []);
 
+  const createParentCandidate = useMemo(() => {
+    if (selectedTreeNodeId) {
+      const selected = keywordNodes.find((node) => node.id === selectedTreeNodeId);
+      if (selected) {
+        return selected;
+      }
+    }
+    return childrenByParent.get(null)?.[0] ?? null;
+  }, [childrenByParent, keywordNodes, selectedTreeNodeId]);
+
+  const createKeywordName = createName.replace(/[<>|]/g, "").trim();
+
+  function openCreateDialog(preserveFields = false) {
+    if (!preserveFields) {
+      setCreateName("");
+      setCreateSynonyms("");
+      setCreateNestIntoParent(false);
+      setCreateAddToShots(false);
+    }
+    setCreateDialogOpen(true);
+  }
+
+  function confirmKeywordCreate() {
+    if (!createKeywordName) {
+      return;
+    }
+    const parentId =
+      createNestIntoParent && createParentCandidate ? createParentCandidate.id : null;
+    const duplicate = keywordNodes.some(
+      (node) => (node.parentId ?? null) === parentId && node.name === createKeywordName,
+    );
+    if (duplicate) {
+      setCreateDialogOpen(false);
+      setDuplicateNameRequest(createKeywordName);
+      return;
+    }
+    const synonyms = createSynonyms
+      .split(/[,，\n]/)
+      .map((value) => value.trim())
+      .filter(Boolean);
+    createStoryboardKeyword(createKeywordName, {
+      parentId,
+      synonyms,
+      shotIds: createAddToShots ? targetShotIds : undefined,
+    });
+    setCreateDialogOpen(false);
+  }
+
+  const handleCancelCreate = useCallback(() => setCreateDialogOpen(false), []);
+
+  function acknowledgeDuplicateName() {
+    setDuplicateNameRequest(null);
+    openCreateDialog(true);
+  }
+
   function renderKeywordGrid(keywordIds: readonly string[]) {
     const cells = Array.from({ length: 9 }, (_, index) => keywordIds[index] ?? null);
     return (
@@ -530,7 +593,10 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
                       return;
                     }
                     const bounds = event.currentTarget.getBoundingClientRect();
-                    setKeywordModeMenu({ x: bounds.right - keywordModeMenuWidth, y: bounds.bottom });
+                    setKeywordModeMenu({
+                      x: bounds.right - keywordModeMenuWidth,
+                      y: bounds.bottom,
+                    });
                   }}
                 >
                   <span className="storyboard-keyword-dropdown-value">
@@ -673,9 +739,9 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
               <button
                 type="button"
                 className="storyboard-keyword-add-button"
-                onClick={() => inputRef.current?.focus()}
-                title="添加关键字"
-                aria-label="添加关键字"
+                onClick={() => openCreateDialog()}
+                title="创建关键字标记"
+                aria-label="创建关键字标记"
               >
                 <Plus aria-hidden="true" />
               </button>
@@ -751,6 +817,105 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
             </PopupMenuItem>
           </PopupMenu>,
           document.body,
+        )}
+      {createDialogOpen &&
+        createPortal(
+          <ModalDialog
+            title="创建关键字标记"
+            className="storyboard-keyword-create-dialog"
+            bodyClassName="storyboard-keyword-create-dialog-body"
+            confirmLabel="创建"
+            confirmDisabled={!createKeywordName}
+            onCancel={handleCancelCreate}
+            onConfirm={confirmKeywordCreate}
+          >
+            <label className="storyboard-keyword-create-field storyboard-keyword-create-field-name">
+              <span>关键字名称:</span>
+              <input
+                autoFocus
+                value={createName}
+                onChange={(event) => setCreateName(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  event.stopPropagation();
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    confirmKeywordCreate();
+                  } else if (event.key === "Escape") {
+                    event.preventDefault();
+                    handleCancelCreate();
+                  }
+                }}
+                aria-label="关键字名称"
+              />
+            </label>
+            <label className="storyboard-keyword-create-field">
+              <span>同义词:</span>
+              <textarea
+                value={createSynonyms}
+                rows={4}
+                onChange={(event) => setCreateSynonyms(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  event.stopPropagation();
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    handleCancelCreate();
+                  }
+                }}
+                aria-label="同义词"
+                title="多个同义词用逗号或换行分隔"
+              />
+            </label>
+            {(createParentCandidate || targetShotIds.length > 0) && (
+              <div className="storyboard-keyword-create-options">
+                <span className="storyboard-keyword-create-options-title">创建选项</span>
+                {createParentCandidate && (
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={createNestIntoParent}
+                      onChange={(event) => setCreateNestIntoParent(event.currentTarget.checked)}
+                    />
+                    置入“{createParentCandidate.name}”中
+                  </label>
+                )}
+                {targetShotIds.length > 0 && (
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={createAddToShots}
+                      onChange={(event) => setCreateAddToShots(event.currentTarget.checked)}
+                    />
+                    添加到选定的分镜
+                  </label>
+                )}
+              </div>
+            )}
+          </ModalDialog>,
+          portalContainerRef.current ?? document.body,
+        )}
+      {duplicateNameRequest &&
+        createPortal(
+          <ModalDialog
+            title="创建关键字标记"
+            className="storyboard-keyword-duplicate-dialog"
+            actions={
+              <button
+                type="button"
+                className="modal-dialog-confirm"
+                autoFocus
+                onClick={acknowledgeDuplicateName}
+              >
+                确定
+              </button>
+            }
+            onCancel={acknowledgeDuplicateName}
+            onConfirm={acknowledgeDuplicateName}
+          >
+            <div className="storyboard-keyword-duplicate-dialog-message">
+              名称“{duplicateNameRequest}”已被使用，请选择其它名称。
+            </div>
+          </ModalDialog>,
+          portalContainerRef.current ?? document.body,
         )}
       {keywordDeleteRequest &&
         createPortal(
