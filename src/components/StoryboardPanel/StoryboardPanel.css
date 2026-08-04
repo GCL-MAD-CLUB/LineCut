@@ -1210,10 +1210,14 @@ body.is-resizing-storyboard-keyword-panel * {
   border-bottom: 1px solid var(--color-border-row);
 }
 
-.storyboard-keyword-tree-row:hover,
-.storyboard-keyword-tree-row.is-active {
+.storyboard-keyword-tree-row:hover {
   color: #e0e0e0;
   background: var(--color-surface-hover);
+}
+
+.storyboard-keyword-tree-row.is-active {
+  color: #e0e0e0;
+  background: #3a3a3a;
 }
 
 .storyboard-keyword-tree-check,

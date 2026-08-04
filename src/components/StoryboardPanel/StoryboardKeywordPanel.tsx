@@ -116,7 +116,9 @@ export function StoryboardKeywordPanel({
   const [recentOpen, setRecentOpen] = useState(true);
   const [treeOpen, setTreeOpen] = useState(true);
   const [collapsedNodeIds, setCollapsedNodeIds] = useState<Set<string>>(() => new Set());
-  const [selectedTreeNodeId, setSelectedTreeNodeId] = useState<string | null>(null);
+  const [selectedTreeNodeIds, setSelectedTreeNodeIds] = useState<Set<string>>(() => new Set());
+  const [selectionAnchorId, setSelectionAnchorId] = useState<string | null>(null);
+  const [keywordBatchDeleteRequest, setKeywordBatchDeleteRequest] = useState(false);
   const [keywordDeleteRequest, setKeywordDeleteRequest] = useState<{
     keywordId: string;
     label: string;
@@ -150,8 +152,10 @@ export function StoryboardKeywordPanel({
     setKeywordEditError(null);
     setFilter("");
     setCollapsedNodeIds(new Set());
-    setSelectedTreeNodeId(null);
+    setSelectedTreeNodeIds(new Set());
+    setSelectionAnchorId(null);
     setKeywordDeleteRequest(null);
+    setKeywordBatchDeleteRequest(false);
     setCreateDialogOpen(false);
     setCreateParentOverrideId(null);
     setNewKeywordContainerId(null);
@@ -337,6 +341,35 @@ export function StoryboardKeywordPanel({
     return matchingIds;
   }, [keywordNodes, normalizedFilter]);
 
+  const visibleOrderedTreeNodeIds = useMemo(() => {
+    const orderedIds: string[] = [];
+    const visit = (parentId: string | null) => {
+      for (const node of childrenByParent.get(parentId) ?? []) {
+        if (!matchingTreeNodeIds.has(node.id)) {
+          continue;
+        }
+        orderedIds.push(node.id);
+        const childNodes = childrenByParent.get(node.id) ?? [];
+        const expanded = normalizedFilter ? true : !collapsedNodeIds.has(node.id);
+        if (childNodes.length > 0 && expanded) {
+          visit(node.id);
+        }
+      }
+    };
+    visit(null);
+    return orderedIds;
+  }, [childrenByParent, collapsedNodeIds, matchingTreeNodeIds, normalizedFilter]);
+
+  const primarySelectedId = useMemo(() => {
+    if (selectedTreeNodeIds.size === 1) {
+      return selectedTreeNodeIds.values().next().value ?? null;
+    }
+    if (selectionAnchorId && selectedTreeNodeIds.has(selectionAnchorId)) {
+      return selectionAnchorId;
+    }
+    return selectedTreeNodeIds.values().next().value ?? null;
+  }, [selectedTreeNodeIds, selectionAnchorId]);
+
   function keywordActivationState(keywordId: string) {
     const activeCount = effectiveCountById.get(keywordId) ?? 0;
     return {
@@ -370,6 +403,51 @@ export function StoryboardKeywordPanel({
     setShotKeywordActivation(targetShotIds, keywordId, !checked);
   }
 
+  function selectTreeRow(
+    nodeId: string,
+    event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean },
+  ) {
+    if (event.shiftKey) {
+      const effectiveAnchorId =
+        selectionAnchorId && visibleOrderedTreeNodeIds.includes(selectionAnchorId)
+          ? selectionAnchorId
+          : (visibleOrderedTreeNodeIds.find((candidateId) =>
+              selectedTreeNodeIds.has(candidateId),
+            ) ?? null);
+      const anchorIndex = effectiveAnchorId
+        ? visibleOrderedTreeNodeIds.indexOf(effectiveAnchorId)
+        : -1;
+      const nodeIndex = visibleOrderedTreeNodeIds.indexOf(nodeId);
+      if (effectiveAnchorId && anchorIndex >= 0 && nodeIndex >= 0) {
+        const start = Math.min(anchorIndex, nodeIndex);
+        const end = Math.max(anchorIndex, nodeIndex);
+        setSelectedTreeNodeIds(new Set(visibleOrderedTreeNodeIds.slice(start, end + 1)));
+        return;
+      }
+      setSelectedTreeNodeIds(new Set([nodeId]));
+      setSelectionAnchorId(nodeId);
+      return;
+    }
+    if (event.ctrlKey || event.metaKey) {
+      const next = new Set(selectedTreeNodeIds);
+      if (next.has(nodeId)) {
+        next.delete(nodeId);
+        if (selectionAnchorId === nodeId) {
+          setSelectionAnchorId(
+            visibleOrderedTreeNodeIds.find((candidateId) => next.has(candidateId)) ?? null,
+          );
+        }
+      } else {
+        next.add(nodeId);
+        setSelectionAnchorId(nodeId);
+      }
+      setSelectedTreeNodeIds(next);
+      return;
+    }
+    setSelectedTreeNodeIds(new Set([nodeId]));
+    setSelectionAnchorId(nodeId);
+  }
+
   function submitKeywordInput() {
     if (targetShotIds.length === 0) {
       return;
@@ -394,12 +472,17 @@ export function StoryboardKeywordPanel({
     }
   }
 
-  function performKeywordDelete(keywordId: string) {
+  function performKeywordDelete(keywordId: string, historyGroupId?: string) {
     const removableIds = storyboardKeywordDescendantIds(keywordId, keywordNodes);
-    removeStoryboardKeyword(keywordId);
-    if (selectedTreeNodeId === keywordId) {
-      setSelectedTreeNodeId(null);
-    }
+    removeStoryboardKeyword(keywordId, historyGroupId);
+    setSelectedTreeNodeIds((current) => {
+      const next = new Set(current);
+      for (const deletedId of removableIds) {
+        next.delete(deletedId);
+      }
+      return next;
+    });
+    setSelectionAnchorId((current) => (current && removableIds.has(current) ? null : current));
     if (newKeywordContainerId && removableIds.has(newKeywordContainerId)) {
       setNewKeywordContainerId(null);
     }
@@ -430,9 +513,20 @@ export function StoryboardKeywordPanel({
   }
 
   function requestRemoveSelectedKeyword() {
-    if (selectedTreeNodeId) {
-      requestKeywordDelete(selectedTreeNodeId);
+    const selectedIds = Array.from(selectedTreeNodeIds);
+    if (selectedIds.length === 1) {
+      requestKeywordDelete(selectedIds[0]);
+    } else if (selectedIds.length > 1) {
+      setKeywordBatchDeleteRequest(true);
     }
+  }
+
+  function requestContextMenuDelete(keywordId: string) {
+    if (selectedTreeNodeIds.size > 1 && selectedTreeNodeIds.has(keywordId)) {
+      setKeywordBatchDeleteRequest(true);
+      return;
+    }
+    requestKeywordDelete(keywordId);
   }
 
   function confirmKeywordDelete() {
@@ -444,7 +538,17 @@ export function StoryboardKeywordPanel({
     performKeywordDelete(keywordId);
   }
 
+  function confirmKeywordBatchDelete() {
+    const selectedIds = Array.from(selectedTreeNodeIds);
+    setKeywordBatchDeleteRequest(false);
+    const historyGroupId = `storyboard-keyword-batch-delete-${Date.now()}`;
+    for (const keywordId of selectedIds) {
+      performKeywordDelete(keywordId, historyGroupId);
+    }
+  }
+
   const handleCancelDelete = useCallback(() => setKeywordDeleteRequest(null), []);
+  const handleCancelBatchDelete = useCallback(() => setKeywordBatchDeleteRequest(false), []);
 
   const createParentCandidate = useMemo(() => {
     if (createParentOverrideId) {
@@ -459,8 +563,8 @@ export function StoryboardKeywordPanel({
         return container;
       }
     }
-    if (selectedTreeNodeId) {
-      const selected = keywordNodes.find((node) => node.id === selectedTreeNodeId);
+    if (primarySelectedId) {
+      const selected = keywordNodes.find((node) => node.id === primarySelectedId);
       if (selected) {
         return selected;
       }
@@ -471,7 +575,7 @@ export function StoryboardKeywordPanel({
     createParentOverrideId,
     keywordNodes,
     newKeywordContainerId,
-    selectedTreeNodeId,
+    primarySelectedId,
   ]);
 
   const createKeywordName = createName.replace(/[<>|]/g, "").trim();
@@ -615,12 +719,15 @@ export function StoryboardKeywordPanel({
         <div key={node.id} className="storyboard-keyword-tree-branch">
           <div
             className={`storyboard-keyword-tree-row ${
-              selectedTreeNodeId === node.id ? "is-active" : ""
+              selectedTreeNodeIds.has(node.id) ? "is-active" : ""
             }`.trim()}
-            onClick={() => setSelectedTreeNodeId(node.id)}
+            onClick={(event) => selectTreeRow(node.id, event)}
             onContextMenu={(event) => {
               event.preventDefault();
-              setSelectedTreeNodeId(node.id);
+              if (!selectedTreeNodeIds.has(node.id)) {
+                setSelectedTreeNodeIds(new Set([node.id]));
+                setSelectionAnchorId(node.id);
+              }
               setTreeContextMenu({ x: event.clientX, y: event.clientY, keywordId: node.id });
             }}
           >
@@ -629,6 +736,8 @@ export function StoryboardKeywordPanel({
               className="storyboard-keyword-tree-check"
               onClick={(event) => {
                 event.stopPropagation();
+                setSelectedTreeNodeIds(new Set([node.id]));
+                setSelectionAnchorId(node.id);
                 toggleKeywordCheck(node.id);
               }}
               disabled={targetShotIds.length === 0}
@@ -902,7 +1011,7 @@ export function StoryboardKeywordPanel({
               >
                 <Plus aria-hidden="true" />
               </button>
-              {selectedTreeNodeId && (
+              {selectedTreeNodeIds.size > 0 && (
                 <button
                   type="button"
                   className="storyboard-keyword-remove-button"
@@ -1038,7 +1147,7 @@ export function StoryboardKeywordPanel({
             <PopupMenuSeparator />
             <PopupMenuItem
               onSelect={() => {
-                requestKeywordDelete(treeContextMenuNode.id);
+                requestContextMenuDelete(treeContextMenuNode.id);
                 setTreeContextMenu(null);
               }}
             >
@@ -1236,6 +1345,28 @@ export function StoryboardKeywordPanel({
               <div>
                 <strong>是否要删除关键字“{keywordDeleteRequest.label}”？</strong>
                 <span>此关键字用于 {keywordDeleteRequest.count} 个分镜，并将从中移去。</span>
+              </div>
+            </div>
+          </ModalDialog>,
+          portalContainerRef.current ?? document.body,
+        )}
+      {keywordBatchDeleteRequest &&
+        createPortal(
+          <ModalDialog
+            title="删除关键字"
+            className="storyboard-keyword-delete-dialog"
+            bodyClassName="storyboard-keyword-delete-dialog-body"
+            confirmLabel="删除"
+            onCancel={handleCancelBatchDelete}
+            onConfirm={confirmKeywordBatchDelete}
+          >
+            <div className="storyboard-keyword-delete-dialog-message">
+              <Trash2 aria-hidden="true" />
+              <div>
+                <strong>是否要删除所有选定的关键字？</strong>
+                <span>
+                  某些选定的关键字可能会用于将移去这些关键字的照片，或可能包含其它将被一同删除的关键字。
+                </span>
               </div>
             </div>
           </ModalDialog>,
