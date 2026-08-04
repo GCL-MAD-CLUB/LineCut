@@ -356,14 +356,16 @@ export function suggestedStoryboardKeywordIds(
   keywordNodes: readonly StoryboardKeywordNode[],
   shotAnnotations: Readonly<Record<string, StoryboardShotAnnotation>>,
   shotIds: Iterable<string> = Object.keys(shotAnnotations),
+  excludedKeywordIds: ReadonlySet<string> = new Set(),
   limit = 18,
 ) {
   const validIds = new Set(keywordNodes.map((node) => node.id));
+  const usageCounts = storyboardKeywordUsageCounts(keywordNodes, shotAnnotations, shotIds);
   const candidates = Array.from(new Set(recentKeywordIds))
     .filter((keywordId) => validIds.has(keywordId))
+    .filter((keywordId) => !excludedKeywordIds.has(keywordId))
     .slice(0, limit);
   const recentRank = new Map(candidates.map((keywordId, index) => [keywordId, index + 1]));
-  const usageCounts = storyboardKeywordUsageCounts(keywordNodes, shotAnnotations, shotIds);
   const byUsage = [...candidates].sort(
     (left, right) =>
       (usageCounts.get(right) ?? 0) - (usageCounts.get(left) ?? 0) ||

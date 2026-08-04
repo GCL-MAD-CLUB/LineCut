@@ -2974,7 +2974,12 @@ export function StoryboardPanel() {
             onPointerDown={startKeywordPanelResize}
           />
         )}
-        <StoryboardKeywordPanel shotIds={keywordPanelShotIds} resetKey={videoContext} />
+        <StoryboardKeywordPanel
+          shotIds={keywordPanelShotIds}
+          resetKey={videoContext}
+          onSetQuickKeyword={setSprayKeywordInput}
+          quickKeywordLabel={sprayKeywordInput}
+        />
         <div className={`storyboard-keyword-collapse-rail ${keywordPanelOpen ? "is-open" : ""}`}>
           <button
             type="button"

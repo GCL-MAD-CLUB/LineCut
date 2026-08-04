@@ -1065,6 +1065,11 @@ body.is-resizing-storyboard-keyword-panel * {
   width: 176px;
 }
 
+.storyboard-keyword-tree-menu {
+  position: fixed;
+  z-index: 1000;
+}
+
 .storyboard-keyword-plain-editor.storyboard-keyword-with-parents {
   background: var(--color-surface);
   border: 0;
@@ -1238,12 +1243,15 @@ body.is-resizing-storyboard-keyword-panel * {
   justify-content: center;
   border: 1px solid transparent;
   color: #d7d7d7;
-  font-size: 12px;
-  line-height: 10px;
+  font-size: 11px;
+  line-height: 1;
 }
 
 .storyboard-keyword-tree-check-mark {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
 }
 
 .storyboard-keyword-tree-row:hover .storyboard-keyword-tree-check-box {
@@ -1287,19 +1295,48 @@ body.is-resizing-storyboard-keyword-panel * {
 }
 
 .storyboard-keyword-tree-name {
+  margin-top: -1.5px;
   display: flex;
-  width: 100%;
+  flex: 0 1 auto;
   align-items: center;
   overflow: hidden;
   text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
+  line-height: 1;
+}
+
+.storyboard-keyword-tree-dot {
+  display: block;
+  flex: none;
+  width: 2px;
+  height: 2px;
+  margin-left: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.storyboard-keyword-tree-quick {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  margin-left: 8px;
+}
+
+.storyboard-keyword-tree-quick > svg {
+  width: 11px;
+  height: 11px;
 }
 
 .storyboard-keyword-tree-count {
+  display: flex;
+  height: 20px;
+  align-items: center;
+  justify-content: flex-end;
   color: #aaa;
   font-variant-numeric: tabular-nums;
-  text-align: right;
+  line-height: 1;
 }
 
 .storyboard-content.is-spraying .shot-frame-button,

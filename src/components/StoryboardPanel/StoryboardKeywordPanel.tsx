@@ -2,7 +2,7 @@ import { ChevronsUpDown, ChevronDown, Minus, Plus, Search, Trash2 } from "lucide
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ModalDialog } from "../ModalDialog";
-import { PopupMenu, PopupMenuItem } from "../PopupMenu";
+import { PopupMenu, PopupMenuItem, PopupMenuSeparator } from "../PopupMenu";
 import type { StoryboardKeywordNode } from "../../types";
 import {
   expandedStoryboardKeywordText,
@@ -22,6 +22,8 @@ import { useStoryboardPanelState } from "./storyboardPanelState";
 interface StoryboardKeywordPanelProps {
   shotIds: readonly string[];
   resetKey: string;
+  onSetQuickKeyword?: (keywordLabel: string) => void;
+  quickKeywordLabel?: string;
 }
 
 const keywordModeMenuWidth = 176;
@@ -76,7 +78,12 @@ function keywordNodeOrder(left: StoryboardKeywordNode, right: StoryboardKeywordN
   return left.name.localeCompare(right.name, "zh-CN");
 }
 
-export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordPanelProps) {
+export function StoryboardKeywordPanel({
+  shotIds,
+  resetKey,
+  onSetQuickKeyword,
+  quickKeywordLabel = "",
+}: StoryboardKeywordPanelProps) {
   const {
     keywordNodes,
     recentKeywordIds,
@@ -86,6 +93,7 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
     setShotKeywords,
     setShotKeywordActivation,
     removeStoryboardKeyword,
+    updateStoryboardKeyword,
     createStoryboardKeyword,
     keywordEditorMode,
     setKeywordEditorMode,
@@ -95,6 +103,11 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
   const [keywordEditError, setKeywordEditError] = useState<string | null>(null);
   const [keywordEditorFocused, setKeywordEditorFocused] = useState(false);
   const [keywordModeMenu, setKeywordModeMenu] = useState<{ x: number; y: number } | null>(null);
+  const [treeContextMenu, setTreeContextMenu] = useState<{
+    x: number;
+    y: number;
+    keywordId: string;
+  } | null>(null);
   const [filter, setFilter] = useState("");
   const [panelOpen, setPanelOpen] = useState(true);
   const [assignmentOpen, setAssignmentOpen] = useState(true);
@@ -113,7 +126,15 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
   const [createSynonyms, setCreateSynonyms] = useState("");
   const [createNestIntoParent, setCreateNestIntoParent] = useState(false);
   const [createAddToShots, setCreateAddToShots] = useState(false);
-  const [duplicateNameRequest, setDuplicateNameRequest] = useState<string | null>(null);
+  const [createParentOverrideId, setCreateParentOverrideId] = useState<string | null>(null);
+  const [newKeywordContainerId, setNewKeywordContainerId] = useState<string | null>(null);
+  const [editKeywordDialog, setEditKeywordDialog] = useState<{ keywordId: string } | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editSynonyms, setEditSynonyms] = useState("");
+  const [duplicateNameRequest, setDuplicateNameRequest] = useState<{
+    name: string;
+    keywordId: string | null;
+  } | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const keywordEditorRef = useRef<HTMLTextAreaElement | null>(null);
   const cancelKeywordEditRef = useRef(false);
@@ -131,9 +152,35 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
     setSelectedTreeNodeId(null);
     setKeywordDeleteRequest(null);
     setCreateDialogOpen(false);
+    setCreateParentOverrideId(null);
+    setNewKeywordContainerId(null);
+    setEditKeywordDialog(null);
     setDuplicateNameRequest(null);
     setKeywordModeMenu(null);
+    setTreeContextMenu(null);
   }, [resetKey]);
+
+  useEffect(() => {
+    if (!treeContextMenu) {
+      return;
+    }
+    const close = () => setTreeContextMenu(null);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        close();
+      }
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("resize", close);
+    window.addEventListener("blur", close);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("blur", close);
+    };
+  }, [treeContextMenu]);
 
   useEffect(() => {
     if (!keywordModeMenu) {
@@ -165,11 +212,6 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
     () => storyboardKeywordUsageCounts(keywordNodes, shotAnnotations, mediaShotIds),
     [keywordNodes, mediaShotIds, shotAnnotations],
   );
-  const suggestedIds = useMemo(
-    () =>
-      suggestedStoryboardKeywordIds(recentKeywordIds, keywordNodes, shotAnnotations, mediaShotIds),
-    [keywordNodes, mediaShotIds, recentKeywordIds, shotAnnotations],
-  );
   const visibleRecentIds = useMemo(() => {
     const validIds = new Set(keywordNodes.map((node) => node.id));
     return Array.from(new Set(recentKeywordIds))
@@ -190,6 +232,16 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
     return counts;
   }, [keywordNodes, shotAnnotations, targetShotIds]);
 
+  const suggestedIds = useMemo(() => {
+    const appliedIds = new Set(effectiveCountById.keys());
+    return suggestedStoryboardKeywordIds(
+      recentKeywordIds,
+      keywordNodes,
+      shotAnnotations,
+      mediaShotIds,
+      appliedIds,
+    );
+  }, [effectiveCountById, keywordNodes, mediaShotIds, recentKeywordIds, shotAnnotations]);
   const directCountById = useMemo(() => {
     const counts = new Map<string, number>();
     for (const shotId of targetShotIds) {
@@ -314,7 +366,7 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
       return;
     }
     const { checked } = keywordCheckState(keywordId);
-    setShotKeywordActivation(targetShotIds, keywordId, !checked, undefined, false);
+    setShotKeywordActivation(targetShotIds, keywordId, !checked);
   }
 
   function submitKeywordInput() {
@@ -347,6 +399,9 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
     if (selectedTreeNodeId === keywordId) {
       setSelectedTreeNodeId(null);
     }
+    if (newKeywordContainerId && removableIds.has(newKeywordContainerId)) {
+      setNewKeywordContainerId(null);
+    }
     setCollapsedNodeIds((current) => {
       const next = new Set(current);
       for (const deletedId of removableIds) {
@@ -356,24 +411,27 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
     });
   }
 
-  function requestRemoveSelectedKeyword() {
-    if (!selectedTreeNodeId) {
-      return;
-    }
-    const node = keywordNodes.find((candidate) => candidate.id === selectedTreeNodeId);
+  function requestKeywordDelete(keywordId: string) {
+    const node = keywordNodes.find((candidate) => candidate.id === keywordId);
     if (!node) {
       return;
     }
-    const count = usageCounts.get(selectedTreeNodeId) ?? 0;
+    const count = usageCounts.get(keywordId) ?? 0;
     if (count > 0) {
       setKeywordDeleteRequest({
-        keywordId: selectedTreeNodeId,
+        keywordId,
         label: node.name,
         count,
       });
       return;
     }
-    performKeywordDelete(selectedTreeNodeId);
+    performKeywordDelete(keywordId);
+  }
+
+  function requestRemoveSelectedKeyword() {
+    if (selectedTreeNodeId) {
+      requestKeywordDelete(selectedTreeNodeId);
+    }
   }
 
   function confirmKeywordDelete() {
@@ -388,6 +446,18 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
   const handleCancelDelete = useCallback(() => setKeywordDeleteRequest(null), []);
 
   const createParentCandidate = useMemo(() => {
+    if (createParentOverrideId) {
+      const override = keywordNodes.find((node) => node.id === createParentOverrideId);
+      if (override) {
+        return override;
+      }
+    }
+    if (newKeywordContainerId) {
+      const container = keywordNodes.find((node) => node.id === newKeywordContainerId);
+      if (container) {
+        return container;
+      }
+    }
     if (selectedTreeNodeId) {
       const selected = keywordNodes.find((node) => node.id === selectedTreeNodeId);
       if (selected) {
@@ -395,16 +465,28 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
       }
     }
     return childrenByParent.get(null)?.[0] ?? null;
-  }, [childrenByParent, keywordNodes, selectedTreeNodeId]);
+  }, [
+    childrenByParent,
+    createParentOverrideId,
+    keywordNodes,
+    newKeywordContainerId,
+    selectedTreeNodeId,
+  ]);
 
   const createKeywordName = createName.replace(/[<>|]/g, "").trim();
 
-  function openCreateDialog(preserveFields = false) {
+  function openCreateDialog(preserveFields = false, parentOverrideId: string | null = null) {
     if (!preserveFields) {
       setCreateName("");
       setCreateSynonyms("");
-      setCreateNestIntoParent(false);
       setCreateAddToShots(false);
+      setCreateNestIntoParent(
+        Boolean(parentOverrideId) ||
+          Boolean(
+            newKeywordContainerId && keywordNodes.some((node) => node.id === newKeywordContainerId),
+          ),
+      );
+      setCreateParentOverrideId(parentOverrideId);
     }
     setCreateDialogOpen(true);
   }
@@ -420,7 +502,7 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
     );
     if (duplicate) {
       setCreateDialogOpen(false);
-      setDuplicateNameRequest(createKeywordName);
+      setDuplicateNameRequest({ name: createKeywordName, keywordId: null });
       return;
     }
     const synonyms = createSynonyms
@@ -438,9 +520,57 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
   const handleCancelCreate = useCallback(() => setCreateDialogOpen(false), []);
 
   function acknowledgeDuplicateName() {
+    if (!duplicateNameRequest) {
+      return;
+    }
+    const { keywordId } = duplicateNameRequest;
     setDuplicateNameRequest(null);
-    openCreateDialog(true);
+    if (keywordId) {
+      setEditKeywordDialog({ keywordId });
+    } else {
+      openCreateDialog(true);
+    }
   }
+
+  const editKeywordDialogNode = editKeywordDialog
+    ? (keywordNodes.find((node) => node.id === editKeywordDialog.keywordId) ?? null)
+    : null;
+  const editKeywordName = editName.replace(/[<>|]/g, "").trim();
+
+  function openKeywordTagEditDialog(keywordId: string) {
+    const node = keywordNodes.find((candidate) => candidate.id === keywordId);
+    if (!node) {
+      return;
+    }
+    setEditName(node.name);
+    setEditSynonyms((node.synonyms ?? []).join(", "));
+    setEditKeywordDialog({ keywordId });
+  }
+
+  function confirmKeywordTagEdit() {
+    if (!editKeywordDialogNode || !editKeywordName) {
+      return;
+    }
+    const duplicate = keywordNodes.some(
+      (node) =>
+        node.id !== editKeywordDialogNode.id &&
+        (node.parentId ?? null) === (editKeywordDialogNode.parentId ?? null) &&
+        node.name === editKeywordName,
+    );
+    if (duplicate) {
+      setEditKeywordDialog(null);
+      setDuplicateNameRequest({ name: editKeywordName, keywordId: editKeywordDialogNode.id });
+      return;
+    }
+    const synonyms = editSynonyms
+      .split(/[,，\n]/)
+      .map((value) => value.trim())
+      .filter(Boolean);
+    updateStoryboardKeyword(editKeywordDialogNode.id, { name: editKeywordName, synonyms });
+    setEditKeywordDialog(null);
+  }
+
+  const handleCancelKeywordTagEdit = useCallback(() => setEditKeywordDialog(null), []);
 
   function renderKeywordGrid(keywordIds: readonly string[]) {
     const cells = Array.from({ length: 9 }, (_, index) => keywordIds[index] ?? null);
@@ -479,6 +609,7 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
       const hasChildren = childNodes.length > 0;
       const expanded = normalizedFilter ? true : !collapsedNodeIds.has(node.id);
       const { checked, mixed } = keywordCheckState(node.id);
+      const nodeLabel = storyboardKeywordLabel(node.id, keywordNodes);
       return (
         <div key={node.id} className="storyboard-keyword-tree-branch">
           <div
@@ -486,6 +617,11 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
               selectedTreeNodeId === node.id ? "is-active" : ""
             }`.trim()}
             onClick={() => setSelectedTreeNodeId(node.id)}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              setSelectedTreeNodeId(node.id);
+              setTreeContextMenu({ x: event.clientX, y: event.clientY, keywordId: node.id });
+            }}
           >
             <button
               type="button"
@@ -495,7 +631,7 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
                 toggleKeywordCheck(node.id);
               }}
               disabled={targetShotIds.length === 0}
-              title={storyboardKeywordLabel(node.id, keywordNodes)}
+              title={nodeLabel}
               aria-pressed={checked ? true : mixed ? "mixed" : false}
               aria-label={`勾选${node.name}`}
             >
@@ -535,12 +671,25 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
                   aria-hidden="true"
                 />
               </button>
-              <span
-                className="storyboard-keyword-tree-name"
-                title={storyboardKeywordLabel(node.id, keywordNodes)}
-              >
+              <span className="storyboard-keyword-tree-name" title={nodeLabel}>
                 {node.name}
               </span>
+              {newKeywordContainerId === node.id && (
+                <span
+                  className="storyboard-keyword-tree-dot"
+                  title="将新关键字置入到该关键字中"
+                  aria-label="将新关键字置入到该关键字中"
+                />
+              )}
+              {quickKeywordLabel === nodeLabel && (
+                <span
+                  className="storyboard-keyword-tree-quick"
+                  title="快捷关键字"
+                  aria-label="快捷关键字"
+                >
+                  <Plus aria-hidden="true" />
+                </span>
+              )}
             </div>
             <span className="storyboard-keyword-tree-count">{usageCounts.get(node.id) ?? 0}</span>
           </div>
@@ -549,6 +698,13 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
       );
     });
   }
+
+  const treeContextMenuNode = treeContextMenu
+    ? (keywordNodes.find((node) => node.id === treeContextMenu.keywordId) ?? null)
+    : null;
+  const treeContextMenuLabel = treeContextMenuNode
+    ? storyboardKeywordLabel(treeContextMenuNode.id, keywordNodes)
+    : "";
 
   return (
     <>
@@ -818,6 +974,102 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
           </PopupMenu>,
           document.body,
         )}
+      {treeContextMenu &&
+        treeContextMenuNode &&
+        createPortal(
+          <PopupMenu
+            className="storyboard-keyword-tree-menu"
+            contextMenuAnchor={{ x: treeContextMenu.x, y: treeContextMenu.y }}
+            ariaLabel="关键字操作"
+            style={{ position: "fixed", left: treeContextMenu.x, top: treeContextMenu.y }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            <PopupMenuItem
+              disabled={
+                targetShotIds.length === 0 || keywordCheckState(treeContextMenuNode.id).checked
+              }
+              onSelect={() => {
+                setShotKeywordActivation(targetShotIds, treeContextMenuNode.id, true);
+                setTreeContextMenu(null);
+              }}
+            >
+              将此关键字添加到选定分镜
+            </PopupMenuItem>
+            <PopupMenuItem
+              disabled={
+                targetShotIds.length === 0 ||
+                (directCountById.get(treeContextMenuNode.id) ?? 0) === 0
+              }
+              onSelect={() => {
+                setShotKeywordActivation(targetShotIds, treeContextMenuNode.id, false);
+                setTreeContextMenu(null);
+              }}
+            >
+              从选定的分镜中移去此关键字
+            </PopupMenuItem>
+            <PopupMenuSeparator />
+            <PopupMenuItem
+              onSelect={() => {
+                openKeywordTagEditDialog(treeContextMenuNode.id);
+                setTreeContextMenu(null);
+              }}
+            >
+              编辑关键字标记...
+            </PopupMenuItem>
+            <PopupMenuSeparator />
+            <PopupMenuItem
+              onSelect={() => {
+                openCreateDialog();
+                setTreeContextMenu(null);
+              }}
+            >
+              创建关键字标记...
+            </PopupMenuItem>
+            <PopupMenuItem
+              onSelect={() => {
+                openCreateDialog(false, treeContextMenuNode.id);
+                setTreeContextMenu(null);
+              }}
+            >
+              在“{treeContextMenuNode.name}”中创建关键字标记...
+            </PopupMenuItem>
+            <PopupMenuSeparator />
+            <PopupMenuItem
+              onSelect={() => {
+                requestKeywordDelete(treeContextMenuNode.id);
+                setTreeContextMenu(null);
+              }}
+            >
+              删除...
+            </PopupMenuItem>
+            <PopupMenuSeparator />
+            <PopupMenuItem
+              checked={newKeywordContainerId === treeContextMenuNode.id}
+              indicator="check"
+              onSelect={() => {
+                setNewKeywordContainerId((current) =>
+                  current === treeContextMenuNode.id ? null : treeContextMenuNode.id,
+                );
+                setTreeContextMenu(null);
+              }}
+            >
+              将新关键字置入到该关键字中
+            </PopupMenuItem>
+            <PopupMenuItem
+              disabled={!onSetQuickKeyword}
+              checked={quickKeywordLabel === treeContextMenuLabel}
+              indicator="check"
+              onSelect={() => {
+                onSetQuickKeyword?.(treeContextMenuLabel);
+                setTreeContextMenu(null);
+              }}
+            >
+              设为快捷关键字
+            </PopupMenuItem>
+          </PopupMenu>,
+          document.body,
+        )}
       {createDialogOpen &&
         createPortal(
           <ModalDialog
@@ -893,6 +1145,57 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
           </ModalDialog>,
           portalContainerRef.current ?? document.body,
         )}
+      {editKeywordDialog &&
+        editKeywordDialogNode &&
+        createPortal(
+          <ModalDialog
+            title="编辑关键字标记"
+            className="storyboard-keyword-create-dialog"
+            bodyClassName="storyboard-keyword-create-dialog-body"
+            confirmLabel="存储"
+            confirmDisabled={!editKeywordName}
+            onCancel={handleCancelKeywordTagEdit}
+            onConfirm={confirmKeywordTagEdit}
+          >
+            <label className="storyboard-keyword-create-field storyboard-keyword-create-field-name">
+              <span>关键字名称:</span>
+              <input
+                autoFocus
+                value={editName}
+                onChange={(event) => setEditName(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  event.stopPropagation();
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    confirmKeywordTagEdit();
+                  } else if (event.key === "Escape") {
+                    event.preventDefault();
+                    handleCancelKeywordTagEdit();
+                  }
+                }}
+                aria-label="关键字名称"
+              />
+            </label>
+            <label className="storyboard-keyword-create-field">
+              <span>同义词:</span>
+              <textarea
+                value={editSynonyms}
+                rows={4}
+                onChange={(event) => setEditSynonyms(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  event.stopPropagation();
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    handleCancelKeywordTagEdit();
+                  }
+                }}
+                aria-label="同义词"
+                title="多个同义词用逗号或换行分隔"
+              />
+            </label>
+          </ModalDialog>,
+          portalContainerRef.current ?? document.body,
+        )}
       {duplicateNameRequest &&
         createPortal(
           <ModalDialog
@@ -912,7 +1215,7 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
             onConfirm={acknowledgeDuplicateName}
           >
             <div className="storyboard-keyword-duplicate-dialog-message">
-              名称“{duplicateNameRequest}”已被使用，请选择其它名称。
+              名称“{duplicateNameRequest.name}”已被使用，请选择其它名称。
             </div>
           </ModalDialog>,
           portalContainerRef.current ?? document.body,

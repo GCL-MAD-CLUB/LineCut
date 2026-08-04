@@ -116,9 +116,13 @@ interface StoryboardPanelState
     keywordId: string,
     active: boolean,
     historyGroupId?: string,
-    removeDescendants?: boolean,
   ) => void;
   removeStoryboardKeyword: (keywordId: string, historyGroupId?: string) => void;
+  updateStoryboardKeyword: (
+    keywordId: string,
+    updates: { name: string; synonyms?: readonly string[] },
+    historyGroupId?: string,
+  ) => void;
   createStoryboardKeyword: (
     name: string,
     options?: {
@@ -542,13 +546,7 @@ export function useStoryboardPanelState<Selection>(
       }),
     setShotKeywords,
     appendShotKeywords,
-    setShotKeywordActivation: (
-      shotIds,
-      keywordId,
-      active,
-      historyGroupId,
-      removeDescendants = true,
-    ) => {
+    setShotKeywordActivation: (shotIds, keywordId, active, historyGroupId) => {
       const uniqueShotIds = Array.from(new Set(shotIds));
       if (
         uniqueShotIds.length === 0 ||
@@ -559,11 +557,7 @@ export function useStoryboardPanelState<Selection>(
       commitStoryboard(
         active ? "添加分镜关键字" : "移除分镜关键字",
         (current) => {
-          const removableIds = active
-            ? null
-            : removeDescendants
-              ? storyboardKeywordDescendantIds(keywordId, current.keywordNodes)
-              : new Set([keywordId]);
+          const removableIds = active ? null : new Set([keywordId]);
           const recentKeywordIds = active
             ? recentKeywordIdsAfterUse(current.recentKeywordIds, [keywordId])
             : current.recentKeywordIds;
@@ -618,6 +612,50 @@ export function useStoryboardPanelState<Selection>(
           return changed
             ? { ...current, keywordNodes, recentKeywordIds, shotAnnotations }
             : current;
+        },
+        uiState.videoContext,
+        historyGroupId,
+      );
+    },
+    updateStoryboardKeyword: (keywordId, updates, historyGroupId) => {
+      const normalizedName = updates.name.replace(/[<>|]/g, "").trim();
+      if (!normalizedName || !storyboard.keywordNodes.some((node) => node.id === keywordId)) {
+        return;
+      }
+      const synonyms = Array.from(
+        new Set(
+          (updates.synonyms ?? [])
+            .map((synonym) => synonym.replace(/[<>|]/g, "").trim())
+            .filter(Boolean),
+        ),
+      );
+      commitStoryboard(
+        "编辑关键字",
+        (current) => {
+          let changed = false;
+          const keywordNodes = current.keywordNodes.map((node) => {
+            if (node.id !== keywordId) {
+              return node;
+            }
+            const currentSynonyms = node.synonyms ?? [];
+            const synonymsEqual =
+              currentSynonyms.length === synonyms.length &&
+              currentSynonyms.every((synonym, index) => synonym === synonyms[index]);
+            if (node.name === normalizedName && synonymsEqual) {
+              return node;
+            }
+            changed = true;
+            const nextNode: StoryboardKeywordNode = {
+              id: node.id,
+              name: normalizedName,
+              parentId: node.parentId,
+            };
+            if (synonyms.length > 0) {
+              nextNode.synonyms = synonyms;
+            }
+            return nextNode;
+          });
+          return changed ? { ...current, keywordNodes } : current;
         },
         uiState.videoContext,
         historyGroupId,
