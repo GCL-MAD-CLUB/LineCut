@@ -1,5 +1,7 @@
-import { ChevronsUpDown, ChevronDown, Plus, Search } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ChevronsUpDown, ChevronDown, Minus, Plus, Search, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { ModalDialog } from "../ModalDialog";
 import type { StoryboardKeywordNode } from "../../types";
 import {
   normalizeStoryboardKeywordIds,
@@ -7,6 +9,7 @@ import {
   renderStoryboardKeywordLabel,
   sanitizeStoryboardKeywordInput,
   storyboardEffectiveKeywordIds,
+  storyboardKeywordDescendantIds,
   storyboardKeywordLabel,
   storyboardKeywordUsageCounts,
   suggestedStoryboardKeywordIds,
@@ -78,6 +81,7 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
     appendShotKeywords,
     setShotKeywords,
     setShotKeywordActivation,
+    removeStoryboardKeyword,
   } = useStoryboardPanelState((state) => state);
   const [keywordInput, setKeywordInput] = useState("");
   const [keywordEditValue, setKeywordEditValue] = useState("");
@@ -91,9 +95,15 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
   const [treeOpen, setTreeOpen] = useState(true);
   const [collapsedNodeIds, setCollapsedNodeIds] = useState<Set<string>>(() => new Set());
   const [selectedTreeNodeId, setSelectedTreeNodeId] = useState<string | null>(null);
+  const [keywordDeleteRequest, setKeywordDeleteRequest] = useState<{
+    keywordId: string;
+    label: string;
+    count: number;
+  } | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const keywordEditorRef = useRef<HTMLTextAreaElement | null>(null);
   const cancelKeywordEditRef = useRef(false);
+  const portalContainerRef = useRef<Element | null>(null);
   const targetShotIds = useMemo(() => Array.from(new Set(shotIds)), [shotIds]);
   const keywordParseResult = parseStoryboardKeywordInput(keywordInput);
   const mediaShotIds = useMemo(() => shots.map((shot) => shot.id), [shots]);
@@ -105,7 +115,12 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
     setFilter("");
     setCollapsedNodeIds(new Set());
     setSelectedTreeNodeId(null);
+    setKeywordDeleteRequest(null);
   }, [resetKey]);
+
+  useEffect(() => {
+    portalContainerRef.current = document.querySelector(".app-shell");
+  }, []);
 
   const usageCounts = useMemo(
     () => storyboardKeywordUsageCounts(keywordNodes, shotAnnotations, mediaShotIds),
@@ -206,25 +221,25 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
     if (!normalizedFilter) {
       return new Set(keywordNodes.map((node) => node.id));
     }
+    const nodeById = new Map(keywordNodes.map((node) => [node.id, node]));
     const matchingIds = new Set<string>();
-    const visit = (node: StoryboardKeywordNode): boolean => {
-      const childMatches = (childrenByParent.get(node.id) ?? []).some(visit);
-      const selfMatches =
-        node.name.toLocaleLowerCase().includes(normalizedFilter) ||
-        storyboardKeywordLabel(node.id, keywordNodes)
+    for (const node of keywordNodes) {
+      if (
+        !node.name.toLocaleLowerCase().includes(normalizedFilter) &&
+        !storyboardKeywordLabel(node.id, keywordNodes)
           .toLocaleLowerCase()
-          .includes(normalizedFilter);
-      if (selfMatches || childMatches) {
-        matchingIds.add(node.id);
-        return true;
+          .includes(normalizedFilter)
+      ) {
+        continue;
       }
-      return false;
-    };
-    for (const rootNode of childrenByParent.get(null) ?? []) {
-      visit(rootNode);
+      let currentId: string | null = node.id;
+      while (currentId && !matchingIds.has(currentId)) {
+        matchingIds.add(currentId);
+        currentId = nodeById.get(currentId)?.parentId ?? null;
+      }
     }
     return matchingIds;
-  }, [childrenByParent, keywordNodes, normalizedFilter]);
+  }, [keywordNodes, normalizedFilter]);
 
   function keywordActivationState(keywordId: string) {
     const activeCount = effectiveCountById.get(keywordId) ?? 0;
@@ -282,6 +297,55 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
       setShotKeywords(targetShotIds, keywordEditValue);
     }
   }
+
+  function performKeywordDelete(keywordId: string) {
+    const removableIds = storyboardKeywordDescendantIds(keywordId, keywordNodes);
+    removeStoryboardKeyword(keywordId);
+    if (selectedTreeNodeId === keywordId) {
+      setSelectedTreeNodeId(null);
+    }
+    setCollapsedNodeIds((current) => {
+      const next = new Set(current);
+      for (const deletedId of removableIds) {
+        next.delete(deletedId);
+      }
+      return next;
+    });
+  }
+
+  function requestRemoveSelectedKeyword() {
+    if (!selectedTreeNodeId) {
+      return;
+    }
+    const node = keywordNodes.find((candidate) => candidate.id === selectedTreeNodeId);
+    if (!node) {
+      return;
+    }
+    const count = usageCounts.get(selectedTreeNodeId) ?? 0;
+    if (count > 0) {
+      setKeywordDeleteRequest({
+        keywordId: selectedTreeNodeId,
+        label: node.name,
+        count,
+      });
+      return;
+    }
+    performKeywordDelete(selectedTreeNodeId);
+  }
+
+  function confirmKeywordDelete() {
+    if (!keywordDeleteRequest) {
+      return;
+    }
+    const { keywordId } = keywordDeleteRequest;
+    setKeywordDeleteRequest(null);
+    performKeywordDelete(keywordId);
+  }
+
+  const handleCancelDelete = useCallback(
+    () => setKeywordDeleteRequest(null),
+    [],
+  );
 
   function renderKeywordGrid(keywordIds: readonly string[]) {
     const cells = Array.from({ length: 9 }, (_, index) => keywordIds[index] ?? null);
@@ -392,193 +456,228 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
   }
 
   return (
-    <aside className="storyboard-keyword-panel">
-      <header
-        className={`storyboard-keyword-panel-heading ${panelOpen ? "" : "is-collapsed"}`.trim()}
-      >
-        <button
-          type="button"
-          className="storyboard-keyword-panel-heading-title"
-          onClick={() => setPanelOpen((current) => !current)}
-          aria-expanded={panelOpen}
-        >
-          <span>关键字</span>
-          <ChevronDown className={panelOpen ? "" : "is-collapsed"} aria-hidden="true" />
-        </button>
-      </header>
-
-      {panelOpen && (
-        <>
-          <section
-            className={`storyboard-keyword-section storyboard-keyword-assignment ${
-              assignmentOpen ? "" : "is-collapsed"
-            }`.trim()}
-          >
-            <header className="storyboard-keyword-assignment-header">
-              <span>关键字标记</span>
-              <span className="storyboard-keyword-dropdown-shell">
-                <span className="storyboard-keyword-dropdown-value">键入关键字</span>
-                <span className="storyboard-keyword-dropdown-arrows" aria-hidden="true">
-                  <ChevronsUpDown aria-hidden="true" />
-                </span>
-              </span>
-              <button
-                type="button"
-                className="storyboard-keyword-assignment-toggle"
-                onClick={() => setAssignmentOpen((current) => !current)}
-                aria-label={assignmentOpen ? "折叠关键字标记" : "展开关键字标记"}
-                aria-expanded={assignmentOpen}
-              >
-                <ChevronDown className={assignmentOpen ? "" : "is-collapsed"} aria-hidden="true" />
-              </button>
-            </header>
-            {assignmentOpen && (
-              <div className="storyboard-keyword-section-body">
-                <div className="storyboard-keyword-plain-editor">
-                  {!keywordEditorFocused && (
-                    <div
-                      className="storyboard-keyword-plain-editor-display"
-                      onClick={() => {
-                        if (targetShotIds.length > 0) {
-                          setKeywordEditorFocused(true);
-                        }
-                      }}
-                    >
-                      {renderStoryboardKeywordLabel(keywordEditValue)}
-                    </div>
-                  )}
-                  <textarea
-                    ref={keywordEditorRef}
-                    className={keywordEditorFocused ? "" : "is-hidden"}
-                    value={keywordEditValue}
-                    disabled={targetShotIds.length === 0}
-                    placeholder=""
-                    aria-label="编辑当前分镜关键字"
-                    aria-invalid={Boolean(keywordEditError)}
-                    title={keywordEditError ?? "直接编辑当前关键字，回车或失焦后保存"}
-                    onFocus={() => {
-                      cancelKeywordEditRef.current = false;
-                    }}
-                    onChange={(event) => {
-                      const value = event.currentTarget.value;
-                      setKeywordEditValue(value);
-                      setKeywordEditError(parseStoryboardKeywordInput(value).error);
-                    }}
-                    onBlur={() => {
-                      setKeywordEditorFocused(false);
-                      if (cancelKeywordEditRef.current) {
-                        cancelKeywordEditRef.current = false;
-                        setKeywordEditValue(selectedKeywordText);
-                        setKeywordEditError(null);
-                        return;
-                      }
-                      commitKeywordEdit();
-                    }}
-                    onKeyDown={(event) => {
-                      event.stopPropagation();
-                      if (event.key === "Enter") {
-                        event.preventDefault();
-                        event.currentTarget.blur();
-                      } else if (event.key === "Escape") {
-                        event.preventDefault();
-                        cancelKeywordEditRef.current = true;
-                        event.currentTarget.blur();
-                      }
-                    }}
-                  />
-                </div>
-                <form
-                  className="storyboard-keyword-inline-entry"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    submitKeywordInput();
-                  }}
-                >
-                  <input
-                    ref={inputRef}
-                    value={keywordInput}
-                    onChange={(event) => setKeywordInput(event.currentTarget.value)}
-                    placeholder="单击此处添加关键字"
-                    disabled={targetShotIds.length === 0}
-                    aria-label="添加分镜关键字"
-                    title={
-                      keywordParseResult.error ?? "支持 父>子、子<父、父|子；多个关键字用逗号分隔"
-                    }
-                  />
-                </form>
-              </div>
-            )}
-          </section>
-
-          <KeywordPanelSection
-            title="建议关键字"
-            open={suggestionsOpen}
-            onToggle={() => setSuggestionsOpen((current) => !current)}
-          >
-            {renderKeywordGrid(suggestedIds)}
-          </KeywordPanelSection>
-
-          <KeywordPanelSection
-            title="关键字集"
-            control={
-              <span className="storyboard-keyword-dropdown-shell">
-                <span className="storyboard-keyword-dropdown-value">最近使用过的关键字</span>
-                <span className="storyboard-keyword-dropdown-arrows" aria-hidden="true">
-                  <ChevronsUpDown />
-                </span>
-              </span>
-            }
-            open={recentOpen}
-            onToggle={() => setRecentOpen((current) => !current)}
-          >
-            {renderKeywordGrid(visibleRecentIds)}
-          </KeywordPanelSection>
-        </>
-      )}
-
-      <section className="storyboard-keyword-tree-section">
+    <>
+      <aside className="storyboard-keyword-panel">
         <header
-          className={`storyboard-keyword-tree-heading ${treeOpen ? "" : "is-collapsed"}`.trim()}
+          className={`storyboard-keyword-panel-heading ${panelOpen ? "" : "is-collapsed"}`.trim()}
         >
           <button
             type="button"
-            className="storyboard-keyword-add-button"
-            onClick={() => inputRef.current?.focus()}
-            title="添加关键字"
-            aria-label="添加关键字"
+            className="storyboard-keyword-panel-heading-title"
+            onClick={() => setPanelOpen((current) => !current)}
+            aria-expanded={panelOpen}
           >
-            <Plus aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            className="storyboard-keyword-tree-title"
-            onClick={() => setTreeOpen((current) => !current)}
-            aria-expanded={treeOpen}
-          >
-            <span>关键字列表</span>
-            <ChevronDown className={treeOpen ? "" : "is-collapsed"} aria-hidden="true" />
+            <span>关键字</span>
+            <ChevronDown className={panelOpen ? "" : "is-collapsed"} aria-hidden="true" />
           </button>
         </header>
-        {treeOpen && (
-          <div className="storyboard-keyword-tree-body">
-            <label className="storyboard-keyword-filter">
-              <Search aria-hidden="true" />
-              <input
-                value={filter}
-                onChange={(event) => setFilter(event.currentTarget.value)}
-                placeholder="过滤关键字"
-                aria-label="过滤关键字"
-              />
-            </label>
-            <div className="storyboard-keyword-tree" role="tree">
-              {renderTreeNodes(null, 0)}
-              {keywordNodes.length === 0 && (
-                <p className="storyboard-keyword-empty">尚未创建关键字</p>
+
+        {panelOpen && (
+          <>
+            <section
+              className={`storyboard-keyword-section storyboard-keyword-assignment ${
+                assignmentOpen ? "" : "is-collapsed"
+              }`.trim()}
+            >
+              <header className="storyboard-keyword-assignment-header">
+                <span>关键字标记</span>
+                <span className="storyboard-keyword-dropdown-shell">
+                  <span className="storyboard-keyword-dropdown-value">键入关键字</span>
+                  <span className="storyboard-keyword-dropdown-arrows" aria-hidden="true">
+                    <ChevronsUpDown aria-hidden="true" />
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  className="storyboard-keyword-assignment-toggle"
+                  onClick={() => setAssignmentOpen((current) => !current)}
+                  aria-label={assignmentOpen ? "折叠关键字标记" : "展开关键字标记"}
+                  aria-expanded={assignmentOpen}
+                >
+                  <ChevronDown
+                    className={assignmentOpen ? "" : "is-collapsed"}
+                    aria-hidden="true"
+                  />
+                </button>
+              </header>
+              {assignmentOpen && (
+                <div className="storyboard-keyword-section-body">
+                  <div className="storyboard-keyword-plain-editor">
+                    {!keywordEditorFocused && (
+                      <div
+                        className="storyboard-keyword-plain-editor-display"
+                        onClick={() => {
+                          if (targetShotIds.length > 0) {
+                            setKeywordEditorFocused(true);
+                          }
+                        }}
+                      >
+                        {renderStoryboardKeywordLabel(keywordEditValue)}
+                      </div>
+                    )}
+                    <textarea
+                      ref={keywordEditorRef}
+                      className={keywordEditorFocused ? "" : "is-hidden"}
+                      value={keywordEditValue}
+                      disabled={targetShotIds.length === 0}
+                      placeholder=""
+                      aria-label="编辑当前分镜关键字"
+                      aria-invalid={Boolean(keywordEditError)}
+                      title={keywordEditError ?? "直接编辑当前关键字，回车或失焦后保存"}
+                      onFocus={() => {
+                        cancelKeywordEditRef.current = false;
+                      }}
+                      onChange={(event) => {
+                        const value = event.currentTarget.value;
+                        setKeywordEditValue(value);
+                        setKeywordEditError(parseStoryboardKeywordInput(value).error);
+                      }}
+                      onBlur={() => {
+                        setKeywordEditorFocused(false);
+                        if (cancelKeywordEditRef.current) {
+                          cancelKeywordEditRef.current = false;
+                          setKeywordEditValue(selectedKeywordText);
+                          setKeywordEditError(null);
+                          return;
+                        }
+                        commitKeywordEdit();
+                      }}
+                      onKeyDown={(event) => {
+                        event.stopPropagation();
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          event.currentTarget.blur();
+                        } else if (event.key === "Escape") {
+                          event.preventDefault();
+                          cancelKeywordEditRef.current = true;
+                          event.currentTarget.blur();
+                        }
+                      }}
+                    />
+                  </div>
+                  <form
+                    className="storyboard-keyword-inline-entry"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      submitKeywordInput();
+                    }}
+                  >
+                    <input
+                      ref={inputRef}
+                      value={keywordInput}
+                      onChange={(event) => setKeywordInput(event.currentTarget.value)}
+                      placeholder="单击此处添加关键字"
+                      disabled={targetShotIds.length === 0}
+                      aria-label="添加分镜关键字"
+                      title={
+                        keywordParseResult.error ?? "支持 父>子、子<父、父|子；多个关键字用逗号分隔"
+                      }
+                    />
+                  </form>
+                </div>
               )}
-            </div>
-          </div>
+            </section>
+
+            <KeywordPanelSection
+              title="建议关键字"
+              open={suggestionsOpen}
+              onToggle={() => setSuggestionsOpen((current) => !current)}
+            >
+              {renderKeywordGrid(suggestedIds)}
+            </KeywordPanelSection>
+
+            <KeywordPanelSection
+              title="关键字集"
+              control={
+                <span className="storyboard-keyword-dropdown-shell">
+                  <span className="storyboard-keyword-dropdown-value">最近使用过的关键字</span>
+                  <span className="storyboard-keyword-dropdown-arrows" aria-hidden="true">
+                    <ChevronsUpDown />
+                  </span>
+                </span>
+              }
+              open={recentOpen}
+              onToggle={() => setRecentOpen((current) => !current)}
+            >
+              {renderKeywordGrid(visibleRecentIds)}
+            </KeywordPanelSection>
+          </>
         )}
-      </section>
-    </aside>
+
+        <section className="storyboard-keyword-tree-section">
+          <header
+            className={`storyboard-keyword-tree-heading ${treeOpen ? "" : "is-collapsed"}`.trim()}
+          >
+            <span className="storyboard-keyword-tree-actions">
+              <button
+                type="button"
+                className="storyboard-keyword-add-button"
+                onClick={() => inputRef.current?.focus()}
+                title="添加关键字"
+                aria-label="添加关键字"
+              >
+                <Plus aria-hidden="true" />
+              </button>
+              {selectedTreeNodeId && (
+                <button
+                  type="button"
+                  className="storyboard-keyword-remove-button"
+                  onClick={requestRemoveSelectedKeyword}
+                  title="删除选中关键字"
+                  aria-label="删除选中关键字"
+                >
+                  <Minus aria-hidden="true" />
+                </button>
+              )}
+            </span>
+            <button
+              type="button"
+              className="storyboard-keyword-tree-title"
+              onClick={() => setTreeOpen((current) => !current)}
+              aria-expanded={treeOpen}
+            >
+              <span>关键字列表</span>
+              <ChevronDown className={treeOpen ? "" : "is-collapsed"} aria-hidden="true" />
+            </button>
+          </header>
+          {treeOpen && (
+            <div className="storyboard-keyword-tree-body">
+              <label className="storyboard-keyword-filter">
+                <Search aria-hidden="true" />
+                <input
+                  value={filter}
+                  onChange={(event) => setFilter(event.currentTarget.value)}
+                  placeholder="过滤关键字"
+                  aria-label="过滤关键字"
+                />
+              </label>
+              <div className="storyboard-keyword-tree" role="tree">
+                {renderTreeNodes(null, 0)}
+              </div>
+            </div>
+          )}
+        </section>
+      </aside>
+      {keywordDeleteRequest &&
+        createPortal(
+          <ModalDialog
+            title="删除关键字"
+            className="storyboard-keyword-delete-dialog"
+            bodyClassName="storyboard-keyword-delete-dialog-body"
+            confirmLabel="删除"
+            onCancel={handleCancelDelete}
+            onConfirm={confirmKeywordDelete}
+          >
+            <div className="storyboard-keyword-delete-dialog-message">
+              <Trash2 aria-hidden="true" />
+              <div>
+                <strong>是否要删除关键字“{keywordDeleteRequest.label}”？</strong>
+                <span>此关键字用于 {keywordDeleteRequest.count} 个分镜，并将从中移去。</span>
+              </div>
+            </div>
+          </ModalDialog>,
+          portalContainerRef.current ?? document.body,
+        )}
+    </>
   );
 }

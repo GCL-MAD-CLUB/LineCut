@@ -595,6 +595,12 @@ body.is-resizing-storyboard-keyword-panel * {
   border: 1px solid #0d0d0d;
   border-radius: 5px;
   box-shadow: inset 0 0 0 1px #292929;
+  user-select: none;
+}
+
+.storyboard-keyword-panel input,
+.storyboard-keyword-panel textarea {
+  user-select: text;
 }
 
 .storyboard-content.is-keyword-panel-closed .storyboard-keyword-panel {
@@ -675,11 +681,11 @@ body.is-resizing-storyboard-keyword-panel * {
   flex: 0 0 30px;
   height: 30px;
   align-items: center;
-  grid-template-columns: minmax(0, 3fr) minmax(0, 7fr) 22px;
+  grid-template-columns: 80px minmax(0, 1fr) 22px;
   padding-left: 10px;
   color: #aaa;
   font-size: 12px;
-  background: var(--color-surface-raised);
+  background: #2f2f2f;
 }
 
 .storyboard-keyword-assignment-header > span:first-child {
@@ -703,7 +709,7 @@ body.is-resizing-storyboard-keyword-panel * {
 
 .storyboard-keyword-assignment-toggle:hover:not(:disabled) {
   color: var(--color-text-highlight);
-  background: var(--color-surface-hover);
+  background: transparent;
 }
 
 .storyboard-keyword-assignment-toggle > svg {
@@ -724,7 +730,7 @@ body.is-resizing-storyboard-keyword-panel * {
   align-items: center;
   color: #aaa;
   font-size: 12px;
-  background: var(--color-surface-raised);
+  background: #2f2f2f;
 }
 
 .storyboard-keyword-section-title,
@@ -756,7 +762,7 @@ body.is-resizing-storyboard-keyword-panel * {
 .storyboard-keyword-section-header.has-control {
   display: grid;
   box-sizing: border-box;
-  grid-template-columns: minmax(0, 3fr) minmax(0, 7fr) 22px;
+  grid-template-columns: 80px minmax(0, 1fr) 22px;
   padding-left: 10px;
 }
 
@@ -769,10 +775,9 @@ body.is-resizing-storyboard-keyword-panel * {
   color: #777;
 }
 
-.storyboard-keyword-section-title:hover:not(:disabled),
 .storyboard-keyword-section-toggle:hover:not(:disabled) {
   color: var(--color-text-highlight);
-  background: var(--color-surface-hover);
+  background: transparent;
 }
 
 .storyboard-keyword-tree-title:hover:not(:disabled) {
@@ -825,6 +830,11 @@ body.is-resizing-storyboard-keyword-panel * {
   background: var(--color-surface-field);
   border: 1px solid #373737;
   border-radius: 0;
+}
+
+.storyboard-keyword-dropdown-shell:hover .storyboard-keyword-dropdown-value,
+.storyboard-keyword-dropdown-shell:hover .storyboard-keyword-dropdown-arrows {
+  color: #d0d0d0;
 }
 
 .storyboard-keyword-filter input {
@@ -1045,14 +1055,20 @@ body.is-resizing-storyboard-keyword-panel * {
 .storyboard-keyword-tree-heading {
   display: grid;
   flex: 0 0 28px;
-  grid-template-columns: 28px minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.storyboard-keyword-tree-actions {
+  display: flex;
+  min-width: 28px;
 }
 
 .storyboard-keyword-tree-heading.is-collapsed {
   box-shadow: inset 0 -1px 0 0 var(--color-border-panel);
 }
 
-.storyboard-keyword-add-button {
+.storyboard-keyword-add-button,
+.storyboard-keyword-remove-button {
   display: grid;
   width: 28px;
   height: 28px;
@@ -1064,12 +1080,14 @@ body.is-resizing-storyboard-keyword-panel * {
   border-radius: 0;
 }
 
-.storyboard-keyword-add-button:hover:not(:disabled) {
+.storyboard-keyword-add-button:hover:not(:disabled),
+.storyboard-keyword-remove-button:hover:not(:disabled) {
   color: var(--color-text-highlight);
   background: var(--color-surface-hover);
 }
 
-.storyboard-keyword-add-button > svg {
+.storyboard-keyword-add-button > svg,
+.storyboard-keyword-remove-button > svg {
   width: 16px;
   height: 16px;
 }
@@ -1168,7 +1186,7 @@ body.is-resizing-storyboard-keyword-panel * {
   justify-content: center;
   border: 1px solid transparent;
   color: #d7d7d7;
-  font-size: 12.5px;
+  font-size: 12px;
   line-height: 10px;
 }
 
@@ -2762,6 +2780,51 @@ body.is-resizing-storyboard-column {
 .storyboard-context-menu {
   position: fixed;
   z-index: 1000;
+}
+
+.storyboard-keyword-delete-dialog {
+  width: min(368px, calc(100vw - 48px));
+}
+
+.storyboard-keyword-delete-dialog .modal-dialog-body {
+  padding: 20px;
+}
+
+.storyboard-keyword-delete-dialog-message {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  color: var(--color-text);
+  font-size: 13px;
+}
+
+.storyboard-keyword-delete-dialog-message > svg {
+  width: 24px;
+  height: 24px;
+  color: #c45a5a;
+}
+
+.storyboard-keyword-delete-dialog-message strong,
+.storyboard-keyword-delete-dialog-message span {
+  margin-left: 0;
+  display: block;
+}
+
+.storyboard-keyword-delete-dialog-message strong {
+  color: var(--color-text-highlight);
+  margin-top: 0;
+  font-weight: 500;
+}
+
+.storyboard-keyword-delete-dialog-message span {
+  margin-top: 8px;
+  padding-top: 8px;
+  color: #929292;
+  border-top: 1px solid var(--color-border-default);
+  line-height: 1.45;
 }
 
 @media (max-width: 1100px) {

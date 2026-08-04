@@ -114,6 +114,7 @@ interface StoryboardPanelState
     historyGroupId?: string,
     removeDescendants?: boolean,
   ) => void;
+  removeStoryboardKeyword: (keywordId: string, historyGroupId?: string) => void;
   setShotCustomLabel: (shotId: string, customLabel: string) => void;
   setShotCustomLabels: (
     shotIds: Iterable<string>,
@@ -568,6 +569,40 @@ export function useStoryboardPanelState<Selection>(
             changed = true;
           }
           return changed ? { ...current, recentKeywordIds, shotAnnotations } : current;
+        },
+        uiState.videoContext,
+        historyGroupId,
+      );
+    },
+    removeStoryboardKeyword: (keywordId, historyGroupId) => {
+      if (!storyboard.keywordNodes.some((node) => node.id === keywordId)) {
+        return;
+      }
+      commitStoryboard(
+        "删除关键字",
+        (current) => {
+          const removableIds = storyboardKeywordDescendantIds(keywordId, current.keywordNodes);
+          const keywordNodes = current.keywordNodes.filter((node) => !removableIds.has(node.id));
+          const recentKeywordIds = current.recentKeywordIds.filter(
+            (candidateId) => !removableIds.has(candidateId),
+          );
+          const shotAnnotations = { ...current.shotAnnotations };
+          let changed =
+            keywordNodes.length !== current.keywordNodes.length ||
+            recentKeywordIds.length !== current.recentKeywordIds.length;
+          for (const shotId of Object.keys(shotAnnotations)) {
+            const annotation = shotAnnotations[shotId];
+            const previousIds = normalizeStoryboardKeywordIds(annotation.keywordIds ?? []);
+            const keywordIds = previousIds.filter((candidateId) => !removableIds.has(candidateId));
+            if (keywordIds.length === previousIds.length) {
+              continue;
+            }
+            shotAnnotations[shotId] = annotationWithDefaults(annotation, { keywordIds });
+            changed = true;
+          }
+          return changed
+            ? { ...current, keywordNodes, recentKeywordIds, shotAnnotations }
+            : current;
         },
         uiState.videoContext,
         historyGroupId,
