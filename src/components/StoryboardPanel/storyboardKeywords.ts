@@ -1,5 +1,9 @@
 import { createElement, type ReactNode } from "react";
-import type { StoryboardKeywordNode, StoryboardShotAnnotation } from "../../types";
+import type {
+  StoryboardKeywordNode,
+  StoryboardKeywordUsageCounters,
+  StoryboardShotAnnotation,
+} from "../../types";
 
 export interface StoryboardKeywordPath {
   names: string[];
@@ -351,8 +355,77 @@ export function storyboardKeywordUsageCounts(
   return usageCounts;
 }
 
+const keywordUsageCounterDecayThreshold = 100;
+
+export function storyboardKeywordUsageCountersAfterUse(
+  current: StoryboardKeywordUsageCounters | null | undefined,
+  usedIds: Iterable<string>,
+): StoryboardKeywordUsageCounters {
+  const used = normalizeStoryboardKeywordIds(usedIds);
+  if (used.length === 0) {
+    return current ?? { counts: {}, total: 0 };
+  }
+  const counts = { ...(current?.counts ?? {}) };
+  let total = current?.total ?? 0;
+  for (const keywordId of used) {
+    counts[keywordId] = (counts[keywordId] ?? 0) + 1;
+    total += 1;
+  }
+  if (total >= keywordUsageCounterDecayThreshold) {
+    for (const keywordId of Object.keys(counts)) {
+      const halved = Math.floor(counts[keywordId] / 2);
+      if (halved > 0) {
+        counts[keywordId] = halved;
+      } else {
+        delete counts[keywordId];
+      }
+    }
+    total = Object.values(counts).reduce((sum, count) => sum + count, 0);
+  }
+  return { counts, total };
+}
+
+export function storyboardKeywordRealUsageCounts(
+  shotAnnotations: Readonly<Record<string, StoryboardShotAnnotation>>,
+  shotIds: Iterable<string> = Object.keys(shotAnnotations),
+) {
+  const usageCounts = new Map<string, number>();
+  for (const shotId of shotIds) {
+    const annotation = shotAnnotations[shotId];
+    if (!annotation) {
+      continue;
+    }
+    for (const keywordId of normalizeStoryboardKeywordIds(annotation.keywordIds ?? [])) {
+      usageCounts.set(keywordId, (usageCounts.get(keywordId) ?? 0) + 1);
+    }
+  }
+  return usageCounts;
+}
+
+function ascendingKeywordRanks(
+  keywordIds: Iterable<string>,
+  valueOf: (keywordId: string) => number,
+) {
+  const sorted = Array.from(keywordIds).sort((left, right) => {
+    const valueDiff = valueOf(left) - valueOf(right);
+    return valueDiff !== 0 ? valueDiff : left.localeCompare(right, "zh-CN");
+  });
+  const ranks = new Map<string, number>();
+  let previousValue: number | null = null;
+  let currentRank = 0;
+  for (const [index, keywordId] of sorted.entries()) {
+    const value = valueOf(keywordId);
+    if (value !== previousValue) {
+      previousValue = value;
+      currentRank = index + 1;
+    }
+    ranks.set(keywordId, currentRank);
+  }
+  return ranks;
+}
+
 export function suggestedStoryboardKeywordIds(
-  recentKeywordIds: readonly string[],
+  keywordUsageCounters: StoryboardKeywordUsageCounters | null | undefined,
   keywordNodes: readonly StoryboardKeywordNode[],
   shotAnnotations: Readonly<Record<string, StoryboardShotAnnotation>>,
   shotIds: Iterable<string> = Object.keys(shotAnnotations),
@@ -360,35 +433,34 @@ export function suggestedStoryboardKeywordIds(
   limit = 18,
 ) {
   const validIds = new Set(keywordNodes.map((node) => node.id));
-  const usageCounts = storyboardKeywordUsageCounts(keywordNodes, shotAnnotations, shotIds);
-  const candidates = Array.from(new Set(recentKeywordIds))
-    .filter((keywordId) => validIds.has(keywordId))
-    .filter((keywordId) => !excludedKeywordIds.has(keywordId))
-    .slice(0, limit);
-  const recentRank = new Map(candidates.map((keywordId, index) => [keywordId, index + 1]));
-  const byUsage = [...candidates].sort(
-    (left, right) =>
-      (usageCounts.get(right) ?? 0) - (usageCounts.get(left) ?? 0) ||
-      candidates.indexOf(left) - candidates.indexOf(right),
+  const realUsageCounts = storyboardKeywordRealUsageCounts(shotAnnotations, shotIds);
+  const counters = keywordUsageCounters?.counts ?? {};
+  const counterOf = (keywordId: string) => counters[keywordId] ?? 0;
+  const counterRanks = ascendingKeywordRanks(validIds, counterOf);
+  const usageRanks = ascendingKeywordRanks(
+    validIds,
+    (keywordId) => realUsageCounts.get(keywordId) ?? 0,
   );
-  const usageRank = new Map<string, number>();
-  let previousCount: number | null = null;
-  for (const [index, keywordId] of byUsage.entries()) {
-    const count = usageCounts.get(keywordId) ?? 0;
-    if (count !== previousCount) {
-      previousCount = count;
-      usageRank.set(keywordId, index + 1);
-    } else {
-      usageRank.set(keywordId, usageRank.get(byUsage[index - 1])!);
-    }
-  }
-  return [...candidates].sort((left, right) => {
-    const leftRecentRank = recentRank.get(left)!;
-    const rightRecentRank = recentRank.get(right)!;
-    const leftAverageRank = ((usageRank.get(left) ?? limit) + leftRecentRank) / 2;
-    const rightAverageRank = ((usageRank.get(right) ?? limit) + rightRecentRank) / 2;
-    return leftAverageRank - rightAverageRank || leftRecentRank - rightRecentRank;
-  });
+  return Array.from(validIds)
+    .filter((keywordId) => !excludedKeywordIds.has(keywordId))
+    .filter((keywordId) => counterOf(keywordId) > 0 || (realUsageCounts.get(keywordId) ?? 0) > 0)
+    .sort((left, right) => {
+      const leftScore = counterRanks.get(left)! * 2 + usageRanks.get(left)!;
+      const rightScore = counterRanks.get(right)! * 2 + usageRanks.get(right)!;
+      if (leftScore !== rightScore) {
+        return rightScore - leftScore;
+      }
+      const counterDiff = counterOf(right) - counterOf(left);
+      if (counterDiff !== 0) {
+        return counterDiff;
+      }
+      const usageDiff = (realUsageCounts.get(right) ?? 0) - (realUsageCounts.get(left) ?? 0);
+      if (usageDiff !== 0) {
+        return usageDiff;
+      }
+      return left.localeCompare(right, "zh-CN");
+    })
+    .slice(0, limit);
 }
 
 export function formatStoryboardKeywords(

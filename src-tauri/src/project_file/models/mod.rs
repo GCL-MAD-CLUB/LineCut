@@ -97,9 +97,10 @@ mod tests {
     use super::{current_version, decode_current, from_runtime, into_runtime, ProjectModel};
     use crate::{
         ProjectEditorState, ProjectMediaBinState, ProjectPreviewState, ProjectStoryboardAnnotation,
-        ProjectStoryboardColorLabel, ProjectStoryboardKeywordNode, ProjectStoryboardShot,
-        ProjectStoryboardStack, ProjectStoryboardState, ProjectSubtitleAnnotation,
-        ProjectSubtitleColorLabel, ProjectSubtitleState, ProjectWorkspace,
+        ProjectStoryboardColorLabel, ProjectStoryboardKeywordNode,
+        ProjectStoryboardKeywordUsageCounters, ProjectStoryboardShot, ProjectStoryboardStack,
+        ProjectStoryboardState, ProjectSubtitleAnnotation, ProjectSubtitleColorLabel,
+        ProjectSubtitleState, ProjectWorkspace,
     };
     use std::collections::{BTreeSet, HashMap};
 
@@ -196,6 +197,13 @@ mod tests {
                     "keyword:hero".to_string(),
                     "keyword:close-up".to_string(),
                 ],
+                keyword_usage_counters: ProjectStoryboardKeywordUsageCounters {
+                    counts: HashMap::from([
+                        ("keyword:hero".to_string(), 3),
+                        ("keyword:close-up".to_string(), 7),
+                    ]),
+                    total: 10,
+                },
                 shot_annotations: HashMap::from([(
                     "shot:0:24".to_string(),
                     ProjectStoryboardAnnotation {
@@ -256,6 +264,16 @@ mod tests {
             encoded_storyboard["recentKeywordIds"],
             serde_json::json!(["keyword:hero", "keyword:close-up"])
         );
+        assert_eq!(
+            encoded_storyboard["keywordUsageCounters"],
+            serde_json::json!({
+                "counts": {
+                    "keyword:close-up": 7,
+                    "keyword:hero": 3
+                },
+                "total": 10
+            })
+        );
         let restored = into_runtime(decode_current(3, &encoded).unwrap()).unwrap();
         let subtitle = restored
             .subtitles
@@ -280,6 +298,18 @@ mod tests {
         assert_eq!(
             storyboard.recent_keyword_ids,
             vec!["keyword:hero", "keyword:close-up"]
+        );
+        assert_eq!(storyboard.keyword_usage_counters.total, 10);
+        assert_eq!(
+            storyboard.keyword_usage_counters.counts.get("keyword:hero"),
+            Some(&3)
+        );
+        assert_eq!(
+            storyboard
+                .keyword_usage_counters
+                .counts
+                .get("keyword:close-up"),
+            Some(&7)
         );
         assert_eq!(storyboard.keyword_nodes[0].name, "close-up");
         assert_eq!(

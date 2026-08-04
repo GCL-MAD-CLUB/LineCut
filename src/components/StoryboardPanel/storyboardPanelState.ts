@@ -14,6 +14,7 @@ import {
   parseStoryboardKeywordInput,
   resolveStoryboardKeywordPaths,
   storyboardKeywordDescendantIds,
+  storyboardKeywordUsageCountersAfterUse,
 } from "./storyboardKeywords";
 
 export { formatStoryboardKeywords } from "./storyboardKeywords";
@@ -251,12 +252,6 @@ function keywordCollectionsEqual(
   return leftKeywords.size === right.length && right.every((keyword) => leftKeywords.has(keyword));
 }
 
-function orderedKeywordIdsEqual(left: readonly string[], right: readonly string[]) {
-  return (
-    left.length === right.length && left.every((keywordId, index) => keywordId === right[index])
-  );
-}
-
 function recentKeywordIdsAfterUse(currentIds: readonly string[], usedIds: readonly string[]) {
   const recentIds = Array.from(new Set(currentIds));
   for (const keywordId of usedIds) {
@@ -359,6 +354,7 @@ export function useStoryboardPanelState<Selection>(
     shotStacks: [],
     keywordNodes: [],
     recentKeywordIds: [],
+    keywordUsageCounters: { counts: {}, total: 0 },
     shotAnnotations: {},
   };
   const shotStacks = storyboard.shotStacks.map((stack) => ({
@@ -446,14 +442,8 @@ export function useStoryboardPanelState<Selection>(
       "设置分镜关键字",
       (current) => {
         const resolved = resolveStoryboardKeywordPaths(current.keywordNodes, parsed.paths);
-        const recentKeywordIds = recentKeywordIdsAfterUse(
-          current.recentKeywordIds,
-          resolved.keywordIds,
-        );
         const shotAnnotations = { ...current.shotAnnotations };
-        let changed =
-          resolved.keywordNodes.length !== current.keywordNodes.length ||
-          !orderedKeywordIdsEqual(current.recentKeywordIds, recentKeywordIds);
+        let changed = resolved.keywordNodes.length !== current.keywordNodes.length;
         for (const shotId of uniqueShotIds) {
           const previous = shotAnnotations[shotId];
           if (keywordCollectionsEqual(previous?.keywordIds, resolved.keywordIds)) {
@@ -464,14 +454,24 @@ export function useStoryboardPanelState<Selection>(
           });
           changed = true;
         }
-        return changed
-          ? {
-              ...current,
-              keywordNodes: resolved.keywordNodes,
-              recentKeywordIds,
-              shotAnnotations,
-            }
-          : current;
+        if (!changed) {
+          return current;
+        }
+        const recentKeywordIds = recentKeywordIdsAfterUse(
+          current.recentKeywordIds,
+          resolved.keywordIds,
+        );
+        const keywordUsageCounters = storyboardKeywordUsageCountersAfterUse(
+          current.keywordUsageCounters,
+          resolved.keywordIds,
+        );
+        return {
+          ...current,
+          keywordNodes: resolved.keywordNodes,
+          recentKeywordIds,
+          keywordUsageCounters,
+          shotAnnotations,
+        };
       },
       uiState.videoContext,
       historyGroupId,
@@ -492,14 +492,8 @@ export function useStoryboardPanelState<Selection>(
       "添加分镜关键字",
       (current) => {
         const resolved = resolveStoryboardKeywordPaths(current.keywordNodes, parsed.paths);
-        const recentKeywordIds = recentKeywordIdsAfterUse(
-          current.recentKeywordIds,
-          resolved.keywordIds,
-        );
         const shotAnnotations = { ...current.shotAnnotations };
-        let changed =
-          resolved.keywordNodes.length !== current.keywordNodes.length ||
-          !orderedKeywordIdsEqual(current.recentKeywordIds, recentKeywordIds);
+        let changed = resolved.keywordNodes.length !== current.keywordNodes.length;
         for (const shotId of uniqueShotIds) {
           const previous = shotAnnotations[shotId];
           const keywordIds = normalizeStoryboardKeywordIds([
@@ -512,14 +506,24 @@ export function useStoryboardPanelState<Selection>(
           shotAnnotations[shotId] = annotationWithDefaults(previous, { keywordIds });
           changed = true;
         }
-        return changed
-          ? {
-              ...current,
-              keywordNodes: resolved.keywordNodes,
-              recentKeywordIds,
-              shotAnnotations,
-            }
-          : current;
+        if (!changed) {
+          return current;
+        }
+        const recentKeywordIds = recentKeywordIdsAfterUse(
+          current.recentKeywordIds,
+          resolved.keywordIds,
+        );
+        const keywordUsageCounters = storyboardKeywordUsageCountersAfterUse(
+          current.keywordUsageCounters,
+          resolved.keywordIds,
+        );
+        return {
+          ...current,
+          keywordNodes: resolved.keywordNodes,
+          recentKeywordIds,
+          keywordUsageCounters,
+          shotAnnotations,
+        };
       },
       uiState.videoContext,
       historyGroupId,
@@ -558,12 +562,8 @@ export function useStoryboardPanelState<Selection>(
         active ? "添加分镜关键字" : "移除分镜关键字",
         (current) => {
           const removableIds = active ? null : new Set([keywordId]);
-          const recentKeywordIds = active
-            ? recentKeywordIdsAfterUse(current.recentKeywordIds, [keywordId])
-            : current.recentKeywordIds;
           const shotAnnotations = { ...current.shotAnnotations };
-          let changed =
-            active && !orderedKeywordIdsEqual(current.recentKeywordIds, recentKeywordIds);
+          let changed = false;
           for (const shotId of uniqueShotIds) {
             const previous = shotAnnotations[shotId];
             const keywordIds = active
@@ -577,7 +577,16 @@ export function useStoryboardPanelState<Selection>(
             shotAnnotations[shotId] = annotationWithDefaults(previous, { keywordIds });
             changed = true;
           }
-          return changed ? { ...current, recentKeywordIds, shotAnnotations } : current;
+          if (!changed) {
+            return current;
+          }
+          const recentKeywordIds = active
+            ? recentKeywordIdsAfterUse(current.recentKeywordIds, [keywordId])
+            : current.recentKeywordIds;
+          const keywordUsageCounters = active
+            ? storyboardKeywordUsageCountersAfterUse(current.keywordUsageCounters, [keywordId])
+            : current.keywordUsageCounters;
+          return { ...current, recentKeywordIds, keywordUsageCounters, shotAnnotations };
         },
         uiState.videoContext,
         historyGroupId,
@@ -609,8 +618,31 @@ export function useStoryboardPanelState<Selection>(
             shotAnnotations[shotId] = annotationWithDefaults(annotation, { keywordIds });
             changed = true;
           }
+          const counters = current.keywordUsageCounters;
+          let keywordUsageCounters = counters;
+          if (counters) {
+            const remainingCounts: Record<string, number> = {};
+            let total = 0;
+            for (const [counterId, count] of Object.entries(counters.counts)) {
+              if (removableIds.has(counterId)) {
+                continue;
+              }
+              remainingCounts[counterId] = count;
+              total += count;
+            }
+            keywordUsageCounters =
+              Object.keys(remainingCounts).length === Object.keys(counters.counts).length
+                ? counters
+                : { counts: remainingCounts, total };
+          }
           return changed
-            ? { ...current, keywordNodes, recentKeywordIds, shotAnnotations }
+            ? {
+                ...current,
+                keywordNodes,
+                recentKeywordIds,
+                keywordUsageCounters,
+                shotAnnotations,
+              }
             : current;
         },
         uiState.videoContext,
@@ -701,18 +733,25 @@ export function useStoryboardPanelState<Selection>(
             shotAnnotations[shotId] = annotationWithDefaults(previous, { keywordIds });
             changed = true;
           }
-          const recentKeywordIds =
-            changed && uniqueShotIds.length > 0
-              ? recentKeywordIdsAfterUse(current.recentKeywordIds, [ensured.keywordId])
-              : current.recentKeywordIds;
-          return changed
-            ? {
-                ...current,
-                keywordNodes: ensured.keywordNodes,
-                recentKeywordIds,
-                shotAnnotations,
-              }
-            : current;
+          if (!changed) {
+            return current;
+          }
+          const appliedToShots = uniqueShotIds.length > 0;
+          const recentKeywordIds = appliedToShots
+            ? recentKeywordIdsAfterUse(current.recentKeywordIds, [ensured.keywordId])
+            : current.recentKeywordIds;
+          const keywordUsageCounters = appliedToShots
+            ? storyboardKeywordUsageCountersAfterUse(current.keywordUsageCounters, [
+                ensured.keywordId,
+              ])
+            : current.keywordUsageCounters;
+          return {
+            ...current,
+            keywordNodes: ensured.keywordNodes,
+            recentKeywordIds,
+            keywordUsageCounters,
+            shotAnnotations,
+          };
         },
         uiState.videoContext,
         historyGroupId,

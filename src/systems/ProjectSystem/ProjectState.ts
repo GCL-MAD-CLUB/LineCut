@@ -1632,6 +1632,7 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
             shotStacks: [],
             keywordNodes: [],
             recentKeywordIds: [],
+            keywordUsageCounters: { counts: {}, total: 0 },
             shotAnnotations: {},
           };
           const storyboard = recipe(currentStoryboard);

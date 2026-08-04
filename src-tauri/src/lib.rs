@@ -417,6 +417,13 @@ struct ProjectStoryboardStack {
     shot_ids: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectStoryboardKeywordUsageCounters {
+    counts: HashMap<String, u64>,
+    total: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ProjectStoryboardState {
@@ -424,6 +431,8 @@ struct ProjectStoryboardState {
     shot_stacks: Vec<ProjectStoryboardStack>,
     keyword_nodes: Vec<ProjectStoryboardKeywordNode>,
     recent_keyword_ids: Vec<String>,
+    #[serde(default)]
+    keyword_usage_counters: ProjectStoryboardKeywordUsageCounters,
     shot_annotations: HashMap<String, ProjectStoryboardAnnotation>,
 }
 

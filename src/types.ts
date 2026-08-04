@@ -91,6 +91,11 @@ export interface StoryboardKeywordNode {
   synonyms?: string[];
 }
 
+export interface StoryboardKeywordUsageCounters {
+  counts: Record<string, number>;
+  total: number;
+}
+
 export interface StoryboardShotAnnotation {
   rating: number;
   retained: boolean;
@@ -111,6 +116,7 @@ export interface StoryboardState {
   shotStacks: StoryboardShotStackState[];
   keywordNodes: StoryboardKeywordNode[];
   recentKeywordIds: string[];
+  keywordUsageCounters?: StoryboardKeywordUsageCounters;
   shotAnnotations: Record<string, StoryboardShotAnnotation>;
 }
 

@@ -86,6 +86,7 @@ export function StoryboardKeywordPanel({
 }: StoryboardKeywordPanelProps) {
   const {
     keywordNodes,
+    keywordUsageCounters,
     recentKeywordIds,
     shots,
     shotAnnotations,
@@ -235,13 +236,13 @@ export function StoryboardKeywordPanel({
   const suggestedIds = useMemo(() => {
     const appliedIds = new Set(effectiveCountById.keys());
     return suggestedStoryboardKeywordIds(
-      recentKeywordIds,
+      keywordUsageCounters,
       keywordNodes,
       shotAnnotations,
       mediaShotIds,
       appliedIds,
     );
-  }, [effectiveCountById, keywordNodes, mediaShotIds, recentKeywordIds, shotAnnotations]);
+  }, [effectiveCountById, keywordNodes, keywordUsageCounters, mediaShotIds, shotAnnotations]);
   const directCountById = useMemo(() => {
     const counts = new Map<string, number>();
     for (const shotId of targetShotIds) {

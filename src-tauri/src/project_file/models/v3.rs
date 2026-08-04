@@ -265,6 +265,13 @@ struct StoryboardStack {
     shot_ids: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoryboardKeywordUsageCounters {
+    counts: BTreeMap<String, u64>,
+    total: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StoryboardState {
@@ -272,6 +279,8 @@ struct StoryboardState {
     shot_stacks: Vec<StoryboardStack>,
     keyword_nodes: Vec<StoryboardKeywordNode>,
     recent_keyword_ids: Vec<String>,
+    #[serde(default)]
+    keyword_usage_counters: StoryboardKeywordUsageCounters,
     shot_annotations: BTreeMap<String, StoryboardAnnotation>,
 }
 
