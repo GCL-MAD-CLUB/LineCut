@@ -2,8 +2,10 @@ import { ChevronsUpDown, ChevronDown, Minus, Plus, Search, Trash2 } from "lucide
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ModalDialog } from "../ModalDialog";
+import { PopupMenu, PopupMenuItem } from "../PopupMenu";
 import type { StoryboardKeywordNode } from "../../types";
 import {
+  expandedStoryboardKeywordText,
   normalizeStoryboardKeywordIds,
   parseStoryboardKeywordInput,
   renderStoryboardKeywordLabel,
@@ -15,12 +17,15 @@ import {
   suggestedStoryboardKeywordIds,
   visibleStoryboardKeywordIds,
 } from "./storyboardKeywords";
+import type { StoryboardKeywordEditorMode } from "./storyboardPanelState";
 import { useStoryboardPanelState } from "./storyboardPanelState";
 
 interface StoryboardKeywordPanelProps {
   shotIds: readonly string[];
   resetKey: string;
 }
+
+const keywordModeMenuWidth = 176;
 
 interface KeywordPanelSectionProps {
   title: ReactNode;
@@ -82,11 +87,14 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
     setShotKeywords,
     setShotKeywordActivation,
     removeStoryboardKeyword,
+    keywordEditorMode,
+    setKeywordEditorMode,
   } = useStoryboardPanelState((state) => state);
   const [keywordInput, setKeywordInput] = useState("");
   const [keywordEditValue, setKeywordEditValue] = useState("");
   const [keywordEditError, setKeywordEditError] = useState<string | null>(null);
   const [keywordEditorFocused, setKeywordEditorFocused] = useState(false);
+  const [keywordModeMenu, setKeywordModeMenu] = useState<{ x: number; y: number } | null>(null);
   const [filter, setFilter] = useState("");
   const [panelOpen, setPanelOpen] = useState(true);
   const [assignmentOpen, setAssignmentOpen] = useState(true);
@@ -116,7 +124,30 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
     setCollapsedNodeIds(new Set());
     setSelectedTreeNodeId(null);
     setKeywordDeleteRequest(null);
+    setKeywordModeMenu(null);
   }, [resetKey]);
+
+  useEffect(() => {
+    if (!keywordModeMenu) {
+      return;
+    }
+    const close = () => setKeywordModeMenu(null);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        close();
+      }
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("resize", close);
+    window.addEventListener("blur", close);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("blur", close);
+    };
+  }, [keywordModeMenu]);
 
   useEffect(() => {
     portalContainerRef.current = document.querySelector(".app-shell");
@@ -186,6 +217,10 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
         .map((keywordId) => storyboardKeywordLabel(keywordId, keywordNodes))
         .filter(Boolean)
         .join(", "),
+    [keywordNodes, selectedKeywordIds],
+  );
+  const expandedKeywordText = useMemo(
+    () => expandedStoryboardKeywordText(selectedKeywordIds, keywordNodes),
     [keywordNodes, selectedKeywordIds],
   );
 
@@ -342,10 +377,7 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
     performKeywordDelete(keywordId);
   }
 
-  const handleCancelDelete = useCallback(
-    () => setKeywordDeleteRequest(null),
-    [],
-  );
+  const handleCancelDelete = useCallback(() => setKeywordDeleteRequest(null), []);
 
   function renderKeywordGrid(keywordIds: readonly string[]) {
     const cells = Array.from({ length: 9 }, (_, index) => keywordIds[index] ?? null);
@@ -481,12 +513,33 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
             >
               <header className="storyboard-keyword-assignment-header">
                 <span>关键字标记</span>
-                <span className="storyboard-keyword-dropdown-shell">
-                  <span className="storyboard-keyword-dropdown-value">键入关键字</span>
+                <button
+                  type="button"
+                  className={`storyboard-keyword-dropdown-shell storyboard-keyword-mode-trigger ${
+                    keywordModeMenu ? "is-open" : ""
+                  }`.trim()}
+                  aria-haspopup="menu"
+                  aria-expanded={Boolean(keywordModeMenu)}
+                  aria-label="关键字编辑方式"
+                  title="选择关键字编辑方式"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    if (keywordModeMenu) {
+                      setKeywordModeMenu(null);
+                      return;
+                    }
+                    const bounds = event.currentTarget.getBoundingClientRect();
+                    setKeywordModeMenu({ x: bounds.right - keywordModeMenuWidth, y: bounds.bottom });
+                  }}
+                >
+                  <span className="storyboard-keyword-dropdown-value">
+                    {keywordEditorMode === "withParents" ? "关键字与父关键字" : "键入关键字"}
+                  </span>
                   <span className="storyboard-keyword-dropdown-arrows" aria-hidden="true">
                     <ChevronsUpDown aria-hidden="true" />
                   </span>
-                </span>
+                </button>
                 <button
                   type="button"
                   className="storyboard-keyword-assignment-toggle"
@@ -502,59 +555,67 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
               </header>
               {assignmentOpen && (
                 <div className="storyboard-keyword-section-body">
-                  <div className="storyboard-keyword-plain-editor">
-                    {!keywordEditorFocused && (
-                      <div
-                        className="storyboard-keyword-plain-editor-display"
-                        onClick={() => {
-                          if (targetShotIds.length > 0) {
-                            setKeywordEditorFocused(true);
+                  {keywordEditorMode === "withParents" ? (
+                    <div className="storyboard-keyword-plain-editor storyboard-keyword-with-parents">
+                      <div className="storyboard-keyword-plain-editor-display">
+                        {renderStoryboardKeywordLabel(expandedKeywordText)}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="storyboard-keyword-plain-editor">
+                      {!keywordEditorFocused && (
+                        <div
+                          className="storyboard-keyword-plain-editor-display"
+                          onClick={() => {
+                            if (targetShotIds.length > 0) {
+                              setKeywordEditorFocused(true);
+                            }
+                          }}
+                        >
+                          {renderStoryboardKeywordLabel(keywordEditValue)}
+                        </div>
+                      )}
+                      <textarea
+                        ref={keywordEditorRef}
+                        className={keywordEditorFocused ? "" : "is-hidden"}
+                        value={keywordEditValue}
+                        disabled={targetShotIds.length === 0}
+                        placeholder=""
+                        aria-label="编辑当前分镜关键字"
+                        aria-invalid={Boolean(keywordEditError)}
+                        title={keywordEditError ?? "直接编辑当前关键字，回车或失焦后保存"}
+                        onFocus={() => {
+                          cancelKeywordEditRef.current = false;
+                        }}
+                        onChange={(event) => {
+                          const value = event.currentTarget.value;
+                          setKeywordEditValue(value);
+                          setKeywordEditError(parseStoryboardKeywordInput(value).error);
+                        }}
+                        onBlur={() => {
+                          setKeywordEditorFocused(false);
+                          if (cancelKeywordEditRef.current) {
+                            cancelKeywordEditRef.current = false;
+                            setKeywordEditValue(selectedKeywordText);
+                            setKeywordEditError(null);
+                            return;
+                          }
+                          commitKeywordEdit();
+                        }}
+                        onKeyDown={(event) => {
+                          event.stopPropagation();
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            event.currentTarget.blur();
+                          } else if (event.key === "Escape") {
+                            event.preventDefault();
+                            cancelKeywordEditRef.current = true;
+                            event.currentTarget.blur();
                           }
                         }}
-                      >
-                        {renderStoryboardKeywordLabel(keywordEditValue)}
-                      </div>
-                    )}
-                    <textarea
-                      ref={keywordEditorRef}
-                      className={keywordEditorFocused ? "" : "is-hidden"}
-                      value={keywordEditValue}
-                      disabled={targetShotIds.length === 0}
-                      placeholder=""
-                      aria-label="编辑当前分镜关键字"
-                      aria-invalid={Boolean(keywordEditError)}
-                      title={keywordEditError ?? "直接编辑当前关键字，回车或失焦后保存"}
-                      onFocus={() => {
-                        cancelKeywordEditRef.current = false;
-                      }}
-                      onChange={(event) => {
-                        const value = event.currentTarget.value;
-                        setKeywordEditValue(value);
-                        setKeywordEditError(parseStoryboardKeywordInput(value).error);
-                      }}
-                      onBlur={() => {
-                        setKeywordEditorFocused(false);
-                        if (cancelKeywordEditRef.current) {
-                          cancelKeywordEditRef.current = false;
-                          setKeywordEditValue(selectedKeywordText);
-                          setKeywordEditError(null);
-                          return;
-                        }
-                        commitKeywordEdit();
-                      }}
-                      onKeyDown={(event) => {
-                        event.stopPropagation();
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          event.currentTarget.blur();
-                        } else if (event.key === "Escape") {
-                          event.preventDefault();
-                          cancelKeywordEditRef.current = true;
-                          event.currentTarget.blur();
-                        }
-                      }}
-                    />
-                  </div>
+                      />
+                    </div>
+                  )}
                   <form
                     className="storyboard-keyword-inline-entry"
                     onSubmit={(event) => {
@@ -658,6 +719,39 @@ export function StoryboardKeywordPanel({ shotIds, resetKey }: StoryboardKeywordP
           )}
         </section>
       </aside>
+      {keywordModeMenu &&
+        createPortal(
+          <PopupMenu
+            className="storyboard-keyword-mode-menu"
+            contextMenuAnchor={keywordModeMenu}
+            ariaLabel="关键字编辑方式"
+            style={{ position: "fixed", left: keywordModeMenu.x, top: keywordModeMenu.y }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            <PopupMenuItem
+              checked={keywordEditorMode === "plain"}
+              indicator="check"
+              onSelect={() => {
+                setKeywordEditorMode("plain");
+                setKeywordModeMenu(null);
+              }}
+            >
+              键入关键字
+            </PopupMenuItem>
+            <PopupMenuItem
+              checked={keywordEditorMode === "withParents"}
+              indicator="check"
+              onSelect={() => {
+                setKeywordEditorMode("withParents");
+                setKeywordModeMenu(null);
+              }}
+            >
+              关键字与父关键字
+            </PopupMenuItem>
+          </PopupMenu>,
+          document.body,
+        )}
       {keywordDeleteRequest &&
         createPortal(
           <ModalDialog

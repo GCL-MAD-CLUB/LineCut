@@ -38,6 +38,7 @@ export type StoryboardShotEditFilter = "edited" | "unedited";
 export type StoryboardShotVisualLabel = StoryboardShotColorLabel | "custom";
 export type StoryboardShotColorLabelFilter = StoryboardShotVisualLabel | "none";
 export type StoryboardViewMode = "list" | "grid";
+export type StoryboardKeywordEditorMode = "plain" | "withParents";
 export type StoryboardIconMetadataMode =
   | "none"
   | "ratingAndColorLabel"
@@ -72,6 +73,7 @@ interface StoryboardPanelUiState extends StoryboardVideoSessionState {
   iconMetadataMode: StoryboardIconMetadataMode;
   thumbnailSize: number;
   gridSize: number;
+  keywordEditorMode: StoryboardKeywordEditorMode;
   syncVideoContext: (videoContext: string) => void;
   setQuery: (query: string) => void;
   setSearchScope: (scope: StoryboardSearchScope) => void;
@@ -86,6 +88,7 @@ interface StoryboardPanelUiState extends StoryboardVideoSessionState {
   setIconMetadataMode: (mode: StoryboardIconMetadataMode) => void;
   setThumbnailSize: (size: number) => void;
   setGridSize: (size: number) => void;
+  setKeywordEditorMode: (mode: StoryboardKeywordEditorMode) => void;
   detectionStarted: (videoContext: string) => void;
   detectionFinished: (videoContext: string) => void;
   shotSelectionCleared: () => void;
@@ -275,6 +278,7 @@ const useStoryboardPanelUiState = createPanelState<StoryboardPanelUiState>(() =>
   iconMetadataMode: "ratingAndColorLabel",
   thumbnailSize: 0,
   gridSize: 0,
+  keywordEditorMode: "plain",
   syncVideoContext: (videoContext) =>
     set((state) => {
       if (state.videoContext === videoContext) {
@@ -312,6 +316,7 @@ const useStoryboardPanelUiState = createPanelState<StoryboardPanelUiState>(() =>
     set({
       gridSize: Number.isFinite(gridSize) ? Math.min(100, Math.max(0, gridSize)) : 0,
     }),
+  setKeywordEditorMode: (keywordEditorMode) => set({ keywordEditorMode }),
   detectionStarted: (detectingVideoContext) => set({ detectingVideoContext }),
   detectionFinished: (videoContext) =>
     set((state) =>

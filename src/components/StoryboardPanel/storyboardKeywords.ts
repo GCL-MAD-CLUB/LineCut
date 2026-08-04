@@ -226,6 +226,32 @@ export function storyboardKeywordLabel(
   return storyboardKeywordPathForId(keywordId, keywordNodes)?.join("<") ?? "";
 }
 
+export function expandedStoryboardKeywordText(
+  keywordIds: Iterable<string> | null | undefined,
+  keywordNodes: readonly StoryboardKeywordNode[],
+) {
+  const chains = normalizeStoryboardKeywordIds(keywordIds ?? [])
+    .map((keywordId) => storyboardKeywordPathForId(keywordId, keywordNodes))
+    .filter((path): path is string[] => path !== null);
+  const entries = new Set<string>();
+  for (const chain of chains) {
+    const isAncestorOfAnother = chains.some(
+      (otherChain) =>
+        otherChain.length > chain.length &&
+        chain.every((name, index) => otherChain[index] === name),
+    );
+    if (isAncestorOfAnother) {
+      continue;
+    }
+    for (let start = 0; start < chain.length; start += 1) {
+      entries.add(chain.slice(start).join("<"));
+    }
+  }
+  return Array.from(entries)
+    .sort((left, right) => left.localeCompare(right, "zh-CN"))
+    .join(", ");
+}
+
 export function sanitizeStoryboardKeywordInput(value: string) {
   const values = splitKeywordValues(value);
   const sanitized: string[] = [];

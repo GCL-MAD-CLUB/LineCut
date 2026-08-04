@@ -808,6 +808,8 @@ body.is-resizing-storyboard-keyword-panel * {
 
 .storyboard-keyword-section:not(.storyboard-keyword-assignment) .storyboard-keyword-section-body {
   max-height: 98px;
+  padding-top: 5px;
+  padding-bottom: 5px;
 }
 
 .storyboard-keyword-assignment .storyboard-keyword-section-body {
@@ -1043,6 +1045,36 @@ body.is-resizing-storyboard-keyword-panel * {
   height: 12px;
 }
 
+.storyboard-keyword-mode-trigger {
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  appearance: none;
+  cursor: pointer;
+}
+
+.storyboard-keyword-mode-trigger:focus-visible {
+  outline: 1px solid #808080;
+  outline-offset: -2px;
+}
+
+.storyboard-keyword-mode-menu {
+  position: fixed;
+  z-index: 1000;
+  width: 176px;
+}
+
+.storyboard-keyword-plain-editor.storyboard-keyword-with-parents {
+  background: var(--color-surface);
+  border: 0;
+}
+
+.storyboard-keyword-with-parents .storyboard-keyword-plain-editor-display {
+  font-size: 11.5px;
+  line-height: 16px;
+}
+
 .storyboard-keyword-tree-section {
   display: flex;
   min-height: 124px;
@@ -1069,6 +1101,8 @@ body.is-resizing-storyboard-keyword-panel * {
 
 .storyboard-keyword-add-button,
 .storyboard-keyword-remove-button {
+  position: relative;
+  z-index: 0;
   display: grid;
   width: 28px;
   height: 28px;
@@ -1080,10 +1114,28 @@ body.is-resizing-storyboard-keyword-panel * {
   border-radius: 0;
 }
 
+.storyboard-keyword-add-button::before,
+.storyboard-keyword-remove-button::before {
+  position: absolute;
+  z-index: -1;
+  top: 50%;
+  left: 50%;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: transparent;
+  content: "";
+  transform: translate(-50%, -50%);
+}
+
+.storyboard-keyword-add-button:hover:not(:disabled)::before,
+.storyboard-keyword-remove-button:hover:not(:disabled)::before {
+  background: var(--color-surface-hover);
+}
+
 .storyboard-keyword-add-button:hover:not(:disabled),
 .storyboard-keyword-remove-button:hover:not(:disabled) {
   color: var(--color-text-highlight);
-  background: var(--color-surface-hover);
 }
 
 .storyboard-keyword-add-button > svg,
