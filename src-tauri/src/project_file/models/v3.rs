@@ -1,7 +1,7 @@
 use crate::{app_error, AppResult, ErrorCode, ProjectWorkspace};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::{v2, CurrentProjectModel, ProjectModel, UpgradeFrom, UpgradeParts};
 
@@ -242,9 +242,20 @@ struct StoryboardAnnotation {
     retained: bool,
     excluded: bool,
     title: Option<String>,
+    keyword_ids: BTreeSet<String>,
     color_label: Option<StoryboardColorLabel>,
     #[serde(default)]
     custom_label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoryboardKeywordNode {
+    id: String,
+    name: String,
+    parent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    synonyms: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -254,11 +265,22 @@ struct StoryboardStack {
     shot_ids: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoryboardKeywordUsageCounters {
+    counts: BTreeMap<String, u64>,
+    total: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StoryboardState {
     shots: Vec<StoryboardShot>,
     shot_stacks: Vec<StoryboardStack>,
+    keyword_nodes: Vec<StoryboardKeywordNode>,
+    recent_keyword_ids: Vec<String>,
+    #[serde(default)]
+    keyword_usage_counters: StoryboardKeywordUsageCounters,
     shot_annotations: BTreeMap<String, StoryboardAnnotation>,
 }
 

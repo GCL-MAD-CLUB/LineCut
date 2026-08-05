@@ -12,7 +12,12 @@ import {
 import { createPortal } from "react-dom";
 import { formatMonitorFrame, formatMonitorTime } from "../../time";
 import type { StoryboardShot } from "../../types";
-import { isPopupMenuEventTarget, PopupMenu, PopupMenuItem, PopupMenuSeparator } from "../PopupMenu";
+import {
+  PopupMenu,
+  PopupMenuItem,
+  PopupMenuSeparator,
+  useCloseOnOutsidePointer,
+} from "../PopupMenu";
 import { StoryboardShotThumbnail } from "./StoryboardShotThumbnail";
 import {
   useStoryboardPanelState,
@@ -267,32 +272,10 @@ export function StoryboardIconView({
     return () => resizeObserver.disconnect();
   }, [gridCardWidth, shots.length]);
 
-  useEffect(() => {
-    if (!metadataMenu) {
-      return;
-    }
-    const close = (event?: Event) => {
-      if (event && isPopupMenuEventTarget(event.target)) {
-        return;
-      }
-      setMetadataMenu(null);
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        close();
-      }
-    };
-    window.addEventListener("pointerdown", close, true);
-    window.addEventListener("keydown", closeOnEscape);
-    window.addEventListener("resize", close);
-    window.addEventListener("blur", close);
-    return () => {
-      window.removeEventListener("pointerdown", close, true);
-      window.removeEventListener("keydown", closeOnEscape);
-      window.removeEventListener("resize", close);
-      window.removeEventListener("blur", close);
-    };
-  }, [metadataMenu]);
+  useCloseOnOutsidePointer(Boolean(metadataMenu), () => setMetadataMenu(null), {
+    capturePointerdown: true,
+    ignorePopupMenuTargets: true,
+  });
 
   return (
     <>

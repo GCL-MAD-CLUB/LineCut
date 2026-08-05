@@ -38,11 +38,11 @@ import { normalizeFrameRate, timeUsToFrame } from "../../timeline";
 import type { SubtitleCue } from "../../types";
 import { usePanelManagerState } from "../DockLayout";
 import {
-  isPopupMenuEventTarget,
   PopupMenu,
   PopupMenuItem,
   PopupMenuSeparator,
   PopupMenuSubmenu,
+  useCloseOnOutsidePointer,
 } from "../PopupMenu";
 import "./SubtitlePanel.css";
 import {
@@ -154,7 +154,7 @@ type SubtitleColumnWidths = Record<SubtitleResizableColumnId, number>;
 
 const initialSubtitleColumnWidths: SubtitleColumnWidths = {
   thumbnail: 104,
-  subtitle: 128,
+  subtitle: 256,
   mediaStart: 128,
   mediaEnd: 128,
   duration: 140,
@@ -1078,65 +1078,36 @@ export function SubtitlePanel() {
     setFooterSprayMenu(null);
   }, [sprayActive]);
 
-  useEffect(() => {
-    if (!contextMenu && !annotationMenu) {
-      return;
-    }
-    const closeContextMenus = (event: PointerEvent) => {
-      if (isPopupMenuEventTarget(event.target)) {
-        return;
-      }
+  useCloseOnOutsidePointer(
+    Boolean(contextMenu) || Boolean(annotationMenu),
+    () => {
       setContextMenu(null);
       setAnnotationMenu(null);
-    };
-    window.addEventListener("pointerdown", closeContextMenus, true);
-    return () => window.removeEventListener("pointerdown", closeContextMenus, true);
-  }, [annotationMenu, contextMenu]);
+    },
+    {
+      capturePointerdown: true,
+      ignorePopupMenuTargets: true,
+    },
+  );
 
-  useEffect(() => {
-    const closeMenus = (event?: KeyboardEvent) => {
-      if (event && event.key !== "Escape") {
-        return;
-      }
-      setContextMenu(null);
-      setAnnotationMenu(null);
-      setTrackMenu(null);
-      setRatingComparatorMenu(null);
-      setFooterSortMenu(null);
-      setFooterSprayMenu(null);
-      setFooterOptionsMenu(null);
-    };
-    const anyMenu =
-      trackMenu ||
-      contextMenu ||
-      annotationMenu ||
-      ratingComparatorMenu ||
-      footerSortMenu ||
-      footerSprayMenu ||
-      footerOptionsMenu;
-    if (!anyMenu) {
-      return;
-    }
-    const closeOnPointer = () => closeMenus();
-    window.addEventListener("pointerdown", closeOnPointer);
-    window.addEventListener("keydown", closeMenus);
-    window.addEventListener("resize", closeOnPointer);
-    window.addEventListener("blur", closeOnPointer);
-    return () => {
-      window.removeEventListener("pointerdown", closeOnPointer);
-      window.removeEventListener("keydown", closeMenus);
-      window.removeEventListener("resize", closeOnPointer);
-      window.removeEventListener("blur", closeOnPointer);
-    };
-  }, [
-    annotationMenu,
-    contextMenu,
+  const anyMenu = Boolean(
+    trackMenu ||
+    contextMenu ||
+    annotationMenu ||
+    ratingComparatorMenu ||
+    footerSortMenu ||
+    footerSprayMenu ||
     footerOptionsMenu,
-    footerSortMenu,
-    footerSprayMenu,
-    ratingComparatorMenu,
-    trackMenu,
-  ]);
+  );
+  useCloseOnOutsidePointer(anyMenu, () => {
+    setContextMenu(null);
+    setAnnotationMenu(null);
+    setTrackMenu(null);
+    setRatingComparatorMenu(null);
+    setFooterSortMenu(null);
+    setFooterSprayMenu(null);
+    setFooterOptionsMenu(null);
+  });
 
   useEffect(() => {
     const visibleSelectedIds = sortedCues
@@ -1204,12 +1175,14 @@ export function SubtitlePanel() {
       for (const cue of sortedCues.slice(start, end + 1)) {
         nextSelection.add(cue.id);
       }
-      cueSelectionReplaced(nextSelection, targetId);
+      const primaryCueId =
+        activeCueId && nextSelection.has(activeCueId) ? activeCueId : targetId;
+      cueSelectionReplaced(nextSelection, primaryCueId);
       rowVirtualizer.scrollToIndex(targetIndex, { align: "auto" });
     };
     panel.addEventListener("keydown", handleSelectionKeyDown);
     return () => panel.removeEventListener("keydown", handleSelectionKeyDown);
-  }, [cueSelectionReplaced, rowVirtualizer, selectedCueIds, sortedCues]);
+  }, [activeCueId, cueSelectionReplaced, rowVirtualizer, selectedCueIds, sortedCues]);
 
   useEffect(() => {
     const handleRatingKey = (event: KeyboardEvent) => {
@@ -1410,7 +1383,9 @@ export function SubtitlePanel() {
     let shouldSeek = false;
 
     if (!event.shiftKey) {
-      selectionAnchorRef.current = cue.id;
+      if (!additive) {
+        selectionAnchorRef.current = cue.id;
+      }
       if (additive) {
         nextSelection = new Set(currentSelection);
         if (nextSelection.has(cue.id)) {

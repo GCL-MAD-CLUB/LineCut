@@ -59,10 +59,21 @@ import {
   storyboardShotColorLabels,
 } from "./StoryboardColorLabelButtons";
 import { StoryboardIconView } from "./StoryboardIconView";
+import { StoryboardKeywordPanel } from "./StoryboardKeywordPanel";
+import {
+  formatParsedStoryboardKeywords,
+  parseStoryboardKeywordInput,
+  storyboardKeywordSearchValues,
+  storyboardMatchesQuickFilter,
+} from "./storyboardKeywords";
 import { StoryboardListView } from "./StoryboardListView";
 import {
+  formatStoryboardKeywords,
   useStoryboardPanelState,
+  type StoryboardKeywordNode,
   type StoryboardRatingComparator,
+  type StoryboardSearchRule,
+  type StoryboardSearchScope,
   type StoryboardShotAnnotation,
   type StoryboardShotColorLabel,
   type StoryboardShotColorLabelFilter,
@@ -85,9 +96,24 @@ const STORYBOARD_THUMBNAIL_COLUMN_PADDING = 16;
 const STORYBOARD_STATUS_GUTTER_WIDTH = 16;
 
 type StoryboardResizableColumnId =
-  "thumbnail" | "title" | "mediaStart" | "mediaEnd" | "duration" | "label" | "rating" | "retained";
+  | "thumbnail"
+  | "title"
+  | "mediaStart"
+  | "mediaEnd"
+  | "duration"
+  | "keywords"
+  | "label"
+  | "rating"
+  | "retained";
 type StoryboardSortableColumnId =
-  "title" | "mediaStart" | "mediaEnd" | "duration" | "rating" | "retained" | "colorLabel";
+  | "title"
+  | "mediaStart"
+  | "mediaEnd"
+  | "duration"
+  | "keywords"
+  | "rating"
+  | "retained"
+  | "colorLabel";
 type StoryboardTableColumnId = StoryboardResizableColumnId | "trailing";
 type StoryboardSortDirection = "ascending" | "descending";
 
@@ -122,7 +148,8 @@ const storyboardTableHeaders: Array<{
     sortColumnId: "duration",
     resizeColumn: "mediaEnd",
   },
-  { id: "rating", label: "星级", sortColumnId: "rating", resizeColumn: "duration" },
+  { id: "keywords", label: "关键字", sortColumnId: "keywords", resizeColumn: "duration" },
+  { id: "rating", label: "星级", sortColumnId: "rating", resizeColumn: "keywords" },
   { id: "retained", label: "留用", resizeColumn: "rating" },
   { id: "label", label: "标签", sortColumnId: "colorLabel", resizeColumn: "retained" },
   { id: "trailing", label: "", resizeColumn: "label" },
@@ -137,6 +164,7 @@ const storyboardGridSortOptions: Array<{
   { id: "mediaStart", label: "媒体开始", defaultDirection: "ascending" },
   { id: "mediaEnd", label: "媒体结束", defaultDirection: "ascending" },
   { id: "duration", label: "媒体持续时间", defaultDirection: "ascending" },
+  { id: "keywords", label: "关键字", defaultDirection: "ascending" },
   { id: "rating", label: "星级", defaultDirection: "descending" },
   { id: "retained", label: "留用", defaultDirection: "ascending" },
   { id: "colorLabel", label: "标签", defaultDirection: "ascending" },
@@ -150,6 +178,7 @@ const initialStoryboardColumnWidths: StoryboardResizableColumnWidths = {
   mediaStart: 128,
   mediaEnd: 128,
   duration: 140,
+  keywords: 128,
   label: 128,
   rating: 112,
   retained: 128,
@@ -161,6 +190,7 @@ const minimumStoryboardColumnWidths: StoryboardResizableColumnWidths = {
   mediaStart: 21,
   mediaEnd: 21,
   duration: 21,
+  keywords: 38,
   label: 38,
   rating: 30,
   retained: 21,
@@ -172,6 +202,7 @@ const maximumStoryboardColumnWidths: StoryboardResizableColumnWidths = {
   mediaStart: 300,
   mediaEnd: 300,
   duration: 320,
+  keywords: 720,
   label: 720,
   rating: 180,
   retained: 300,
@@ -183,6 +214,7 @@ const storyboardResizableColumnLabels: Record<StoryboardResizableColumnId, strin
   mediaStart: "媒体开始",
   mediaEnd: "媒体结束",
   duration: "媒体持续时间",
+  keywords: "关键字",
   label: "标签",
   rating: "星级",
   retained: "留用",
@@ -203,6 +235,21 @@ const storyboardRatingComparatorLabels: Record<StoryboardRatingComparator, strin
   gte: "星级大于等于",
   lte: "星级小于等于",
   eq: "星级等于",
+};
+const storyboardSearchScopeLabels: Record<StoryboardSearchScope, string> = {
+  any: "任何可搜索的字段",
+  title: "标题",
+  keywords: "关键字",
+};
+const storyboardSearchRuleLabels: Record<StoryboardSearchRule, string> = {
+  contains: "包含",
+  containsAll: "包含所有",
+  containsWords: "包含单词",
+  doesNotContain: "不含",
+  startsWith: "开头为",
+  endsWith: "结尾为",
+  isEmpty: "为空",
+  isNotEmpty: "不为空",
 };
 const storyboardShotFlags: StoryboardShotFlag[] = ["retained", "none", "excluded"];
 const storyboardShotEditFilters: StoryboardShotEditFilter[] = ["edited", "unedited"];
@@ -249,9 +296,10 @@ interface StoryboardMenuAnchor {
   y: number;
 }
 
-type StoryboardSprayMode = "colorLabel" | "flag" | "rating";
+type StoryboardSprayMode = "keywords" | "colorLabel" | "flag" | "rating";
 
 const storyboardSprayModeOptions: Array<readonly [StoryboardSprayMode, string]> = [
+  ["keywords", "关键字"],
   ["colorLabel", "标签"],
   ["flag", "旗标"],
   ["rating", "星级"],
@@ -347,21 +395,71 @@ function storyboardShotIsEdited(annotation: StoryboardShotAnnotation | undefined
       annotation.retained ||
       annotation.excluded ||
       annotation.title?.trim() ||
+      annotation.keywordIds?.length ||
       annotation.colorLabel ||
       annotation.customLabel?.trim()),
   );
 }
 
-function shotMatches(title: string, query: string) {
+function storyboardSearchTerms(query: string) {
   const normalized = query.trim().toLocaleLowerCase();
   if (!normalized) {
+    return [];
+  }
+  return normalized.match(/[\p{L}\p{N}_]+/gu) ?? [normalized];
+}
+
+function containsWholeSearchWord(value: string, term: string) {
+  const escapedTerm = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|[^\\p{L}\\p{N}_])${escapedTerm}(?:$|[^\\p{L}\\p{N}_])`, "u").test(value);
+}
+
+function shotMatchesSearch(
+  shot: StoryboardShot,
+  annotation: StoryboardShotAnnotation | undefined,
+  shotCount: number,
+  keywordNodes: readonly StoryboardKeywordNode[],
+  query: string,
+  scope: StoryboardSearchScope,
+  rule: StoryboardSearchRule,
+) {
+  const values = [
+    ...(scope === "any" || scope === "title"
+      ? [storyboardShotTitle(shot, shotCount, annotation)]
+      : []),
+    ...(scope === "any" || scope === "keywords"
+      ? storyboardKeywordSearchValues(annotation?.keywordIds, keywordNodes)
+      : []),
+  ].map((value) => value.trim().toLocaleLowerCase());
+  const populatedValues = values.filter(Boolean);
+  if (rule === "isEmpty") {
+    return populatedValues.length === 0;
+  }
+  if (rule === "isNotEmpty") {
+    return populatedValues.length > 0;
+  }
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  if (!normalizedQuery) {
     return true;
   }
-  const haystack = title.toLocaleLowerCase();
-  return normalized
-    .split(/\s+/)
-    .filter(Boolean)
-    .every((token) => haystack.includes(token));
+  const terms = storyboardSearchTerms(query);
+  const searchableText = populatedValues.join(" ");
+  if (rule === "contains") {
+    return terms.some((term) => searchableText.includes(term));
+  }
+  if (rule === "containsAll") {
+    return terms.every((term) => searchableText.includes(term));
+  }
+  if (rule === "containsWords") {
+    return terms.every((term) => containsWholeSearchWord(searchableText, term));
+  }
+  if (rule === "doesNotContain") {
+    return terms.every((term) => !searchableText.includes(term));
+  }
+  if (rule === "startsWith") {
+    return populatedValues.some((value) => value.startsWith(normalizedQuery));
+  }
+  return populatedValues.some((value) => value.endsWith(normalizedQuery));
 }
 
 function shotMatchesFilter(
@@ -616,12 +714,49 @@ function SortArrow({ direction }: { direction: StoryboardSortDirection }) {
   );
 }
 
+interface StoryboardDropdownTriggerProps {
+  label: string;
+  value: string;
+  open: boolean;
+  disabled?: boolean;
+  className?: string;
+  onClick: (event: ReactMouseEvent<HTMLButtonElement>) => void;
+}
+
+function StoryboardDropdownTrigger({
+  label,
+  value,
+  open,
+  disabled,
+  className = "",
+  onClick,
+}: StoryboardDropdownTriggerProps) {
+  return (
+    <button
+      type="button"
+      className={`storyboard-footer-sort-trigger ${className} ${open ? "active" : ""}`.trim()}
+      aria-haspopup="menu"
+      aria-expanded={open}
+      disabled={disabled}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={onClick}
+    >
+      <span className="storyboard-footer-sort-label">{label}</span>
+      <span className="storyboard-footer-sort-value">{value}</span>
+      <ChevronsUpDown aria-hidden="true" />
+    </button>
+  );
+}
+
 function storyboardSprayBottleMarkSvg(
   mode: StoryboardSprayMode,
   flag: StoryboardShotFlag,
   rating: number,
   customLabel: boolean,
 ) {
+  if (mode === "keywords") {
+    return '<text x="10" y="17.8" fill="#fff" font-family="Arial,sans-serif" font-size="7.5" font-weight="700" text-anchor="middle">K</text>';
+  }
   if (mode === "colorLabel" && customLabel) {
     return '<text x="10" y="17.8" fill="#fff" font-family="Arial,sans-serif" font-size="7.5" font-weight="700" text-anchor="middle">T</text>';
   }
@@ -684,6 +819,19 @@ function StoryboardSprayBottleIcon({
       />
       <path d="M4 21.25h12v1.5H4z" fill={fillColor} stroke="currentColor" strokeWidth="1" />
       <path d="M6.25 11h7.5M6.25 18.75h7.5" stroke="#686868" strokeWidth="0.75" />
+      {mode === "keywords" && (
+        <text
+          x="10"
+          y="17.8"
+          fill="#fff"
+          fontFamily="Arial, sans-serif"
+          fontSize="7.5"
+          fontWeight="700"
+          textAnchor="middle"
+        >
+          K
+        </text>
+      )}
       {mode === "colorLabel" && customLabel && (
         <text
           x="10"
@@ -871,6 +1019,7 @@ function storyboardShotSortValue(
   shot: StoryboardShot,
   columnId: StoryboardSortableColumnId,
   shotAnnotations: Record<string, StoryboardShotAnnotation>,
+  keywordNodes: readonly StoryboardKeywordNode[],
   shotCount: number,
 ) {
   const annotation = shotAnnotations[shot.id];
@@ -889,6 +1038,9 @@ function storyboardShotSortValue(
   if (columnId === "rating") {
     return annotation?.rating ?? 0;
   }
+  if (columnId === "keywords") {
+    return formatStoryboardKeywords(annotation?.keywordIds, keywordNodes);
+  }
   if (columnId === "colorLabel") {
     return storyboardShotLabel(annotation);
   }
@@ -900,6 +1052,7 @@ function sortStoryboardShots(
   shots: readonly StoryboardShot[],
   sort: StoryboardSort,
   shotAnnotations: Record<string, StoryboardShotAnnotation>,
+  keywordNodes: readonly StoryboardKeywordNode[],
   shotCount: number,
   sortShotsById: ReadonlyMap<string, StoryboardShot>,
 ) {
@@ -922,8 +1075,20 @@ function sortStoryboardShots(
       const leftSortShot = sortShotsById.get(left.shot.id) ?? left.shot;
       const rightSortShot = sortShotsById.get(right.shot.id) ?? right.shot;
       const valueDelta = compareSortValues(
-        storyboardShotSortValue(leftSortShot, sort.columnId, shotAnnotations, shotCount),
-        storyboardShotSortValue(rightSortShot, sort.columnId, shotAnnotations, shotCount),
+        storyboardShotSortValue(
+          leftSortShot,
+          sort.columnId,
+          shotAnnotations,
+          keywordNodes,
+          shotCount,
+        ),
+        storyboardShotSortValue(
+          rightSortShot,
+          sort.columnId,
+          shotAnnotations,
+          keywordNodes,
+          shotCount,
+        ),
       );
       return (
         valueDelta * direction ||
@@ -945,15 +1110,19 @@ export function StoryboardPanel() {
   );
   const {
     query,
+    searchScope,
+    searchRule,
     showOnlySelected,
     minimumRating,
     ratingComparator,
     flagFilters,
     editFilters,
     colorLabelFilters,
+    quickFilterKeywordIds,
     activeShotId,
     shots,
     shotStacks,
+    keywordNodes,
     selectedShotIds,
     shotAnnotations,
     detectingVideoContext,
@@ -962,6 +1131,8 @@ export function StoryboardPanel() {
     gridSize,
     syncVideoContext,
     setQuery,
+    setSearchScope,
+    setSearchRule,
     setShowOnlySelected,
     setMinimumRating,
     setRatingComparator,
@@ -976,6 +1147,7 @@ export function StoryboardPanel() {
     setShotFlags,
     setShotColorLabels,
     setShotCustomLabels,
+    appendShotKeywords,
     createShotStack,
     cancelShotStack,
     removeShotFromStack,
@@ -991,6 +1163,7 @@ export function StoryboardPanel() {
   const { isRunning: isDetecting } = useTaskProgressStatus("storyboard.detect");
   const playback = usePlaybackStatus();
   const panelRef = useRef<HTMLElement | null>(null);
+  const contentLayoutRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const tableHeaderRef = useRef<HTMLDivElement | null>(null);
   const scrollAnimationRef = useRef<number | null>(null);
@@ -998,21 +1171,27 @@ export function StoryboardPanel() {
   const selectionFocusRef = useRef<string | null>(null);
   const marqueeCleanupRef = useRef<(() => void) | null>(null);
   const sprayGestureCleanupRef = useRef<(() => void) | null>(null);
+  const keywordResizeCleanupRef = useRef<(() => void) | null>(null);
   const hadShotsRef = useRef(shots.length > 0);
   const [shotSort, setShotSort] = useState<StoryboardSort>(defaultStoryboardSort);
   const [gridShotSort, setGridShotSort] = useState<StoryboardSort>(defaultStoryboardGridSort);
   const [ratingComparatorMenu, setRatingComparatorMenu] = useState<StoryboardMenuAnchor | null>(
     null,
   );
+  const [searchScopeMenu, setSearchScopeMenu] = useState<StoryboardMenuAnchor | null>(null);
+  const [searchRuleMenu, setSearchRuleMenu] = useState<StoryboardMenuAnchor | null>(null);
   const [footerSortMenu, setFooterSortMenu] = useState<StoryboardMenuAnchor | null>(null);
   const [footerSprayMenu, setFooterSprayMenu] = useState<StoryboardMenuAnchor | null>(null);
   const [footerOptionsMenu, setFooterOptionsMenu] = useState<StoryboardMenuAnchor | null>(null);
   const [sprayActive, setSprayActive] = useState(false);
-  const [sprayMode, setSprayMode] = useState<StoryboardSprayMode>("colorLabel");
+  const [sprayMode, setSprayMode] = useState<StoryboardSprayMode>("keywords");
+  const [sprayKeywordInput, setSprayKeywordInput] = useState("");
   const [sprayColorLabel, setSprayColorLabel] = useState<StoryboardShotColorLabel | null>(null);
   const [sprayCustomLabel, setSprayCustomLabel] = useState("");
   const [sprayFlag, setSprayFlag] = useState<StoryboardShotFlag>("none");
   const [sprayRating, setSprayRating] = useState(0);
+  const [storyboardViewRatio, setStoryboardViewRatio] = useState(2 / 3);
+  const [keywordPanelOpen, setKeywordPanelOpen] = useState(true);
   const [footerAreaVisibility, setFooterAreaVisibility] = useState(
     defaultStoryboardFooterAreaVisibility,
   );
@@ -1052,7 +1231,15 @@ export function StoryboardPanel() {
       displayShots.filter(
         (shot) =>
           (!showOnlySelected || selectedShotIds.has(shot.id)) &&
-          shotMatches(storyboardShotTitle(shot, shotCount, shotAnnotations[shot.id]), query) &&
+          shotMatchesSearch(
+            shot,
+            shotAnnotations[shot.id],
+            shotCount,
+            keywordNodes,
+            query,
+            searchScope,
+            searchRule,
+          ) &&
           shotMatchesFilter(
             shotAnnotations[shot.id],
             minimumRating,
@@ -1060,6 +1247,11 @@ export function StoryboardPanel() {
             flagFilters,
             editFilters,
             colorLabelFilters,
+          ) &&
+          storyboardMatchesQuickFilter(
+            shotAnnotations[shot.id]?.keywordIds,
+            keywordNodes,
+            quickFilterKeywordIds,
           ),
       ),
     [
@@ -1068,8 +1260,12 @@ export function StoryboardPanel() {
       editFilters,
       flagFilters,
       minimumRating,
+      keywordNodes,
       query,
+      quickFilterKeywordIds,
       ratingComparator,
+      searchRule,
+      searchScope,
       selectedShotIds,
       shotCount,
       shotAnnotations,
@@ -1080,13 +1276,23 @@ export function StoryboardPanel() {
   const setActiveShotSort = viewMode === "grid" ? setGridShotSort : setShotSort;
   const sortedShots = useMemo(
     () =>
-      sortStoryboardShots(filteredShots, activeShotSort, shotAnnotations, shotCount, sortShotsById),
-    [activeShotSort, filteredShots, shotAnnotations, shotCount, sortShotsById],
+      sortStoryboardShots(
+        filteredShots,
+        activeShotSort,
+        shotAnnotations,
+        keywordNodes,
+        shotCount,
+        sortShotsById,
+      ),
+    [activeShotSort, filteredShots, keywordNodes, shotAnnotations, shotCount, sortShotsById],
   );
   const footerSortLabel =
     storyboardGridSortOptions.find((option) => option.id === activeShotSort.columnId)?.label ??
     "标题";
   const footerSortVisible = footerAreaVisibility.sort[viewMode];
+  const sprayKeywordParseResult = parseStoryboardKeywordInput(sprayKeywordInput);
+  const sprayKeywords = sprayKeywordParseResult.paths;
+  const sprayKeywordsDisplay = formatParsedStoryboardKeywords(sprayKeywords);
   const sprayUsesCustomLabel = sprayMode === "colorLabel" && sprayCustomLabel.trim().length > 0;
   const sprayBottleFillColor =
     sprayMode === "colorLabel" && sprayColorLabel
@@ -1173,6 +1379,7 @@ export function StoryboardPanel() {
     storyboardColumnWidths.mediaStart +
     storyboardColumnWidths.mediaEnd +
     storyboardColumnWidths.duration +
+    storyboardColumnWidths.keywords +
     storyboardColumnWidths.label +
     storyboardColumnWidths.rating +
     storyboardColumnWidths.retained;
@@ -1184,6 +1391,7 @@ export function StoryboardPanel() {
     "--storyboard-col-media-start": `${storyboardColumnWidths.mediaStart}px`,
     "--storyboard-col-media-end": `${storyboardColumnWidths.mediaEnd}px`,
     "--storyboard-col-duration": `${storyboardColumnWidths.duration}px`,
+    "--storyboard-col-keywords": `${storyboardColumnWidths.keywords}px`,
     "--storyboard-col-label": `${storyboardColumnWidths.label}px`,
     "--storyboard-col-rating": `${storyboardColumnWidths.rating}px`,
     "--storyboard-col-retained": `${storyboardColumnWidths.retained}px`,
@@ -1228,6 +1436,7 @@ export function StoryboardPanel() {
     [selectedShotIds, shotStacksByShotId],
   );
   const contextMenuShotIds = Array.from(selectedAnnotationShotIds);
+  const keywordPanelShotIds = contextMenuShotIds;
   const contextMenuRatings = contextMenuShotIds.map(
     (shotId) => shotAnnotations[shotId]?.rating ?? 0,
   );
@@ -1317,6 +1526,8 @@ export function StoryboardPanel() {
     setContextMenu(null);
     setAnnotationMenu(null);
     setRatingComparatorMenu(null);
+    setSearchScopeMenu(null);
+    setSearchRuleMenu(null);
     setFooterSortMenu(null);
     setFooterSprayMenu(null);
     setFooterOptionsMenu(null);
@@ -1398,6 +1609,31 @@ export function StoryboardPanel() {
       window.removeEventListener("blur", close);
     };
   }, [ratingComparatorMenu]);
+
+  useEffect(() => {
+    if (!searchScopeMenu && !searchRuleMenu) {
+      return;
+    }
+    const close = () => {
+      setSearchScopeMenu(null);
+      setSearchRuleMenu(null);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        close();
+      }
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("resize", close);
+    window.addEventListener("blur", close);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("blur", close);
+    };
+  }, [searchRuleMenu, searchScopeMenu]);
 
   useEffect(() => {
     if (!footerSortMenu) {
@@ -1587,13 +1823,15 @@ export function StoryboardPanel() {
       for (const shot of sortedShots.slice(start, end + 1)) {
         nextSelection.add(shot.id);
       }
-      shotSelectionReplaced(Array.from(nextSelection), targetId);
+      const primaryShotId =
+        activeShotId && nextSelection.has(activeShotId) ? activeShotId : targetId;
+      shotSelectionReplaced(Array.from(nextSelection), primaryShotId);
       scrollToTarget();
     };
 
     panel.addEventListener("keydown", handleSelectionKeyDown);
     return () => panel.removeEventListener("keydown", handleSelectionKeyDown);
-  }, [rowVirtualizer, selectedShotIds, shotSelectionReplaced, sortedShots, viewMode]);
+  }, [activeShotId, rowVirtualizer, selectedShotIds, shotSelectionReplaced, sortedShots, viewMode]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1641,7 +1879,9 @@ export function StoryboardPanel() {
       }
       marqueeCleanupRef.current?.();
       sprayGestureCleanupRef.current?.();
+      keywordResizeCleanupRef.current?.();
       document.body.classList.remove("is-resizing-storyboard-column");
+      document.body.classList.remove("is-resizing-storyboard-keyword-panel");
     },
     [],
   );
@@ -1786,6 +2026,10 @@ export function StoryboardPanel() {
 
   function applySprayToShot(shotId: string, historyGroupId: string) {
     const targetShotIds = annotationShotIdsForSelection([shotId], shotStacksByShotId);
+    if (sprayMode === "keywords") {
+      appendShotKeywords(targetShotIds, sprayKeywordInput, historyGroupId);
+      return;
+    }
     if (sprayMode === "colorLabel") {
       const customLabel = sprayCustomLabel.trim();
       if (customLabel) {
@@ -2054,6 +2298,54 @@ export function StoryboardPanel() {
     );
   }
 
+  function startKeywordPanelResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) {
+      return;
+    }
+    const layout = contentLayoutRef.current;
+    if (!layout) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    keywordResizeCleanupRef.current?.();
+    document.body.classList.add("is-resizing-storyboard-keyword-panel");
+    const bounds = layout.getBoundingClientRect();
+    const layoutStyle = getComputedStyle(layout);
+    const paddingLeft = Number.parseFloat(layoutStyle.paddingLeft) || 0;
+    const paddingRight = Number.parseFloat(layoutStyle.paddingRight) || 0;
+    const resizeHandleWidth = 4;
+    const availableWidth = Math.max(
+      1,
+      bounds.width - paddingLeft - paddingRight - resizeHandleWidth,
+    );
+    const update = (clientX: number) => {
+      const ratio = (clientX - bounds.left - paddingLeft - resizeHandleWidth / 2) / availableWidth;
+      setStoryboardViewRatio(Math.min(0.8, Math.max(0.35, ratio)));
+    };
+    const cleanup = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      document.body.classList.remove("is-resizing-storyboard-keyword-panel");
+      if (keywordResizeCleanupRef.current === cleanup) {
+        keywordResizeCleanupRef.current = null;
+      }
+    };
+    const onMove = (moveEvent: globalThis.PointerEvent) => {
+      moveEvent.preventDefault();
+      update(moveEvent.clientX);
+    };
+    const onUp = (upEvent: globalThis.PointerEvent) => {
+      update(upEvent.clientX);
+      cleanup();
+    };
+    keywordResizeCleanupRef.current = cleanup;
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  }
+
   function openAnnotationMenu(
     event: ReactMouseEvent<HTMLButtonElement>,
     shotId: string,
@@ -2122,7 +2414,9 @@ export function StoryboardPanel() {
     let shouldSeek = false;
 
     if (!event.shiftKey) {
-      selectionAnchorRef.current = shot.id;
+      if (!additive) {
+        selectionAnchorRef.current = shot.id;
+      }
       if (additive) {
         nextSelection = new Set(currentSelection);
         if (nextSelection.has(shot.id)) {
@@ -2429,6 +2723,62 @@ export function StoryboardPanel() {
             disabled={shots.length === 0}
           />
         </label>
+        <span
+          className="storyboard-filter-separator storyboard-search-separator"
+          aria-hidden="true"
+        />
+        <div className="storyboard-search-dropdown-control storyboard-search-scope-control">
+          <StoryboardDropdownTrigger
+            label="范围："
+            value={storyboardSearchScopeLabels[searchScope]}
+            open={Boolean(searchScopeMenu)}
+            disabled={shots.length === 0}
+            onClick={(event) => {
+              event.stopPropagation();
+              setContextMenu(null);
+              setAnnotationMenu(null);
+              setRatingComparatorMenu(null);
+              setSearchRuleMenu(null);
+              setFooterSortMenu(null);
+              setFooterSprayMenu(null);
+              setFooterOptionsMenu(null);
+              if (searchScopeMenu) {
+                setSearchScopeMenu(null);
+                return;
+              }
+              const bounds = event.currentTarget.getBoundingClientRect();
+              setSearchScopeMenu({ x: bounds.left, y: bounds.bottom });
+            }}
+          />
+        </div>
+        <span
+          className="storyboard-filter-separator storyboard-search-separator"
+          aria-hidden="true"
+        />
+        <div className="storyboard-search-dropdown-control">
+          <StoryboardDropdownTrigger
+            label="规则："
+            value={storyboardSearchRuleLabels[searchRule]}
+            open={Boolean(searchRuleMenu)}
+            disabled={shots.length === 0}
+            onClick={(event) => {
+              event.stopPropagation();
+              setContextMenu(null);
+              setAnnotationMenu(null);
+              setRatingComparatorMenu(null);
+              setSearchScopeMenu(null);
+              setFooterSortMenu(null);
+              setFooterSprayMenu(null);
+              setFooterOptionsMenu(null);
+              if (searchRuleMenu) {
+                setSearchRuleMenu(null);
+                return;
+              }
+              const bounds = event.currentTarget.getBoundingClientRect();
+              setSearchRuleMenu({ x: bounds.left, y: bounds.bottom });
+            }}
+          />
+        </div>
         <span className="storyboard-selection-summary">
           {selectedCount} 条已选择，共 {sortedShots.length} 条
         </span>
@@ -2516,6 +2866,8 @@ export function StoryboardPanel() {
             }
             setContextMenu(null);
             setAnnotationMenu(null);
+            setSearchScopeMenu(null);
+            setSearchRuleMenu(null);
             setFooterSortMenu(null);
             setFooterSprayMenu(null);
             setFooterOptionsMenu(null);
@@ -2559,7 +2911,15 @@ export function StoryboardPanel() {
       </div>
 
       <div
-        className={`storyboard-content ${sprayActive ? "is-spraying" : ""}`}
+        ref={contentLayoutRef}
+        className={`storyboard-content ${sprayActive ? "is-spraying" : ""} ${
+          keywordPanelOpen ? "" : "is-keyword-panel-closed"
+        }`.trim()}
+        style={{
+          gridTemplateColumns: keywordPanelOpen
+            ? `minmax(0, ${storyboardViewRatio}fr) 4px minmax(0, ${1 - storyboardViewRatio}fr)`
+            : "minmax(0, 1fr) 0 0",
+        }}
         onPointerDownCapture={startSprayGesture}
         onClickCapture={suppressSprayClick}
         onDoubleClickCapture={suppressSprayClick}
@@ -2569,52 +2929,80 @@ export function StoryboardPanel() {
           }
         }}
       >
-        {viewMode === "list" ? (
-          <StoryboardListView
-            shots={sortedShots}
-            currentShotIndex={currentShotIndex}
-            tableStyle={tableStyle}
-            headerContent={storyboardTableHeaders.map(renderTableHeader)}
-            rowVirtualizer={rowVirtualizer}
-            virtualRows={virtualRows}
-            thumbnailPriorityCenterIndex={thumbnailPriorityCenterIndex}
-            assetId={thumbnailAssetId}
-            fingerprint={thumbnailFingerprint}
-            videoPath={thumbnailVideoPath}
-            previewVideoPath={thumbnailPreviewVideoPath}
-            frameRate={frameRate}
-            resetKey={videoContext}
-            headerRef={tableHeaderRef}
-            scrollRef={listRef}
-            onScroll={syncTableHeaderScroll}
-            onPointerDown={startMarqueeSelection}
-            onContextMenu={openContextMenu}
-            onSelectShot={handleShotSelection}
-            onDoubleClickShot={handleShotDoubleClick}
-            onOpenAnnotationMenu={openAnnotationMenu}
-            shotTitle={(shot) => storyboardShotTitle(shot, shotCount, shotAnnotations[shot.id])}
-            shotLabel={(shot) => storyboardShotLabel(shotAnnotations[shot.id])}
-          />
-        ) : (
-          <StoryboardIconView
-            shots={sortedShots}
-            currentShotId={currentShotId}
-            assetId={thumbnailAssetId}
-            fingerprint={thumbnailFingerprint}
-            videoPath={thumbnailVideoPath}
-            previewVideoPath={thumbnailPreviewVideoPath}
-            frameRate={frameRate}
-            gridCardWidth={gridCardWidth}
-            scrollRef={listRef}
-            onPointerDown={startMarqueeSelection}
-            onContextMenu={openContextMenu}
-            onSelectShot={handleShotSelection}
-            onDoubleClickShot={handleShotDoubleClick}
-            onOpenAnnotationMenu={openAnnotationMenu}
-            shotTitle={(shot) => storyboardShotTitle(shot, shotCount, shotAnnotations[shot.id])}
-            shotLabel={(shot) => storyboardShotLabel(shotAnnotations[shot.id])}
+        <div className="storyboard-primary-view">
+          {viewMode === "list" ? (
+            <StoryboardListView
+              shots={sortedShots}
+              currentShotIndex={currentShotIndex}
+              tableStyle={tableStyle}
+              headerContent={storyboardTableHeaders.map(renderTableHeader)}
+              rowVirtualizer={rowVirtualizer}
+              virtualRows={virtualRows}
+              thumbnailPriorityCenterIndex={thumbnailPriorityCenterIndex}
+              assetId={thumbnailAssetId}
+              fingerprint={thumbnailFingerprint}
+              videoPath={thumbnailVideoPath}
+              previewVideoPath={thumbnailPreviewVideoPath}
+              frameRate={frameRate}
+              resetKey={videoContext}
+              headerRef={tableHeaderRef}
+              scrollRef={listRef}
+              onScroll={syncTableHeaderScroll}
+              onPointerDown={startMarqueeSelection}
+              onContextMenu={openContextMenu}
+              onSelectShot={handleShotSelection}
+              onDoubleClickShot={handleShotDoubleClick}
+              onOpenAnnotationMenu={openAnnotationMenu}
+              shotTitle={(shot) => storyboardShotTitle(shot, shotCount, shotAnnotations[shot.id])}
+              shotLabel={(shot) => storyboardShotLabel(shotAnnotations[shot.id])}
+            />
+          ) : (
+            <StoryboardIconView
+              shots={sortedShots}
+              currentShotId={currentShotId}
+              assetId={thumbnailAssetId}
+              fingerprint={thumbnailFingerprint}
+              videoPath={thumbnailVideoPath}
+              previewVideoPath={thumbnailPreviewVideoPath}
+              frameRate={frameRate}
+              gridCardWidth={gridCardWidth}
+              scrollRef={listRef}
+              onPointerDown={startMarqueeSelection}
+              onContextMenu={openContextMenu}
+              onSelectShot={handleShotSelection}
+              onDoubleClickShot={handleShotDoubleClick}
+              onOpenAnnotationMenu={openAnnotationMenu}
+              shotTitle={(shot) => storyboardShotTitle(shot, shotCount, shotAnnotations[shot.id])}
+              shotLabel={(shot) => storyboardShotLabel(shotAnnotations[shot.id])}
+            />
+          )}
+        </div>
+        {keywordPanelOpen && (
+          <div
+            className="storyboard-keyword-resize-handle"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="调整分镜表格和关键字面板宽度"
+            onPointerDown={startKeywordPanelResize}
           />
         )}
+        <StoryboardKeywordPanel
+          shotIds={keywordPanelShotIds}
+          resetKey={videoContext}
+          onSetQuickKeyword={setSprayKeywordInput}
+          quickKeywordLabel={sprayKeywordInput}
+        />
+        <div className={`storyboard-keyword-collapse-rail ${keywordPanelOpen ? "is-open" : ""}`}>
+          <button
+            type="button"
+            onClick={() => setKeywordPanelOpen((current) => !current)}
+            title={keywordPanelOpen ? "关闭关键字面板" : "展开关键字面板"}
+            aria-label={keywordPanelOpen ? "关闭关键字面板" : "展开关键字面板"}
+            aria-expanded={keywordPanelOpen}
+          >
+            <span aria-hidden="true" />
+          </button>
+        </div>
       </div>
 
       {renderMarqueeOverlay()}
@@ -2677,16 +3065,17 @@ export function StoryboardPanel() {
                     <span className="storyboard-footer-spray-icon-background" aria-hidden="true" />
                   </button>
                   <div className="storyboard-footer-sort-control storyboard-footer-spray-control">
-                    <button
-                      type="button"
-                      className={`storyboard-footer-sort-trigger storyboard-footer-spray-trigger ${footerSprayMenu ? "active" : ""}`}
-                      aria-haspopup="menu"
-                      aria-expanded={Boolean(footerSprayMenu)}
-                      onPointerDown={(event) => event.stopPropagation()}
+                    <StoryboardDropdownTrigger
+                      className="storyboard-footer-spray-trigger"
+                      label="喷涂："
+                      value={storyboardSprayModeLabels[sprayMode]}
+                      open={Boolean(footerSprayMenu)}
                       onClick={(event) => {
                         event.stopPropagation();
                         setContextMenu(null);
                         setAnnotationMenu(null);
+                        setSearchScopeMenu(null);
+                        setSearchRuleMenu(null);
                         setFooterSortMenu(null);
                         setFooterOptionsMenu(null);
                         if (footerSprayMenu) {
@@ -2696,15 +3085,24 @@ export function StoryboardPanel() {
                         const bounds = event.currentTarget.getBoundingClientRect();
                         setFooterSprayMenu({ x: bounds.left, y: bounds.top });
                       }}
-                    >
-                      <span className="storyboard-footer-sort-label">喷涂：</span>
-                      <span className="storyboard-footer-sort-value">
-                        {storyboardSprayModeLabels[sprayMode]}
-                      </span>
-                      <ChevronsUpDown aria-hidden="true" />
-                    </button>
+                    />
                   </div>
                   <span className="storyboard-filter-separator storyboard-footer-separator" />
+                  {sprayMode === "keywords" && (
+                    <input
+                      className="shot-title-editor storyboard-footer-spray-keyword-input"
+                      value={sprayKeywordInput}
+                      aria-label="喷涂关键字"
+                      aria-invalid={Boolean(sprayKeywordParseResult.error)}
+                      title={
+                        sprayKeywordParseResult.error ??
+                        "支持 父>子、子<父、父|子；多个关键字用逗号分隔"
+                      }
+                      autoComplete="off"
+                      spellCheck={false}
+                      onChange={(event) => setSprayKeywordInput(event.currentTarget.value)}
+                    />
+                  )}
                   {sprayMode === "colorLabel" && (
                     <div className="storyboard-footer-spray-label-controls">
                       <StoryboardColorLabelButtons
@@ -2842,17 +3240,17 @@ export function StoryboardPanel() {
                     <ArrowDownZA aria-hidden="true" />
                   )}
                 </button>
-                <button
-                  type="button"
-                  className={`storyboard-footer-sort-trigger ${footerSortMenu ? "active" : ""}`}
-                  aria-haspopup="menu"
-                  aria-expanded={Boolean(footerSortMenu)}
+                <StoryboardDropdownTrigger
+                  label="排序依据："
+                  value={footerSortLabel}
+                  open={Boolean(footerSortMenu)}
                   disabled={displayShots.length === 0}
-                  onPointerDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
                     setContextMenu(null);
                     setAnnotationMenu(null);
+                    setSearchScopeMenu(null);
+                    setSearchRuleMenu(null);
                     setFooterOptionsMenu(null);
                     if (footerSortMenu) {
                       setFooterSortMenu(null);
@@ -2861,11 +3259,7 @@ export function StoryboardPanel() {
                     const bounds = event.currentTarget.getBoundingClientRect();
                     setFooterSortMenu({ x: bounds.left, y: bounds.top });
                   }}
-                >
-                  <span className="storyboard-footer-sort-label">排序依据：</span>
-                  <span className="storyboard-footer-sort-value">{footerSortLabel}</span>
-                  <ChevronsUpDown aria-hidden="true" />
-                </button>
+                />
               </div>
               <span className="storyboard-filter-separator storyboard-footer-separator" />
             </div>
@@ -2999,6 +3393,8 @@ export function StoryboardPanel() {
                   event.stopPropagation();
                   setContextMenu(null);
                   setAnnotationMenu(null);
+                  setSearchScopeMenu(null);
+                  setSearchRuleMenu(null);
                   setFooterSortMenu(null);
                   if (footerOptionsMenu) {
                     setFooterOptionsMenu(null);
@@ -3039,6 +3435,104 @@ export function StoryboardPanel() {
                 }}
               >
                 {label}
+              </PopupMenuItem>
+            ))}
+          </PopupMenu>,
+          document.body,
+        )}
+
+      {searchScopeMenu &&
+        createPortal(
+          <PopupMenu
+            className="storyboard-search-scope-menu"
+            contextMenuAnchor={searchScopeMenu}
+            ariaLabel="分镜搜索范围"
+            style={{
+              position: "fixed",
+              left: searchScopeMenu.x,
+              top: searchScopeMenu.y,
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            <PopupMenuItem
+              checked={searchScope === "any"}
+              onSelect={() => {
+                setSearchScope("any");
+                setSearchScopeMenu(null);
+              }}
+            >
+              {storyboardSearchScopeLabels.any}
+            </PopupMenuItem>
+            <PopupMenuSeparator />
+            {(["title", "keywords"] as const).map((scope) => (
+              <PopupMenuItem
+                key={scope}
+                checked={searchScope === scope}
+                onSelect={() => {
+                  setSearchScope(scope);
+                  setSearchScopeMenu(null);
+                }}
+              >
+                {storyboardSearchScopeLabels[scope]}
+              </PopupMenuItem>
+            ))}
+          </PopupMenu>,
+          document.body,
+        )}
+
+      {searchRuleMenu &&
+        createPortal(
+          <PopupMenu
+            className="storyboard-search-rule-menu"
+            contextMenuAnchor={searchRuleMenu}
+            ariaLabel="分镜搜索规则"
+            style={{
+              position: "fixed",
+              left: searchRuleMenu.x,
+              top: searchRuleMenu.y,
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            {(["contains", "containsAll", "containsWords", "doesNotContain"] as const).map(
+              (rule) => (
+                <PopupMenuItem
+                  key={rule}
+                  checked={searchRule === rule}
+                  onSelect={() => {
+                    setSearchRule(rule);
+                    setSearchRuleMenu(null);
+                  }}
+                >
+                  {storyboardSearchRuleLabels[rule]}
+                </PopupMenuItem>
+              ),
+            )}
+            <PopupMenuSeparator />
+            {(["startsWith", "endsWith"] as const).map((rule) => (
+              <PopupMenuItem
+                key={rule}
+                checked={searchRule === rule}
+                onSelect={() => {
+                  setSearchRule(rule);
+                  setSearchRuleMenu(null);
+                }}
+              >
+                {storyboardSearchRuleLabels[rule]}
+              </PopupMenuItem>
+            ))}
+            <PopupMenuSeparator />
+            {(["isEmpty", "isNotEmpty"] as const).map((rule) => (
+              <PopupMenuItem
+                key={rule}
+                checked={searchRule === rule}
+                onSelect={() => {
+                  setSearchRule(rule);
+                  setSearchRuleMenu(null);
+                }}
+              >
+                {storyboardSearchRuleLabels[rule]}
               </PopupMenuItem>
             ))}
           </PopupMenu>,
@@ -3366,6 +3860,23 @@ export function StoryboardPanel() {
                 }}
               />
             </PopupMenuSubmenu>
+
+            <PopupMenuItem
+              mnemonic="A"
+              onSelect={() => {
+                appendShotKeywords(contextMenuShotIds, sprayKeywordInput);
+                setContextMenu(null);
+              }}
+              disabled={
+                contextMenuShotIds.length === 0 ||
+                sprayKeywords.length === 0 ||
+                Boolean(sprayKeywordParseResult.error)
+              }
+            >
+              {sprayKeywords.length > 0
+                ? `添加关键字“${sprayKeywordsDisplay}”(A)`
+                : "添加快捷关键字(A)"}
+            </PopupMenuItem>
 
             <PopupMenuSeparator />
 

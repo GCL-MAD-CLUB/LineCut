@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use std::os::windows::process::CommandExt;
 use std::process::Command as StdCommand;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     env, fs,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
@@ -393,9 +393,21 @@ struct ProjectStoryboardAnnotation {
     #[serde(default)]
     title: Option<String>,
     #[serde(default)]
+    keyword_ids: BTreeSet<String>,
+    #[serde(default)]
     color_label: Option<ProjectStoryboardColorLabel>,
     #[serde(default)]
     custom_label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectStoryboardKeywordNode {
+    id: String,
+    name: String,
+    parent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    synonyms: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -405,11 +417,22 @@ struct ProjectStoryboardStack {
     shot_ids: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectStoryboardKeywordUsageCounters {
+    counts: HashMap<String, u64>,
+    total: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ProjectStoryboardState {
     shots: Vec<ProjectStoryboardShot>,
     shot_stacks: Vec<ProjectStoryboardStack>,
+    keyword_nodes: Vec<ProjectStoryboardKeywordNode>,
+    recent_keyword_ids: Vec<String>,
+    #[serde(default)]
+    keyword_usage_counters: ProjectStoryboardKeywordUsageCounters,
     shot_annotations: HashMap<String, ProjectStoryboardAnnotation>,
 }
 

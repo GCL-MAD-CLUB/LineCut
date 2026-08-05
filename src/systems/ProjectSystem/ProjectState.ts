@@ -1630,6 +1630,9 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
           const currentStoryboard = state.storyboards[videoContext] ?? {
             shots: [],
             shotStacks: [],
+            keywordNodes: [],
+            recentKeywordIds: [],
+            keywordUsageCounters: { counts: {}, total: 0 },
             shotAnnotations: {},
           };
           const storyboard = recipe(currentStoryboard);
