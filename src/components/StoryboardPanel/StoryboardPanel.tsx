@@ -64,6 +64,7 @@ import {
   formatParsedStoryboardKeywords,
   parseStoryboardKeywordInput,
   storyboardKeywordSearchValues,
+  storyboardMatchesQuickFilter,
 } from "./storyboardKeywords";
 import { StoryboardListView } from "./StoryboardListView";
 import {
@@ -1117,6 +1118,7 @@ export function StoryboardPanel() {
     flagFilters,
     editFilters,
     colorLabelFilters,
+    quickFilterKeywordIds,
     activeShotId,
     shots,
     shotStacks,
@@ -1245,6 +1247,11 @@ export function StoryboardPanel() {
             flagFilters,
             editFilters,
             colorLabelFilters,
+          ) &&
+          storyboardMatchesQuickFilter(
+            shotAnnotations[shot.id]?.keywordIds,
+            keywordNodes,
+            quickFilterKeywordIds,
           ),
       ),
     [
@@ -1255,6 +1262,7 @@ export function StoryboardPanel() {
       minimumRating,
       keywordNodes,
       query,
+      quickFilterKeywordIds,
       ratingComparator,
       searchRule,
       searchScope,

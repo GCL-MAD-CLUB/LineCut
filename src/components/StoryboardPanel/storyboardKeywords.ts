@@ -234,6 +234,25 @@ export function storyboardEffectiveKeywordIds(
   return effectiveIds;
 }
 
+export function storyboardMatchesQuickFilter(
+  keywordIds: Iterable<string> | null | undefined,
+  keywordNodes: readonly StoryboardKeywordNode[],
+  quickFilterKeywordIds: readonly string[],
+): boolean {
+  if (quickFilterKeywordIds.length === 0) {
+    return true;
+  }
+  const validNodeIds = new Set(keywordNodes.map((node) => node.id));
+  const activeFilterIds = quickFilterKeywordIds.filter((keywordId) =>
+    validNodeIds.has(keywordId),
+  );
+  if (activeFilterIds.length === 0) {
+    return true;
+  }
+  const effectiveIds = storyboardEffectiveKeywordIds(keywordIds, keywordNodes);
+  return activeFilterIds.every((keywordId) => effectiveIds.has(keywordId));
+}
+
 export function storyboardKeywordDescendantIds(
   keywordId: string,
   keywordNodes: readonly StoryboardKeywordNode[],

@@ -1167,7 +1167,7 @@ body.is-resizing-storyboard-keyword-panel * {
   min-height: 0;
   flex: 1 1 auto;
   flex-direction: column;
-  padding: 7px 8px;
+  padding: 7px 0;
   overflow: hidden;
   border-top: 1px solid var(--color-border-panel);
 }
@@ -1176,6 +1176,7 @@ body.is-resizing-storyboard-keyword-panel * {
   position: relative;
   display: block;
   flex: 0 0 22px;
+  margin: 0 8px;
 }
 
 .storyboard-keyword-filter > svg {
@@ -1207,8 +1208,8 @@ body.is-resizing-storyboard-keyword-panel * {
   display: grid;
   height: 20px;
   align-items: center;
-  grid-template-columns: 20px minmax(0, 1fr) 36px;
-  padding-right: 8px;
+  grid-template-columns: 20px minmax(0, 1fr) 29px 15px;
+  padding: 0 4px 0 0;
   color: #aaa;
   border-bottom: 1px solid var(--color-border-row);
 }
@@ -1341,9 +1342,32 @@ body.is-resizing-storyboard-keyword-panel * {
   height: 20px;
   align-items: center;
   justify-content: flex-end;
+  margin-top: -2px;
   color: #aaa;
   font-variant-numeric: tabular-nums;
   line-height: 1;
+}
+
+.storyboard-keyword-tree-quick-filter {
+  display: flex;
+  height: 20px;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.storyboard-keyword-tree-quick-filter.is-active {
+  opacity: 1;
+}
+
+.storyboard-keyword-tree-row:hover .storyboard-keyword-tree-quick-filter:not(.is-active),
+.storyboard-keyword-tree-quick-filter:hover:not(.is-active) {
+  opacity: 0.5;
 }
 
 .storyboard-content.is-spraying .shot-frame-button,

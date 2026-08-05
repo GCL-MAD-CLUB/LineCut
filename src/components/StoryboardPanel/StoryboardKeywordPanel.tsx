@@ -26,6 +26,7 @@ import {
   type StoryboardKeywordPath,
 } from "./storyboardKeywords";
 import { useStoryboardPanelState } from "./storyboardPanelState";
+import { usePanelInstanceId } from "../../runtime/systems/PanelState";
 
 interface StoryboardKeywordPanelProps {
   shotIds: readonly string[];
@@ -106,7 +107,10 @@ export function StoryboardKeywordPanel({
     createStoryboardKeyword,
     keywordEditorMode,
     setKeywordEditorMode,
+    quickFilterKeywordIds,
+    toggleQuickFilterKeyword,
   } = useStoryboardPanelState((state) => state);
+  const panelInstanceId = usePanelInstanceId();
   const [keywordInput, setKeywordInput] = useState("");
   const [keywordEditValue, setKeywordEditValue] = useState("");
   const [keywordEditError, setKeywordEditError] = useState<string | null>(null);
@@ -838,6 +842,40 @@ export function StoryboardKeywordPanel({
               )}
             </div>
             <span className="storyboard-keyword-tree-count">{usageCounts.get(node.id) ?? 0}</span>
+            <button
+              type="button"
+              className={`storyboard-keyword-tree-quick-filter ${
+                quickFilterKeywordIds.includes(node.id) ? "is-active" : ""
+              }`.trim()}
+              title={
+                quickFilterKeywordIds.includes(node.id)
+                  ? `取消快捷过滤 ${nodeLabel}`
+                  : `快捷过滤 ${nodeLabel}`
+              }
+              aria-pressed={quickFilterKeywordIds.includes(node.id)}
+              aria-label={
+                quickFilterKeywordIds.includes(node.id)
+                  ? `取消快捷过滤${nodeLabel}`
+                  : `快捷过滤${nodeLabel}`
+              }
+              onClick={(event) => {
+                event.stopPropagation();
+                toggleQuickFilterKeyword(node.id);
+              }}
+            >
+              <svg
+                className="storyboard-keyword-tree-quick-filter-arrow"
+                viewBox="-1 -1 12 14"
+                width="11"
+                height="12"
+                aria-hidden="true"
+              >
+                <g filter={`url(#quick-filter-arrow-inset-${panelInstanceId})`}>
+                  <path d="M0 4h4v4H0z" fill="currentColor" />
+                  <path d="M4 0 10 6 4 12z" fill="currentColor" />
+                </g>
+              </svg>
+            </button>
           </div>
           {hasChildren && expanded && renderTreeNodes(node.id, depth + 1)}
         </div>
@@ -854,6 +892,19 @@ export function StoryboardKeywordPanel({
 
   return (
     <>
+      <svg width="0" height="0" aria-hidden="true" style={{ position: "absolute" }}>
+        <defs>
+          <filter id={`quick-filter-arrow-inset-${panelInstanceId}`}>
+            <feMorphology in="SourceAlpha" operator="dilate" radius="1" result="dilated" />
+            <feFlood floodColor="#000" floodOpacity="1" result="black" />
+            <feComposite in="black" in2="dilated" operator="in" result="outline" />
+            <feMerge>
+              <feMergeNode in="outline" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+      </svg>
       <aside className="storyboard-keyword-panel">
         <header
           className={`storyboard-keyword-panel-heading ${panelOpen ? "" : "is-collapsed"}`.trim()}

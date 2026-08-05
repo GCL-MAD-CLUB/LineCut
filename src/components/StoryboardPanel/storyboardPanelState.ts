@@ -64,6 +64,7 @@ interface StoryboardVideoSessionState {
   flagFilters: StoryboardShotFlag[];
   editFilters: StoryboardShotEditFilter[];
   colorLabelFilters: StoryboardShotColorLabelFilter[];
+  quickFilterKeywordIds: string[];
   activeShotId: string | null;
   selectedShotIds: Set<string>;
   expandedStackIds: Set<string>;
@@ -88,6 +89,8 @@ interface StoryboardPanelUiState extends StoryboardVideoSessionState {
   setFlagFilters: (flags: StoryboardShotFlag[]) => void;
   setEditFilters: (editFilters: StoryboardShotEditFilter[]) => void;
   setColorLabelFilters: (colorLabels: StoryboardShotColorLabelFilter[]) => void;
+  setQuickFilterKeywordIds: (keywordIds: string[]) => void;
+  toggleQuickFilterKeyword: (keywordId: string) => void;
   setViewMode: (viewMode: StoryboardViewMode) => void;
   setIconMetadataMode: (mode: StoryboardIconMetadataMode) => void;
   setThumbnailSize: (size: number) => void;
@@ -180,6 +183,7 @@ function defaultVideoSessionState(): StoryboardVideoSessionState {
     flagFilters: [],
     editFilters: [],
     colorLabelFilters: [],
+    quickFilterKeywordIds: [],
     activeShotId: null,
     selectedShotIds: new Set<string>(),
     expandedStackIds: new Set<string>(),
@@ -197,6 +201,7 @@ function videoSessionFromState(state: StoryboardPanelUiState): StoryboardVideoSe
     flagFilters: state.flagFilters,
     editFilters: state.editFilters,
     colorLabelFilters: state.colorLabelFilters,
+    quickFilterKeywordIds: state.quickFilterKeywordIds,
     activeShotId: state.activeShotId,
     selectedShotIds: state.selectedShotIds,
     expandedStackIds: state.expandedStackIds,
@@ -323,6 +328,13 @@ const useStoryboardPanelUiState = createPanelState<StoryboardPanelUiState>(() =>
   setEditFilters: (editFilters) => set({ editFilters: Array.from(new Set(editFilters)) }),
   setColorLabelFilters: (colorLabelFilters) =>
     set({ colorLabelFilters: Array.from(new Set(colorLabelFilters)) }),
+  setQuickFilterKeywordIds: (quickFilterKeywordIds) => set({ quickFilterKeywordIds }),
+  toggleQuickFilterKeyword: (keywordId) =>
+    set((state) => ({
+      quickFilterKeywordIds: state.quickFilterKeywordIds.includes(keywordId)
+        ? state.quickFilterKeywordIds.filter((id) => id !== keywordId)
+        : [...state.quickFilterKeywordIds, keywordId],
+    })),
   setViewMode: (viewMode) => set({ viewMode }),
   setIconMetadataMode: (iconMetadataMode) => set({ iconMetadataMode }),
   setThumbnailSize: (thumbnailSize) =>
@@ -720,6 +732,13 @@ export function useStoryboardPanelState<Selection>(
         uiState.videoContext,
         historyGroupId,
       );
+      const removedIds = storyboardKeywordDescendantIds(keywordId, storyboard.keywordNodes);
+      const nextQuickFilterIds = uiState.quickFilterKeywordIds.filter(
+        (candidateId) => !removedIds.has(candidateId),
+      );
+      if (nextQuickFilterIds.length !== uiState.quickFilterKeywordIds.length) {
+        uiState.setQuickFilterKeywordIds(nextQuickFilterIds);
+      }
     },
     updateStoryboardKeyword: (keywordId, updates, historyGroupId) => {
       const normalizedName = sanitizeStoryboardKeywordName(updates.name);
