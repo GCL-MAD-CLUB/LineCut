@@ -3,6 +3,8 @@ export type OperationKey =
   | "app.event"
   | "dragDrop.listen"
   | "dragDrop.region"
+  | "export.reveal"
+  | "export.run"
   | "feedback.audio"
   | "media.bindSubtitles"
   | "media.closeBackend"

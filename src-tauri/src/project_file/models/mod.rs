@@ -7,21 +7,19 @@ use super::handle_v1;
 
 mod v2;
 mod v3;
+mod v4;
 
-#[allow(dead_code)] // Required by the uniform model contract before V3 exists.
 pub(super) struct UpgradeParts {
     pub(super) workspace: Value,
     pub(super) saved_at: u64,
     pub(super) app_version: String,
 }
 
-#[allow(dead_code)] // `into_upgrade_parts` becomes production code when the next model is added.
 pub(super) trait ProjectModel: Sized {
     const VERSION: u16;
 
     fn decode(payload: &[u8]) -> AppResult<Self>;
     fn encode(&self) -> AppResult<Vec<u8>>;
-    #[allow(dead_code)] // Silence warning until used by next model upgrade path
     fn into_upgrade_parts(self) -> AppResult<UpgradeParts>;
 }
 
@@ -39,7 +37,7 @@ pub(super) trait CurrentProjectModel: ProjectModel {
     fn into_runtime(self) -> AppResult<ProjectWorkspace>;
 }
 
-pub(super) type Current = v3::Model;
+pub(super) type Current = v4::Model;
 
 pub(super) fn current_version() -> u16 {
     Current::VERSION
@@ -47,8 +45,11 @@ pub(super) fn current_version() -> u16 {
 
 pub(super) fn decode_current(version: u16, payload: &[u8]) -> AppResult<Current> {
     match version {
-        v2::Model::VERSION => v3::Model::upgrade_from(v2::Model::decode(payload)?),
-        v3::Model::VERSION => v3::Model::decode(payload),
+        v2::Model::VERSION => {
+            v4::Model::upgrade_from(v3::Model::upgrade_from(v2::Model::decode(payload)?)?)
+        }
+        v3::Model::VERSION => v4::Model::upgrade_from(v3::Model::decode(payload)?),
+        v4::Model::VERSION => v4::Model::decode(payload),
         version if version > current_version() => Err(app_error(
             ErrorCode::ProjectVersionUnsupported,
             format!(
@@ -64,7 +65,7 @@ pub(super) fn decode_current(version: u16, payload: &[u8]) -> AppResult<Current>
 }
 
 pub(super) fn upgrade_v1(previous: handle_v1::ProjectFile) -> AppResult<Current> {
-    v3::Model::upgrade_from(v2::Model::upgrade_from(previous)?)
+    v4::Model::upgrade_from(v3::Model::upgrade_from(v2::Model::upgrade_from(previous)?)?)
 }
 
 pub(super) fn from_runtime(
@@ -119,11 +120,12 @@ mod tests {
             },
             subtitles: HashMap::new(),
             storyboards: HashMap::new(),
+            export_state: None,
         }
     }
 
     #[test]
-    fn migrates_v2_workspace_to_empty_v3_storyboards() {
+    fn migrates_v2_workspace_to_empty_storyboards_and_export_state() {
         let payload = br#"{
             "workspace": {
                 "projects": [],
@@ -140,14 +142,15 @@ mod tests {
             "app_version": "0.2.0"
         }"#;
 
-        assert_eq!(current_version(), 3);
+        assert_eq!(current_version(), 4);
         let workspace = into_runtime(decode_current(2, payload).unwrap()).unwrap();
         assert!(workspace.subtitles.is_empty());
         assert!(workspace.storyboards.is_empty());
+        assert!(workspace.export_state.is_none());
     }
 
     #[test]
-    fn v3_round_trip_preserves_annotations_without_subtitle_selection() {
+    fn v4_round_trip_preserves_annotations_without_subtitle_selection() {
         let mut workspace = empty_workspace();
         workspace.subtitles.insert(
             "video:asset:fingerprint:track".to_string(),
@@ -274,7 +277,8 @@ mod tests {
                 "total": 10
             })
         );
-        let restored = into_runtime(decode_current(3, &encoded).unwrap()).unwrap();
+        let restored = into_runtime(decode_current(4, &encoded).unwrap()).unwrap();
+        assert!(restored.export_state.is_none());
         let subtitle = restored
             .subtitles
             .get("video:asset:fingerprint:track")
@@ -341,6 +345,8 @@ mod tests {
         let mut encoded: serde_json::Value =
             serde_json::from_slice(&model.encode().unwrap()).unwrap();
         let workspace = encoded["workspace"].as_object_mut().unwrap();
+        // A genuine V3 file has no `export_state`; strip it before decoding as V3.
+        workspace.remove("export_state");
         workspace.remove("subtitles");
         workspace["editor"]["subtitle_selections"] = serde_json::json!({
             "video": { "track": ["cue-1"] }
@@ -349,5 +355,6 @@ mod tests {
         let encoded = serde_json::to_vec(&encoded).unwrap();
         let restored = into_runtime(decode_current(3, &encoded).unwrap()).unwrap();
         assert!(restored.subtitles.is_empty());
+        assert!(restored.export_state.is_none());
     }
 }

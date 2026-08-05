@@ -25,7 +25,9 @@ import {
   type OpenPanelRequest,
   type PanelManagerInitialState,
 } from "./components/DockLayout";
+import { ExportWorkspace } from "./components/ExportWorkspace";
 import { HistoryPanelServicesProvider, historyPanelType } from "./components/HistoryPanel";
+import { exportWorkspaceStore } from "./systems/ExportSystem";
 import { ImportWorkspace } from "./components/ImportWorkspace";
 import { mediaBinPanelType, type MediaBinPanelParams } from "./components/MediaBin";
 import { PreferencesDialog } from "./components/PreferencesDialog";
@@ -227,6 +229,7 @@ function standaloneSubtitleItem(path: string, index: number): MediaBinItem {
 const appWorkspaces = [
   { id: "import", label: "导入" },
   { id: "edit", label: "编辑" },
+  { id: "export", label: "导出" },
 ] as const;
 
 type AppWorkspace = (typeof appWorkspaces)[number]["id"];
@@ -837,6 +840,12 @@ function AppContent() {
     return "handled" as const;
   });
 
+  useBroadcastEvent(identity, "export.requested", async ({ payload }) => {
+    exportWorkspaceStore.getState().setSource(payload.source);
+    setActiveWorkspace("export");
+    return "handled" as const;
+  });
+
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
       if (event.repeat) {
@@ -939,6 +948,7 @@ function AppContent() {
   const workspaceContent: Record<AppWorkspace, ReactNode> = {
     import: <ImportWorkspace onImportCompleted={() => setActiveWorkspace("edit")} />,
     edit: <DockLayout />,
+    export: <ExportWorkspace />,
   };
 
   function showPanel<Params>(request: OpenPanelRequest<Params>) {

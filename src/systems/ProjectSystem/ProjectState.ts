@@ -19,6 +19,7 @@ import type {
   MediaBinItem,
   Preferences,
   Project,
+  ProjectExportState,
   ProjectWorkspace,
   StoryboardState,
   SubtitleCue,
@@ -102,6 +103,7 @@ interface ProjectCommands {
   ) => void;
   projectHistoryJumped: (cursor: number) => boolean;
   projectHistoryFutureDiscarded: () => void;
+  exportSettingsRecorded: (settings: ProjectExportState) => void;
 }
 
 interface ProjectSystemState {
@@ -123,6 +125,7 @@ interface ProjectSystemState {
   mediaBinReadOnly: boolean;
   subtitles: Record<string, SubtitleState>;
   storyboards: Record<string, StoryboardState>;
+  exportState: ProjectExportState | null;
   projectHistory: ProjectHistoryState;
   commands: ProjectCommands;
 }
@@ -373,6 +376,7 @@ function initialProjectState(project: Project | null) {
       proxyPath: null,
       subtitles: {},
       storyboards: {},
+      exportState: null,
     };
   }
   const mediaItems = [projectMediaItem(project), ...externalSubtitleItems(project)];
@@ -392,6 +396,7 @@ function initialProjectState(project: Project | null) {
     proxyPath: project.proxy_path,
     subtitles: {},
     storyboards: {},
+    exportState: null,
   };
 }
 
@@ -495,6 +500,7 @@ function openedProjectState(workspace: ProjectWorkspace) {
     mediaBinReadOnly: false,
     subtitles: workspace.subtitles ?? {},
     storyboards: workspace.storyboards ?? {},
+    exportState: workspace.export_state ?? null,
   };
 }
 
@@ -519,6 +525,7 @@ function projectFileStateFromStore(state: ProjectSystemState): ProjectFileState 
     useProxy: state.useProxy,
     subtitles: state.subtitles,
     storyboards: state.storyboards,
+    exportState: state.exportState,
   };
 }
 
@@ -539,6 +546,13 @@ function reconciledProjectFileState(
     proxyPath: project?.proxy_path ?? null,
     proxyDialogOpen: false,
   };
+}
+
+function exportSettingsEqual(left: ProjectExportState | null, right: ProjectExportState) {
+  if (!left) {
+    return false;
+  }
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function removedMediaItemsState(
@@ -1690,6 +1704,13 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
           ? state
           : { projectHistory, projectDirty: isProjectHistoryDirty(projectHistory) };
       }),
+    exportSettingsRecorded: (settings) =>
+      commitProjectEvent(set, "记录上次导出设置", "export", (state) => {
+        if (exportSettingsEqual(state.exportState, settings)) {
+          return state;
+        }
+        return { exportState: settings };
+      }),
   },
 }));
 
@@ -1742,5 +1763,6 @@ export function getProjectWorkspaceSnapshot(): ProjectWorkspace {
     },
     subtitles: state.subtitles,
     storyboards: state.storyboards,
+    export_state: state.exportState ?? undefined,
   };
 }

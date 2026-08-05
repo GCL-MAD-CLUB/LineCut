@@ -257,6 +257,23 @@ pub(crate) fn stop_running_ffmpeg(tasks: Vec<RunningFfmpeg>) {
     }
 }
 
+pub(crate) fn prune_task_cleanup_paths(
+    task_id: &str,
+    keep: &[PathBuf],
+    state: &AppState,
+) -> AppResult<()> {
+    let mut tasks = state.running_tasks.lock().map_err(|_| {
+        app_error(
+            ErrorCode::TaskStateUnavailable,
+            "Task state lock is poisoned",
+        )
+    })?;
+    if let Some(task) = tasks.get_mut(task_id) {
+        task.cleanup_paths.retain(|path| keep.contains(path));
+    }
+    Ok(())
+}
+
 pub(crate) fn remove_cleanup_paths(paths: &[PathBuf]) {
     for path in paths.iter().rev() {
         if path.is_dir() {

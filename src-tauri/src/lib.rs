@@ -445,6 +445,8 @@ struct ProjectWorkspace {
     subtitles: HashMap<String, ProjectSubtitleState>,
     #[serde(default)]
     storyboards: HashMap<String, ProjectStoryboardState>,
+    #[serde(default)]
+    export_state: Option<ExportOptions>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -500,6 +502,102 @@ struct ImportResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ProxyResult {
     proxy_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportClip {
+    id: String,
+    source_path: String,
+    label: String,
+    #[serde(default)]
+    start_us: i64,
+    #[serde(default)]
+    end_us: i64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ExportMode {
+    Merge,
+    Individual,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ExportContainer {
+    Mp4H264,
+    Mp4Hevc,
+    MovProres,
+    WebmVp9,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ExportResolution {
+    MatchSource,
+    Custom,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ExportQuality {
+    Low,
+    Medium,
+    High,
+    VeryHigh,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ExportEncoderSpeed {
+    Fast,
+    Balanced,
+    Quality,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportOptions {
+    mode: ExportMode,
+    container: ExportContainer,
+    resolution: ExportResolution,
+    #[serde(default)]
+    custom_width: i64,
+    #[serde(default)]
+    custom_height: i64,
+    frame_rate: Option<f64>,
+    quality: ExportQuality,
+    encoder_speed: ExportEncoderSpeed,
+    #[serde(default)]
+    include_audio: bool,
+    #[serde(default = "default_export_audio_bitrate_kbps")]
+    audio_bitrate_kbps: u32,
+    #[serde(default)]
+    output_dir: String,
+    #[serde(default)]
+    output_stem: String,
+}
+
+const fn default_export_audio_bitrate_kbps() -> u32 {
+    192
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportOutput {
+    clip_id: Option<String>,
+    path: String,
+    status: String,
+    error: Option<String>,
+    duration_us: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportResult {
+    outputs: Vec<ExportOutput>,
+    warnings: Vec<UserNotice>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -661,6 +759,7 @@ pub fn run() {
             generate_storyboard_thumbnail,
             demux_media_streams,
             generate_proxy,
+            export_clips,
             add_external_subtitles,
             save_project_file,
             auto_save_project_snapshot,

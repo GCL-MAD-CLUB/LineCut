@@ -145,6 +145,11 @@ define_error_codes! {
     BlockingTaskFailed => ("BLOCKING_TASK_FAILED", Runtime, true),
     EventEmitFailed => ("EVENT_EMIT_FAILED", Runtime, true),
     ApplicationRunFailed => ("APPLICATION_RUN_FAILED", Runtime, false),
+    ExportOptionsInvalid => ("EXPORT_OPTIONS_INVALID", Validation, false),
+    ExportClipsEmpty => ("EXPORT_CLIPS_EMPTY", Validation, false),
+    ExportOutputRequired => ("EXPORT_OUTPUT_REQUIRED", Validation, false),
+    ExportDimensionsInvalid => ("EXPORT_DIMENSIONS_INVALID", Validation, false),
+    ExportWriteFailed => ("EXPORT_WRITE_FAILED", Io, true),
 }
 
 #[derive(Debug, Clone, Serialize)]

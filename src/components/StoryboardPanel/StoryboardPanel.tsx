@@ -38,6 +38,11 @@ import {
   listenToFfmpegTaskProgress,
 } from "../../ffmpegProgress";
 import { mediaDisplayName, useProjectPort } from "../../systems/ProjectSystem";
+import {
+  buildStoryboardExportSource,
+  requestExport,
+  runQuickExport,
+} from "../../systems/ExportSystem";
 import { createTaskProgress, useTaskProgressStatus } from "../../systems/TaskSystem";
 import { requestStoryboardThumbnail } from "../../storyboardThumbnail";
 import { isTauriRuntime } from "../../tauriRuntime";
@@ -282,6 +287,7 @@ interface StoryboardContextMenuState {
   ratingSubmenuOpen: boolean;
   colorSubmenuOpen: boolean;
   stackSubmenuOpen: boolean;
+  exportSubmenuOpen: boolean;
 }
 
 interface StoryboardAnnotationMenuState {
@@ -1104,9 +1110,17 @@ export function StoryboardPanel() {
   const panelActive = usePanelActive();
   const focusedPanelId = usePanelManagerState((state) => state.focusedPanelId);
   const identity = useStableIdentity("storyboard-panel", panelInstanceId);
-  const { project, activeVideoId, mediaItems } = useProjectPort(
-    ["project", "activeVideoId", "mediaItems"],
-    [],
+  const {
+    project,
+    activeVideoId,
+    mediaItems,
+    projects,
+    storyboards,
+    exportState,
+    messagePublished,
+  } = useProjectPort(
+    ["project", "activeVideoId", "mediaItems", "projects", "storyboards", "exportState"],
+    ["messagePublished"],
   );
   const {
     query,
@@ -1510,7 +1524,8 @@ export function StoryboardPanel() {
     (contextMenu.flagSubmenuOpen ||
       contextMenu.ratingSubmenuOpen ||
       contextMenu.colorSubmenuOpen ||
-      contextMenu.stackSubmenuOpen),
+      contextMenu.stackSubmenuOpen ||
+      contextMenu.exportSubmenuOpen),
   );
 
   useEffect(() => {
@@ -2363,6 +2378,44 @@ export function StoryboardPanel() {
     });
   }
 
+  function buildCurrentStoryboardSource() {
+    return buildStoryboardExportSource({
+      videoId: activeVideoId,
+      assetId: project?.asset.id ?? "",
+      fingerprint: project?.asset.fingerprint ?? "",
+      shotIds: contextMenuShotIds,
+      storyboards,
+      mediaItems,
+      projects,
+    });
+  }
+
+  function exportSelectedShots() {
+    const source = buildCurrentStoryboardSource();
+    if (source) {
+      requestExport(source);
+      setContextMenu(null);
+    }
+  }
+
+  async function quickExportWithLastSettings() {
+    const source = buildCurrentStoryboardSource();
+    if (!source || !exportState) {
+      return;
+    }
+    const outcome = await runQuickExport(source, exportState);
+    if (outcome.status === "success") {
+      const completed = outcome.result.outputs.filter(
+        (output) => output.status === "completed",
+      ).length;
+      const failed = outcome.result.outputs.filter((output) => output.status === "failed").length;
+      messagePublished(`已导出 ${completed} 个片段${failed > 0 ? `，${failed} 个失败` : ""}`);
+    } else if (outcome.status === "cancelled") {
+      messagePublished("导出已取消");
+    }
+    setContextMenu(null);
+  }
+
   function openContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
     event.preventDefault();
     const shotElement = (event.target as HTMLElement | null)?.closest<HTMLElement>(
@@ -2384,6 +2437,7 @@ export function StoryboardPanel() {
       ratingSubmenuOpen: false,
       colorSubmenuOpen: false,
       stackSubmenuOpen: false,
+      exportSubmenuOpen: false,
     });
   }
 
@@ -3740,6 +3794,7 @@ export function StoryboardPanel() {
                   current
                     ? {
                         ...current,
+                        exportSubmenuOpen: open ? false : current.exportSubmenuOpen,
                         flagSubmenuOpen: open,
                         ratingSubmenuOpen: open ? false : current.ratingSubmenuOpen,
                         colorSubmenuOpen: open ? false : current.colorSubmenuOpen,
@@ -3770,6 +3825,7 @@ export function StoryboardPanel() {
                   current
                     ? {
                         ...current,
+                        exportSubmenuOpen: open ? false : current.exportSubmenuOpen,
                         ratingSubmenuOpen: open,
                         flagSubmenuOpen: open ? false : current.flagSubmenuOpen,
                         colorSubmenuOpen: open ? false : current.colorSubmenuOpen,
@@ -3842,6 +3898,7 @@ export function StoryboardPanel() {
                   current
                     ? {
                         ...current,
+                        exportSubmenuOpen: open ? false : current.exportSubmenuOpen,
                         colorSubmenuOpen: open,
                         flagSubmenuOpen: open ? false : current.flagSubmenuOpen,
                         ratingSubmenuOpen: open ? false : current.ratingSubmenuOpen,
@@ -3891,6 +3948,7 @@ export function StoryboardPanel() {
                   current
                     ? {
                         ...current,
+                        exportSubmenuOpen: open ? false : current.exportSubmenuOpen,
                         stackSubmenuOpen: open,
                         flagSubmenuOpen: open ? false : current.flagSubmenuOpen,
                         ratingSubmenuOpen: open ? false : current.ratingSubmenuOpen,
@@ -3983,6 +4041,40 @@ export function StoryboardPanel() {
                 disabled={!hasCollapsedShotStacks}
               >
                 展开全部堆叠(E)
+              </PopupMenuItem>
+            </PopupMenuSubmenu>
+
+            <PopupMenuSeparator />
+            <PopupMenuSubmenu
+              label="导出"
+              open={contextMenu.exportSubmenuOpen}
+              disabled={contextMenuShotIds.length === 0}
+              enableMnemonics
+              menuClassName="storyboard-context-menu"
+              onOpenChange={(open) =>
+                setContextMenu((current) =>
+                  current
+                    ? {
+                        ...current,
+                        exportSubmenuOpen: open,
+                        flagSubmenuOpen: open ? false : current.flagSubmenuOpen,
+                        ratingSubmenuOpen: open ? false : current.ratingSubmenuOpen,
+                        colorSubmenuOpen: open ? false : current.colorSubmenuOpen,
+                        stackSubmenuOpen: open ? false : current.stackSubmenuOpen,
+                      }
+                    : current,
+                )
+              }
+            >
+              <PopupMenuItem mnemonic="E" onSelect={exportSelectedShots}>
+                导出(E)...
+              </PopupMenuItem>
+              <PopupMenuItem
+                mnemonic="W"
+                disabled={!exportState}
+                onSelect={() => void quickExportWithLastSettings()}
+              >
+                使用上次设置导出(W)
               </PopupMenuItem>
             </PopupMenuSubmenu>
           </PopupMenu>,

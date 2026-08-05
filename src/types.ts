@@ -199,12 +199,29 @@ export interface ProjectEditorState {
   preview: ProjectPreviewState;
 }
 
+/** The export settings recorded with the last completed export of this project. */
+export interface ProjectExportState {
+  mode: "merge" | "individual";
+  container: "mp4_h264" | "mp4_hevc" | "mov_prores" | "webm_vp9";
+  resolution: "match_source" | "custom";
+  customWidth: number;
+  customHeight: number;
+  frameRate: number | null;
+  quality: "low" | "medium" | "high" | "very_high";
+  encoderSpeed: "fast" | "balanced" | "quality";
+  includeAudio: boolean;
+  audioBitrateKbps: number;
+  outputDir: string;
+  outputStem: string;
+}
+
 export interface ProjectWorkspace {
   projects: Project[];
   media_bin: ProjectMediaBinState;
   editor: ProjectEditorState;
   subtitles?: Record<string, SubtitleState>;
   storyboards?: Record<string, StoryboardState>;
+  export_state?: ProjectExportState;
 }
 
 export interface DemuxedAudioTrack {

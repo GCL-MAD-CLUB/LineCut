@@ -33,6 +33,11 @@ import {
   useProjectPort,
   visibleSubtitleTracks,
 } from "../../systems/ProjectSystem";
+import {
+  buildSubtitleExportSource,
+  requestExport,
+  runQuickExport,
+} from "../../systems/ExportSystem";
 import { requestSubtitleThumbnail } from "../../subtitleThumbnail";
 import { normalizeFrameRate, timeUsToFrame } from "../../timeline";
 import type { SubtitleCue } from "../../types";
@@ -251,6 +256,7 @@ interface SubtitleContextMenuState extends SubtitleMenuAnchor {
   flagSubmenuOpen: boolean;
   ratingSubmenuOpen: boolean;
   colorSubmenuOpen: boolean;
+  exportSubmenuOpen: boolean;
 }
 
 interface SubtitleAnnotationMenuState extends SubtitleMenuAnchor {
@@ -729,11 +735,19 @@ export function SubtitlePanel() {
   const panelActive = usePanelActive();
   const focusedPanelId = usePanelManagerState((state) => state.focusedPanelId);
   const identity = useStableIdentity("subtitle-panel", panelInstanceId);
-  const { project, projects, mediaItems, activeVideoId, activeTrackId, activeTrackChanged } =
-    useProjectPort(
-      ["project", "projects", "mediaItems", "activeVideoId", "activeTrackId"],
-      ["activeTrackChanged"],
-    );
+  const {
+    project,
+    projects,
+    mediaItems,
+    activeVideoId,
+    activeTrackId,
+    exportState,
+    activeTrackChanged,
+    messagePublished,
+  } = useProjectPort(
+    ["project", "projects", "mediaItems", "activeVideoId", "activeTrackId", "exportState"],
+    ["activeTrackChanged", "messagePublished"],
+  );
   const {
     query,
     showOnlySelected,
@@ -1027,7 +1041,10 @@ export function SubtitlePanel() {
       : undefined;
   const contextSubmenuOpen = Boolean(
     contextMenu &&
-    (contextMenu.flagSubmenuOpen || contextMenu.ratingSubmenuOpen || contextMenu.colorSubmenuOpen),
+    (contextMenu.flagSubmenuOpen ||
+      contextMenu.ratingSubmenuOpen ||
+      contextMenu.colorSubmenuOpen ||
+      contextMenu.exportSubmenuOpen),
   );
   const trackOptions = visibleTracks.map((track) => {
     const mediaItem = mediaItems.find(
@@ -1449,6 +1466,42 @@ export function SubtitlePanel() {
     }
   }
 
+  function buildCurrentSubtitleSource() {
+    return buildSubtitleExportSource({
+      videoId: activeVideoId,
+      trackId: activeTrackId,
+      cueIds: contextMenuCueIds,
+      mediaItems,
+      projects,
+    });
+  }
+
+  function exportSelectedCues() {
+    const source = buildCurrentSubtitleSource();
+    if (source) {
+      requestExport(source);
+      setContextMenu(null);
+    }
+  }
+
+  async function quickExportWithLastSettings() {
+    const source = buildCurrentSubtitleSource();
+    if (!source || !exportState) {
+      return;
+    }
+    const outcome = await runQuickExport(source, exportState);
+    if (outcome.status === "success") {
+      const completed = outcome.result.outputs.filter(
+        (output) => output.status === "completed",
+      ).length;
+      const failed = outcome.result.outputs.filter((output) => output.status === "failed").length;
+      messagePublished(`已导出 ${completed} 个片段${failed > 0 ? `，${failed} 个失败` : ""}`);
+    } else if (outcome.status === "cancelled") {
+      messagePublished("导出已取消");
+    }
+    setContextMenu(null);
+  }
+
   function openContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
     event.preventDefault();
     const row = (event.target as HTMLElement | null)?.closest<HTMLElement>(
@@ -1467,6 +1520,7 @@ export function SubtitlePanel() {
       x: event.clientX,
       y: event.clientY,
       cueId: cueId ?? null,
+      exportSubmenuOpen: false,
       flagSubmenuOpen: false,
       ratingSubmenuOpen: false,
       colorSubmenuOpen: false,
@@ -2723,6 +2777,7 @@ export function SubtitlePanel() {
                   current
                     ? {
                         ...current,
+                        exportSubmenuOpen: open ? false : current.exportSubmenuOpen,
                         flagSubmenuOpen: open,
                         ratingSubmenuOpen: open ? false : current.ratingSubmenuOpen,
                         colorSubmenuOpen: open ? false : current.colorSubmenuOpen,
@@ -2751,6 +2806,7 @@ export function SubtitlePanel() {
                   current
                     ? {
                         ...current,
+                        exportSubmenuOpen: open ? false : current.exportSubmenuOpen,
                         ratingSubmenuOpen: open,
                         flagSubmenuOpen: open ? false : current.flagSubmenuOpen,
                         colorSubmenuOpen: open ? false : current.colorSubmenuOpen,
@@ -2814,6 +2870,7 @@ export function SubtitlePanel() {
                   current
                     ? {
                         ...current,
+                        exportSubmenuOpen: open ? false : current.exportSubmenuOpen,
                         colorSubmenuOpen: open,
                         flagSubmenuOpen: open ? false : current.flagSubmenuOpen,
                         ratingSubmenuOpen: open ? false : current.ratingSubmenuOpen,
@@ -2830,6 +2887,39 @@ export function SubtitlePanel() {
                   setContextMenu(null);
                 }}
               />
+            </PopupMenuSubmenu>
+
+            <PopupMenuSeparator />
+            <PopupMenuSubmenu
+              label="导出"
+              open={contextMenu.exportSubmenuOpen}
+              disabled={contextMenuCueIds.length === 0}
+              enableMnemonics
+              menuClassName="subtitle-context-menu"
+              onOpenChange={(open) =>
+                setContextMenu((current) =>
+                  current
+                    ? {
+                        ...current,
+                        exportSubmenuOpen: open,
+                        flagSubmenuOpen: open ? false : current.flagSubmenuOpen,
+                        ratingSubmenuOpen: open ? false : current.ratingSubmenuOpen,
+                        colorSubmenuOpen: open ? false : current.colorSubmenuOpen,
+                      }
+                    : current,
+                )
+              }
+            >
+              <PopupMenuItem mnemonic="E" onSelect={exportSelectedCues}>
+                导出(E)...
+              </PopupMenuItem>
+              <PopupMenuItem
+                mnemonic="W"
+                disabled={!exportState}
+                onSelect={() => void quickExportWithLastSettings()}
+              >
+                使用上次设置导出(W)
+              </PopupMenuItem>
             </PopupMenuSubmenu>
           </PopupMenu>,
           document.body,

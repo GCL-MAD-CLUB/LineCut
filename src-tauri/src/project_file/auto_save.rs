@@ -190,6 +190,7 @@ mod tests {
             },
             subtitles: HashMap::new(),
             storyboards: HashMap::new(),
+            export_state: None,
         }
     }
 
