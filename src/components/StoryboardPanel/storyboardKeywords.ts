@@ -20,7 +20,13 @@ interface ResolvedStoryboardKeywords {
 }
 
 const keywordSeparators = [">", "<", "|"] as const;
+const keywordNameFilter = /[,，<>|*]/g;
 let fallbackKeywordId = 0;
+
+/** Removes characters that are forbidden inside keyword names (list separators, path separators, and the partial-applicability marker). */
+export function sanitizeStoryboardKeywordName(name: string) {
+  return name.replace(keywordNameFilter, "").trim();
+}
 
 function keywordPathKey(names: readonly string[]) {
   return names.join("\u0000");
@@ -46,17 +52,13 @@ function parseKeywordValue(value: string): StoryboardKeywordParseResult {
   }
 
   const separator = separators[0];
-  const names = (separator ? trimmed.split(separator) : [trimmed]).map((name) => name.trim());
+  const names = (separator ? trimmed.split(separator) : [trimmed]).map((name) =>
+    sanitizeStoryboardKeywordName(name),
+  );
   if (names.some((name) => !name)) {
     return {
       paths: [],
       error: `关键字路径“${trimmed}”包含空的关键字名称`,
-    };
-  }
-  if (names.some((name) => /[<>|]/.test(name))) {
-    return {
-      paths: [],
-      error: "关键字名称不能包含 >、<、|",
     };
   }
 
@@ -302,7 +304,7 @@ export function sanitizeStoryboardKeywordInput(value: string) {
     }
     const separators = keywordSeparators.filter((separator) => trimmed.includes(separator));
     if (separators.length === 0) {
-      const name = trimmed.replace(/[<>|]/g, "").trim();
+      const name = sanitizeStoryboardKeywordName(trimmed);
       if (name) {
         sanitized.push(name);
       }
@@ -311,7 +313,7 @@ export function sanitizeStoryboardKeywordInput(value: string) {
     const separator = separators[0];
     const names = trimmed
       .split(separator)
-      .map((name) => name.replace(/[<>|]/g, "").trim())
+      .map((name) => sanitizeStoryboardKeywordName(name))
       .filter(Boolean);
     if (names.length > 0) {
       sanitized.push(names.join(separator));

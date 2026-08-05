@@ -6,16 +6,19 @@ import { PopupMenu, PopupMenuItem, PopupMenuSeparator } from "../PopupMenu";
 import type { StoryboardKeywordNode } from "../../types";
 import {
   expandedStoryboardKeywordText,
+  formatStoryboardKeywordPath,
   normalizeStoryboardKeywordIds,
   parseStoryboardKeywordInput,
   renderStoryboardKeywordLabel,
   sanitizeStoryboardKeywordInput,
+  sanitizeStoryboardKeywordName,
   storyboardEffectiveKeywordIds,
   storyboardKeywordDescendantIds,
   storyboardKeywordLabel,
   storyboardKeywordUsageCounts,
   suggestedStoryboardKeywordIds,
   visibleStoryboardKeywordIds,
+  type StoryboardKeywordPath,
 } from "./storyboardKeywords";
 import { useStoryboardPanelState } from "./storyboardPanelState";
 
@@ -91,8 +94,8 @@ export function StoryboardKeywordPanel({
     shots,
     shotAnnotations,
     appendShotKeywords,
-    setShotKeywords,
     setShotKeywordActivation,
+    reconcileShotKeywords,
     removeStoryboardKeyword,
     updateStoryboardKeyword,
     createStoryboardKeyword,
@@ -276,17 +279,51 @@ export function StoryboardKeywordPanel({
       ),
     );
   }, [keywordNodes, shotAnnotations, targetShotIds]);
-  const selectedKeywordText = useMemo(
-    () =>
-      selectedKeywordIds
-        .map((keywordId) => storyboardKeywordLabel(keywordId, keywordNodes))
-        .filter(Boolean)
-        .join(", "),
-    [keywordNodes, selectedKeywordIds],
-  );
+  const selectedKeywordText = useMemo(() => {
+    const textParts: string[] = [];
+    for (const keywordId of selectedKeywordIds) {
+      const label = storyboardKeywordLabel(keywordId, keywordNodes);
+      if (!label) {
+        continue;
+      }
+      const activeCount = effectiveCountById.get(keywordId) ?? 0;
+      const partial =
+        targetShotIds.length > 1 && activeCount > 0 && activeCount < targetShotIds.length;
+      textParts.push(partial ? `${label}*` : label);
+    }
+    return textParts.join(", ");
+  }, [effectiveCountById, keywordNodes, selectedKeywordIds, targetShotIds.length]);
+  const partialKeywordIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const keywordId of selectedKeywordIds) {
+      const activeCount = effectiveCountById.get(keywordId) ?? 0;
+      if (targetShotIds.length > 1 && activeCount > 0 && activeCount < targetShotIds.length) {
+        ids.add(keywordId);
+      }
+    }
+    return ids;
+  }, [effectiveCountById, selectedKeywordIds, targetShotIds.length]);
+  const partialKeywordLabels = useMemo(() => {
+    const labels = new Set<string>();
+    for (const keywordId of partialKeywordIds) {
+      const label = storyboardKeywordLabel(keywordId, keywordNodes);
+      if (label) {
+        labels.add(label);
+      }
+    }
+    return labels;
+  }, [keywordNodes, partialKeywordIds]);
   const expandedKeywordText = useMemo(
     () => expandedStoryboardKeywordText(selectedKeywordIds, keywordNodes),
     [keywordNodes, selectedKeywordIds],
+  );
+  const keywordEditorKeywordCount = useMemo(
+    () =>
+      keywordEditValue
+        .split(/[,，]/)
+        .map((value) => value.trim())
+        .filter(Boolean).length,
+    [keywordEditValue],
   );
 
   useEffect(() => {
@@ -461,14 +498,49 @@ export function StoryboardKeywordPanel({
   }
 
   function commitKeywordEdit() {
-    const parsed = parseStoryboardKeywordInput(keywordEditValue);
-    if (parsed.error) {
-      setKeywordEditError(parsed.error);
+    const tokens = keywordEditValue
+      .split(/[,，]/)
+      .map((token) => token.trim())
+      .filter(Boolean);
+    const pathsByLabel = new Map<string, StoryboardKeywordPath>();
+    const preservedLabels = new Set<string>();
+    const forcedFullLabels = new Set<string>();
+    let parseError: string | null = null;
+    for (const token of tokens) {
+      const isStarred = token.endsWith("*");
+      const value = isStarred ? token.slice(0, -1).trim() : token;
+      if (!value) {
+        parseError = `关键字路径“${token}”包含空的关键字名称`;
+        break;
+      }
+      const parsed = parseStoryboardKeywordInput(value);
+      if (parsed.error) {
+        parseError = parsed.error;
+        break;
+      }
+      for (const path of parsed.paths) {
+        const label = formatStoryboardKeywordPath(path);
+        pathsByLabel.set(label, path);
+        const preserve = isStarred && partialKeywordLabels.has(label);
+        if (preserve && !forcedFullLabels.has(label)) {
+          preservedLabels.add(label);
+        } else {
+          preservedLabels.delete(label);
+          forcedFullLabels.add(label);
+        }
+      }
+    }
+    if (parseError) {
+      setKeywordEditError(parseError);
       return;
     }
     setKeywordEditError(null);
     if (keywordEditValue.trim() !== selectedKeywordText) {
-      setShotKeywords(targetShotIds, keywordEditValue);
+      const allPaths = Array.from(pathsByLabel.values());
+      const preservedPaths = Array.from(preservedLabels)
+        .map((label) => pathsByLabel.get(label))
+        .filter((path): path is StoryboardKeywordPath => path !== undefined);
+      reconcileShotKeywords(targetShotIds, allPaths, preservedPaths);
     }
   }
 
@@ -578,7 +650,7 @@ export function StoryboardKeywordPanel({
     primarySelectedId,
   ]);
 
-  const createKeywordName = createName.replace(/[<>|]/g, "").trim();
+  const createKeywordName = sanitizeStoryboardKeywordName(createName);
 
   function openCreateDialog(preserveFields = false, parentOverrideId: string | null = null) {
     if (!preserveFields) {
@@ -640,7 +712,7 @@ export function StoryboardKeywordPanel({
   const editKeywordDialogNode = editKeywordDialog
     ? (keywordNodes.find((node) => node.id === editKeywordDialog.keywordId) ?? null)
     : null;
-  const editKeywordName = editName.replace(/[<>|]/g, "").trim();
+  const editKeywordName = sanitizeStoryboardKeywordName(editName);
 
   function openKeywordTagEditDialog(keywordId: string) {
     const node = keywordNodes.find((candidate) => candidate.id === keywordId);
@@ -894,10 +966,18 @@ export function StoryboardKeywordPanel({
                       </div>
                     </div>
                   ) : (
-                    <div className="storyboard-keyword-plain-editor">
+                    <div
+                      className="storyboard-keyword-plain-editor"
+                      title={
+                        keywordEditError ??
+                        `星号（*）表示标记仅应用于某些选定的分镜。\n\n关键词数量：${keywordEditorKeywordCount}`
+                      }
+                    >
                       {!keywordEditorFocused && (
                         <div
-                          className="storyboard-keyword-plain-editor-display"
+                          className={`storyboard-keyword-plain-editor-display ${
+                            keywordEditError ? "is-error" : ""
+                          }`.trim()}
                           onClick={() => {
                             if (targetShotIds.length > 0) {
                               setKeywordEditorFocused(true);
@@ -915,7 +995,6 @@ export function StoryboardKeywordPanel({
                         placeholder=""
                         aria-label="编辑当前分镜关键字"
                         aria-invalid={Boolean(keywordEditError)}
-                        title={keywordEditError ?? "直接编辑当前关键字，回车或失焦后保存"}
                         onFocus={() => {
                           cancelKeywordEditRef.current = false;
                         }}

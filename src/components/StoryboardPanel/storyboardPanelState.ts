@@ -13,8 +13,10 @@ import {
   normalizeStoryboardKeywordIds,
   parseStoryboardKeywordInput,
   resolveStoryboardKeywordPaths,
+  sanitizeStoryboardKeywordName,
   storyboardKeywordDescendantIds,
   storyboardKeywordUsageCountersAfterUse,
+  type StoryboardKeywordPath,
 } from "./storyboardKeywords";
 
 export { formatStoryboardKeywords } from "./storyboardKeywords";
@@ -116,6 +118,12 @@ interface StoryboardPanelState
     shotIds: Iterable<string>,
     keywordId: string,
     active: boolean,
+    historyGroupId?: string,
+  ) => void;
+  reconcileShotKeywords: (
+    shotIds: Iterable<string>,
+    allPaths: readonly StoryboardKeywordPath[],
+    preservedPaths: readonly StoryboardKeywordPath[],
     historyGroupId?: string,
   ) => void;
   removeStoryboardKeyword: (keywordId: string, historyGroupId?: string) => void;
@@ -592,6 +600,70 @@ export function useStoryboardPanelState<Selection>(
         historyGroupId,
       );
     },
+    reconcileShotKeywords: (shotIds, allPaths, preservedPaths, historyGroupId) => {
+      const uniqueShotIds = Array.from(new Set(shotIds));
+      if (uniqueShotIds.length === 0) {
+        return;
+      }
+      commitStoryboard(
+        "设置分镜关键字",
+        (current) => {
+          const resolved = resolveStoryboardKeywordPaths(current.keywordNodes, allPaths);
+          const preservedIds = new Set(
+            resolveStoryboardKeywordPaths(resolved.keywordNodes, preservedPaths).keywordIds,
+          );
+          const textIds = new Set(resolved.keywordIds);
+          const addableIds = resolved.keywordIds.filter(
+            (keywordId) => !preservedIds.has(keywordId),
+          );
+          const shotAnnotations = { ...current.shotAnnotations };
+          let changed = resolved.keywordNodes.length !== current.keywordNodes.length;
+
+          const currentUnionIds = new Set<string>();
+          for (const shotId of uniqueShotIds) {
+            for (const keywordId of normalizeStoryboardKeywordIds(
+              shotAnnotations[shotId]?.keywordIds ?? [],
+            )) {
+              currentUnionIds.add(keywordId);
+            }
+          }
+          const removableIds = Array.from(currentUnionIds).filter(
+            (keywordId) => !textIds.has(keywordId),
+          );
+          for (const shotId of uniqueShotIds) {
+            const previous = shotAnnotations[shotId];
+            const keywordIds = normalizeStoryboardKeywordIds([
+              ...normalizeStoryboardKeywordIds(previous?.keywordIds ?? []).filter(
+                (keywordId) => !removableIds.includes(keywordId),
+              ),
+              ...addableIds,
+            ]);
+            if (keywordCollectionsEqual(previous?.keywordIds, keywordIds)) {
+              continue;
+            }
+            shotAnnotations[shotId] = annotationWithDefaults(previous, { keywordIds });
+            changed = true;
+          }
+          if (!changed) {
+            return current;
+          }
+          const recentKeywordIds = recentKeywordIdsAfterUse(current.recentKeywordIds, addableIds);
+          const keywordUsageCounters = storyboardKeywordUsageCountersAfterUse(
+            current.keywordUsageCounters,
+            addableIds,
+          );
+          return {
+            ...current,
+            keywordNodes: resolved.keywordNodes,
+            recentKeywordIds,
+            keywordUsageCounters,
+            shotAnnotations,
+          };
+        },
+        uiState.videoContext,
+        historyGroupId,
+      );
+    },
     removeStoryboardKeyword: (keywordId, historyGroupId) => {
       if (!storyboard.keywordNodes.some((node) => node.id === keywordId)) {
         return;
@@ -650,16 +722,12 @@ export function useStoryboardPanelState<Selection>(
       );
     },
     updateStoryboardKeyword: (keywordId, updates, historyGroupId) => {
-      const normalizedName = updates.name.replace(/[<>|]/g, "").trim();
+      const normalizedName = sanitizeStoryboardKeywordName(updates.name);
       if (!normalizedName || !storyboard.keywordNodes.some((node) => node.id === keywordId)) {
         return;
       }
       const synonyms = Array.from(
-        new Set(
-          (updates.synonyms ?? [])
-            .map((synonym) => synonym.replace(/[<>|]/g, "").trim())
-            .filter(Boolean),
-        ),
+        new Set((updates.synonyms ?? []).map(sanitizeStoryboardKeywordName).filter(Boolean)),
       );
       commitStoryboard(
         "编辑关键字",
@@ -694,7 +762,7 @@ export function useStoryboardPanelState<Selection>(
       );
     },
     createStoryboardKeyword: (name, options = {}, historyGroupId) => {
-      const normalizedName = name.replace(/[<>|]/g, "").trim();
+      const normalizedName = sanitizeStoryboardKeywordName(name);
       if (!normalizedName) {
         return;
       }
@@ -703,11 +771,7 @@ export function useStoryboardPanelState<Selection>(
           ? options.parentId
           : null;
       const synonyms = Array.from(
-        new Set(
-          (options.synonyms ?? [])
-            .map((synonym) => synonym.replace(/[<>|]/g, "").trim())
-            .filter(Boolean),
-        ),
+        new Set((options.synonyms ?? []).map(sanitizeStoryboardKeywordName).filter(Boolean)),
       );
       const uniqueShotIds = Array.from(new Set(options.shotIds ?? []));
       commitStoryboard(
