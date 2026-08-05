@@ -479,7 +479,7 @@
   --subtitle-status-gutter-width: 16px;
   --subtitle-fixed-left-width: var(--subtitle-fixed-thumbnail-width);
   --subtitle-col-thumbnail: 120px;
-  --subtitle-col-subtitle: 128px;
+  --subtitle-col-subtitle: 256px;
   --subtitle-col-media-start: 128px;
   --subtitle-col-media-end: 128px;
   --subtitle-col-duration: 140px;

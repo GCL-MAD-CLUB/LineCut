@@ -2,7 +2,12 @@ import { ChevronsUpDown, ChevronDown, Minus, Plus, Search, Trash2 } from "lucide
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ModalDialog } from "../ModalDialog";
-import { PopupMenu, PopupMenuItem, PopupMenuSeparator } from "../PopupMenu";
+import {
+  PopupMenu,
+  PopupMenuItem,
+  PopupMenuSeparator,
+  useCloseOnOutsidePointer,
+} from "../PopupMenu";
 import type { StoryboardKeywordNode } from "../../types";
 import {
   expandedStoryboardKeywordText,
@@ -168,49 +173,8 @@ export function StoryboardKeywordPanel({
     setTreeContextMenu(null);
   }, [resetKey]);
 
-  useEffect(() => {
-    if (!treeContextMenu) {
-      return;
-    }
-    const close = () => setTreeContextMenu(null);
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        close();
-      }
-    };
-    window.addEventListener("pointerdown", close);
-    window.addEventListener("keydown", closeOnEscape);
-    window.addEventListener("resize", close);
-    window.addEventListener("blur", close);
-    return () => {
-      window.removeEventListener("pointerdown", close);
-      window.removeEventListener("keydown", closeOnEscape);
-      window.removeEventListener("resize", close);
-      window.removeEventListener("blur", close);
-    };
-  }, [treeContextMenu]);
-
-  useEffect(() => {
-    if (!keywordModeMenu) {
-      return;
-    }
-    const close = () => setKeywordModeMenu(null);
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        close();
-      }
-    };
-    window.addEventListener("pointerdown", close);
-    window.addEventListener("keydown", closeOnEscape);
-    window.addEventListener("resize", close);
-    window.addEventListener("blur", close);
-    return () => {
-      window.removeEventListener("pointerdown", close);
-      window.removeEventListener("keydown", closeOnEscape);
-      window.removeEventListener("resize", close);
-      window.removeEventListener("blur", close);
-    };
-  }, [keywordModeMenu]);
+  useCloseOnOutsidePointer(Boolean(treeContextMenu), () => setTreeContextMenu(null));
+  useCloseOnOutsidePointer(Boolean(keywordModeMenu), () => setKeywordModeMenu(null));
 
   useEffect(() => {
     portalContainerRef.current = document.querySelector(".app-shell");

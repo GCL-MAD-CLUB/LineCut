@@ -56,11 +56,11 @@ import { runMediaImportTask } from "../../mediaImportTask";
 import { MediaLinkDialog, type MediaLinkCandidate, type MediaLinkMode } from "../MediaLinkDialog";
 import { ModalDialog } from "../ModalDialog";
 import {
-  isPopupMenuEventTarget,
   PopupMenu,
   PopupMenuItem,
   PopupMenuSeparator,
   PopupMenuSubmenu,
+  useCloseOnOutsidePointer,
 } from "../PopupMenu";
 import { SelectDropdown, selectDropdownItems } from "../SelectDropdown";
 import { createTaskProgress, useTaskProgressStatus } from "../../systems/TaskSystem";
@@ -578,32 +578,10 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     }
   }, [bindingPopoverOpen, isReadOnly, setBindingPopoverOpen]);
 
-  useEffect(() => {
-    if (!contextMenu) {
-      return;
-    }
-    const close = (event?: Event) => {
-      if (event && isPopupMenuEventTarget(event.target)) {
-        return;
-      }
-      setContextMenu(null);
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        close();
-      }
-    };
-    window.addEventListener("pointerdown", close, true);
-    window.addEventListener("keydown", closeOnEscape);
-    window.addEventListener("resize", close);
-    window.addEventListener("blur", close);
-    return () => {
-      window.removeEventListener("pointerdown", close, true);
-      window.removeEventListener("keydown", closeOnEscape);
-      window.removeEventListener("resize", close);
-      window.removeEventListener("blur", close);
-    };
-  }, [contextMenu]);
+  useCloseOnOutsidePointer(Boolean(contextMenu), () => setContextMenu(null), {
+    capturePointerdown: true,
+    ignorePopupMenuTargets: true,
+  });
 
   useEffect(() => {
     const nextSelection = Array.from(selectedIds).filter((itemId) => scopedEntryIds.has(itemId));

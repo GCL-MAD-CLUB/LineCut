@@ -1182,7 +1182,7 @@ export function StoryboardPanel() {
   const [footerSprayMenu, setFooterSprayMenu] = useState<StoryboardMenuAnchor | null>(null);
   const [footerOptionsMenu, setFooterOptionsMenu] = useState<StoryboardMenuAnchor | null>(null);
   const [sprayActive, setSprayActive] = useState(false);
-  const [sprayMode, setSprayMode] = useState<StoryboardSprayMode>("colorLabel");
+  const [sprayMode, setSprayMode] = useState<StoryboardSprayMode>("keywords");
   const [sprayKeywordInput, setSprayKeywordInput] = useState("");
   const [sprayColorLabel, setSprayColorLabel] = useState<StoryboardShotColorLabel | null>(null);
   const [sprayCustomLabel, setSprayCustomLabel] = useState("");
@@ -1815,13 +1815,15 @@ export function StoryboardPanel() {
       for (const shot of sortedShots.slice(start, end + 1)) {
         nextSelection.add(shot.id);
       }
-      shotSelectionReplaced(Array.from(nextSelection), targetId);
+      const primaryShotId =
+        activeShotId && nextSelection.has(activeShotId) ? activeShotId : targetId;
+      shotSelectionReplaced(Array.from(nextSelection), primaryShotId);
       scrollToTarget();
     };
 
     panel.addEventListener("keydown", handleSelectionKeyDown);
     return () => panel.removeEventListener("keydown", handleSelectionKeyDown);
-  }, [rowVirtualizer, selectedShotIds, shotSelectionReplaced, sortedShots, viewMode]);
+  }, [activeShotId, rowVirtualizer, selectedShotIds, shotSelectionReplaced, sortedShots, viewMode]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -2404,7 +2406,9 @@ export function StoryboardPanel() {
     let shouldSeek = false;
 
     if (!event.shiftKey) {
-      selectionAnchorRef.current = shot.id;
+      if (!additive) {
+        selectionAnchorRef.current = shot.id;
+      }
       if (additive) {
         nextSelection = new Set(currentSelection);
         if (nextSelection.has(shot.id)) {
