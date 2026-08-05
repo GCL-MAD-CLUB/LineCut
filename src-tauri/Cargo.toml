@@ -1,6 +1,6 @@
 [package]
 name = "linecut"
-version = "0.2.0"
+version = "0.3.0-alpha.1"
 description = "Subtitle indexing and media organization tool"
 authors = ["Kotodama"]
 license = "Apache-2.0"
