@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  format:
+    name: Format check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # TS/TSX/JS/JSON/CSS/HTML/Markdown/YAML formatting
+      - name: Prettier check
+        run: npx prettier --check .
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Rust format check (main crate)
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Rust format check (thumbnail provider)
+        run: cargo fmt --manifest-path src-tauri/thumbnail-provider/Cargo.toml -- --check
+
+  frontend:
+    name: Frontend (TS / TSX)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Custom boundary checks + TypeScript type check + production build
+      - name: Check error boundaries
+        run: npm run check:errors
+
+      - name: Check system architecture
+        run: npm run check:architecture
+
+      - name: Type check and build
+        run: tsc && vite build
+
+      # The Rust job needs ../dist to exist for tauri::generate_context!
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist
+          retention-days: 1
+
+  rust:
+    name: Rust (clippy)
+    runs-on: windows-latest
+    needs: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist
+
+      # externalBin sidecars are gitignored, but tauri-build requires the paths to exist
+      # at compile time. Empty placeholders are enough for cargo clippy.
+      - name: Create placeholder sidecar binaries
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force src-tauri/bin | Out-Null
+          New-Item -ItemType File -Force src-tauri/bin/ffmpeg-x86_64-pc-windows-msvc.exe | Out-Null
+          New-Item -ItemType File -Force src-tauri/bin/ffprobe-x86_64-pc-windows-msvc.exe | Out-Null
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            src-tauri
+            src-tauri/thumbnail-provider
+
+      - name: Clippy (main crate)
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+
+      - name: Clippy (thumbnail provider)
+        run: cargo clippy --manifest-path src-tauri/thumbnail-provider/Cargo.toml --all-targets --locked -- -D warnings

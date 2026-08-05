@@ -1085,7 +1085,7 @@ function AppContent() {
         label: "历史记录",
         checked: Boolean(panelInstances.history),
         enabled: true,
-        execute: () => showSingletonPanel("history", historyPanelType, {}, "right"),
+        execute: () => showSingletonPanel("history", historyPanelType, {}, "middle"),
       },
     },
   };

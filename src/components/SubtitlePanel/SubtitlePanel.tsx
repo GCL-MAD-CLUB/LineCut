@@ -1175,8 +1175,7 @@ export function SubtitlePanel() {
       for (const cue of sortedCues.slice(start, end + 1)) {
         nextSelection.add(cue.id);
       }
-      const primaryCueId =
-        activeCueId && nextSelection.has(activeCueId) ? activeCueId : targetId;
+      const primaryCueId = activeCueId && nextSelection.has(activeCueId) ? activeCueId : targetId;
       cueSelectionReplaced(nextSelection, primaryCueId);
       rowVirtualizer.scrollToIndex(targetIndex, { align: "auto" });
     };

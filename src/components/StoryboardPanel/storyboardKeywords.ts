@@ -243,9 +243,7 @@ export function storyboardMatchesQuickFilter(
     return true;
   }
   const validNodeIds = new Set(keywordNodes.map((node) => node.id));
-  const activeFilterIds = quickFilterKeywordIds.filter((keywordId) =>
-    validNodeIds.has(keywordId),
-  );
+  const activeFilterIds = quickFilterKeywordIds.filter((keywordId) => validNodeIds.has(keywordId));
   if (activeFilterIds.length === 0) {
     return true;
   }
