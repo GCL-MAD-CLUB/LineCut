@@ -55,7 +55,13 @@ import type {
 import { runMediaImportTask } from "../../mediaImportTask";
 import { MediaLinkDialog, type MediaLinkCandidate, type MediaLinkMode } from "../MediaLinkDialog";
 import { ModalDialog } from "../ModalDialog";
-import { PopupMenu, PopupMenuItem, PopupMenuSeparator, PopupMenuSubmenu } from "../PopupMenu";
+import {
+  isPopupMenuEventTarget,
+  PopupMenu,
+  PopupMenuItem,
+  PopupMenuSeparator,
+  PopupMenuSubmenu,
+} from "../PopupMenu";
 import { SelectDropdown, selectDropdownItems } from "../SelectDropdown";
 import { createTaskProgress, useTaskProgressStatus } from "../../systems/TaskSystem";
 import "./MediaBin.css";
@@ -576,18 +582,23 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     if (!contextMenu) {
       return;
     }
-    const close = () => setContextMenu(null);
+    const close = (event?: Event) => {
+      if (event && isPopupMenuEventTarget(event.target)) {
+        return;
+      }
+      setContextMenu(null);
+    };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         close();
       }
     };
-    window.addEventListener("pointerdown", close);
+    window.addEventListener("pointerdown", close, true);
     window.addEventListener("keydown", closeOnEscape);
     window.addEventListener("resize", close);
     window.addEventListener("blur", close);
     return () => {
-      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("pointerdown", close, true);
       window.removeEventListener("keydown", closeOnEscape);
       window.removeEventListener("resize", close);
       window.removeEventListener("blur", close);
@@ -1510,7 +1521,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                 <Link2 aria-hidden="true" />
                 <div>
                   <strong>关联所选媒体与目标视频</strong>
-                  <span>绑定后，音频和字幕会归入目标视频，方便集中预览和导出。</span>
+                  <span>绑定后，音频和字幕会归入目标视频，方便集中预览和整理。</span>
                 </div>
               </div>
               <div className="media-bin-bind-dialog-field">
@@ -1836,7 +1847,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                 <PopupMenuSubmenu
                   label="代理"
                   open={contextMenu.proxySubmenuOpen}
-                  menuClassName="media-bin-context-menu media-bin-proxy-context-menu"
+                  menuClassName="media-bin-context-menu"
                   onOpenChange={(open) =>
                     setContextMenu((current) =>
                       current

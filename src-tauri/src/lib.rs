@@ -144,7 +144,6 @@ struct RunningFfmpeg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Preferences {
     cache_dir: String,
-    default_export_dir: String,
     ffmpeg_path: String,
     ffprobe_path: String,
     #[serde(default = "default_auto_save_interval_minutes")]
@@ -161,21 +160,10 @@ const fn default_auto_save_max_snapshots() -> u32 {
     20
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum ExportNameRule {
-    #[default]
-    SourceTimeRange,
-    SourceDialogue,
-    TimeRange,
-    Dialogue,
-}
-
 impl Default for Preferences {
     fn default() -> Self {
         Self {
             cache_dir: default_cache_root().to_string_lossy().into_owned(),
-            default_export_dir: default_export_root().to_string_lossy().into_owned(),
             ffmpeg_path: DEFAULT_FFMPEG_PROGRAM.to_string(),
             ffprobe_path: DEFAULT_FFPROBE_PROGRAM.to_string(),
             auto_save_interval_minutes: default_auto_save_interval_minutes(),
@@ -342,9 +330,87 @@ struct ProjectPreviewState {
 struct ProjectEditorState {
     active_video_id: String,
     active_track_id: String,
-    subtitle_selections: HashMap<String, HashMap<String, Vec<String>>>,
     detached_video_ids: Vec<String>,
     preview: ProjectPreviewState,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ProjectSubtitleColorLabel {
+    Red,
+    Yellow,
+    Green,
+    Blue,
+    Purple,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectSubtitleAnnotation {
+    rating: u8,
+    retained: bool,
+    #[serde(default)]
+    excluded: bool,
+    #[serde(default)]
+    color_label: Option<ProjectSubtitleColorLabel>,
+    #[serde(default)]
+    custom_label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectSubtitleState {
+    cue_annotations: HashMap<String, ProjectSubtitleAnnotation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProjectStoryboardShot {
+    id: String,
+    sequence: usize,
+    start_frame: usize,
+    end_frame: usize,
+    start_us: i64,
+    end_us: i64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ProjectStoryboardColorLabel {
+    Red,
+    Yellow,
+    Green,
+    Blue,
+    Purple,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectStoryboardAnnotation {
+    rating: u8,
+    retained: bool,
+    #[serde(default)]
+    excluded: bool,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    color_label: Option<ProjectStoryboardColorLabel>,
+    #[serde(default)]
+    custom_label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectStoryboardStack {
+    id: String,
+    shot_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectStoryboardState {
+    shots: Vec<ProjectStoryboardShot>,
+    shot_stacks: Vec<ProjectStoryboardStack>,
+    shot_annotations: HashMap<String, ProjectStoryboardAnnotation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -352,6 +418,10 @@ struct ProjectWorkspace {
     projects: Vec<Project>,
     media_bin: ProjectMediaBinState,
     editor: ProjectEditorState,
+    #[serde(default)]
+    subtitles: HashMap<String, ProjectSubtitleState>,
+    #[serde(default)]
+    storyboards: HashMap<String, ProjectStoryboardState>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -395,14 +465,6 @@ impl UserNotice {
             "operation warning"
         );
         Self::warning(code, message)
-    }
-
-    fn info(code: &str, message: impl Into<String>) -> Self {
-        Self {
-            code: code.to_string(),
-            severity: NoticeSeverity::Info,
-            message: message.into(),
-        }
     }
 }
 
@@ -502,76 +564,6 @@ struct FfmpegProgressContext<'a> {
     cleanup_paths: Vec<PathBuf>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum ExportMode {
-    FastCopy,
-    PreciseEncode,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum ExportLayout {
-    Individual,
-    Merged,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ExportOptions {
-    head_padding_ms: i64,
-    tail_padding_ms: i64,
-    merge_gap_ms: i64,
-    mode: ExportMode,
-    layout: ExportLayout,
-    output_dir: String,
-    #[serde(default)]
-    output_dir_explicit: bool,
-    #[serde(default)]
-    export_name_rule: ExportNameRule,
-    #[serde(default)]
-    dialogue_line_indexes: Vec<usize>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum ExportBoundMediaKind {
-    Audio,
-    Subtitle,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum ExportBoundMediaSource {
-    File,
-    EmbeddedStream,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ExportBoundMedia {
-    kind: ExportBoundMediaKind,
-    source: ExportBoundMediaSource,
-    path: String,
-    stream_index: Option<i32>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ClipRange {
-    index: usize,
-    start_us: i64,
-    end_us: i64,
-    cue_ids: Vec<String>,
-    head_padding_us: i64,
-    tail_padding_us: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ExportResult {
-    ranges: Vec<ClipRange>,
-    files: Vec<String>,
-    output_dir: String,
-    log: Vec<UserNotice>,
-}
-
 #[derive(Debug, Deserialize)]
 struct ProbeOutput {
     #[serde(default)]
@@ -641,6 +633,9 @@ pub fn run() {
             get_cached_subtitle_thumbnail,
             cache_subtitle_thumbnail,
             generate_subtitle_thumbnail,
+            get_cached_storyboard_thumbnail,
+            cache_storyboard_thumbnail,
+            generate_storyboard_thumbnail,
             demux_media_streams,
             generate_proxy,
             add_external_subtitles,
@@ -652,10 +647,10 @@ pub fn run() {
             path_is_file,
             load_workspace_config,
             save_workspace_config,
+            detect_storyboard_shots,
             set_media_import_drop_region,
             reveal_in_file_manager,
             cancel_task,
-            export_clips,
             play_system_sound,
             record_frontend_incident
         ])

@@ -24,6 +24,11 @@ import "./PopupMenu.css";
 
 const popupViewportMargin = 8;
 
+/** Returns whether an event originated inside a PopupMenu, including portal-based submenus. */
+export function isPopupMenuEventTarget(target: EventTarget | null) {
+  return target instanceof Element && target.closest(".popup-menu") !== null;
+}
+
 interface PopupMenuViewportLayout {
   maxHeight: number | undefined;
   translateX: number;
@@ -432,6 +437,7 @@ interface PopupMenuSubmenuProps {
   open: boolean;
   disabled?: boolean;
   mnemonic?: string;
+  enableMnemonics?: boolean;
   menuClassName?: string;
   onOpenChange: (open: boolean) => void;
 }
@@ -442,6 +448,7 @@ export function PopupMenuSubmenu({
   open,
   disabled,
   mnemonic,
+  enableMnemonics = false,
   menuClassName,
   onOpenChange,
 }: PopupMenuSubmenuProps) {
@@ -493,6 +500,7 @@ export function PopupMenuSubmenu({
             ariaLabel={typeof label === "string" ? label : undefined}
             className={menuClassName}
             submenuAnchor={anchor}
+            enableMnemonics={enableMnemonics}
             style={{ position: "fixed", left: anchor.right - 4, top: anchor.top - 3 }}
             onPointerDown={(event) => event.stopPropagation()}
             onContextMenu={(event) => event.preventDefault()}

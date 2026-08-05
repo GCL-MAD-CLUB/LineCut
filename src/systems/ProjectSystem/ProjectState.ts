@@ -12,17 +12,17 @@ import {
   type ProjectFileState,
   type ProjectHistoryCategory,
   type ProjectHistoryState,
-  type SubtitleSelections,
 } from "./ProjectHistory";
 import type {
   DemuxMediaResult,
-  ExportResult,
   MediaBinFolder,
   MediaBinItem,
   Preferences,
   Project,
   ProjectWorkspace,
+  StoryboardState,
   SubtitleCue,
+  SubtitleState,
   SubtitleTrack,
   UserNotice,
 } from "../../types";
@@ -77,9 +77,6 @@ interface ProjectCommands {
     itemIds: string[],
   ) => void;
   activeTrackChanged: (trackId: string) => void;
-  cueSelectionToggled: (cueId: string) => void;
-  cueSelectionCleared: () => void;
-  cueSelectionReplaced: (cueIds: string[]) => void;
   proxyDialogOpened: () => void;
   proxyDialogClosed: () => void;
   sourcePreviewCleared: () => void;
@@ -90,8 +87,19 @@ interface ProjectCommands {
   messagePublished: (message: string) => void;
   warningsReplaced: (warnings: UserNotice[]) => void;
   warningsAppended: (warnings: UserNotice[]) => void;
-  exportResultChanged: (result: ExportResult | null) => void;
   mediaBinReadOnlyChanged: (readOnly: boolean) => void;
+  subtitleUpdated: (
+    trackContext: string,
+    historyLabel: string,
+    recipe: (subtitle: SubtitleState) => SubtitleState,
+    historyGroupId?: string,
+  ) => void;
+  storyboardUpdated: (
+    videoContext: string,
+    historyLabel: string,
+    recipe: (storyboard: StoryboardState) => StoryboardState,
+    historyGroupId?: string,
+  ) => void;
   projectHistoryJumped: (cursor: number) => boolean;
   projectHistoryFutureDiscarded: () => void;
 }
@@ -106,16 +114,15 @@ interface ProjectSystemState {
   projectFilePath: string | null;
   projectDirty: boolean;
   activeTrackId: string;
-  subtitleSelections: SubtitleSelections;
-  selectedCueIds: Set<string>;
   proxyPath: string | null;
   useProxy: boolean;
   proxyDialogOpen: boolean;
   preferences: Preferences;
   message: string;
   warnings: UserNotice[];
-  exportResult: ExportResult | null;
   mediaBinReadOnly: boolean;
+  subtitles: Record<string, SubtitleState>;
+  storyboards: Record<string, StoryboardState>;
   projectHistory: ProjectHistoryState;
   commands: ProjectCommands;
 }
@@ -143,6 +150,18 @@ export function isMediaItemHidden(item: MediaBinItem) {
 
 export function isMediaItemOffline(item: MediaBinItem) {
   return item.offline === true;
+}
+
+export function mediaDisplayName(
+  project: Project | null,
+  mediaItems: MediaBinItem[],
+  itemId?: string,
+) {
+  const item = itemId ? mediaItems.find((candidate) => candidate.id === itemId) : undefined;
+  const projectItem = project
+    ? mediaItems.find((candidate) => candidate.id === project.asset.id)
+    : undefined;
+  return item?.file_name ?? projectItem?.file_name ?? project?.asset.file_name ?? "";
 }
 
 export function isVirtualMediaItem(
@@ -341,78 +360,6 @@ function preferredTrackId(
   );
 }
 
-function selectedCueIdsForContext(
-  subtitleSelections: SubtitleSelections,
-  videoId: string,
-  trackId: string,
-) {
-  return new Set(subtitleSelections[videoId]?.[trackId] ?? []);
-}
-
-function subtitleContextState(
-  subtitleSelections: SubtitleSelections,
-  activeVideoId: string,
-  activeTrackId: string,
-) {
-  return {
-    activeVideoId,
-    activeTrackId,
-    selectedCueIds: selectedCueIdsForContext(subtitleSelections, activeVideoId, activeTrackId),
-  };
-}
-
-function replaceCurrentSubtitleSelection(state: ProjectSystemState, selectedCueIds: Set<string>) {
-  const subtitleSelections = { ...state.subtitleSelections };
-  const videoSelections = { ...(subtitleSelections[state.activeVideoId] ?? {}) };
-  if (selectedCueIds.size > 0) {
-    videoSelections[state.activeTrackId] = selectedCueIds;
-  } else {
-    delete videoSelections[state.activeTrackId];
-  }
-  if (Object.keys(videoSelections).length > 0) {
-    subtitleSelections[state.activeVideoId] = videoSelections;
-  } else {
-    delete subtitleSelections[state.activeVideoId];
-  }
-  return { subtitleSelections, selectedCueIds };
-}
-
-function restoreSubtitleSelections(
-  serialized: ProjectWorkspace["editor"]["subtitle_selections"],
-  projects: Record<string, Project>,
-  mediaItems: MediaBinItem[],
-) {
-  const restored: SubtitleSelections = {};
-  for (const [videoId, trackSelections] of Object.entries(serialized)) {
-    const video = mediaItems.find((item) => item.id === videoId && item.kind === "video");
-    const project = video ? mediaItemProject(video, projects, mediaItems) : null;
-    if (!project) {
-      continue;
-    }
-    for (const [trackId, cueIds] of Object.entries(trackSelections)) {
-      const validCueIds = new Set(
-        subtitleTrackCues(project, projects, mediaItems, videoId, trackId).map((cue) => cue.id),
-      );
-      const selection = new Set(cueIds.filter((cueId) => validCueIds.has(cueId)));
-      if (selection.size > 0) {
-        (restored[videoId] ??= {})[trackId] = selection;
-      }
-    }
-  }
-  return restored;
-}
-
-function serializeSubtitleSelections(subtitleSelections: SubtitleSelections) {
-  return Object.fromEntries(
-    Object.entries(subtitleSelections).map(([videoId, trackSelections]) => [
-      videoId,
-      Object.fromEntries(
-        Object.entries(trackSelections).map(([trackId, cueIds]) => [trackId, [...cueIds]]),
-      ),
-    ]),
-  );
-}
-
 function initialProjectState(project: Project | null) {
   if (!project) {
     return {
@@ -423,9 +370,9 @@ function initialProjectState(project: Project | null) {
       activeVideoId: "",
       detachedVideoIds: new Set<string>(),
       activeTrackId: "",
-      subtitleSelections: {},
-      selectedCueIds: new Set<string>(),
       proxyPath: null,
+      subtitles: {},
+      storyboards: {},
     };
   }
   const mediaItems = [projectMediaItem(project), ...externalSubtitleItems(project)];
@@ -442,9 +389,9 @@ function initialProjectState(project: Project | null) {
       mediaItems,
       project.asset.id,
     ),
-    subtitleSelections: {},
-    selectedCueIds: new Set<string>(),
     proxyPath: project.proxy_path,
+    subtitles: {},
+    storyboards: {},
   };
 }
 
@@ -530,12 +477,6 @@ function openedProjectState(workspace: ProjectWorkspace) {
   const activeTrackId = visibleTrackIds.has(workspace.editor.active_track_id)
     ? workspace.editor.active_track_id
     : preferredTrackId(project, projects, mediaItems, activeVideoId);
-  const subtitleSelections = restoreSubtitleSelections(
-    workspace.editor.subtitle_selections,
-    projects,
-    mediaItems,
-  );
-
   return {
     project,
     projects,
@@ -546,21 +487,20 @@ function openedProjectState(workspace: ProjectWorkspace) {
       workspace.editor.detached_video_ids.filter((videoId) => videoIds.has(videoId)),
     ),
     activeTrackId,
-    subtitleSelections,
-    selectedCueIds: selectedCueIdsForContext(subtitleSelections, activeVideoId, activeTrackId),
     proxyPath: project?.proxy_path ?? null,
     useProxy:
       Boolean(project?.proxy_path) &&
       (workspace.editor.preview.use_proxy ||
         Boolean(activeVideo && isMediaItemOffline(activeVideo))),
     mediaBinReadOnly: false,
+    subtitles: workspace.subtitles ?? {},
+    storyboards: workspace.storyboards ?? {},
   };
 }
 
 export function defaultPreferences(): Preferences {
   return {
     cache_dir: "",
-    default_export_dir: "",
     ffmpeg_path: "ffmpeg",
     ffprobe_path: "ffprobe",
     auto_save_interval_minutes: 5,
@@ -575,9 +515,10 @@ function projectFileStateFromStore(state: ProjectSystemState): ProjectFileState 
     mediaItems: state.mediaItems,
     activeVideoId: state.activeVideoId,
     activeTrackId: state.activeTrackId,
-    subtitleSelections: state.subtitleSelections,
     detachedVideoIds: state.detachedVideoIds,
     useProxy: state.useProxy,
+    subtitles: state.subtitles,
+    storyboards: state.storyboards,
   };
 }
 
@@ -594,15 +535,9 @@ function reconciledProjectFileState(
 
   return {
     ...projectFileState,
-    selectedCueIds: selectedCueIdsForContext(
-      projectFileState.subtitleSelections,
-      projectFileState.activeVideoId,
-      projectFileState.activeTrackId,
-    ),
     project,
     proxyPath: project?.proxy_path ?? null,
     proxyDialogOpen: false,
-    exportResult: null,
   };
 }
 
@@ -651,17 +586,25 @@ function removedMediaItemsState(
   const activeTrackId = activeTrackVisible
     ? state.activeTrackId
     : preferredTrackId(project, projects, mediaItems, nextVideoId);
-  const subtitleSelections = { ...state.subtitleSelections };
-  for (const videoId of removedVideoIds) {
-    delete subtitleSelections[videoId];
-  }
+  const subtitles = Object.fromEntries(
+    Object.entries(state.subtitles).filter(([trackContext]) =>
+      Array.from(removedVideoIds).every((videoId) => !trackContext.startsWith(`${videoId}:`)),
+    ),
+  );
+  const storyboards = Object.fromEntries(
+    Object.entries(state.storyboards).filter(([videoContext]) =>
+      Array.from(removedVideoIds).every((videoId) => !videoContext.startsWith(`${videoId}:`)),
+    ),
+  );
   return {
     projects,
     mediaItems,
     detachedVideoIds,
     project,
-    subtitleSelections,
-    ...subtitleContextState(subtitleSelections, nextVideoId, activeTrackId),
+    subtitles,
+    storyboards,
+    activeVideoId: nextVideoId,
+    activeTrackId,
     proxyPath: project?.proxy_path ?? null,
     useProxy: Boolean(nextVideo && isMediaItemOffline(nextVideo) && project?.proxy_path),
     projectDirty: true,
@@ -803,7 +746,7 @@ function movedMediaBinEntriesState(
     mediaItems,
     mediaFolders,
     projectDirty: true,
-    ...subtitleContextState(state.subtitleSelections, state.activeVideoId, activeTrackId),
+    activeTrackId,
   };
 }
 
@@ -812,6 +755,7 @@ function commitProjectEvent(
   label: string,
   category: ProjectHistoryCategory,
   recipe: (state: ProjectSystemState) => Partial<ProjectSystemState> | ProjectSystemState,
+  historyGroupId?: string,
 ) {
   set((state) => {
     const update = recipe(state);
@@ -824,6 +768,7 @@ function commitProjectEvent(
       category,
       projectFileStateFromStore(state),
       projectFileStateFromStore(candidate),
+      historyGroupId,
     );
     if (!entry) {
       return candidate;
@@ -841,13 +786,11 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
   ...initialProjectState(null),
   projectFilePath: null,
   projectDirty: false,
-  selectedCueIds: new Set<string>(),
   useProxy: false,
   proxyDialogOpen: false,
   preferences: defaultPreferences(),
   message: "就绪",
   warnings: [],
-  exportResult: null,
   mediaBinReadOnly: false,
   projectHistory: createProjectHistory(),
   commands: {
@@ -855,7 +798,6 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
       set({
         ...initialProjectState(project),
         projectDirty: true,
-        selectedCueIds: new Set<string>(),
         useProxy: false,
         mediaBinReadOnly: false,
         projectHistory: createProjectHistory(true, false),
@@ -865,11 +807,9 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
         ...initialProjectState(null),
         projectFilePath: null,
         projectDirty: false,
-        selectedCueIds: new Set<string>(),
         useProxy: false,
         proxyDialogOpen: false,
         warnings: [],
-        exportResult: null,
         mediaBinReadOnly: false,
         projectHistory: createProjectHistory(true),
       }),
@@ -880,7 +820,6 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
         projectDirty: false,
         proxyDialogOpen: false,
         warnings: [],
-        exportResult: null,
         projectHistory: createProjectHistory(true),
       }),
     projectSaved: (projectFilePath) =>
@@ -894,11 +833,9 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
         ...initialProjectState(null),
         projectFilePath: null,
         projectDirty: false,
-        selectedCueIds: new Set<string>(),
         useProxy: false,
         proxyDialogOpen: false,
         warnings: [],
-        exportResult: null,
         mediaBinReadOnly: false,
         projectHistory: createProjectHistory(),
       }),
@@ -936,7 +873,8 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
             projects,
             mediaItems: nextItems,
             project: firstVideo,
-            ...subtitleContextState(state.subtitleSelections, activeVideoId, activeTrackId),
+            activeVideoId,
+            activeTrackId,
             proxyPath: firstVideo.proxy_path,
             useProxy: false,
             projectDirty: true,
@@ -1161,11 +1099,11 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
           return {
             mediaItems,
             project,
-            ...subtitleContextState(state.subtitleSelections, activeVideoId, activeTrackId),
+            activeVideoId,
+            activeTrackId,
             proxyPath: activeVideoChanged ? (project?.proxy_path ?? null) : state.proxyPath,
             useProxy: activeVideoChanged ? false : state.useProxy,
             proxyDialogOpen: activeVideoChanged ? false : state.proxyDialogOpen,
-            exportResult: activeVideoChanged ? null : state.exportResult,
             projectDirty: true,
           };
         },
@@ -1213,11 +1151,11 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
           return {
             mediaItems,
             project,
-            ...subtitleContextState(state.subtitleSelections, activeVideoId, activeTrackId),
+            activeVideoId,
+            activeTrackId,
             proxyPath: activeVideoChanged ? (project?.proxy_path ?? null) : state.proxyPath,
             useProxy: activeVideoChanged ? false : state.useProxy,
             proxyDialogOpen: activeVideoChanged ? false : state.proxyDialogOpen,
-            exportResult: activeVideoChanged ? null : state.exportResult,
             projectDirty: true,
           };
         },
@@ -1322,14 +1260,13 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
           projects,
           mediaItems,
           project: activeProject,
-          ...subtitleContextState(state.subtitleSelections, state.activeVideoId, activeTrackId),
+          activeTrackId,
           proxyPath: activeProject === project ? project.proxy_path : state.proxyPath,
           useProxy:
             activeProject === project
               ? state.useProxy && Boolean(project.proxy_path)
               : state.useProxy,
           proxyDialogOpen: activeProject === project ? false : state.proxyDialogOpen,
-          exportResult: activeProject === project ? null : state.exportResult,
           projectDirty: true,
         };
       }),
@@ -1378,7 +1315,7 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
         return {
           mediaItems,
           projectDirty: true,
-          ...subtitleContextState(state.subtitleSelections, state.activeVideoId, activeTrackId),
+          activeTrackId,
         };
       }),
     mediaItemsUnbound: (itemIds) =>
@@ -1401,7 +1338,7 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
         return {
           mediaItems,
           projectDirty: true,
-          ...subtitleContextState(state.subtitleSelections, state.activeVideoId, activeTrackId),
+          activeTrackId,
         };
       }),
     mediaItemsRemoved: (itemIds) =>
@@ -1498,15 +1435,15 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
         const activeTrackId = preferredTrackId(project, state.projects, state.mediaItems, videoId);
         return {
           project,
-          ...subtitleContextState(state.subtitleSelections, videoId, activeTrackId),
+          activeVideoId: videoId,
+          activeTrackId,
           proxyPath: project.proxy_path,
           useProxy: isMediaItemOffline(video) && Boolean(project.proxy_path),
           proxyDialogOpen: false,
-          exportResult: null,
         };
       }),
     subtitleTracksAdded: (tracks, cues) =>
-      commitProjectEvent(set, `添加 ${tracks.length} 条字幕轨`, "subtitle", (state) => {
+      commitProjectEvent(set, `添加 ${tracks.length} 条字幕`, "subtitle", (state) => {
         if (!state.project) {
           return state;
         }
@@ -1546,11 +1483,12 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
           projects: { ...state.projects, [nextProject.asset.id]: nextProject },
           mediaItems: [...state.mediaItems, ...additions],
           projectDirty: true,
-          ...subtitleContextState(state.subtitleSelections, videoId, activeTrackId),
+          activeVideoId: videoId,
+          activeTrackId,
         };
       }),
     subtitleTracksAddedToVideo: (videoId, tracks, cues, itemIds) =>
-      commitProjectEvent(set, `绑定 ${tracks.length} 条字幕轨`, "bind", (state) => {
+      commitProjectEvent(set, `绑定 ${tracks.length} 条字幕`, "bind", (state) => {
         const video = state.mediaItems.find((item) => item.id === videoId);
         const project = video
           ? mediaItemProject(video, state.projects, state.mediaItems)
@@ -1597,50 +1535,15 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
           mediaItems,
           project: nextProject,
           projectDirty: true,
-          ...subtitleContextState(state.subtitleSelections, videoId, activeTrackId),
+          activeVideoId: videoId,
+          activeTrackId,
         };
       }),
     activeTrackChanged: (activeTrackId) =>
-      commitProjectEvent(set, "切换字幕轨", "subtitle", (state) => ({
-        ...subtitleContextState(state.subtitleSelections, state.activeVideoId, activeTrackId),
+      commitProjectEvent(set, "切换字幕", "subtitle", (state) => ({
+        activeTrackId,
         projectDirty: true,
       })),
-    cueSelectionToggled: (cueId) =>
-      commitProjectEvent(set, "更改台词选择", "selection", (state) => {
-        const selectedCueIds = new Set(state.selectedCueIds);
-        if (selectedCueIds.has(cueId)) {
-          selectedCueIds.delete(cueId);
-        } else {
-          selectedCueIds.add(cueId);
-        }
-        return {
-          ...replaceCurrentSubtitleSelection(state, selectedCueIds),
-          projectDirty: true,
-        };
-      }),
-    cueSelectionCleared: () =>
-      commitProjectEvent(set, "清除台词选择", "delete", (state) =>
-        state.selectedCueIds.size === 0
-          ? state
-          : {
-              ...replaceCurrentSubtitleSelection(state, new Set<string>()),
-              projectDirty: true,
-            },
-      ),
-    cueSelectionReplaced: (cueIds) =>
-      commitProjectEvent(set, `选择 ${cueIds.length} 条台词`, "selection", (state) => {
-        const selectedCueIds = new Set(cueIds);
-        if (
-          selectedCueIds.size === state.selectedCueIds.size &&
-          [...selectedCueIds].every((cueId) => state.selectedCueIds.has(cueId))
-        ) {
-          return state;
-        }
-        return {
-          ...replaceCurrentSubtitleSelection(state, selectedCueIds),
-          projectDirty: true,
-        };
-      }),
     proxyDialogOpened: () => set({ proxyDialogOpen: true }),
     proxyDialogClosed: () => set({ proxyDialogOpen: false }),
     sourcePreviewCleared: () =>
@@ -1652,11 +1555,9 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
           project: null,
           activeVideoId: "",
           activeTrackId: "",
-          selectedCueIds: new Set<string>(),
           proxyPath: null,
           useProxy: false,
           proxyDialogOpen: false,
-          exportResult: null,
         };
       }),
     sourcePreviewSelected: () =>
@@ -1687,8 +1588,63 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
     warningsReplaced: (warnings) => set({ warnings }),
     warningsAppended: (warnings) =>
       set((state) => ({ warnings: [...state.warnings, ...warnings] })),
-    exportResultChanged: (exportResult) => set({ exportResult }),
     mediaBinReadOnlyChanged: (mediaBinReadOnly) => set({ mediaBinReadOnly }),
+    subtitleUpdated: (trackContext, historyLabel, recipe, historyGroupId) =>
+      commitProjectEvent(
+        set,
+        historyLabel,
+        "subtitle",
+        (state) => {
+          const videoExists = state.mediaItems.some(
+            (item) => item.kind === "video" && trackContext.startsWith(`${item.id}:`),
+          );
+          if (!trackContext || !videoExists) {
+            return state;
+          }
+          const currentSubtitle = state.subtitles[trackContext] ?? { cueAnnotations: {} };
+          const subtitle = recipe(currentSubtitle);
+          if (subtitle === currentSubtitle) {
+            return state;
+          }
+          return {
+            subtitles: {
+              ...state.subtitles,
+              [trackContext]: subtitle,
+            },
+          };
+        },
+        historyGroupId,
+      ),
+    storyboardUpdated: (videoContext, historyLabel, recipe, historyGroupId) =>
+      commitProjectEvent(
+        set,
+        historyLabel,
+        "storyboard",
+        (state) => {
+          const videoExists = state.mediaItems.some(
+            (item) => item.kind === "video" && videoContext.startsWith(`${item.id}:`),
+          );
+          if (!videoContext || !videoExists) {
+            return state;
+          }
+          const currentStoryboard = state.storyboards[videoContext] ?? {
+            shots: [],
+            shotStacks: [],
+            shotAnnotations: {},
+          };
+          const storyboard = recipe(currentStoryboard);
+          if (storyboard === currentStoryboard) {
+            return state;
+          }
+          return {
+            storyboards: {
+              ...state.storyboards,
+              [videoContext]: storyboard,
+            },
+          };
+        },
+        historyGroupId,
+      ),
     projectHistoryJumped: (targetCursor) => {
       let changed = false;
       set((state) => {
@@ -1776,11 +1732,12 @@ export function getProjectWorkspaceSnapshot(): ProjectWorkspace {
     editor: {
       active_video_id: state.activeVideoId,
       active_track_id: state.activeTrackId,
-      subtitle_selections: serializeSubtitleSelections(state.subtitleSelections),
       detached_video_ids: [...state.detachedVideoIds],
       preview: {
         use_proxy: state.useProxy,
       },
     },
+    subtitles: state.subtitles,
+    storyboards: state.storyboards,
   };
 }

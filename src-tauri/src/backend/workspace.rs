@@ -478,7 +478,7 @@ mod tests {
 
     fn sample_config() -> WorkspaceConfig {
         WorkspaceConfig {
-            focused_panel_id: Some("export".to_string()),
+            focused_panel_id: Some("history".to_string()),
             instances: vec![
                 WorkspaceInstance {
                     id: "source".to_string(),
@@ -486,9 +486,9 @@ mod tests {
                     params: serde_json::json!({}),
                 },
                 WorkspaceInstance {
-                    id: "export".to_string(),
-                    panel_type: "export".to_string(),
-                    params: serde_json::json!({ "preset": "mp4" }),
+                    id: "history".to_string(),
+                    panel_type: "history".to_string(),
+                    params: serde_json::json!({}),
                 },
             ],
             layout: DockLayoutState {
@@ -514,8 +514,8 @@ mod tests {
                     (
                         "right".to_string(),
                         DockAreaState {
-                            tabs: vec!["export".to_string()],
-                            active_panel_id: Some("export".to_string()),
+                            tabs: vec!["history".to_string()],
+                            active_panel_id: Some("history".to_string()),
                         },
                     ),
                 ]),

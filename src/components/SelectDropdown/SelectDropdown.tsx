@@ -21,6 +21,7 @@ interface SelectDropdownProps<T extends string> {
   menuClassName?: string;
   placement?: "auto" | "bottom" | "top";
   selectedLabel?: string;
+  title?: string;
   value: T;
   onChange: (value: T) => void;
 }
@@ -49,6 +50,7 @@ export function SelectDropdown<T extends string>({
   menuClassName,
   placement = "auto",
   selectedLabel,
+  title,
   value,
   onChange,
 }: SelectDropdownProps<T>) {
@@ -165,6 +167,7 @@ export function SelectDropdown<T extends string>({
         aria-label={ariaLabel}
         aria-expanded={open}
         disabled={disabled}
+        title={title}
         onClick={() => setOpen((current) => !current)}
       >
         <span>{resolvedSelectedLabel}</span>

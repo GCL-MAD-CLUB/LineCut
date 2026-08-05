@@ -1,7 +1,7 @@
 [package]
 name = "linecut"
 version = "0.2.0"
-description = "Subtitle indexed clip export tool"
+description = "Subtitle indexing and media organization tool"
 authors = ["Kotodama"]
 license = "Apache-2.0"
 repository = ""
@@ -24,6 +24,12 @@ getrandom = "=0.2.16"
 hkdf = "=0.12.4"
 quick-xml = { version = "0.37", features = ["serialize"] }
 regex = "1"
+ort = { version = "=2.0.0-rc.9", default-features = false, features = [
+  "directml",
+  "load-dynamic",
+  "ndarray",
+] }
+ort-sys = { version = "=2.0.0-rc.9", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

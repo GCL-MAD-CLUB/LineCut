@@ -279,14 +279,15 @@ export function TaskProgress({ children }: TaskProgressProps) {
 
   if (tasks.length === 1) {
     const task = tasks[0];
-    const percent = Math.round(taskPercent(task));
+    const fillPercent = taskPercent(task);
+    const percent = Math.round(fillPercent);
     return (
       <>
         <div className="topbar-progress" title={`${task.label} ${percent}%`}>
           <span>{task.label}</span>
           <div className="topbar-progress-row">
             <div className="topbar-progress-track">
-              <div className="topbar-progress-fill" style={{ width: `${percent}%` }} />
+              <div className="topbar-progress-fill" style={{ width: `${fillPercent}%` }} />
             </div>
             {task.on_cancel && (
               <button
@@ -314,14 +315,15 @@ export function TaskProgress({ children }: TaskProgressProps) {
           style={{ gridTemplateRows: `repeat(${tasks.length}, minmax(0, 1fr))` }}
         >
           {tasks.map((task) => {
-            const percent = Math.round(taskPercent(task));
+            const fillPercent = taskPercent(task);
+            const percent = Math.round(fillPercent);
             return (
               <div
                 key={task.id}
                 className="topbar-progress-track"
                 title={`${task.label} ${percent}%`}
               >
-                <div className="topbar-progress-fill" style={{ width: `${percent}%` }} />
+                <div className="topbar-progress-fill" style={{ width: `${fillPercent}%` }} />
               </div>
             );
           })}

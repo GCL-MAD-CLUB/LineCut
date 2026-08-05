@@ -2,7 +2,12 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 import { Loader2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { appPanelRegistry, initialAppPanelState } from "./appPanelRegistry";
+import {
+  appPanelRegistry,
+  initialAppPanelState,
+  withoutUnavailableAppPanels,
+  withAppPanelDefaults,
+} from "./appPanelRegistry";
 import { publishEvent, useBroadcastEvent } from "./runtime/events/react";
 import { useProjections } from "./runtime/state/StateHub";
 import {
@@ -20,7 +25,6 @@ import {
   type OpenPanelRequest,
   type PanelManagerInitialState,
 } from "./components/DockLayout";
-import { exportPanelType } from "./components/ExportPanel";
 import { HistoryPanelServicesProvider, historyPanelType } from "./components/HistoryPanel";
 import { ImportWorkspace } from "./components/ImportWorkspace";
 import { mediaBinPanelType, type MediaBinPanelParams } from "./components/MediaBin";
@@ -28,6 +32,7 @@ import { PreferencesDialog } from "./components/PreferencesDialog";
 import { ProxyCreationDialog } from "./components/ProxyCreationDialog";
 import { SecondaryTopbar } from "./components/SecondaryTopbar";
 import { sourcePanelType } from "./components/SourceMonitor";
+import { storyboardPanelType } from "./components/StoryboardPanel";
 import { subtitlePanelType } from "./components/SubtitlePanel";
 import { cancelAllTaskProgress, useTaskProgressStatus } from "./systems/TaskSystem";
 import { runMediaImportTask } from "./mediaImportTask";
@@ -38,7 +43,11 @@ import {
   runOperation,
   type OperationKey,
 } from "./errors";
-import { getProjectWorkspaceSnapshot, useProjectPort } from "./systems/ProjectSystem";
+import {
+  getProjectWorkspaceSnapshot,
+  mediaDisplayName,
+  useProjectPort,
+} from "./systems/ProjectSystem";
 import { isTauriRuntime } from "./tauriRuntime";
 import type { MediaBinFolder, MediaBinItem, OpenProjectResult, Preferences } from "./types";
 
@@ -92,6 +101,7 @@ const recentProjectStorageKey = "linecut:recent-project-paths";
 const recentPathsLimit = 10;
 const warningDisplayDurationMs = 5000;
 const workspaceConfigSaveDelayMs = 120;
+const storyboardPanelDefaultMigrationKey = "linecut:workspace:storyboard-panel-default:v1";
 
 function fileName(path: string) {
   return path.split(/[\\/]/).pop() ?? path;
@@ -157,6 +167,38 @@ function readRecentPaths(storageKey: string) {
   }
 }
 
+function markStoryboardPanelDefaultMigrationApplied() {
+  try {
+    window.localStorage.setItem(storyboardPanelDefaultMigrationKey, "1");
+  } catch (error) {
+    captureOperationError("workspace.save", error);
+  }
+}
+
+function storyboardPanelDefaultMigrationApplied() {
+  try {
+    return window.localStorage.getItem(storyboardPanelDefaultMigrationKey) === "1";
+  } catch (error) {
+    captureOperationError("workspace.load", error);
+    return false;
+  }
+}
+
+function restoreAppPanelDefaults(state: PanelManagerInitialState): PanelManagerInitialState {
+  if (state.instances.some((instance) => instance.id === "storyboard")) {
+    markStoryboardPanelDefaultMigrationApplied();
+    return state;
+  }
+  if (storyboardPanelDefaultMigrationApplied()) {
+    return state;
+  }
+  const restored = withAppPanelDefaults(state);
+  if (restored !== state) {
+    markStoryboardPanelDefaultMigrationApplied();
+  }
+  return restored;
+}
+
 function standaloneSubtitleItem(path: string, index: number): MediaBinItem {
   const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${index}`;
   return {
@@ -207,13 +249,13 @@ function AppContent() {
 
   const {
     project,
+    activeVideoId,
     mediaFolders,
     mediaItems,
     projectFilePath,
     projectDirty,
     message,
     warnings,
-    exportResult,
     projectHistory,
     projectOpened,
     projectCreated,
@@ -226,7 +268,6 @@ function AppContent() {
     messagePublished,
     warningsReplaced,
     warningsAppended,
-    exportResultChanged,
     projectHistoryJumped,
     projectHistoryFutureDiscarded,
     preferences,
@@ -234,6 +275,7 @@ function AppContent() {
   } = useProjectPort(
     [
       "project",
+      "activeVideoId",
       "mediaFolders",
       "mediaItems",
       "projectFilePath",
@@ -241,7 +283,6 @@ function AppContent() {
       "preferences",
       "message",
       "warnings",
-      "exportResult",
       "mediaBinReadOnly",
       "projectHistory",
     ],
@@ -257,7 +298,6 @@ function AppContent() {
       "messagePublished",
       "warningsReplaced",
       "warningsAppended",
-      "exportResultChanged",
       "projectHistoryJumped",
       "projectHistoryFutureDiscarded",
     ],
@@ -269,10 +309,10 @@ function AppContent() {
   const activeEditCapability = editCapabilities.find(
     (projection) => projection.value.active,
   )?.value;
+  const activeMediaDisplayName = mediaDisplayName(project, mediaItems, activeVideoId);
   const autoSaveProjectName = projectFilePath
     ? fileName(projectFilePath).replace(/\.lcp$/i, "")
-    : (project?.asset.file_name ?? mediaItems[0]?.file_name)?.replace(/\.[^.]+$/, "") ||
-      "未命名项目";
+    : (activeMediaDisplayName || mediaItems[0]?.file_name)?.replace(/\.[^.]+$/, "") || "未命名项目";
   const autoSaveProjectNameRef = useRef(autoSaveProjectName);
   autoSaveProjectNameRef.current = autoSaveProjectName;
   const { tasks: runningTasks } = useTaskProgressStatus();
@@ -599,8 +639,7 @@ function AppContent() {
       return projectFilePath;
     }
     const mediaName =
-      (project?.asset.file_name ?? mediaItems[0]?.file_name)?.replace(/\.[^.]+$/, "") ||
-      "未命名项目";
+      (activeMediaDisplayName || mediaItems[0]?.file_name)?.replace(/\.[^.]+$/, "") || "未命名项目";
     return `${mediaName}.lcp`;
   }
 
@@ -694,7 +733,6 @@ function AppContent() {
 
     const subtitlePaths = paths.filter((path) => subtitleExtensions.has(fileExtension(path)));
     const probePaths = paths.filter((path) => !subtitleExtensions.has(fileExtension(path)));
-    exportResultChanged(null);
     if (subtitlePaths.length > 0) {
       const subtitleItems = subtitlePaths.map(standaloneSubtitleItem);
       mediaItemsAdded(subtitleItems);
@@ -1028,19 +1066,19 @@ function AppContent() {
         enabled: projectWindowItems.length > 0,
         items: projectWindowItems,
       },
-      export: {
-        id: "export",
-        label: "导出设置",
-        checked: Boolean(panelInstances.export),
-        enabled: true,
-        execute: () => showSingletonPanel("export", exportPanelType, {}, "right"),
-      },
       subtitles: {
         id: "subtitles",
-        label: "字幕轨",
+        label: "字幕",
         checked: Boolean(panelInstances.subtitles),
         enabled: true,
         execute: () => showSingletonPanel("subtitles", subtitlePanelType, {}, "middle"),
+      },
+      storyboard: {
+        id: "storyboard",
+        label: "分镜",
+        checked: Boolean(panelInstances.storyboard),
+        enabled: true,
+        execute: () => showSingletonPanel("storyboard", storyboardPanelType, {}, "middle"),
       },
       history: {
         id: "history",
@@ -1089,19 +1127,13 @@ function AppContent() {
             )}
           </span>
           {warnings.length > 0 && <span>{warnings.length} 条导入提示</span>}
-          {exportResult && <span>导出结果已生成</span>}
         </footer>
 
-        {(warnings.length > 0 || exportResult) && (
+        {warnings.length > 0 && (
           <aside className="event-drawer">
             {warnings.map((warning) => (
               <div key={`${warning.code}:${warning.message}`} className="event warning">
                 {warning.message}
-              </div>
-            ))}
-            {exportResult?.log.map((item) => (
-              <div key={`${item.code}:${item.message}`} className="event">
-                {item.message}
               </div>
             ))}
           </aside>
@@ -1196,11 +1228,13 @@ function RestoredPanelManager() {
       if (!mounted) {
         return;
       }
+      const availableState =
+        outcome.status === "success" && outcome.value
+          ? withoutUnavailableAppPanels(outcome.value)
+          : null;
       const restoredState =
-        outcome.status === "success" &&
-        outcome.value &&
-        outcome.value.instances.every((instance) => appPanelRegistry.get(instance.type))
-          ? outcome.value
+        availableState && availableState.instances.length > 0
+          ? restoreAppPanelDefaults(availableState)
           : initialAppPanelState;
       setInitialState(restoredState);
     });
