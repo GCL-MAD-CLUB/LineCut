@@ -556,6 +556,26 @@ enum ExportEncoderSpeed {
     Quality,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ExportAudioCodec {
+    Aac,
+    /// MPEG-1 Layer II (ffmpeg native `mp2` encoder).
+    Mp2,
+    /// MPEG-1 Layer III (`libmp3lame`).
+    Mp3,
+    Opus,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ExportAudioChannels {
+    Stereo,
+    Mono,
+    #[serde(rename = "5.1")]
+    FivePointOne,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ExportOptions {
@@ -571,12 +591,33 @@ struct ExportOptions {
     encoder_speed: ExportEncoderSpeed,
     #[serde(default)]
     include_audio: bool,
+    #[serde(default = "default_export_audio_codec")]
+    audio_codec: ExportAudioCodec,
+    /// None means "match the source sample rate".
+    #[serde(default)]
+    audio_sample_rate_hz: Option<i64>,
+    #[serde(default = "default_export_audio_channels")]
+    audio_channels: ExportAudioChannels,
     #[serde(default = "default_export_audio_bitrate_kbps")]
     audio_bitrate_kbps: u32,
+    /// Persisted with the project; the import itself runs on the frontend.
+    #[serde(default)]
+    import_into_project: bool,
+    /// Persisted with the project; the frontend swaps clip sources to proxies.
+    #[serde(default)]
+    use_proxy: bool,
     #[serde(default)]
     output_dir: String,
     #[serde(default)]
     output_stem: String,
+}
+
+const fn default_export_audio_codec() -> ExportAudioCodec {
+    ExportAudioCodec::Aac
+}
+
+const fn default_export_audio_channels() -> ExportAudioChannels {
+    ExportAudioChannels::Stereo
 }
 
 const fn default_export_audio_bitrate_kbps() -> u32 {

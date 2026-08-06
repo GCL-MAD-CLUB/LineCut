@@ -11,10 +11,10 @@ import { exportWorkspaceStore } from "./exportWorkspaceState";
 export type ExportTaskOutcome =
   { status: "success"; result: ExportResult } | { status: "cancelled" } | { status: "failed" };
 
-function backendClip(clip: ExportClip) {
+function backendClip(clip: ExportClip, useProxy: boolean) {
   return {
     id: clip.id,
-    sourcePath: clip.sourcePath,
+    sourcePath: useProxy && clip.proxyPath ? clip.proxyPath : clip.sourcePath,
     label: clip.label,
     startUs: clip.startUs,
     endUs: clip.endUs,
@@ -47,7 +47,7 @@ export async function runExportTask({
 
   try {
     const result = await invokeCommand<ExportResult>("export_clips", {
-      clips: clips.map(backendClip),
+      clips: clips.map((clip) => backendClip(clip, settings.useProxy)),
       options: settings,
       taskId,
     });

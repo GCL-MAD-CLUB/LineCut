@@ -1,3 +1,4 @@
+import { parseFrameRate } from "../../timeline";
 import type { MediaBinItem, Project, StoryboardState } from "../../types";
 import {
   isMediaItemEnabled,
@@ -6,7 +7,48 @@ import {
   subtitleTrackContext,
   subtitleTrackCues,
 } from "../../systems/ProjectSystem";
-import type { ExportClip, ExportSource } from "./exportTypes";
+import type { ExportClip, ExportSource, ExportSourceMedia } from "./exportTypes";
+
+function parseAspectRatio(value?: string | null) {
+  if (!value) {
+    return null;
+  }
+  const [width, height] = value.split(":").map(Number);
+  return width > 0 && height > 0 ? width / height : null;
+}
+
+function sourceMediaFromProject(project: Project): ExportSourceMedia {
+  const videoStream =
+    project.asset.video_stream_index !== null
+      ? project.streams.find((stream) => stream.index === project.asset.video_stream_index)
+      : null;
+  const audioStream =
+    project.asset.audio_stream_index !== null
+      ? project.streams.find((stream) => stream.index === project.asset.audio_stream_index)
+      : null;
+  const extension = project.asset.file_name.split(".").pop()?.toLocaleLowerCase() ?? "";
+  const audioSampleRateHz = audioStream?.sample_rate
+    ? Number.parseInt(audioStream.sample_rate, 10) || null
+    : null;
+  return {
+    fileName: project.asset.file_name,
+    container: extension ? extension.toUpperCase() : "未知",
+    videoCodec: videoStream?.codec_name ?? null,
+    audioCodec: audioStream?.codec_name ?? null,
+    audioChannels: audioStream?.channels ?? null,
+    width: videoStream?.width ?? null,
+    height: videoStream?.height ?? null,
+    frameRate:
+      parseFrameRate(videoStream?.avg_frame_rate) ??
+      parseFrameRate(videoStream?.r_frame_rate) ??
+      null,
+    pixelAspectRatio: parseAspectRatio(videoStream?.sample_aspect_ratio),
+    audioSampleRateHz,
+    audioChannelLayout: audioStream?.channel_layout ?? null,
+    fileSize: project.asset.file_size,
+    durationUs: project.asset.duration_us,
+  };
+}
 
 function clipFromProject(
   id: string,
@@ -28,6 +70,8 @@ function clipFromProject(
     durationUs,
     videoStreamIndex: project.asset.video_stream_index,
     thumbnail,
+    proxyPath: project.proxy_path ?? null,
+    sourceMedia: sourceMediaFromProject(project),
   };
 }
 
@@ -44,6 +88,19 @@ function activeVideoProject(
       !isMediaItemOffline(item),
   );
   return video ? mediaItemProject(video, projects, mediaItems) : undefined;
+}
+
+/** Matches the storyboard panel: the shot's annotation title, or a padded 分镜 N fallback. */
+function storyboardShotTitle(
+  shot: { sequence: number },
+  shotCount: number,
+  annotationTitle: string | null | undefined,
+) {
+  if (annotationTitle?.trim()) {
+    return annotationTitle.trim();
+  }
+  const digits = Math.max(1, String(Math.max(1, shotCount)).length);
+  return `分镜 ${String(shot.sequence).padStart(digits, "0")}`;
 }
 
 export interface StoryboardExportInput {
@@ -80,7 +137,7 @@ export function buildStoryboardExportSource({
       clipFromProject(
         `shot:${shot.id}`,
         project,
-        `分镜 ${shot.sequence}`,
+        storyboardShotTitle(shot, shots.length, storyboard?.shotAnnotations?.[shot.id]?.title),
         shot.start_us,
         shot.end_us,
         {
@@ -158,9 +215,8 @@ export function buildSubtitleExportSource({
 }
 
 function subtitleLabel(cue: { sequence: number; plain_text: string }) {
-  const text = cue.plain_text.trim().replace(/\s+/g, " ");
-  const excerpt = text.length > 20 ? `${text.slice(0, 20)}…` : text;
-  return excerpt ? `字幕 ${cue.sequence} ${excerpt}` : `字幕 ${cue.sequence}`;
+  // Show the subtitle text itself (multi-line cues keep their line breaks).
+  return cue.plain_text.trim();
 }
 
 export interface MediaBinExportInput {

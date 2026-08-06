@@ -128,7 +128,7 @@ interface StoryboardSort {
 }
 
 const defaultStoryboardSort: StoryboardSort = {
-  columnId: "title",
+  columnId: "mediaStart",
   direction: "ascending",
 };
 

@@ -4,6 +4,29 @@ export type ExportSourceKind = "storyboard" | "subtitle" | "media-bin";
 
 export type ExportClipThumbnailKind = "storyboard" | "subtitle" | "video";
 
+/** Technical details of the source file behind an export clip, for the preview/media-info panel. */
+export interface ExportSourceMedia {
+  fileName: string;
+  /** Container label derived from the file extension, e.g. "MP4". */
+  container: string;
+  videoCodec: string | null;
+  audioCodec: string | null;
+  /** Number of channels in the source audio stream (1=mono, 2=stereo, 6=5.1, ...). */
+  audioChannels: number | null;
+  width: number | null;
+  height: number | null;
+  frameRate: number | null;
+  /** Pixel aspect ratio of the video stream (1 means square pixels). */
+  pixelAspectRatio: number | null;
+  audioSampleRateHz: number | null;
+  /** ffprobe channel layout of the audio stream, e.g. "stereo". */
+  audioChannelLayout: string | null;
+  /** Source file size in bytes. */
+  fileSize: number;
+  /** Total duration of the source file, in microseconds. */
+  durationUs: number;
+}
+
 /** A single video segment to export, described by its source file and time range. */
 export interface ExportClip {
   id: string;
@@ -25,6 +48,10 @@ export interface ExportClip {
     /** Asset fingerprint so the thumbnail request can reuse the editor's cache. */
     fingerprint?: string;
   };
+  /** Proxy file for this clip's source, when one exists; used when 使用代理 is on. */
+  proxyPath: string | null;
+  /** Source file technical details, resolved from the project at build time. */
+  sourceMedia?: ExportSourceMedia;
 }
 
 /** The set of clips an editor area handed to the export page. */
@@ -40,6 +67,9 @@ export type ExportContainer = "mp4_h264" | "mp4_hevc" | "mov_prores" | "webm_vp9
 export type ExportResolution = "match_source" | "custom";
 export type ExportQuality = "low" | "medium" | "high" | "very_high";
 export type ExportEncoderSpeed = "fast" | "balanced" | "quality";
+export type ExportAudioCodec = "aac" | "mp2" | "mp3" | "opus";
+export type ExportAudioFormat = "aac" | "mpeg" | "opus";
+export type ExportAudioChannels = "stereo" | "mono" | "5.1";
 
 export interface ExportSettings {
   mode: ExportMode;
@@ -52,7 +82,15 @@ export interface ExportSettings {
   quality: ExportQuality;
   encoderSpeed: ExportEncoderSpeed;
   includeAudio: boolean;
+  audioCodec: ExportAudioCodec;
+  /** null means "match source". */
+  audioSampleRateHz: number | null;
+  audioChannels: ExportAudioChannels;
   audioBitrateKbps: number;
+  /** Import the exported file(s) into the media bin after a successful export. */
+  importIntoProject: boolean;
+  /** Export from proxy files instead of the original sources when available. */
+  useProxy: boolean;
   outputDir: string;
   outputStem: string;
 }
@@ -77,11 +115,6 @@ export const exportContainerOptions: Array<readonly [ExportContainer, string]> =
   ["webm_vp9", "WebM（VP9）"],
 ];
 
-export const exportModeOptions: Array<readonly [ExportMode, string]> = [
-  ["merge", "合并为一个视频"],
-  ["individual", "单独导出每个片段"],
-];
-
 export const exportResolutionOptions: Array<readonly [ExportResolution, string]> = [
   ["match_source", "匹配源"],
   ["custom", "自定义分辨率"],
@@ -99,3 +132,124 @@ export const exportEncoderSpeedOptions: Array<readonly [ExportEncoderSpeed, stri
   ["balanced", "均衡"],
   ["quality", "高质量"],
 ];
+
+/** Audio formats each container can actually hold (mp4/mov: AAC/MPEG, webm: Opus). */
+export function exportAudioFormatOptions(
+  container: ExportContainer,
+): Array<readonly [ExportAudioFormat, string]> {
+  if (container === "webm_vp9") {
+    return [["opus", "Opus"]];
+  }
+  return [
+    ["aac", "AAC"],
+    ["mpeg", "MPEG"],
+  ];
+}
+
+/** Maps a concrete audio codec back to the format family shown in the 音频格式 dropdown. */
+export function audioFormatOfCodec(codec: ExportAudioCodec): ExportAudioFormat {
+  switch (codec) {
+    case "aac":
+      return "aac";
+    case "opus":
+      return "opus";
+    default:
+      return "mpeg";
+  }
+}
+
+/** Default codec when a format family is picked (MPEG defaults to Layer III). */
+export function defaultAudioCodecForFormat(format: ExportAudioFormat): ExportAudioCodec {
+  switch (format) {
+    case "aac":
+      return "aac";
+    case "opus":
+      return "opus";
+    case "mpeg":
+      return "mp3";
+  }
+}
+
+/** MPEG audio layers the bundled ffmpeg can encode (no Layer I encoder exists). */
+export const exportAudioLayerOptions: Array<readonly [ExportAudioCodec, string]> = [
+  ["mp2", "MPEG-1, Layer II"],
+  ["mp3", "MPEG-1, Layer III"],
+];
+
+/** Sample rates (Hz) each format family supports; "source" keeps the source rate. */
+export function exportAudioSampleRateOptions(
+  format: ExportAudioFormat,
+): Array<readonly [string, string]> {
+  const rates =
+    format === "mpeg" ? [32000, 44100, 48000] : [16000, 22050, 24000, 32000, 44100, 48000];
+  return [
+    ["source", "匹配源"],
+    ...rates.map((rate): [string, string] => [String(rate), `${rate} Hz`]),
+  ];
+}
+
+/**
+ * Channel layouts the exporter can produce. Surround (5.1) is only offered when
+ * the source actually carries enough channels; up-mixing a stereo source to
+ * 5.1 would fabricate surround content, so those options are source-dependent.
+ */
+export function exportAudioChannelOptions(
+  sourceChannels: number | null,
+): Array<readonly [ExportAudioChannels, string]> {
+  const options: Array<readonly [ExportAudioChannels, string]> = [
+    ["stereo", "立体声"],
+    ["mono", "单声道"],
+  ];
+  if (sourceChannels !== null && sourceChannels >= 6) {
+    options.push(["5.1", "5.1 声道"]);
+  }
+  return options;
+}
+
+/** Human-readable label for an export channel layout. */
+export function exportAudioChannelLabel(channels: ExportAudioChannels): string {
+  switch (channels) {
+    case "stereo":
+      return "立体声";
+    case "mono":
+      return "单声道";
+    case "5.1":
+      return "5.1 声道";
+  }
+}
+
+/** Bitrate ladder values in [from, to] (kbps) stepping by `step`. */
+function steppedBitrates(from: number, to: number, step: number): number[] {
+  const values: number[] = [];
+  for (let value = from; value <= to; value += step) {
+    values.push(value);
+  }
+  return values;
+}
+
+/** AAC/Opus ladder: fine steps at low bitrates, coarser at high ones. */
+const aacBitrateSegments = [
+  [16, 32, 4],
+  [32, 64, 8],
+  [64, 128, 16],
+  [128, 256, 32],
+  [256, 512, 64],
+] as const;
+
+/**
+ * Audio bitrate (kbps) options for a format family. AAC/Opus use a variable
+ * ladder (16→512), while MPEG offers a uniform 32-step range (128→448).
+ */
+export function exportAudioBitrateOptions(
+  format: ExportAudioFormat,
+): Array<readonly [string, string]> {
+  const values =
+    format === "mpeg"
+      ? steppedBitrates(128, 448, 32)
+      : [
+          ...new Set(
+            aacBitrateSegments.flatMap(([from, to, step]) => steppedBitrates(from, to, step)),
+          ),
+        ];
+  return values.map((value) => [String(value), String(value)]);
+}

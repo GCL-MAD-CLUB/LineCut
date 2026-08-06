@@ -416,8 +416,15 @@ pub(crate) fn clean_plain_text(raw: &str) -> String {
     text = ass_tag_re.replace_all(&text, "").into_owned();
     let html_tag_re = Regex::new(r"<[^>]+>").expect("valid html tag regex");
     text = html_tag_re.replace_all(&text, "").into_owned();
-    let whitespace_re = Regex::new(r"[ \t\r\n]+").expect("valid whitespace regex");
-    whitespace_re.replace_all(text.trim(), " ").into_owned()
+    text = text.replace("\r\n", "\n").replace('\r', "\n");
+    // Keep each line of a multi-line cue instead of flattening onto one line,
+    // normalizing inline whitespace and dropping blank lines.
+    let inline_space_re = Regex::new(r"[ \t]+").expect("valid whitespace regex");
+    text.lines()
+        .map(|line| inline_space_re.replace_all(line.trim(), " ").into_owned())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub(crate) fn parse_subtitle_time(value: &str) -> i64 {

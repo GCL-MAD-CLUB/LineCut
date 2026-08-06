@@ -30,6 +30,8 @@ export interface ExportWorkspaceState {
   settings: ExportSettings;
   results: ExportResult | null;
   status: ExportWorkspaceStatus;
+  /** The clip currently previewed in the export source player. */
+  previewClipId: string | null;
   setSource: (source: ExportSource | null) => void;
   toggleClip: (clipId: string) => void;
   setAllSelected: (selected: boolean) => void;
@@ -37,11 +39,12 @@ export interface ExportWorkspaceState {
   setResults: (results: ExportResult | null) => void;
   setStatus: (status: ExportWorkspaceStatus) => void;
   resetResults: () => void;
+  setPreviewClip: (clipId: string | null) => void;
 }
 
 export function defaultExportSettings(): ExportSettings {
   return {
-    mode: "merge",
+    mode: "individual",
     container: "mp4_h264",
     resolution: "match_source",
     customWidth: 1920,
@@ -50,7 +53,12 @@ export function defaultExportSettings(): ExportSettings {
     quality: "high",
     encoderSpeed: "balanced",
     includeAudio: true,
+    audioCodec: "aac",
+    audioSampleRateHz: null,
+    audioChannels: "stereo",
     audioBitrateKbps: 192,
+    importIntoProject: false,
+    useProxy: false,
     outputDir: "",
     outputStem: "",
   };
@@ -62,10 +70,12 @@ export const exportWorkspaceStore = createStore<ExportWorkspaceState>()((set) =>
   settings: defaultExportSettings(),
   results: null,
   status: "idle",
+  previewClipId: null,
   setSource: (source) =>
     set((state) => ({
       source,
       selectedClipIds: source ? new Set(source.clips.map((clip) => clip.id)) : new Set<string>(),
+      previewClipId: source?.clips[0]?.id ?? null,
       // The output stem is derived by the export workspace from the project/source,
       // so it is left untouched here.
       settings: state.settings,
@@ -93,6 +103,7 @@ export const exportWorkspaceStore = createStore<ExportWorkspaceState>()((set) =>
   setResults: (results) => set({ results }),
   setStatus: (status) => set({ status }),
   resetResults: () => set({ results: null, status: "idle" }),
+  setPreviewClip: (previewClipId) => set({ previewClipId }),
 }));
 
 export function useExportWorkspaceState<Selection>(

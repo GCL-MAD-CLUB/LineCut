@@ -25,6 +25,7 @@ struct ExportTargets {
     fps: f64,
     pix_fmt: &'static str,
     audio_sample_rate: i64,
+    audio_channel_layout: &'static str,
 }
 
 /// Normalizes an export clip time range against the probed source duration.
@@ -63,6 +64,27 @@ fn validate_export_options(options: &ExportOptions) -> AppResult<()> {
             return Err(app_error(
                 ErrorCode::ExportOptionsInvalid,
                 "Export frame rate must be between 1 and 120",
+            ));
+        }
+    }
+    let codec_matches_container = match options.container {
+        ExportContainer::WebmVp9 => matches!(options.audio_codec, ExportAudioCodec::Opus),
+        _ => matches!(
+            options.audio_codec,
+            ExportAudioCodec::Aac | ExportAudioCodec::Mp2 | ExportAudioCodec::Mp3
+        ),
+    };
+    if !codec_matches_container {
+        return Err(app_error(
+            ErrorCode::ExportOptionsInvalid,
+            "Audio codec is not supported by the selected container",
+        ));
+    }
+    if let Some(rate) = options.audio_sample_rate_hz {
+        if !(8000..=192000).contains(&rate) {
+            return Err(app_error(
+                ErrorCode::ExportOptionsInvalid,
+                "Audio sample rate must be between 8000 and 192000 Hz",
             ));
         }
     }
@@ -164,17 +186,32 @@ fn plan_merge_targets(clips: &[ProbedClip], options: &ExportOptions) -> AppResul
         ExportContainer::MovProres => "yuv422p10le",
         _ => "yuv420p",
     };
-    let audio_sample_rate = clips
-        .first()
-        .map(|clip| clip.audio_sample_rate)
-        .unwrap_or(EXPORT_AUDIO_SAMPLE_RATE_DEFAULT);
+    let audio_sample_rate = options
+        .audio_sample_rate_hz
+        .filter(|rate| *rate > 0)
+        .unwrap_or_else(|| {
+            clips
+                .first()
+                .map(|clip| clip.audio_sample_rate)
+                .unwrap_or(EXPORT_AUDIO_SAMPLE_RATE_DEFAULT)
+        });
+    let audio_channel_layout = audio_channel_layout(options.audio_channels);
     Ok(ExportTargets {
         width,
         height,
         fps,
         pix_fmt,
         audio_sample_rate,
+        audio_channel_layout,
     })
+}
+
+fn audio_channel_layout(channels: ExportAudioChannels) -> &'static str {
+    match channels {
+        ExportAudioChannels::Stereo => "stereo",
+        ExportAudioChannels::Mono => "mono",
+        ExportAudioChannels::FivePointOne => "5.1",
+    }
 }
 
 /// Builds the `filter_complex` graph for a merge export.
@@ -204,8 +241,8 @@ fn build_merge_filter_complex(
         ));
         if all_have_audio {
             parts.push(format!(
-                "[{index}:a:0]aresample={}:async=1:first_pts=0,aformat=sample_fmts=fltp:channel_layouts=stereo[{index}a]",
-                targets.audio_sample_rate
+                "[{index}:a:0]aresample={}:async=1:first_pts=0,aformat=sample_fmts=fltp:channel_layouts={}[{index}a]",
+                targets.audio_sample_rate, targets.audio_channel_layout
             ));
         }
     }
@@ -335,17 +372,29 @@ fn append_audio_encode_args(args: &mut Vec<String>, options: &ExportOptions, ena
         args.push("-an".to_string());
         return;
     }
-    let bitrate = options.audio_bitrate_kbps.clamp(32, 512);
-    match options.container {
-        ExportContainer::WebmVp9 => {
+    let bitrate = options.audio_bitrate_kbps.clamp(16, 512);
+    match options.audio_codec {
+        ExportAudioCodec::Aac => {
+            push_args(args, &["-c:a", "aac", "-b:a"]);
+            args.push(format!("{bitrate}k"));
+        }
+        ExportAudioCodec::Mp2 => {
+            push_args(args, &["-c:a", "mp2", "-b:a"]);
+            args.push(format!("{bitrate}k"));
+        }
+        ExportAudioCodec::Mp3 => {
+            push_args(args, &["-c:a", "libmp3lame", "-b:a"]);
+            args.push(format!("{bitrate}k"));
+        }
+        ExportAudioCodec::Opus => {
             push_args(args, &["-c:a", "libopus", "-b:a"]);
             args.push(format!("{bitrate}k"));
         }
-        _ => {
-            push_args(args, &["-c:a", "aac", "-b:a"]);
-            args.push(format!("{bitrate}k"));
-            push_args(args, &["-ar", "48000"]);
-        }
+    }
+    // Without an explicit rate the stream keeps its (filter-normalized) source rate.
+    if let Some(rate) = options.audio_sample_rate_hz.filter(|rate| *rate > 0) {
+        push_args(args, &["-ar"]);
+        args.push(rate.to_string());
     }
 }
 
@@ -491,6 +540,17 @@ async fn run_export_individual(
         if audio_enabled {
             args.push("-map".to_string());
             args.push("0:a:0?".to_string());
+            // Normalize channels (and the sample rate when explicitly set) so the
+            // 声道/采样率 settings also apply to per-clip exports.
+            let channel_layout = audio_channel_layout(options.audio_channels);
+            let audio_filter = match options.audio_sample_rate_hz.filter(|rate| *rate > 0) {
+                Some(rate) => format!(
+                    "aresample={rate}:async=1:first_pts=0,aformat=channel_layouts={channel_layout}"
+                ),
+                None => format!("aformat=channel_layouts={channel_layout}"),
+            };
+            args.push("-af".to_string());
+            args.push(audio_filter);
         }
         append_video_encode_args(&mut args, options);
         append_audio_encode_args(&mut args, options, audio_enabled);
@@ -719,26 +779,36 @@ mod tests {
             quality: ExportQuality::High,
             encoder_speed: ExportEncoderSpeed::Balanced,
             include_audio: true,
+            audio_codec: ExportAudioCodec::Aac,
+            audio_sample_rate_hz: None,
+            audio_channels: ExportAudioChannels::Stereo,
             audio_bitrate_kbps: 192,
+            import_into_project: false,
+            use_proxy: false,
             output_dir: "/out".to_string(),
             output_stem: "result".to_string(),
+        }
+    }
+
+    fn test_targets() -> ExportTargets {
+        ExportTargets {
+            width: 1280,
+            height: 720,
+            fps: 30.0,
+            pix_fmt: "yuv420p",
+            audio_sample_rate: 48000,
+            audio_channel_layout: "stereo",
         }
     }
 
     #[test]
     fn merge_graph_concats_audio_when_all_clips_have_audio() {
         let clips = vec![test_clip(true, 1920, 1080), test_clip(true, 1280, 720)];
-        let targets = ExportTargets {
-            width: 1280,
-            height: 720,
-            fps: 30.0,
-            pix_fmt: "yuv420p",
-            audio_sample_rate: 48000,
-        };
-        let (graph, has_audio) = build_merge_filter_complex(&clips, &targets, true);
+        let (graph, has_audio) = build_merge_filter_complex(&clips, &test_targets(), true);
         assert!(has_audio);
         assert!(graph.ends_with("[0v][0a][1v][1a]concat=n=2:v=1:a=1[v][a]"));
         assert!(graph.contains("[0:a:0]aresample=48000:async=1:first_pts=0"));
+        assert!(graph.contains("channel_layouts=stereo"));
         assert!(graph.contains("setpts=PTS-STARTPTS"));
         assert!(graph.contains(
             "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2"
@@ -748,16 +818,57 @@ mod tests {
     }
 
     #[test]
-    fn merge_graph_drops_audio_when_a_clip_lacks_audio() {
-        let clips = vec![test_clip(true, 1920, 1080), test_clip(false, 1280, 720)];
+    fn merge_graph_uses_requested_sample_rate_and_channels() {
+        let clips = vec![test_clip(true, 1920, 1080)];
         let targets = ExportTargets {
-            width: 1280,
-            height: 720,
-            fps: 30.0,
-            pix_fmt: "yuv420p",
-            audio_sample_rate: 48000,
+            audio_sample_rate: 44100,
+            audio_channel_layout: "mono",
+            ..test_targets()
         };
         let (graph, has_audio) = build_merge_filter_complex(&clips, &targets, true);
+        assert!(has_audio);
+        assert!(graph.contains("aresample=44100:async=1:first_pts=0"));
+        assert!(graph.contains("channel_layouts=mono"));
+    }
+
+    #[test]
+    fn audio_channel_layout_maps_surround() {
+        assert_eq!(audio_channel_layout(ExportAudioChannels::Stereo), "stereo");
+        assert_eq!(audio_channel_layout(ExportAudioChannels::Mono), "mono");
+        assert_eq!(
+            audio_channel_layout(ExportAudioChannels::FivePointOne),
+            "5.1"
+        );
+    }
+
+    #[test]
+    fn merge_graph_uses_five_point_one_layout() {
+        let clips = vec![test_clip(true, 1920, 1080)];
+        let targets = ExportTargets {
+            audio_channel_layout: "5.1",
+            ..test_targets()
+        };
+        let (graph, has_audio) = build_merge_filter_complex(&clips, &targets, true);
+        assert!(has_audio);
+        assert!(graph.contains("channel_layouts=5.1"));
+    }
+
+    #[test]
+    fn merge_targets_prefer_explicit_sample_rate() {
+        let clips = vec![test_clip(true, 1920, 1080)];
+        let mut options = options_with(ExportContainer::Mp4H264);
+        options.audio_sample_rate_hz = Some(44100);
+        let targets = plan_merge_targets(&clips, &options).expect("targets");
+        assert_eq!(targets.audio_sample_rate, 44100);
+        options.audio_sample_rate_hz = None;
+        let targets = plan_merge_targets(&clips, &options).expect("targets");
+        assert_eq!(targets.audio_sample_rate, 48000);
+    }
+
+    #[test]
+    fn merge_graph_drops_audio_when_a_clip_lacks_audio() {
+        let clips = vec![test_clip(true, 1920, 1080), test_clip(false, 1280, 720)];
+        let (graph, has_audio) = build_merge_filter_complex(&clips, &test_targets(), true);
         assert!(!has_audio);
         assert!(graph.ends_with("[0v][1v]concat=n=2:v=1:a=0[v]"));
         assert!(!graph.contains("[0:a:0]"));
@@ -766,14 +877,7 @@ mod tests {
     #[test]
     fn merge_graph_ignores_audio_when_disabled() {
         let clips = vec![test_clip(true, 1920, 1080)];
-        let targets = ExportTargets {
-            width: 1920,
-            height: 1080,
-            fps: 30.0,
-            pix_fmt: "yuv420p",
-            audio_sample_rate: 48000,
-        };
-        let (graph, has_audio) = build_merge_filter_complex(&clips, &targets, false);
+        let (graph, has_audio) = build_merge_filter_complex(&clips, &test_targets(), false);
         assert!(!has_audio);
         assert!(graph.contains("concat=n=1:v=1:a=0[v]"));
     }
@@ -845,18 +949,61 @@ mod tests {
     }
 
     #[test]
-    fn audio_encode_args_choose_container_codec() {
+    fn audio_encode_args_use_selected_codec() {
         let mut mp4 = Vec::new();
         append_audio_encode_args(&mut mp4, &options_with(ExportContainer::Mp4H264), true);
         assert!(mp4.iter().any(|arg| arg == "aac"));
         assert!(mp4.iter().any(|arg| arg == "192k"));
+        assert!(!mp4.iter().any(|arg| arg == "-ar"));
 
-        let mut webm = Vec::new();
-        append_audio_encode_args(&mut webm, &options_with(ExportContainer::WebmVp9), true);
-        assert!(webm.iter().any(|arg| arg == "libopus"));
+        let mut mp2_options = options_with(ExportContainer::Mp4H264);
+        mp2_options.audio_codec = ExportAudioCodec::Mp2;
+        let mut mp2 = Vec::new();
+        append_audio_encode_args(&mut mp2, &mp2_options, true);
+        assert!(mp2.iter().any(|arg| arg == "mp2"));
+
+        let mut mp3_options = options_with(ExportContainer::MovProres);
+        mp3_options.audio_codec = ExportAudioCodec::Mp3;
+        let mut mp3 = Vec::new();
+        append_audio_encode_args(&mut mp3, &mp3_options, true);
+        assert!(mp3.iter().any(|arg| arg == "libmp3lame"));
+
+        let mut opus_options = options_with(ExportContainer::WebmVp9);
+        opus_options.audio_codec = ExportAudioCodec::Opus;
+        let mut opus = Vec::new();
+        append_audio_encode_args(&mut opus, &opus_options, true);
+        assert!(opus.iter().any(|arg| arg == "libopus"));
+
+        let mut rated_options = options_with(ExportContainer::Mp4H264);
+        rated_options.audio_sample_rate_hz = Some(44100);
+        let mut rated = Vec::new();
+        append_audio_encode_args(&mut rated, &rated_options, true);
+        assert!(rated.iter().any(|arg| arg == "-ar"));
+        assert!(rated.iter().any(|arg| arg == "44100"));
 
         let mut none = Vec::new();
         append_audio_encode_args(&mut none, &options_with(ExportContainer::Mp4H264), false);
         assert!(none.iter().any(|arg| arg == "-an"));
+    }
+
+    #[test]
+    fn validation_rejects_codec_container_mismatch() {
+        let mut options = options_with(ExportContainer::WebmVp9);
+        options.audio_codec = ExportAudioCodec::Aac;
+        assert!(validate_export_options(&options).is_err());
+        options.audio_codec = ExportAudioCodec::Opus;
+        assert!(validate_export_options(&options).is_ok());
+
+        let mut options = options_with(ExportContainer::Mp4H264);
+        options.audio_codec = ExportAudioCodec::Opus;
+        assert!(validate_export_options(&options).is_err());
+        options.audio_codec = ExportAudioCodec::Mp3;
+        assert!(validate_export_options(&options).is_ok());
+
+        let mut options = options_with(ExportContainer::Mp4H264);
+        options.audio_sample_rate_hz = Some(4000);
+        assert!(validate_export_options(&options).is_err());
+        options.audio_sample_rate_hz = Some(48000);
+        assert!(validate_export_options(&options).is_ok());
     }
 }

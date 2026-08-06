@@ -5,15 +5,11 @@ import { ExportClipThumbnail } from "./ExportClipThumbnail";
 interface ExportSourceListProps {
   source: ExportSource;
   selectedClipIds: Set<string>;
+  previewClipId: string | null;
   onToggleClip: (clipId: string) => void;
   onSetAllSelected: (selected: boolean) => void;
+  onPreviewClip: (clipId: string) => void;
 }
-
-const sourceKindLabels = {
-  storyboard: "分镜片段",
-  subtitle: "字幕片段",
-  "media-bin": "媒体库视频",
-} as const;
 
 function clipDurationUs(clip: ExportClip) {
   if (clip.endUs > 0) {
@@ -25,27 +21,18 @@ function clipDurationUs(clip: ExportClip) {
 export function ExportSourceList({
   source,
   selectedClipIds,
+  previewClipId,
   onToggleClip,
   onSetAllSelected,
+  onPreviewClip,
 }: ExportSourceListProps) {
   const allSelected =
     source.clips.length > 0 && source.clips.every((clip) => selectedClipIds.has(clip.id));
   const selectedClips = source.clips.filter((clip) => selectedClipIds.has(clip.id));
   const totalDurationUs = selectedClips.reduce((sum, clip) => sum + clipDurationUs(clip), 0);
-  const kindLabel = sourceKindLabels[source.kind];
 
   return (
-    <section className="export-source-pane">
-      <header className="export-pane-header">
-        <div>
-          <div className="export-pane-eyebrow">导出片段</div>
-          <h2 className="export-pane-title" title={source.title}>
-            {source.title}
-          </h2>
-        </div>
-        <span className="export-source-kind-badge">{kindLabel}</span>
-      </header>
-
+    <section className="export-clips-panel">
       <div className="export-source-toolbar">
         <label className="export-check-label">
           <input
@@ -59,38 +46,39 @@ export function ExportSourceList({
           已选 {selectedClips.length} / {source.clips.length} 个 · 总时长{" "}
           {formatDuration(totalDurationUs)}
         </span>
-        {selectedClips.length > 0 && (
-          <button type="button" className="toolbar-button" onClick={() => onSetAllSelected(false)}>
-            清空
-          </button>
-        )}
       </div>
 
       <div className="export-clip-list">
-        {source.clips.map((clip, index) => {
+        {source.clips.map((clip) => {
           const selected = selectedClipIds.has(clip.id);
+          const previewing = previewClipId === clip.id;
           return (
-            <label
+            <div
               key={clip.id}
-              className={`export-clip-row ${selected ? "is-selected" : ""}`}
+              className={`export-clip-row ${selected ? "is-selected" : ""} ${
+                previewing ? "is-previewing" : ""
+              }`}
               title={clip.sourcePath}
+              onClick={() => onPreviewClip(clip.id)}
             >
-              <input
-                type="checkbox"
-                checked={selected}
-                onChange={() => onToggleClip(clip.id)}
-                className="export-clip-checkbox"
-              />
-              <span className="export-clip-index">{index + 1}</span>
-              <ExportClipThumbnail clip={clip} />
-              <span className="export-clip-label">{clip.label}</span>
-              <span className="export-clip-time">
-                {clip.endUs > 0
-                  ? `${formatDuration(clip.startUs)} → ${formatDuration(clip.endUs)}`
-                  : formatDuration(clip.startUs)}
+              <span
+                className="export-clip-checkbox-cell"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <input type="checkbox" checked={selected} onChange={() => onToggleClip(clip.id)} />
               </span>
-              <span className="export-clip-duration">{formatDuration(clipDurationUs(clip))}</span>
-            </label>
+              <ExportClipThumbnail clip={clip} />
+              <span className="export-clip-info">
+                <span className="export-clip-label">{clip.label}</span>
+                <span className="export-clip-meta">
+                  {clip.endUs > 0
+                    ? `${formatDuration(clip.startUs)} → ${formatDuration(clip.endUs)}`
+                    : formatDuration(clip.startUs)}
+                  <span className="export-clip-meta-separator">·</span>
+                  {formatDuration(clipDurationUs(clip))}
+                </span>
+              </span>
+            </div>
           );
         })}
       </div>

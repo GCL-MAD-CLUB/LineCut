@@ -1,37 +1,24 @@
-import { FolderOpen, Loader2, X } from "lucide-react";
-import { captureOperationError, invokeCommand } from "../../errors";
+import { FolderOpen, X } from "lucide-react";
+import { runMediaImportTask } from "../../mediaImportTask";
 import {
   runExportTask,
   useExportWorkspaceState,
-  type ExportResult,
+  type ExportOutput,
 } from "../../systems/ExportSystem";
 import { useProjectPort } from "../../systems/ProjectSystem";
 import { useTaskProgressStatus } from "../../systems/TaskSystem";
-
-function basename(path: string) {
-  return path.split(/[\\/]/).pop() ?? path;
-}
-
-async function revealInFileManager(path: string) {
-  try {
-    await invokeCommand("reveal_in_file_manager", { path });
-  } catch (error) {
-    captureOperationError("export.reveal", error);
-  }
-}
 
 export function ExportActionBar() {
   const source = useExportWorkspaceState((state) => state.source);
   const selectedClipIds = useExportWorkspaceState((state) => state.selectedClipIds);
   const settings = useExportWorkspaceState((state) => state.settings);
-  const results = useExportWorkspaceState((state) => state.results);
   const status = useExportWorkspaceState((state) => state.status);
   const setStatus = useExportWorkspaceState((state) => state.setStatus);
   const setResults = useExportWorkspaceState((state) => state.setResults);
-  const exportSettingsRecorded = useProjectPort(
+  const { exportSettingsRecorded, mediaProjectsAdded, warningsAppended } = useProjectPort(
     [],
-    ["exportSettingsRecorded"],
-  ).exportSettingsRecorded;
+    ["exportSettingsRecorded", "mediaProjectsAdded", "warningsAppended"],
+  );
 
   const { tasks } = useTaskProgressStatus("export.run");
   const runningTask = tasks[0];
@@ -43,6 +30,26 @@ export function ExportActionBar() {
     settings.outputStem.trim() !== "" &&
     status !== "running";
 
+  /** 导入项目中开启时，把导出成功的产物逐个登记进媒体箱。 */
+  async function importOutputsIntoProject(outputs: ExportOutput[]) {
+    for (const output of outputs) {
+      if (output.status !== "completed") {
+        continue;
+      }
+      await runMediaImportTask({
+        path: output.path,
+        operation: "media.import",
+        taskIdPrefix: "export-import",
+        onSuccess: (result) => {
+          mediaProjectsAdded([result.project]);
+          if (result.warnings.length > 0) {
+            warningsAppended(result.warnings);
+          }
+        },
+      });
+    }
+  }
+
   async function handleExport() {
     if (!canExport) {
       return;
@@ -52,6 +59,9 @@ export function ExportActionBar() {
     const outcome = await runExportTask({ clips: selectedClips, settings });
     if (outcome.status === "success") {
       exportSettingsRecorded(settings);
+      if (settings.importIntoProject) {
+        await importOutputsIntoProject(outcome.result.outputs);
+      }
       setResults(outcome.result);
       setStatus("done");
     } else {
@@ -61,22 +71,7 @@ export function ExportActionBar() {
 
   return (
     <footer className="export-action-bar">
-      {runningTask && (
-        <div className="export-progress">
-          <span className="export-progress-label">
-            <Loader2 className="spin" size={14} />
-            {runningTask.label} {Math.round(runningTask.percent)}%
-          </span>
-          <div className="export-progress-track">
-            <div className="export-progress-fill" style={{ width: `${runningTask.percent}%` }} />
-          </div>
-        </div>
-      )}
-
       <div className="export-action-row">
-        <span className="export-action-summary">
-          {status === "running" ? "正在导出…" : `将导出 ${selectedClips.length} 个片段`}
-        </span>
         {status === "running" ? (
           <button
             type="button"
@@ -101,57 +96,6 @@ export function ExportActionBar() {
           </button>
         )}
       </div>
-
-      {results && <ExportResults results={results} />}
     </footer>
-  );
-}
-
-function ExportResults({ results }: { results: ExportResult }) {
-  const completed = results.outputs.filter((output) => output.status === "completed");
-  const failed = results.outputs.filter((output) => output.status === "failed");
-
-  return (
-    <div className="export-results">
-      <div className="export-results-summary">
-        <span>
-          完成：{completed.length} 个成功
-          {failed.length > 0 && (
-            <span className="export-results-failed">，{failed.length} 个失败</span>
-          )}
-        </span>
-      </div>
-      <ul className="export-results-list">
-        {results.outputs.map((output, index) => (
-          <li
-            key={`${output.path}:${index}`}
-            className={output.status === "failed" ? "is-failed" : ""}
-          >
-            <span className="export-result-path" title={output.path}>
-              {basename(output.path)}
-            </span>
-            {output.error && <span className="export-result-error">{output.error}</span>}
-            {output.status === "completed" && (
-              <button
-                type="button"
-                className="tool-button"
-                onClick={() => void revealInFileManager(output.path)}
-                title="在资源管理器中显示"
-                aria-label="在资源管理器中显示"
-              >
-                <FolderOpen size={14} />
-              </button>
-            )}
-          </li>
-        ))}
-      </ul>
-      {results.warnings.length > 0 && (
-        <div className="export-results-warnings">
-          {results.warnings.map((warning, index) => (
-            <div key={`${warning.code}:${index}`}>{warning.message}</div>
-          ))}
-        </div>
-      )}
-    </div>
   );
 }

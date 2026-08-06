@@ -210,7 +210,13 @@ export interface ProjectExportState {
   quality: "low" | "medium" | "high" | "very_high";
   encoderSpeed: "fast" | "balanced" | "quality";
   includeAudio: boolean;
+  audioCodec: "aac" | "mp2" | "mp3" | "opus";
+  /** null means "match the source sample rate". */
+  audioSampleRateHz: number | null;
+  audioChannels: "stereo" | "mono" | "5.1";
   audioBitrateKbps: number;
+  importIntoProject: boolean;
+  useProxy: boolean;
   outputDir: string;
   outputStem: string;
 }
