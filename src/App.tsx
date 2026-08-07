@@ -48,11 +48,21 @@ import {
 } from "./errors";
 import {
   getProjectWorkspaceSnapshot,
+  loadProjectStates,
   mediaDisplayName,
+  persistExportState,
+  projectStatesLoaded,
+  pruneProjectStates,
   useProjectPort,
 } from "./systems/ProjectSystem";
 import { isTauriRuntime } from "./tauriRuntime";
-import type { MediaBinFolder, MediaBinItem, OpenProjectResult, Preferences } from "./types";
+import type {
+  MediaBinFolder,
+  MediaBinItem,
+  OpenProjectResult,
+  Preferences,
+  RecentProjectEntry,
+} from "./types";
 
 const projectFilters = [
   {
@@ -170,6 +180,39 @@ function readRecentPaths(storageKey: string) {
   }
 }
 
+/**
+ * Reads the recently-opened projects list. Older builds persisted plain paths;
+ * those entries are migrated in place to `{ path, projectId }` pairs with an
+ * unknown (empty) document id until the project is next opened.
+ */
+function readRecentProjects(): RecentProjectEntry[] {
+  try {
+    const stored = window.localStorage.getItem(recentProjectStorageKey);
+    if (!stored) {
+      return [];
+    }
+    const parsed = JSON.parse(stored);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    if (parsed.every((entry) => typeof entry === "string")) {
+      return parsed
+        .filter((entry): entry is string => typeof entry === "string")
+        .map((path) => ({ path, projectId: "" }))
+        .slice(0, recentPathsLimit);
+    }
+    return parsed
+      .filter(
+        (entry): entry is RecentProjectEntry =>
+          typeof entry?.path === "string" && typeof entry?.projectId === "string",
+      )
+      .slice(0, recentPathsLimit);
+  } catch (error) {
+    captureOperationError("storage.recentPaths", error);
+    return [];
+  }
+}
+
 function markStoryboardPanelDefaultMigrationApplied() {
   try {
     window.localStorage.setItem(storyboardPanelDefaultMigrationKey, "1");
@@ -246,9 +289,8 @@ function AppContent() {
   const [recentMediaPaths, setRecentMediaPaths] = useState(() =>
     readRecentPaths(recentMediaStorageKey),
   );
-  const [recentProjectPaths, setRecentProjectPaths] = useState(() =>
-    readRecentPaths(recentProjectStorageKey),
-  );
+  const [recentProjects, setRecentProjects] = useState(() => readRecentProjects());
+  const [launchResolved, setLaunchResolved] = useState(false);
   const closingWindowRef = useRef(false);
 
   const {
@@ -257,6 +299,8 @@ function AppContent() {
     mediaFolders,
     mediaItems,
     projectFilePath,
+    projectId,
+    exportState,
     projectDirty,
     message,
     warnings,
@@ -283,6 +327,8 @@ function AppContent() {
       "mediaFolders",
       "mediaItems",
       "projectFilePath",
+      "projectId",
+      "exportState",
       "projectDirty",
       "preferences",
       "message",
@@ -397,6 +443,10 @@ function AppContent() {
         invokeCommand<string | null>("auto_save_project_snapshot", {
           projectName: autoSaveProjectNameRef.current,
           workspace: getProjectWorkspaceSnapshot(),
+          // A session that only imported media has no document id yet; an empty
+          // id keeps auto-save snapshots content-deduplicated instead of minting
+          // a fresh, ever-changing id every tick.
+          projectId: projectId ?? "",
         }),
       ).finally(() => {
         snapshotRunning = false;
@@ -404,20 +454,31 @@ function AppContent() {
     }, autoSaveIntervalMinutes * 60_000);
 
     return () => window.clearInterval(timer);
-  }, [autoSaveIntervalMinutes, hasProject]);
+  }, [autoSaveIntervalMinutes, hasProject, projectId]);
 
   useEffect(() => {
     if (!isTauriRuntime()) {
       return;
     }
 
-    void runOperation("project.launchPath", () =>
-      invokeCommand<string | null>("take_launch_project_path"),
-    ).then((outcome) => {
-      if (outcome.status === "success" && outcome.value) {
-        return openProject(outcome.value);
+    void runOperation("project.launchPath", async () => {
+      // Load the per-project state store first so a launch-path project's
+      // recorded export settings are available when it is opened.
+      if (!projectStatesLoaded()) {
+        await loadProjectStates();
       }
-    });
+      return invokeCommand<string | null>("take_launch_project_path");
+    })
+      .then((outcome) => {
+        if (outcome.status === "success" && outcome.value) {
+          return openProject(outcome.value);
+        }
+      })
+      .finally(() => {
+        // Unlock pruning only after the launch-path project (if any) is open,
+        // so the first prune cannot delete its recorded state.
+        setLaunchResolved(true);
+      });
   }, []);
 
   useEffect(() => {
@@ -431,12 +492,38 @@ function AppContent() {
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(recentProjectStorageKey, JSON.stringify(recentProjectPaths));
+      window.localStorage.setItem(recentProjectStorageKey, JSON.stringify(recentProjects));
     } catch (error) {
       captureOperationError("storage.recentPaths", error);
       // Recent projects are a convenience feature; opening and saving must still work.
     }
-  }, [recentProjectPaths]);
+  }, [recentProjects]);
+
+  // Per-project state retention mirrors the recently-opened list: a project's
+  // global state is dropped exactly when it leaves the list. The current
+  // project is always kept (its id may not be on the list yet while unsaved),
+  // and pruning waits until the launch-path project, if any, has been opened so
+  // it cannot be wiped before its recorded state is read.
+  useEffect(() => {
+    if (!isTauriRuntime() || !launchResolved) {
+      return;
+    }
+    let cancelled = false;
+    const keepProjectIds = [projectId, ...recentProjects.map((entry) => entry.projectId)].filter(
+      (id): id is string => Boolean(id),
+    );
+    void (async () => {
+      if (!projectStatesLoaded()) {
+        await loadProjectStates();
+      }
+      if (!cancelled) {
+        await pruneProjectStates(keepProjectIds);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [launchResolved, projectId, recentProjects]);
 
   useEffect(() => {
     if (!isTauriRuntime()) {
@@ -544,7 +631,8 @@ function AppContent() {
 
     const outcome = await runOperation("project.new", async () => {
       await removeBackendProject();
-      projectCreated();
+      // A brand-new document gets its own identity, persisted on first save.
+      projectCreated(crypto.randomUUID());
       setActiveWorkspace("import");
     });
     if (outcome.status === "success") {
@@ -552,14 +640,17 @@ function AppContent() {
     }
   }
 
-  function rememberRecentProject(path: string) {
-    setRecentProjectPaths((current) =>
-      Array.from(new Set([path, ...current])).slice(0, recentPathsLimit),
+  function rememberRecentProject(entry: RecentProjectEntry) {
+    setRecentProjects((current) =>
+      [{ ...entry }, ...current.filter((currentEntry) => currentEntry.path !== entry.path)].slice(
+        0,
+        recentPathsLimit,
+      ),
     );
   }
 
   function forgetRecentProject(path: string) {
-    setRecentProjectPaths((current) => current.filter((currentPath) => currentPath !== path));
+    setRecentProjects((current) => current.filter((currentEntry) => currentEntry.path !== path));
   }
 
   async function openProject(pathToOpen?: string) {
@@ -600,9 +691,9 @@ function AppContent() {
     );
     if (outcome.status === "success") {
       const result = outcome.value;
-      projectOpened(result.workspace, result.path);
+      projectOpened(result.workspace, result.path, result.project_id);
       warningsReplaced(result.warnings);
-      rememberRecentProject(result.path);
+      rememberRecentProject({ path: result.path, projectId: result.project_id });
       messagePublished(`已打开项目 ${fileName(result.path)}`);
     } else if (outcome.status === "failed") {
       if (pathToOpen) {
@@ -625,17 +716,33 @@ function AppContent() {
   }
 
   async function writeProject(path: string, makeCurrent: boolean) {
+    // 另存为 of an already-saved project and 保存副本 write a brand-new file, so
+    // each gets a fresh document identity. The first save of an unsaved project
+    // keeps the id minted at 新建 (the file is its first materialization); a
+    // regular save keeps the current id.
+    const isNewFile = !makeCurrent || Boolean(projectFilePath && path !== projectFilePath);
+    const targetId = isNewFile ? crypto.randomUUID() : (projectId ?? crypto.randomUUID());
+    const previousId = projectId;
     const savedPath = await invokeCommand<string>("save_project_file", {
       path,
       workspace: getProjectWorkspaceSnapshot(),
+      projectId: targetId,
     });
     if (makeCurrent) {
-      projectSaved(savedPath);
+      projectSaved(savedPath, targetId);
       messagePublished(`项目已保存到 ${fileName(savedPath)}`);
     } else {
       messagePublished(`项目副本已保存到 ${fileName(savedPath)}`);
     }
-    rememberRecentProject(savedPath);
+    // A new document identity starts with the current export settings so the
+    // copy/另存为 behaves like the original. The file is already saved, so a
+    // settings-copy failure must not surface as a failed save.
+    if (previousId !== targetId && exportState) {
+      void persistExportState(targetId, exportState).catch((error) =>
+        captureOperationError("project.exportState.save", error),
+      );
+    }
+    rememberRecentProject({ path: savedPath, projectId: targetId });
   }
 
   function suggestedProjectName() {
@@ -1012,12 +1119,12 @@ function AppContent() {
       newProject: { enabled: !isBusy, execute: newProject },
       openProject: { enabled: !isBusy, execute: openProject },
       recentProjects: {
-        enabled: recentProjectPaths.length > 0 && !isBusy,
-        items: recentProjectPaths.map((path) => ({
-          id: path,
-          label: fileName(path),
-          title: path,
-          execute: () => openProject(path),
+        enabled: recentProjects.length > 0 && !isBusy,
+        items: recentProjects.map((entry) => ({
+          id: entry.path,
+          label: fileName(entry.path),
+          title: entry.path,
+          execute: () => openProject(entry.path),
         })),
       },
       closeProject: { enabled: hasProject && !isBusy, execute: closeProject },

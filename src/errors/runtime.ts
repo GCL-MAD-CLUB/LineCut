@@ -229,6 +229,7 @@ const operationPolicies = {
   "preferences.update": modal("无法保存首选项"),
   "project.autosave": modal("自动备份失败"),
   "project.close": modal("无法关闭项目"),
+  "project.exportState.save": silent("保存项目导出设置失败"),
   "project.history": modal("无法完成历史操作"),
   "project.launchPath": modal("无法打开启动项目"),
   "project.new": modal("无法新建项目"),

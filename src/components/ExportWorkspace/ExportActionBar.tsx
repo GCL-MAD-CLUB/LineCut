@@ -1,11 +1,12 @@
 import { FolderOpen, X } from "lucide-react";
+import { captureOperationError } from "../../errors";
 import { runMediaImportTask } from "../../mediaImportTask";
 import {
   runExportTask,
   useExportWorkspaceState,
   type ExportOutput,
 } from "../../systems/ExportSystem";
-import { useProjectPort } from "../../systems/ProjectSystem";
+import { persistExportState, useProjectPort } from "../../systems/ProjectSystem";
 import { useTaskProgressStatus } from "../../systems/TaskSystem";
 
 export function ExportActionBar() {
@@ -16,11 +17,16 @@ export function ExportActionBar() {
   const isExporting = useExportWorkspaceState((state) => state.isExporting);
   const setStatus = useExportWorkspaceState((state) => state.setStatus);
   const setResults = useExportWorkspaceState((state) => state.setResults);
-  const { exportSettingsRecorded, mediaProjectsAdded, warningsAppended, messagePublished } =
-    useProjectPort(
-      [],
-      ["exportSettingsRecorded", "mediaProjectsAdded", "warningsAppended", "messagePublished"],
-    );
+  const {
+    projectId,
+    exportSettingsRecorded,
+    mediaProjectsAdded,
+    warningsAppended,
+    messagePublished,
+  } = useProjectPort(
+    ["projectId"],
+    ["exportSettingsRecorded", "mediaProjectsAdded", "warningsAppended", "messagePublished"],
+  );
 
   const { tasks } = useTaskProgressStatus("export.run");
   const runningTask = tasks[0];
@@ -62,6 +68,13 @@ export function ExportActionBar() {
     const outcome = await runExportTask({ clips: selectedClips, settings });
     if (outcome.status === "success") {
       exportSettingsRecorded(settings);
+      if (projectId) {
+        // The export already succeeded; failing to persist the settings for the
+        // next "使用上次设置导出" must not break the current flow.
+        void persistExportState(projectId, settings).catch((error) =>
+          captureOperationError("project.exportState.save", error),
+        );
+      }
       if (settings.importIntoProject) {
         await importOutputsIntoProject(outcome.result.outputs);
       }

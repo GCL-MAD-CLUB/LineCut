@@ -2,7 +2,6 @@ import type {
   MediaBinFolder,
   MediaBinItem,
   Project,
-  ProjectExportState,
   StoryboardState,
   SubtitleState,
 } from "../../types";
@@ -43,7 +42,6 @@ export interface ProjectFileState {
   useProxy: boolean;
   subtitles: Record<string, SubtitleState>;
   storyboards: Record<string, StoryboardState>;
-  exportState: ProjectExportState | null;
 }
 
 interface ProjectSetOperation {
@@ -93,11 +91,6 @@ interface SubtitleSetOperation {
   value: SubtitleState | null;
 }
 
-interface ExportStateSetOperation {
-  type: "export-state.set";
-  value: ProjectExportState | null;
-}
-
 export type ProjectFileOperation =
   | ProjectSetOperation
   | MediaFolderSetOperation
@@ -106,8 +99,7 @@ export type ProjectFileOperation =
   | StringSetSetOperation
   | BooleanSetOperation
   | SubtitleSetOperation
-  | StoryboardSetOperation
-  | ExportStateSetOperation;
+  | StoryboardSetOperation;
 
 export interface ProjectFileEvent {
   id: string;
@@ -142,10 +134,6 @@ function nextEventId() {
 
 function setsEqual(left: Set<string>, right: Set<string>) {
   return left.size === right.size && [...left].every((value) => right.has(value));
-}
-
-function exportStatesEqual(left: ProjectExportState | null, right: ProjectExportState | null) {
-  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function addSetOperation(
@@ -344,16 +332,6 @@ export function createProjectHistoryEntry(
       value: previousStoryboard,
     });
   }
-  if (!exportStatesEqual(before.exportState, after.exportState)) {
-    eventOperations.push({
-      type: "export-state.set",
-      value: after.exportState,
-    });
-    inverseOperations.push({
-      type: "export-state.set",
-      value: before.exportState,
-    });
-  }
   if (eventOperations.length === 0) {
     return null;
   }
@@ -455,9 +433,6 @@ export function applyProjectFileEvent(
         } else {
           delete next.storyboards[operation.videoContext];
         }
-        break;
-      case "export-state.set":
-        next.exportState = operation.value;
         break;
     }
   }

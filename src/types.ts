@@ -256,7 +256,6 @@ export interface ProjectWorkspace {
   editor: ProjectEditorState;
   subtitles?: Record<string, SubtitleState>;
   storyboards?: Record<string, StoryboardState>;
-  export_state?: ProjectExportState;
 }
 
 export interface DemuxedAudioTrack {
@@ -286,8 +285,27 @@ export interface UserNotice {
 
 export interface OpenProjectResult {
   path: string;
+  /** Stable per-document identity (generated for files that predate it). */
+  project_id: string;
   workspace: ProjectWorkspace;
   warnings: UserNotice[];
+}
+
+/**
+ * One entry in the recently-opened projects list. The project id lets the
+ * global per-project state store key data to the document, not its path.
+ */
+export interface RecentProjectEntry {
+  path: string;
+  projectId: string;
+}
+
+/**
+ * Fixed template for the global state stored under one project document id.
+ * Only `exportState` is defined today; future state kinds are added as fields.
+ */
+export interface ProjectStateConfig {
+  exportState: ProjectExportState | null;
 }
 
 export interface ProxyResult {

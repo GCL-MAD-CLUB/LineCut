@@ -47,6 +47,9 @@ struct AppState {
     launch_project_path: Mutex<Option<String>>,
     running_tasks: Mutex<HashMap<String, RunningTask>>,
     running_ffmpeg: Mutex<HashMap<String, RunningFfmpeg>>,
+    /// Serializes read-modify-write cycles over WorkspaceConfig.xml so panel
+    /// autosaves and per-project state updates never clobber each other.
+    workspace_config_lock: Mutex<()>,
 }
 
 impl AppState {
@@ -66,6 +69,7 @@ impl AppState {
             launch_project_path: Mutex::new(project_path_from_launch_args()),
             running_tasks: Mutex::new(HashMap::new()),
             running_ffmpeg: Mutex::new(HashMap::new()),
+            workspace_config_lock: Mutex::new(()),
         }
     }
 }
@@ -334,7 +338,7 @@ struct ProjectEditorState {
     preview: ProjectPreviewState,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ProjectSubtitleColorLabel {
     Red,
@@ -373,7 +377,7 @@ struct ProjectStoryboardShot {
     end_us: i64,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ProjectStoryboardColorLabel {
     Red,
@@ -445,13 +449,13 @@ struct ProjectWorkspace {
     subtitles: HashMap<String, ProjectSubtitleState>,
     #[serde(default)]
     storyboards: HashMap<String, ProjectStoryboardState>,
-    #[serde(default)]
-    export_state: Option<ExportOptions>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 struct OpenProjectResult {
     path: String,
+    /// Stable per-document identity (generated for files that predate it).
+    project_id: String,
     workspace: ProjectWorkspace,
     warnings: Vec<UserNotice>,
 }
@@ -520,14 +524,14 @@ struct ExportClip {
     end_us: i64,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ExportMode {
     Merge,
     Individual,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ExportContainer {
     Mp4H264,
@@ -536,14 +540,14 @@ enum ExportContainer {
     WebmVp9,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ExportResolution {
     MatchSource,
     Custom,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ExportQuality {
     Low,
@@ -552,7 +556,7 @@ enum ExportQuality {
     VeryHigh,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ExportEncoderSpeed {
     Fast,
@@ -560,7 +564,7 @@ enum ExportEncoderSpeed {
     Quality,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ExportAudioCodec {
     Aac,
@@ -571,7 +575,7 @@ enum ExportAudioCodec {
     Opus,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ExportAudioChannels {
     Stereo,
@@ -637,7 +641,7 @@ const fn default_export_existing_file_mode() -> ExportExistingFileMode {
     ExportExistingFileMode::Ask
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ExportOptions {
     mode: ExportMode,
@@ -755,7 +759,7 @@ struct ProxyOptions {
     custom_location: String,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ProxyFrameSize {
     Full,
@@ -764,7 +768,7 @@ enum ProxyFrameSize {
     Custom,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ProxyPreset {
     H264Mp4,
@@ -774,13 +778,13 @@ enum ProxyPreset {
     Vp9Webm,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ProxyWatermark {
     None,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ProxyLocation {
     SourceProxyFolder,
@@ -913,6 +917,9 @@ pub fn run() {
             resolve_known_folder,
             load_workspace_config,
             save_workspace_config,
+            load_project_states,
+            save_project_state,
+            prune_project_states,
             detect_storyboard_shots,
             set_media_import_drop_region,
             reveal_in_file_manager,

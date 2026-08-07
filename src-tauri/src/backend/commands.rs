@@ -115,10 +115,11 @@ pub(crate) async fn cancel_task(
 pub(crate) async fn save_project_file(
     path: String,
     workspace: ProjectWorkspace,
+    project_id: String,
 ) -> CommandResult<String> {
     let normalized_path = normalize_project_path(&path)?;
     let output_path = normalized_path.clone();
-    tokio::task::spawn_blocking(move || write_project_file(&output_path, workspace))
+    tokio::task::spawn_blocking(move || write_project_file(&output_path, workspace, &project_id))
         .await
         .map_err(|error| {
             app_error(
@@ -133,6 +134,7 @@ pub(crate) async fn save_project_file(
 pub(crate) async fn auto_save_project_snapshot(
     project_name: String,
     workspace: ProjectWorkspace,
+    project_id: String,
     state: tauri::State<'_, AppState>,
 ) -> CommandResult<Option<String>> {
     let (cache_root, max_snapshots) = {
@@ -148,8 +150,14 @@ pub(crate) async fn auto_save_project_snapshot(
         )
     };
     tokio::task::spawn_blocking(move || {
-        write_auto_save_snapshot(&cache_root, &project_name, workspace, max_snapshots)
-            .map(|path| path.map(|path| path.to_string_lossy().into_owned()))
+        write_auto_save_snapshot(
+            &cache_root,
+            &project_name,
+            workspace,
+            &project_id,
+            max_snapshots,
+        )
+        .map(|path| path.map(|path| path.to_string_lossy().into_owned()))
     })
     .await
     .map_err(|error| {
@@ -167,14 +175,15 @@ pub(crate) async fn open_project_file(
 ) -> CommandResult<OpenProjectResult> {
     let input_path = PathBuf::from(path);
     let read_path = input_path.clone();
-    let mut workspace = tokio::task::spawn_blocking(move || read_project_file(&read_path))
-        .await
-        .map_err(|error| {
-            app_error(
-                ErrorCode::BlockingTaskFailed,
-                format!("Project open task failed: {error}"),
-            )
-        })??;
+    let (mut workspace, project_id, migrated) =
+        tokio::task::spawn_blocking(move || read_project_file(&read_path))
+            .await
+            .map_err(|error| {
+                app_error(
+                    ErrorCode::BlockingTaskFailed,
+                    format!("Project open task failed: {error}"),
+                )
+            })??;
     let mut warnings = Vec::new();
 
     for project in &mut workspace.projects {
@@ -292,6 +301,31 @@ pub(crate) async fn open_project_file(
         }
     }
 
+    // A legacy file's id was generated in memory; write it back so the id stays
+    // stable across opens (and the file's recorded per-project state keeps its
+    // identity). Best-effort: a read-only file must still open.
+    if migrated {
+        let write_path = input_path.clone();
+        let write_workspace = workspace.clone();
+        let write_project_id = project_id.clone();
+        if let Err(error) = tokio::task::spawn_blocking(move || {
+            write_project_file(&write_path, write_workspace, &write_project_id)
+        })
+        .await
+        .map_err(|error| {
+            app_error(
+                ErrorCode::BlockingTaskFailed,
+                format!("Project id backfill task failed: {error}"),
+            )
+        })? {
+            warnings.push(UserNotice::warning_with_detail(
+                "PROJECT_ID_BACKFILL_FAILED",
+                "无法将项目标识写回旧项目文件，打开后首次保存将固定该标识",
+                error.detail(),
+            ));
+        }
+    }
+
     let mut projects = state.projects.lock().map_err(|_| {
         app_error(
             ErrorCode::ProjectStateUnavailable,
@@ -309,6 +343,7 @@ pub(crate) async fn open_project_file(
 
     Ok(OpenProjectResult {
         path: input_path.to_string_lossy().into_owned(),
+        project_id,
         workspace,
         warnings,
     })

@@ -1,13 +1,19 @@
-use crate::{app_error, AppResult, ErrorCode, ExportOptions, ProjectWorkspace};
+use crate::{app_error, AppResult, ErrorCode, ProjectWorkspace};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
+use uuid::Uuid;
 
 use super::{v3, CurrentProjectModel, ProjectModel, UpgradeFrom, UpgradeParts};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(in crate::project_file) struct Model {
+    /// Stable per-document identity. Generated for files that predate it;
+    /// `default` so a pre-refactor dev build (no id yet) still decodes, with the
+    /// read path filling in a fresh id and writing it back.
+    #[serde(default)]
+    project_id: String,
     workspace: Workspace,
     saved_at: u64,
     app_version: String,
@@ -22,8 +28,11 @@ struct Workspace {
     #[serde(default)]
     subtitles: BTreeMap<String, SubtitleState>,
     storyboards: BTreeMap<String, StoryboardState>,
-    #[serde(default)]
-    export_state: Option<ExportOptions>,
+    /// Tolerated but never written: a pre-refactor dev build recorded
+    /// `export_state` inside the project file. V4 was unreleased, so the data is
+    /// dropped, but the field is accepted so those throwaway files still open.
+    #[serde(default, skip_serializing, rename = "export_state")]
+    _legacy_export_state: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -330,7 +339,9 @@ impl UpgradeFrom<v3::Model> for Model {
             app_version,
         } = previous.into_upgrade_parts()?;
         Ok(Self {
-            // `export_state` was introduced with V4; older V3 projects have none.
+            // `project_id` was introduced with V4; legacy files never carry one,
+            // so every migration mints a fresh id.
+            project_id: Uuid::new_v4().to_string(),
             workspace: serde_json::from_value(workspace).map_err(|error| {
                 app_error(
                     ErrorCode::ProjectMigrationFailed,
@@ -356,6 +367,9 @@ impl CurrentProjectModel for Model {
             )
         })?;
         Ok(Self {
+            // The `from_runtime` facade stamps a real id via `set_project_id`
+            // after construction; older models have no such field.
+            project_id: String::new(),
             workspace: serde_json::from_value(value).map_err(|error| {
                 app_error(
                     ErrorCode::ProjectEncodeFailed,
@@ -380,5 +394,13 @@ impl CurrentProjectModel for Model {
                 format!("The V4 project model is incompatible with runtime state: {error}"),
             )
         })
+    }
+
+    fn project_id(&self) -> &str {
+        &self.project_id
+    }
+
+    fn set_project_id(&mut self, project_id: &str) {
+        self.project_id = project_id.to_string();
     }
 }

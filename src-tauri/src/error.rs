@@ -103,6 +103,7 @@ define_error_codes! {
     WorkspaceConfigWriteFailed => ("WORKSPACE_CONFIG_WRITE_FAILED", Io, true),
     WorkspaceConfigDecodeFailed => ("WORKSPACE_CONFIG_DECODE_FAILED", Format, false),
     WorkspaceConfigEncodeFailed => ("WORKSPACE_CONFIG_ENCODE_FAILED", Format, true),
+    WorkspaceConfigStateUnavailable => ("WORKSPACE_CONFIG_STATE_UNAVAILABLE", State, true),
     ProjectReadFailed => ("PROJECT_READ_FAILED", Io, true),
     ProjectWriteFailed => ("PROJECT_WRITE_FAILED", Io, true),
     MediaReadFailed => ("MEDIA_READ_FAILED", Io, true),

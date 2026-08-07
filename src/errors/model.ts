@@ -19,6 +19,7 @@ export type OperationKey =
   | "preferences.update"
   | "project.autosave"
   | "project.close"
+  | "project.exportState.save"
   | "project.history"
   | "project.launchPath"
   | "project.new"
