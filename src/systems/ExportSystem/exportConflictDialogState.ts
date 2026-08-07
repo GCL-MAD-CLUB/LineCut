@@ -4,7 +4,6 @@ import type { ExportConflict, ExportConflictAction } from "./exportConflict";
 
 interface PendingConflictRequest {
   conflicts: ExportConflict[];
-  /** Resolves the promise returned by `requestExportConflictAction`. */
   resolve: (action: ExportConflictAction) => void;
 }
 
@@ -16,10 +15,7 @@ export const exportConflictDialogStore = createStore<ExportConflictDialogState>(
   pending: null,
 }));
 
-/**
- * Asks the user what to do with conflicting output files. Resolves when the
- * dialog component calls `resolveExportConflict` with the chosen action.
- */
+/** Asks the user what to do with conflicting output files, resolving when the dialog picks an action. */
 export function requestExportConflictAction(
   conflicts: ExportConflict[],
 ): Promise<ExportConflictAction> {
@@ -35,7 +31,6 @@ export function requestExportConflictAction(
   });
 }
 
-/** Resolves the currently pending conflict request (called by each dialog button). */
 export function resolveExportConflict(action: ExportConflictAction) {
   const pending = exportConflictDialogStore.getState().pending;
   if (!pending) {

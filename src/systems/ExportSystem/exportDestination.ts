@@ -1,20 +1,11 @@
 import { invokeCommand } from "../../errors";
 import type { ExportDestination, ExportSource } from "./exportTypes";
 
-/** Parent directory of a file path, or the path itself when it has none. */
 export function dirname(path: string) {
   return path.replace(/[\\/][^\\/]*$/, "") || path;
 }
 
-/**
- * Resolves the concrete target folder for a destination category.
- *
- * - `"source"` uses the folder containing the first clip's source file.
- * - `"choose_later"` is a preset-only placeholder; no path is resolved yet.
- * - The remaining values are well-known Windows folders resolved by the
- *   backend. A resolution failure degrades to `""` (export stays disabled),
- *   rather than silently writing to a stale folder.
- */
+/** Resolves the target folder: `"source"` → the first clip's folder, `"choose_later"` → nothing yet, the rest are well-known Windows folders; a failure degrades to `""` rather than a stale folder. */
 export async function resolveExportDestinationDir(
   destination: ExportDestination,
   source: ExportSource | null,

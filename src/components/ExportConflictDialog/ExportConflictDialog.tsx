@@ -3,11 +3,7 @@ import { resolveExportConflict, useExportConflictDialog } from "../../systems/Ex
 import { ModalDialog } from "../ModalDialog";
 import "./ExportConflictDialog.css";
 
-/**
- * Confirms how to handle output files that already exist before an export runs.
- * Driven by the dialog store (`requestExportConflictAction`); every button
- * resolves the single pending action, which applies to all conflicting files.
- */
+/** Confirms how to handle existing output files before an export runs. Driven by the dialog store (`requestExportConflictAction`); every button resolves the single pending action, which applies to all conflicting files. */
 export function ExportConflictDialog() {
   const pending = useExportConflictDialog((state) => state.pending);
   if (!pending) {
@@ -60,10 +56,7 @@ export function ExportConflictDialog() {
         <div className="export-conflict-dialog-list-scroll">
           <div className="export-conflict-dialog-list">
             {pending.conflicts.map((conflict, index) => (
-              <div
-                className="export-conflict-dialog-row"
-                key={conflict.clipId ?? `merge-${index}`}
-              >
+              <div className="export-conflict-dialog-row" key={conflict.clipId ?? `merge-${index}`}>
                 <span className="export-conflict-dialog-name" title={conflict.path}>
                   {conflict.fileName}
                 </span>

@@ -33,7 +33,6 @@ export interface ExportWorkspaceState {
   settingsProjectId: string | null;
   results: ExportResult | null;
   status: ExportWorkspaceStatus;
-  /** The clip currently previewed in the export source player. */
   previewClipId: string | null;
   /** True while any export is in flight; exports are serialized. */
   isExporting: boolean;

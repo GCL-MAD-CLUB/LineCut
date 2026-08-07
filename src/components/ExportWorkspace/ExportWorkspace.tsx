@@ -253,8 +253,7 @@ export function ExportWorkspace() {
     if (!previewClip) {
       return;
     }
-    // Focus the reused source player on the selected clip: load its source video
-    // (if different from the active one) and constrain playback to [startUs, endUs].
+    // Focus the reused source player on the selected clip: load its source video if different from the active one, and constrain playback to [startUs, endUs].
     const sourceItem = mediaItemsRef.current.find(
       (item) =>
         item.kind === "video" && item.path === previewClip.sourcePath && !isMediaItemOffline(item),

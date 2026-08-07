@@ -40,11 +40,7 @@ export interface RunExportTaskOptions {
   settings: ExportSettings;
 }
 
-/**
- * Old project files recorded `export_state` before the destination/subfolder
- * fields existed; filling them in here keeps quick-export and the workspace on
- * the same defaults without touching recorded history.
- */
+/** Old project files lack the destination/subfolder fields; filling them in keeps quick-export and the workspace on the same defaults. */
 export function normalizeExportSettings(settings: ExportSettings): ExportSettings {
   return {
     ...settings,
@@ -59,11 +55,7 @@ export function normalizeExportSettings(settings: ExportSettings): ExportSetting
   };
 }
 
-/**
- * Appends the configured subfolder to the base output directory. The base is
- * left untouched in the workspace so the 文件夹 row shows the user's choice;
- * the composed path is what the backend writes into.
- */
+/** Appends the configured subfolder to the base output dir; the base stays untouched in the workspace so the 文件夹 row shows the user's choice. */
 export function composeExportOutputDir(settings: ExportSettings): string {
   const base = settings.outputDir.trim();
   const sub = settings.subfolderName.trim();
@@ -201,11 +193,7 @@ export async function runExportTask({
   }
 }
 
-/**
- * Runs an export immediately with the given source and settings, skipping the
- * export workspace. Used by the panel's "使用上次设置导出" quick action. The
- * result is stored so the export workspace can show it if opened later.
- */
+/** Runs an export immediately with the given source and settings, skipping the export workspace; used by the panel's "使用上次设置导出" quick action. */
 export async function runQuickExport(
   source: ExportSource,
   settings: ExportSettings,

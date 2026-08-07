@@ -49,21 +49,14 @@ const frameRateOptions: Array<readonly [string, string]> = [
 /** Presets are not implemented yet; the dropdown is a disabled placeholder. */
 const exportPresetOptions: Array<readonly [string, string]> = [["custom", "自定义"]];
 
-/**
- * Destination dropdown items: the three source/file categories first, then a
- * separator, then the well-known Windows folders (they are OS paths, not the
- * user's own project, so they are visually grouped below the divider).
- */
+/** Destination dropdown items: source/file categories first, then a separator, then the well-known Windows folders (OS paths, grouped below the divider). */
 const destinationItems: Array<SelectDropdownItem<ExportDestination>> = [
   ...selectDropdownItems(exportDestinationOptions.slice(0, 3)),
   { type: "separator" },
   ...selectDropdownItems(exportDestinationOptions.slice(3)),
 ];
 
-/**
- * Existing-file handling dropdown. "询问要执行的操作" sits above the divider:
- * it prompts on export, while the other modes act automatically.
- */
+/** Existing-file handling dropdown: "询问要执行的操作" prompts on export; the other modes act automatically. */
 const existingFileModeItems: Array<SelectDropdownItem<ExportExistingFileMode>> = [
   ...selectDropdownItems([["ask", "询问要执行的操作"]]),
   { type: "separator" },
@@ -184,14 +177,12 @@ export function ExportSettingsSection({
   const audioFormat = audioFormatOfCodec(settings.audioCodec);
   const audioSampleRateValue =
     settings.audioSampleRateHz === null ? "source" : String(settings.audioSampleRateHz);
-  // The 文件夹 row shows the actual resolved target folder. `choose_later` is a
-  // preset-only placeholder with no path, so it gets a hint instead.
+  // The 文件夹 row shows the actual resolved target folder. `choose_later` is a preset-only placeholder with no path, so it gets a hint instead.
   const folderLabel =
     settings.destination === "choose_later"
       ? "将在导出时选择文件夹"
       : settings.outputDir.trim() || "未选择输出位置";
-  // 重命名规则 options depend on the export mode + source kind; when switching
-  // between them the current rule may leave the option set, so snap it back.
+  // 重命名规则 options depend on export mode + source kind; switching may leave the current rule out of the option set, so snap it back.
   const renameRuleOptions = exportRenameRuleOptions(settings.mode, source?.kind ?? "media-bin");
   const renameRuleValid = renameRuleOptions.some(([value]) => value === settings.renameRule);
   const selectedClips = source?.clips.filter((clip) => selectedClipIds.has(clip.id)) ?? [];
@@ -223,8 +214,7 @@ export function ExportSettingsSection({
       onUpdateSettings({ renameRule: "filename" });
     }
   }, [renameRuleValid, onUpdateSettings]);
-  // Surround output is only offered when the source actually carries surround
-  // audio, and MPEG (MP2/MP3) cannot encode more than two channels.
+  // Surround output is only offered when the source carries surround audio, and MPEG (MP2/MP3) cannot encode more than two channels.
   const channelOptions = exportAudioChannelOptions(sourceChannels).filter(
     ([value]) => audioFormat !== "mpeg" || value !== "5.1",
   );
@@ -236,9 +226,7 @@ export function ExportSettingsSection({
     }
   }, [channelsValid, onUpdateSettings]);
 
-  // Bitrate and sample-rate choices are format-specific; snap the selection back
-  // to the nearest valid value when the current one falls outside the new
-  // format's options.
+  // Bitrate and sample-rate choices are format-specific; snap the selection back to the nearest valid value when it falls outside the new format's options.
   const bitrateOptions = exportAudioBitrateOptions(audioFormat);
   const bitrateValues = bitrateOptions.map(([value]) => Number(value));
   const bitrateValid = bitrateValues.includes(settings.audioBitrateKbps);
@@ -288,11 +276,7 @@ export function ExportSettingsSection({
     onUpdateSettings(updates);
   }
 
-  /**
-   * Picks the target folder for the 指定文件夹 destination. Merge mode also
-   * writes into a folder now (the file name comes from the auto-derived output
-   * stem), so the button is always a directory picker.
-   */
+  /** Picks the target folder for the 指定文件夹 destination. Merge mode also writes into a folder now (name from the auto-derived output stem), so the button is always a directory picker. */
   async function chooseOutputLocation() {
     const picked = await open({
       directory: true,

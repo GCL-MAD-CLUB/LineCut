@@ -21,9 +21,7 @@ export interface ExportSourceMedia {
   audioSampleRateHz: number | null;
   /** ffprobe channel layout of the audio stream, e.g. "stereo". */
   audioChannelLayout: string | null;
-  /** Source file size in bytes. */
   fileSize: number;
-  /** Total duration of the source file, in microseconds. */
   durationUs: number;
 }
 
@@ -37,7 +35,6 @@ export interface ExportClip {
   sourceName: string;
   /** Storyboard shot keyword string (分镜-关键字); undefined for other sources. */
   keywordText?: string;
-  /** Start offset in the source file, in microseconds. */
   startUs: number;
   /** End offset in the source file; <= 0 means "up to the end of the source". */
   endUs: number;
@@ -135,26 +132,21 @@ export interface ExportSettings {
   importIntoProject: boolean;
   /** Export from proxy files instead of the original sources when available. */
   useProxy: boolean;
-  /** Destination category driving the target folder; see `ExportDestination`. */
   destination: ExportDestination;
-  /** Store exports under a named subfolder of the target folder. */
   useSubfolder: boolean;
   /** Subfolder name used when `useSubfolder` is on; trimmed at export time. */
   subfolderName: string;
   /** Base target folder (before any subfolder is appended). */
   outputDir: string;
   outputStem: string;
-  /** Output filename rule; see `ExportRenameRule`. */
   renameRule: ExportRenameRule;
   /** Custom name segment for the 自定名称/自定名称-* rules. */
   customName: string;
   /** First number used when duplicate filenames are disambiguated with -N. */
   startNumber: number;
-  /** File-extension case. */
   extensionCase: ExportExtensionCase;
   /** Explicit merged-output filename (with extension) for merge exports. */
   outputName: string;
-  /** How to handle an output file that already exists on disk. */
   existingFileMode: ExportExistingFileMode;
 }
 
@@ -191,12 +183,7 @@ export function containerExtension(container: ExportContainer): "mp4" | "mov" | 
   }
 }
 
-/**
- * Destination options for the 导出到 dropdown. The first three are file/source
- * based; the rest are well-known Windows folders and are rendered below a
- * separator (the first three map to the user's own project, the rest are OS
- * folders, so they are visually grouped).
- */
+/** Destination options for the 导出到 dropdown; the well-known Windows folders are rendered below a separator, apart from the file/source-based options. */
 export const exportDestinationOptions: Array<readonly [ExportDestination, string]> = [
   ["specified", "指定文件夹"],
   ["source", "原始照片所在的文件夹"],
@@ -281,11 +268,7 @@ export function exportAudioSampleRateOptions(
   ];
 }
 
-/**
- * Channel layouts the exporter can produce. Surround (5.1) is only offered when
- * the source actually carries enough channels; up-mixing a stereo source to
- * 5.1 would fabricate surround content, so those options are source-dependent.
- */
+/** Channel layouts the exporter can produce; Surround (5.1) is only offered when the source actually carries enough channels. */
 export function exportAudioChannelOptions(
   sourceChannels: number | null,
 ): Array<readonly [ExportAudioChannels, string]> {
@@ -299,7 +282,6 @@ export function exportAudioChannelOptions(
   return options;
 }
 
-/** Human-readable label for an export channel layout. */
 export function exportAudioChannelLabel(channels: ExportAudioChannels): string {
   switch (channels) {
     case "stereo":
@@ -329,10 +311,7 @@ const aacBitrateSegments = [
   [256, 512, 64],
 ] as const;
 
-/**
- * Audio bitrate (kbps) options for a format family. AAC/Opus use a variable
- * ladder (16→512), while MPEG offers a uniform 32-step range (128→448).
- */
+/** Audio bitrate (kbps) options per format family (AAC/Opus: variable ladder 16→512; MPEG: uniform 128→448). */
 export function exportAudioBitrateOptions(
   format: ExportAudioFormat,
 ): Array<readonly [string, string]> {

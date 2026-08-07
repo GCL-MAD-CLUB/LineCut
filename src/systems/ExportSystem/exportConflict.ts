@@ -9,15 +9,12 @@ export type ExportConflictAction = "overwrite" | "skip" | "uniqueName" | "cancel
 export interface ExportConflict {
   /** The clip whose output this target is; null for the single merged file. */
   clipId: string | null;
-  /** Absolute target path (directory + file name). */
   path: string;
-  /** File name for display, e.g. "shot-1.mp4". */
   fileName: string;
   /** Clip label for the dialog list; unused for merge targets. */
   clipLabel: string;
 }
 
-/** Appends `name` to `dir` with a trailing-slash-tolerant separator. */
 export function joinPath(dir: string, name: string): string {
   if (!dir) {
     return name;
@@ -26,14 +23,7 @@ export function joinPath(dir: string, name: string): string {
   return `${dir.replace(/[\\/]+$/, "")}${separator}${name}`;
 }
 
-/**
- * Mirrors the backend `safe_component` (storage.rs) for the file-name part that
- * changes the on-disk path: leading dots/spaces are stripped and the name is
- * clamped to 120 chars. Illegal characters were already replaced by the frontend
- * sanitizer, and computeExportFileNames always appends an extension, so the
- * result is never empty. Conflict checks probe this effective name so they match
- * the path ffmpeg will actually write.
- */
+/** Mirrors the backend `safe_component` (storage.rs): leading dots/spaces are stripped and the name is clamped to 120 chars, so conflict probes match the path ffmpeg will actually write. */
 function effectiveOutputName(fileName: string): string {
   const trimmed = fileName.replace(/^[.\s]+/, "").trim();
   return clampFileName(trimmed);

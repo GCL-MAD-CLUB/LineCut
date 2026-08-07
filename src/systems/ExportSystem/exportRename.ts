@@ -9,7 +9,6 @@ import {
   type ExportSourceKind,
 } from "./exportTypes";
 
-/** The individual segments a rename rule can compose. */
 type RenamePart = "label" | "label_keywords" | "time" | "filename" | "custom";
 
 /** Splits a rule into its 1–2 component parts, in display order. */
@@ -134,10 +133,7 @@ function segmentFor(clip: ExportClip, part: RenamePart, customName: string): str
   }
 }
 
-/**
- * Builds a clip's base name (before disambiguation and extension) from the rule.
- * Empty segments are dropped; an all-empty result falls back to the label.
- */
+/** Builds a clip's base name (before disambiguation and extension) from the rule; empty segments are dropped, an all-empty result falls back to the label. */
 export function computeClipBaseName(
   clip: ExportClip,
   rule: ExportRenameRule,
