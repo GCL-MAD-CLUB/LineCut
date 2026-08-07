@@ -593,7 +593,6 @@ enum ExportAudioChannels {
 enum ExportDestination {
     Specified,
     Source,
-    ChooseLater,
     Desktop,
     Documents,
     User,

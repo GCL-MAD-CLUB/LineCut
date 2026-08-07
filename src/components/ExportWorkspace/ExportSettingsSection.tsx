@@ -46,14 +46,11 @@ const frameRateOptions: Array<readonly [string, string]> = [
   ["60", "60 fps"],
 ];
 
-/** Presets are not implemented yet; the dropdown is a disabled placeholder. */
-const exportPresetOptions: Array<readonly [string, string]> = [["custom", "自定义"]];
-
 /** Destination dropdown items: source/file categories first, then a separator, then the well-known Windows folders (OS paths, grouped below the divider). */
 const destinationItems: Array<SelectDropdownItem<ExportDestination>> = [
-  ...selectDropdownItems(exportDestinationOptions.slice(0, 3)),
+  ...selectDropdownItems(exportDestinationOptions.slice(0, 2)),
   { type: "separator" },
-  ...selectDropdownItems(exportDestinationOptions.slice(3)),
+  ...selectDropdownItems(exportDestinationOptions.slice(2)),
 ];
 
 /** Existing-file handling dropdown: "询问要执行的操作" prompts on export; the other modes act automatically. */
@@ -177,11 +174,7 @@ export function ExportSettingsSection({
   const audioFormat = audioFormatOfCodec(settings.audioCodec);
   const audioSampleRateValue =
     settings.audioSampleRateHz === null ? "source" : String(settings.audioSampleRateHz);
-  // The 文件夹 row shows the actual resolved target folder. `choose_later` is a preset-only placeholder with no path, so it gets a hint instead.
-  const folderLabel =
-    settings.destination === "choose_later"
-      ? "将在导出时选择文件夹"
-      : settings.outputDir.trim() || "未选择输出位置";
+  const folderLabel = settings.outputDir.trim() || "未选择输出位置";
   // 重命名规则 options depend on export mode + source kind; switching may leave the current rule out of the option set, so snap it back.
   const renameRuleOptions = exportRenameRuleOptions(settings.mode, source?.kind ?? "media-bin");
   const renameRuleValid = renameRuleOptions.some(([value]) => value === settings.renameRule);
@@ -363,18 +356,6 @@ export function ExportSettingsSection({
             value={settings.existingFileMode}
             items={existingFileModeItems}
             onChange={(value) => onUpdateSettings({ existingFileMode: value })}
-          />
-        </ExportField>
-
-        <ExportField label="预设">
-          <SelectDropdown
-            className="export-select"
-            ariaLabel="导出预设"
-            disabled
-            title="预设保存功能尚未开放"
-            value="custom"
-            items={selectDropdownItems(exportPresetOptions)}
-            onChange={() => {}}
           />
         </ExportField>
 
