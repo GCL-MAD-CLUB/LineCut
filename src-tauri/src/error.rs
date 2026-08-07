@@ -103,6 +103,7 @@ define_error_codes! {
     WorkspaceConfigWriteFailed => ("WORKSPACE_CONFIG_WRITE_FAILED", Io, true),
     WorkspaceConfigDecodeFailed => ("WORKSPACE_CONFIG_DECODE_FAILED", Format, false),
     WorkspaceConfigEncodeFailed => ("WORKSPACE_CONFIG_ENCODE_FAILED", Format, true),
+    WorkspaceConfigStateUnavailable => ("WORKSPACE_CONFIG_STATE_UNAVAILABLE", State, true),
     ProjectReadFailed => ("PROJECT_READ_FAILED", Io, true),
     ProjectWriteFailed => ("PROJECT_WRITE_FAILED", Io, true),
     MediaReadFailed => ("MEDIA_READ_FAILED", Io, true),
@@ -142,9 +143,15 @@ define_error_codes! {
     NativeDragRegistrationFailed => ("NATIVE_DRAG_REGISTRATION_FAILED", Platform, true),
     ProcessTerminationFailed => ("PROCESS_TERMINATION_FAILED", Platform, true),
     SystemSoundPlayFailed => ("SYSTEM_SOUND_PLAY_FAILED", Platform, true),
+    ExportDestinationResolveFailed => ("EXPORT_DESTINATION_RESOLVE_FAILED", Platform, true),
     BlockingTaskFailed => ("BLOCKING_TASK_FAILED", Runtime, true),
     EventEmitFailed => ("EVENT_EMIT_FAILED", Runtime, true),
     ApplicationRunFailed => ("APPLICATION_RUN_FAILED", Runtime, false),
+    ExportOptionsInvalid => ("EXPORT_OPTIONS_INVALID", Validation, false),
+    ExportClipsEmpty => ("EXPORT_CLIPS_EMPTY", Validation, false),
+    ExportOutputRequired => ("EXPORT_OUTPUT_REQUIRED", Validation, false),
+    ExportDimensionsInvalid => ("EXPORT_DIMENSIONS_INVALID", Validation, false),
+    ExportWriteFailed => ("EXPORT_WRITE_FAILED", Io, true),
 }
 
 #[derive(Debug, Clone, Serialize)]

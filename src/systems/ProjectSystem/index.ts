@@ -15,3 +15,10 @@ export {
   useProjectPort,
   visibleSubtitleTracks,
 } from "./ProjectState";
+export {
+  loadProjectStates,
+  persistExportState,
+  projectStatesLoaded,
+  pruneProjectStates,
+  readExportState,
+} from "./ProjectStatesCache";

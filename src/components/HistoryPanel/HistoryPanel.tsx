@@ -9,6 +9,7 @@ import {
   Eye,
   EyeOff,
   FileInput,
+  FileOutput,
   FileVideo,
   FolderOpen,
   Link2,
@@ -69,6 +70,8 @@ function historyOperationIcon(category: ProjectHistoryCategory) {
       return <Clapperboard />;
     case "proxy":
       return <FileVideo />;
+    case "export":
+      return <FileOutput />;
     default:
       return <ListRestart />;
   }

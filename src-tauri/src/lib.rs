@@ -47,6 +47,9 @@ struct AppState {
     launch_project_path: Mutex<Option<String>>,
     running_tasks: Mutex<HashMap<String, RunningTask>>,
     running_ffmpeg: Mutex<HashMap<String, RunningFfmpeg>>,
+    /// Serializes read-modify-write cycles over WorkspaceConfig.xml so panel
+    /// autosaves and per-project state updates never clobber each other.
+    workspace_config_lock: Mutex<()>,
 }
 
 impl AppState {
@@ -66,6 +69,7 @@ impl AppState {
             launch_project_path: Mutex::new(project_path_from_launch_args()),
             running_tasks: Mutex::new(HashMap::new()),
             running_ffmpeg: Mutex::new(HashMap::new()),
+            workspace_config_lock: Mutex::new(()),
         }
     }
 }
@@ -334,7 +338,7 @@ struct ProjectEditorState {
     preview: ProjectPreviewState,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ProjectSubtitleColorLabel {
     Red,
@@ -373,7 +377,7 @@ struct ProjectStoryboardShot {
     end_us: i64,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ProjectStoryboardColorLabel {
     Red,
@@ -450,6 +454,8 @@ struct ProjectWorkspace {
 #[derive(Debug, Clone, Serialize)]
 struct OpenProjectResult {
     path: String,
+    /// Stable per-document identity (generated for files that predate it).
+    project_id: String,
     workspace: ProjectWorkspace,
     warnings: Vec<UserNotice>,
 }
@@ -504,6 +510,245 @@ struct ProxyResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ExportClip {
+    id: String,
+    source_path: String,
+    label: String,
+    /// Full output filename (with extension) computed by the frontend rename
+    /// rule; empty falls back to the legacy stem-based naming.
+    #[serde(default)]
+    output_name: String,
+    #[serde(default)]
+    start_us: i64,
+    #[serde(default)]
+    end_us: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ExportMode {
+    Merge,
+    Individual,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ExportContainer {
+    Mp4H264,
+    Mp4Hevc,
+    MovProres,
+    WebmVp9,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ExportResolution {
+    MatchSource,
+    Custom,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ExportQuality {
+    Low,
+    Medium,
+    High,
+    VeryHigh,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ExportEncoderSpeed {
+    Fast,
+    Balanced,
+    Quality,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ExportAudioCodec {
+    Aac,
+    /// MPEG-1 Layer II (ffmpeg native `mp2` encoder).
+    Mp2,
+    /// MPEG-1 Layer III (`libmp3lame`).
+    Mp3,
+    Opus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ExportAudioChannels {
+    Stereo,
+    Mono,
+    #[serde(rename = "5.1")]
+    FivePointOne,
+}
+
+/// Destination category for the 导出到 dropdown. The well-known Windows folder
+/// variants are resolved by the `resolve_known_folder` command on the frontend;
+/// the backend only consumes the resolved `output_dir`, so this is persisted for
+/// UI state round-tripping rather than used for path logic here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ExportDestination {
+    Specified,
+    Source,
+    ChooseLater,
+    Desktop,
+    Documents,
+    User,
+    Videos,
+    Pictures,
+}
+
+/// Output filename rule for the 重命名规则 group. The frontend resolves the
+/// rule into a concrete per-clip `output_name`; this enum only round-trips the
+/// persisted UI state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ExportRenameRule {
+    Label,
+    LabelKeywords,
+    Time,
+    TimeLabel,
+    Filename,
+    FilenameLabel,
+    FilenameTime,
+    Custom,
+    CustomLabel,
+    CustomTime,
+    CustomFilename,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ExportExtensionCase {
+    Upper,
+    Lower,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ExportExistingFileMode {
+    Ask,
+    #[serde(rename = "uniqueName")]
+    UniqueName,
+    Overwrite,
+    Skip,
+}
+
+const fn default_export_existing_file_mode() -> ExportExistingFileMode {
+    ExportExistingFileMode::Ask
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportOptions {
+    mode: ExportMode,
+    container: ExportContainer,
+    resolution: ExportResolution,
+    #[serde(default)]
+    custom_width: i64,
+    #[serde(default)]
+    custom_height: i64,
+    frame_rate: Option<f64>,
+    quality: ExportQuality,
+    encoder_speed: ExportEncoderSpeed,
+    #[serde(default)]
+    include_audio: bool,
+    #[serde(default = "default_export_audio_codec")]
+    audio_codec: ExportAudioCodec,
+    /// None means "match the source sample rate".
+    #[serde(default)]
+    audio_sample_rate_hz: Option<i64>,
+    #[serde(default = "default_export_audio_channels")]
+    audio_channels: ExportAudioChannels,
+    #[serde(default = "default_export_audio_bitrate_kbps")]
+    audio_bitrate_kbps: u32,
+    /// Persisted with the project; the import itself runs on the frontend.
+    #[serde(default)]
+    import_into_project: bool,
+    /// Persisted with the project; the frontend swaps clip sources to proxies.
+    #[serde(default)]
+    use_proxy: bool,
+    /// UI state persisted with the project; the frontend resolves the folder.
+    #[serde(default = "default_export_destination")]
+    destination: ExportDestination,
+    #[serde(default)]
+    use_subfolder: bool,
+    #[serde(default)]
+    subfolder_name: String,
+    #[serde(default)]
+    output_dir: String,
+    #[serde(default)]
+    output_stem: String,
+    /// UI state persisted with the project; the frontend resolves filenames.
+    #[serde(default = "default_export_rename_rule")]
+    rename_rule: ExportRenameRule,
+    #[serde(default)]
+    custom_name: String,
+    #[serde(default = "default_export_start_number")]
+    start_number: i64,
+    #[serde(default = "default_export_extension_case")]
+    extension_case: ExportExtensionCase,
+    /// Explicit merged-output filename (with extension) sent by the frontend for
+    /// merge exports, so the backend names the merged file exactly like the
+    /// preview instead of after `probed[0]`.
+    #[serde(default)]
+    output_name: String,
+    /// How to handle an output file that already exists (UI state round-trip;
+    /// the conflict resolution itself runs on the frontend).
+    #[serde(default = "default_export_existing_file_mode")]
+    existing_file_mode: ExportExistingFileMode,
+}
+
+const fn default_export_audio_codec() -> ExportAudioCodec {
+    ExportAudioCodec::Aac
+}
+
+const fn default_export_destination() -> ExportDestination {
+    ExportDestination::Specified
+}
+
+const fn default_export_rename_rule() -> ExportRenameRule {
+    ExportRenameRule::Filename
+}
+
+const fn default_export_start_number() -> i64 {
+    1
+}
+
+const fn default_export_extension_case() -> ExportExtensionCase {
+    ExportExtensionCase::Lower
+}
+
+const fn default_export_audio_channels() -> ExportAudioChannels {
+    ExportAudioChannels::Stereo
+}
+
+const fn default_export_audio_bitrate_kbps() -> u32 {
+    192
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportOutput {
+    clip_id: Option<String>,
+    path: String,
+    status: String,
+    error: Option<String>,
+    duration_us: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportResult {
+    outputs: Vec<ExportOutput>,
+    warnings: Vec<UserNotice>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ProxyOptions {
     frame_size: ProxyFrameSize,
     custom_width: i64,
@@ -514,7 +759,7 @@ struct ProxyOptions {
     custom_location: String,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ProxyFrameSize {
     Full,
@@ -523,7 +768,7 @@ enum ProxyFrameSize {
     Custom,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ProxyPreset {
     H264Mp4,
@@ -533,13 +778,13 @@ enum ProxyPreset {
     Vp9Webm,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ProxyWatermark {
     None,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ProxyLocation {
     SourceProxyFolder,
@@ -661,6 +906,7 @@ pub fn run() {
             generate_storyboard_thumbnail,
             demux_media_streams,
             generate_proxy,
+            export_clips,
             add_external_subtitles,
             save_project_file,
             auto_save_project_snapshot,
@@ -668,8 +914,12 @@ pub fn run() {
             sync_project_workspace,
             close_project,
             path_is_file,
+            resolve_known_folder,
             load_workspace_config,
             save_workspace_config,
+            load_project_states,
+            save_project_state,
+            prune_project_states,
             detect_storyboard_shots,
             set_media_import_drop_region,
             reveal_in_file_manager,

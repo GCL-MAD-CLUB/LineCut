@@ -4,13 +4,28 @@ use std::collections::{HashMap, HashSet};
 
 const WORKSPACE_CONFIG_FILE_NAME: &str = "WorkspaceConfig.xml";
 
-/// Frontend-facing JSON representation, matching TypeScript `PanelManagerInitialState`.
+/// Frontend-facing JSON representation, matching TypeScript `PanelManagerInitialState`
+/// plus the per-project persistent state store.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct WorkspaceConfig {
     #[serde(rename = "focusedPanelId")]
     pub(crate) focused_panel_id: Option<String>,
     pub(crate) instances: Vec<WorkspaceInstance>,
     pub(crate) layout: DockLayoutState,
+    /// Per-project persistent state keyed by the project document id. The fixed
+    /// `ProjectStateConfig` template keeps the store constrained while leaving
+    /// room for additional state kinds later.
+    #[serde(default)]
+    pub(crate) project_states: HashMap<String, ProjectStateConfig>,
+}
+
+/// Fixed template for the state associated with one project id. Only
+/// `export_state` is defined today; future state kinds are added as fields.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProjectStateConfig {
+    #[serde(default)]
+    pub(crate) export_state: Option<ExportOptions>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -62,6 +77,23 @@ struct WorkspaceConfigXml {
     instances: WorkspaceInstancesXml,
     #[serde(rename = "Layout")]
     layout: LayoutNodeXml,
+    #[serde(rename = "ProjectStates", default)]
+    project_states: WorkspaceProjectStatesXml,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct WorkspaceProjectStatesXml {
+    #[serde(rename = "ProjectState", default)]
+    project_state: Vec<WorkspaceProjectStateXml>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorkspaceProjectStateXml {
+    #[serde(rename = "@projectId")]
+    project_id: String,
+    /// The fixed `ProjectStateConfig` template, JSON-encoded like panel params.
+    #[serde(rename = "@state")]
+    state: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,10 +155,28 @@ impl WorkspaceConfig {
                 .collect::<AppResult<Vec<_>>>()?,
         };
         let layout = layout_node_to_xml(self.layout.root, &self.layout.areas)?;
+        let mut project_states = self
+            .project_states
+            .into_iter()
+            .map(|(project_id, config)| {
+                let state = serde_json::to_string(&config).map_err(|error| {
+                    app_error(
+                        ErrorCode::WorkspaceConfigEncodeFailed,
+                        format!("Failed to encode project state for {project_id}: {error}"),
+                    )
+                })?;
+                Ok(WorkspaceProjectStateXml { project_id, state })
+            })
+            .collect::<AppResult<Vec<_>>>()?;
+        // Deterministic file layout.
+        project_states.sort_by(|left, right| left.project_id.cmp(&right.project_id));
         Ok(WorkspaceConfigXml {
             focused_panel_id: self.focused_panel_id,
             instances,
             layout,
+            project_states: WorkspaceProjectStatesXml {
+                project_state: project_states,
+            },
         })
     }
 
@@ -231,10 +281,31 @@ impl WorkspaceConfigXml {
             })
             .collect::<AppResult<Vec<_>>>()?;
         let (root, areas) = layout_node_to_json(self.layout)?;
+        let mut project_states = HashMap::new();
+        for entry in self.project_states.project_state {
+            if entry.project_id.is_empty() {
+                continue;
+            }
+            let config = if entry.state.trim().is_empty() {
+                ProjectStateConfig::default()
+            } else {
+                serde_json::from_str(&entry.state).map_err(|error| {
+                    app_error(
+                        ErrorCode::WorkspaceConfigDecodeFailed,
+                        format!(
+                            "Failed to decode project state for {}: {error}",
+                            entry.project_id
+                        ),
+                    )
+                })?
+            };
+            project_states.insert(entry.project_id, config);
+        }
         let config = WorkspaceConfig {
             focused_panel_id: non_empty_string(self.focused_panel_id),
             instances,
             layout: DockLayoutState { root, areas },
+            project_states,
         };
         config.validate()?;
         Ok(config)
@@ -410,11 +481,32 @@ fn workspace_config_path() -> PathBuf {
     preferences_file().with_file_name(WORKSPACE_CONFIG_FILE_NAME)
 }
 
-#[tauri::command]
-pub(crate) fn load_workspace_config() -> CommandResult<Option<WorkspaceConfig>> {
+/// A valid, empty workspace config so a project-state write can seed the file
+/// on its very first save without depending on any panel layout.
+fn default_workspace_config() -> WorkspaceConfig {
+    WorkspaceConfig {
+        focused_panel_id: None,
+        instances: Vec::new(),
+        layout: DockLayoutState {
+            root: DockLayoutNode::Area {
+                area_id: "default".to_string(),
+            },
+            areas: HashMap::from([(
+                "default".to_string(),
+                DockAreaState {
+                    tabs: Vec::new(),
+                    active_panel_id: None,
+                },
+            )]),
+        },
+        project_states: HashMap::new(),
+    }
+}
+
+fn read_workspace_config() -> AppResult<WorkspaceConfig> {
     let path = workspace_config_path();
     if !path.exists() {
-        return Ok(None);
+        return Ok(default_workspace_config());
     }
     let body = fs::read_to_string(&path).map_err(|error| {
         app_error(
@@ -434,13 +526,11 @@ pub(crate) fn load_workspace_config() -> CommandResult<Option<WorkspaceConfig>> 
             ),
         )
     })?;
-    let config = xml.into_json()?;
-    Ok(Some(config))
+    xml.into_json()
 }
 
-#[tauri::command]
-pub(crate) fn save_workspace_config(config: WorkspaceConfig) -> CommandResult<()> {
-    let xml = config.into_xml()?;
+fn write_workspace_config(config: &WorkspaceConfig) -> AppResult<()> {
+    let xml = config.clone().into_xml()?;
     let path = workspace_config_path();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
@@ -460,7 +550,8 @@ pub(crate) fn save_workspace_config(config: WorkspaceConfig) -> CommandResult<()
         )
     })?;
     let body = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n{body}");
-    fs::write(&path, body).map_err(|error| {
+    // Atomic temp+rename so a crash mid-write cannot corrupt the whole config.
+    crate::project_file::write_atomic(&path, body.as_bytes()).map_err(|error| {
         app_error(
             ErrorCode::WorkspaceConfigWriteFailed,
             format!(
@@ -468,8 +559,96 @@ pub(crate) fn save_workspace_config(config: WorkspaceConfig) -> CommandResult<()
                 path.display()
             ),
         )
-    })?;
-    Ok(())
+    })
+}
+
+/// Serializes all read-modify-write cycles over WorkspaceConfig.xml so panel
+/// autosaves and per-project state updates never clobber each other.
+fn workspace_config_guard<'a>(
+    state: &'a tauri::State<'_, AppState>,
+) -> CommandResult<std::sync::MutexGuard<'a, ()>> {
+    state.workspace_config_lock.lock().map_err(|_| {
+        app_error(
+            ErrorCode::WorkspaceConfigStateUnavailable,
+            "Workspace config lock is poisoned",
+        )
+    })
+}
+
+#[tauri::command]
+pub(crate) fn load_workspace_config() -> CommandResult<Option<WorkspaceConfig>> {
+    let path = workspace_config_path();
+    if !path.exists() {
+        return Ok(None);
+    }
+    let config = read_workspace_config()?;
+    Ok(Some(config))
+}
+
+#[tauri::command]
+pub(crate) fn save_workspace_config(
+    config: WorkspaceConfig,
+    state: tauri::State<'_, AppState>,
+) -> CommandResult<()> {
+    let _guard = workspace_config_guard(&state)?;
+    // The frontend only ever sends the panel layout; keep any per-project state
+    // that is already on disk so panel autosaves cannot wipe it.
+    let existing = read_workspace_config()?;
+    let merged = WorkspaceConfig {
+        focused_panel_id: config.focused_panel_id,
+        instances: config.instances,
+        layout: config.layout,
+        project_states: existing.project_states,
+    };
+    write_workspace_config(&merged)
+}
+
+/// Loads every persisted per-project state, keyed by project document id.
+#[tauri::command]
+pub(crate) fn load_project_states(
+    state: tauri::State<'_, AppState>,
+) -> CommandResult<HashMap<String, ProjectStateConfig>> {
+    let _guard = workspace_config_guard(&state)?;
+    Ok(read_workspace_config()?.project_states)
+}
+
+/// Upserts the state stored under a project document id. Passing `None` removes
+/// the entry so empty state never lingers.
+#[tauri::command]
+pub(crate) fn save_project_state(
+    project_id: String,
+    export_state: Option<ExportOptions>,
+    state: tauri::State<'_, AppState>,
+) -> CommandResult<()> {
+    let _guard = workspace_config_guard(&state)?;
+    let mut config = read_workspace_config()?;
+    if let Some(export_state) = export_state {
+        config.project_states.insert(
+            project_id,
+            ProjectStateConfig {
+                export_state: Some(export_state),
+            },
+        );
+    } else {
+        config.project_states.remove(&project_id);
+    }
+    write_workspace_config(&config)
+}
+
+/// Removes every per-project state whose document id is not on the keep list.
+/// The frontend derives the list from the recently-opened projects list.
+#[tauri::command]
+pub(crate) fn prune_project_states(
+    keep_project_ids: Vec<String>,
+    state: tauri::State<'_, AppState>,
+) -> CommandResult<()> {
+    let _guard = workspace_config_guard(&state)?;
+    let keep = keep_project_ids.into_iter().collect::<HashSet<_>>();
+    let mut config = read_workspace_config()?;
+    config
+        .project_states
+        .retain(|project_id, _| keep.contains(project_id));
+    write_workspace_config(&config)
 }
 
 #[cfg(test)]
@@ -478,6 +657,7 @@ mod tests {
 
     fn sample_config() -> WorkspaceConfig {
         WorkspaceConfig {
+            project_states: HashMap::new(),
             focused_panel_id: Some("history".to_string()),
             instances: vec![
                 WorkspaceInstance {
@@ -538,6 +718,7 @@ mod tests {
     #[test]
     fn empty_workspace_config_xml_round_trips() {
         let config = WorkspaceConfig {
+            project_states: HashMap::new(),
             focused_panel_id: None,
             instances: Vec::new(),
             layout: DockLayoutState {
@@ -576,5 +757,72 @@ mod tests {
             workspace_config_path().parent(),
             preferences_file().parent(),
         );
+    }
+
+    #[test]
+    fn project_states_round_trip_through_xml() {
+        use crate::{
+            ExportAudioChannels, ExportAudioCodec, ExportContainer, ExportDestination,
+            ExportEncoderSpeed, ExportExistingFileMode, ExportExtensionCase, ExportMode,
+            ExportOptions, ExportQuality, ExportRenameRule, ExportResolution,
+        };
+        let mut config = sample_config();
+        config.project_states.insert(
+            "project-1".to_string(),
+            ProjectStateConfig {
+                export_state: Some(ExportOptions {
+                    mode: ExportMode::Individual,
+                    container: ExportContainer::Mp4Hevc,
+                    resolution: ExportResolution::MatchSource,
+                    custom_width: 0,
+                    custom_height: 0,
+                    frame_rate: None,
+                    quality: ExportQuality::VeryHigh,
+                    encoder_speed: ExportEncoderSpeed::Quality,
+                    include_audio: true,
+                    audio_codec: ExportAudioCodec::Opus,
+                    audio_sample_rate_hz: Some(48000),
+                    audio_channels: ExportAudioChannels::Stereo,
+                    audio_bitrate_kbps: 256,
+                    import_into_project: true,
+                    use_proxy: false,
+                    destination: ExportDestination::Desktop,
+                    use_subfolder: false,
+                    subfolder_name: String::new(),
+                    output_dir: r"D:\out".to_string(),
+                    output_stem: "clip".to_string(),
+                    rename_rule: ExportRenameRule::Filename,
+                    custom_name: String::new(),
+                    start_number: 1,
+                    extension_case: ExportExtensionCase::Lower,
+                    output_name: String::new(),
+                    existing_file_mode: ExportExistingFileMode::Ask,
+                }),
+            },
+        );
+        let xml = quick_xml::se::to_string(&config.clone().into_xml().unwrap()).unwrap();
+        assert!(xml.contains("ProjectState"));
+        let restored = quick_xml::de::from_str::<WorkspaceConfigXml>(&xml)
+            .unwrap()
+            .into_json()
+            .unwrap();
+        assert_eq!(restored, config);
+    }
+
+    #[test]
+    fn legacy_config_without_project_states_loads_empty() {
+        let config = sample_config();
+        let xml = quick_xml::se::to_string(&config.clone().into_xml().unwrap()).unwrap();
+        // A genuine old config has no ProjectStates element; the empty one
+        // emitted by a default config is equivalent to it being absent.
+        let xml = xml
+            .replace("<ProjectStates></ProjectStates>", "")
+            .replace("<ProjectStates/>", "");
+        let restored = quick_xml::de::from_str::<WorkspaceConfigXml>(&xml)
+            .unwrap()
+            .into_json()
+            .unwrap();
+        assert!(restored.project_states.is_empty());
+        assert_eq!(restored, config);
     }
 }

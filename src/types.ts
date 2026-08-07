@@ -199,6 +199,57 @@ export interface ProjectEditorState {
   preview: ProjectPreviewState;
 }
 
+/** The export settings recorded with the last completed export of this project. */
+export interface ProjectExportState {
+  mode: "merge" | "individual";
+  container: "mp4_h264" | "mp4_hevc" | "mov_prores" | "webm_vp9";
+  resolution: "match_source" | "custom";
+  customWidth: number;
+  customHeight: number;
+  frameRate: number | null;
+  quality: "low" | "medium" | "high" | "very_high";
+  encoderSpeed: "fast" | "balanced" | "quality";
+  includeAudio: boolean;
+  audioCodec: "aac" | "mp2" | "mp3" | "opus";
+  /** null means "match the source sample rate". */
+  audioSampleRateHz: number | null;
+  audioChannels: "stereo" | "mono" | "5.1";
+  audioBitrateKbps: number;
+  importIntoProject: boolean;
+  useProxy: boolean;
+  destination:
+    | "specified"
+    | "source"
+    | "choose_later"
+    | "desktop"
+    | "documents"
+    | "user"
+    | "videos"
+    | "pictures";
+  useSubfolder: boolean;
+  subfolderName: string;
+  outputDir: string;
+  outputStem: string;
+  renameRule:
+    | "label"
+    | "label_keywords"
+    | "time"
+    | "time_label"
+    | "filename"
+    | "filename_label"
+    | "filename_time"
+    | "custom"
+    | "custom_label"
+    | "custom_time"
+    | "custom_filename";
+  customName: string;
+  startNumber: number;
+  extensionCase: "upper" | "lower";
+  /** Explicit merged-output filename (with extension) round-tripped from the backend. */
+  outputName: string;
+  existingFileMode: "ask" | "uniqueName" | "overwrite" | "skip";
+}
+
 export interface ProjectWorkspace {
   projects: Project[];
   media_bin: ProjectMediaBinState;
@@ -234,8 +285,27 @@ export interface UserNotice {
 
 export interface OpenProjectResult {
   path: string;
+  /** Stable per-document identity (generated for files that predate it). */
+  project_id: string;
   workspace: ProjectWorkspace;
   warnings: UserNotice[];
+}
+
+/**
+ * One entry in the recently-opened projects list. The project id lets the
+ * global per-project state store key data to the document, not its path.
+ */
+export interface RecentProjectEntry {
+  path: string;
+  projectId: string;
+}
+
+/**
+ * Fixed template for the global state stored under one project document id.
+ * Only `exportState` is defined today; future state kinds are added as fields.
+ */
+export interface ProjectStateConfig {
+  exportState: ProjectExportState | null;
 }
 
 export interface ProxyResult {

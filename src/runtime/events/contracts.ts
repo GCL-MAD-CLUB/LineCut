@@ -1,5 +1,8 @@
+import type { ExportSource } from "../../systems/ExportSystem/exportTypes";
+
 export interface ApplicationEventMap {
   "media.import.requested": { paths?: string[]; folderId?: string };
+  "export.requested": { source: ExportSource };
   "edit.copy.requested": Record<string, never>;
   "edit.paste.requested": Record<string, never>;
   "edit.clear.requested": Record<string, never>;

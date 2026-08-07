@@ -45,6 +45,12 @@ import {
   getProjectWorkspaceSnapshot,
   useProjectPort,
 } from "../../systems/ProjectSystem";
+import {
+  buildMediaBinExportSource,
+  requestExport,
+  runQuickExport,
+  useExportWorkspaceState,
+} from "../../systems/ExportSystem";
 import { isTauriRuntime } from "../../tauriRuntime";
 import type {
   AddExternalSubtitlesResult,
@@ -92,6 +98,7 @@ interface MediaBinContextMenuState {
   bindingSubmenuOpen: boolean;
   proxySubmenuOpen: boolean;
   moveSubmenuOpen: boolean;
+  exportSubmenuOpen: boolean;
 }
 
 interface MediaBinProps {
@@ -215,6 +222,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     mediaItems,
     activeVideoId,
     detachedVideoIds,
+    exportState,
     mediaItemRenamed,
     mediaBinEntriesAdded,
     mediaBinEntriesRemoved,
@@ -246,6 +254,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
       "activeVideoId",
       "detachedVideoIds",
       "mediaBinReadOnly",
+      "exportState",
     ],
     [
       "mediaItemRenamed",
@@ -272,6 +281,8 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
       "mediaBinReadOnlyChanged",
     ],
   );
+  // Exports are serialized; hide/disable quick export while one is in flight.
+  const isExporting = useExportWorkspaceState((state) => state.isExporting);
   const {
     query,
     selectedIds,
@@ -1247,6 +1258,42 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     );
   }
 
+  function buildCurrentMediaBinSource() {
+    return buildMediaBinExportSource({
+      itemIds: selectedProjectVideos.map((item) => item.id),
+      mediaItems,
+      projects,
+    });
+  }
+
+  function exportSelectedVideos() {
+    const source = buildCurrentMediaBinSource();
+    if (source) {
+      requestExport(source);
+      setContextMenu(null);
+    }
+  }
+
+  async function quickExportWithLastSettings() {
+    const source = buildCurrentMediaBinSource();
+    if (!source || !exportState) {
+      return;
+    }
+    const outcome = await runQuickExport(source, exportState);
+    if (outcome.status === "success") {
+      const completed = outcome.result.outputs.filter(
+        (output) => output.status === "completed",
+      ).length;
+      const failed = outcome.result.outputs.filter((output) => output.status === "failed").length;
+      messagePublished(`已导出 ${completed} 个片段${failed > 0 ? `，${failed} 个失败` : ""}`);
+    } else if (outcome.status === "cancelled") {
+      messagePublished("导出已取消");
+    } else if (outcome.status === "busy") {
+      messagePublished("已有导出正在进行");
+    }
+    setContextMenu(null);
+  }
+
   function openContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
     event.preventDefault();
     const itemElement = (event.target as HTMLElement | null)?.closest<HTMLElement>(
@@ -1273,6 +1320,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
       bindingSubmenuOpen: false,
       proxySubmenuOpen: false,
       moveSubmenuOpen: false,
+      exportSubmenuOpen: false,
     });
   }
 
@@ -1621,6 +1669,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                       current
                         ? {
                             ...current,
+                            exportSubmenuOpen: open ? false : current.exportSubmenuOpen,
                             moveSubmenuOpen: open,
                             bindingSubmenuOpen: false,
                             proxySubmenuOpen: false,
@@ -1690,6 +1739,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                         current
                           ? {
                               ...current,
+                              exportSubmenuOpen: open ? false : current.exportSubmenuOpen,
                               bindingSubmenuOpen: open,
                               proxySubmenuOpen: open ? false : current.proxySubmenuOpen,
                               moveSubmenuOpen: open ? false : current.moveSubmenuOpen,
@@ -1831,6 +1881,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                       current
                         ? {
                             ...current,
+                            exportSubmenuOpen: open ? false : current.exportSubmenuOpen,
                             proxySubmenuOpen: open,
                             bindingSubmenuOpen: open ? false : current.bindingSubmenuOpen,
                             moveSubmenuOpen: open ? false : current.moveSubmenuOpen,
@@ -1876,6 +1927,38 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                     disabled={isReadOnly || isBusy || selectedOfflineProjectVideos.length === 0}
                   >
                     重新连接完整分辨率媒体...
+                  </PopupMenuItem>
+                </PopupMenuSubmenu>
+                <PopupMenuSeparator />
+                <PopupMenuSubmenu
+                  label="导出"
+                  open={contextMenu.exportSubmenuOpen}
+                  disabled={selectedProjectVideos.length === 0}
+                  enableMnemonics
+                  menuClassName="media-bin-context-menu"
+                  onOpenChange={(open) =>
+                    setContextMenu((current) =>
+                      current
+                        ? {
+                            ...current,
+                            exportSubmenuOpen: open,
+                            bindingSubmenuOpen: open ? false : current.bindingSubmenuOpen,
+                            proxySubmenuOpen: open ? false : current.proxySubmenuOpen,
+                            moveSubmenuOpen: open ? false : current.moveSubmenuOpen,
+                          }
+                        : current,
+                    )
+                  }
+                >
+                  <PopupMenuItem mnemonic="E" onSelect={exportSelectedVideos}>
+                    导出(E)...
+                  </PopupMenuItem>
+                  <PopupMenuItem
+                    mnemonic="W"
+                    disabled={!exportState || isExporting}
+                    onSelect={() => void quickExportWithLastSettings()}
+                  >
+                    使用上次设置导出(W)
                   </PopupMenuItem>
                 </PopupMenuSubmenu>
               </>

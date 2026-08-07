@@ -19,6 +19,7 @@ import type {
   MediaBinItem,
   Preferences,
   Project,
+  ProjectExportState,
   ProjectWorkspace,
   StoryboardState,
   SubtitleCue,
@@ -26,12 +27,13 @@ import type {
   SubtitleTrack,
   UserNotice,
 } from "../../types";
+import { readExportState } from "./ProjectStatesCache";
 
 interface ProjectCommands {
   projectImported: (project: Project) => void;
-  projectCreated: () => void;
-  projectOpened: (workspace: ProjectWorkspace, path: string) => void;
-  projectSaved: (path: string) => void;
+  projectCreated: (projectId: string) => void;
+  projectOpened: (workspace: ProjectWorkspace, path: string, projectId: string) => void;
+  projectSaved: (path: string, projectId: string) => void;
   projectClosed: () => void;
   mediaProjectsAdded: (projects: Project[]) => void;
   mediaItemsAdded: (items: MediaBinItem[], historyLabel?: string) => void;
@@ -102,6 +104,7 @@ interface ProjectCommands {
   ) => void;
   projectHistoryJumped: (cursor: number) => boolean;
   projectHistoryFutureDiscarded: () => void;
+  exportSettingsRecorded: (settings: ProjectExportState) => void;
 }
 
 interface ProjectSystemState {
@@ -112,6 +115,8 @@ interface ProjectSystemState {
   activeVideoId: string;
   detachedVideoIds: Set<string>;
   projectFilePath: string | null;
+  /** Stable per-document identity; see the `project_id` project-file field. */
+  projectId: string | null;
   projectDirty: boolean;
   activeTrackId: string;
   proxyPath: string | null;
@@ -123,6 +128,7 @@ interface ProjectSystemState {
   mediaBinReadOnly: boolean;
   subtitles: Record<string, SubtitleState>;
   storyboards: Record<string, StoryboardState>;
+  exportState: ProjectExportState | null;
   projectHistory: ProjectHistoryState;
   commands: ProjectCommands;
 }
@@ -371,8 +377,10 @@ function initialProjectState(project: Project | null) {
       detachedVideoIds: new Set<string>(),
       activeTrackId: "",
       proxyPath: null,
+      projectId: null,
       subtitles: {},
       storyboards: {},
+      exportState: null,
     };
   }
   const mediaItems = [projectMediaItem(project), ...externalSubtitleItems(project)];
@@ -390,8 +398,10 @@ function initialProjectState(project: Project | null) {
       project.asset.id,
     ),
     proxyPath: project.proxy_path,
+    projectId: null,
     subtitles: {},
     storyboards: {},
+    exportState: null,
   };
 }
 
@@ -438,7 +448,7 @@ function normalizedMediaFolders(folders: MediaBinFolder[] | undefined) {
   return normalized.map((folder) => ({ ...folder, parent_id: parentById.get(folder.id) ?? null }));
 }
 
-function openedProjectState(workspace: ProjectWorkspace) {
+function openedProjectState(workspace: ProjectWorkspace, projectId: string) {
   const projects = Object.fromEntries(
     workspace.projects.map((project) => [project.asset.id, project]),
   );
@@ -495,6 +505,7 @@ function openedProjectState(workspace: ProjectWorkspace) {
     mediaBinReadOnly: false,
     subtitles: workspace.subtitles ?? {},
     storyboards: workspace.storyboards ?? {},
+    exportState: readExportState(projectId),
   };
 }
 
@@ -539,6 +550,13 @@ function reconciledProjectFileState(
     proxyPath: project?.proxy_path ?? null,
     proxyDialogOpen: false,
   };
+}
+
+function exportSettingsEqual(left: ProjectExportState | null, right: ProjectExportState) {
+  if (!left) {
+    return false;
+  }
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function removedMediaItemsState(
@@ -802,10 +820,11 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
         mediaBinReadOnly: false,
         projectHistory: createProjectHistory(true, false),
       }),
-    projectCreated: () =>
+    projectCreated: (projectId) =>
       set({
         ...initialProjectState(null),
         projectFilePath: null,
+        projectId,
         projectDirty: false,
         useProxy: false,
         proxyDialogOpen: false,
@@ -813,18 +832,20 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
         mediaBinReadOnly: false,
         projectHistory: createProjectHistory(true),
       }),
-    projectOpened: (workspace, projectFilePath) =>
+    projectOpened: (workspace, projectFilePath, projectId) =>
       set({
-        ...openedProjectState(workspace),
+        ...openedProjectState(workspace, projectId),
         projectFilePath,
+        projectId,
         projectDirty: false,
         proxyDialogOpen: false,
         warnings: [],
         projectHistory: createProjectHistory(true),
       }),
-    projectSaved: (projectFilePath) =>
+    projectSaved: (projectFilePath, projectId) =>
       set((state) => ({
         projectFilePath,
+        projectId,
         projectDirty: false,
         projectHistory: markProjectHistorySaved(state.projectHistory),
       })),
@@ -832,6 +853,7 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
       set({
         ...initialProjectState(null),
         projectFilePath: null,
+        projectId: null,
         projectDirty: false,
         useProxy: false,
         proxyDialogOpen: false,
@@ -1690,6 +1712,12 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
           ? state
           : { projectHistory, projectDirty: isProjectHistoryDirty(projectHistory) };
       }),
+    // Export settings live in the global per-project store (WorkspaceConfig.xml),
+    // not the project file, so recording them never dirties the project.
+    exportSettingsRecorded: (settings) =>
+      set((state) =>
+        exportSettingsEqual(state.exportState, settings) ? state : { exportState: settings },
+      ),
   },
 }));
 

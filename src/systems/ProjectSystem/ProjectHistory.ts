@@ -29,6 +29,7 @@ export type ProjectHistoryCategory =
   | "subtitle"
   | "storyboard"
   | "proxy"
+  | "export"
   | "default";
 
 export interface ProjectFileState {

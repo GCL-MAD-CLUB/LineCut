@@ -75,10 +75,14 @@ export function SelectDropdown<T extends string>({
         menuHeight > 0 &&
         rect.bottom + gap + menuHeight > window.innerHeight &&
         rect.top - gap - menuHeight > 0);
-    const top = shouldOpenUp ? rect.top - gap - menuHeight : rect.bottom + gap;
+    const preferredTop = shouldOpenUp ? rect.top - gap - menuHeight : rect.bottom + gap;
+    // Keep the (possibly max-height-clamped) menu box fully inside the viewport
+    // even when neither direction has enough room for the whole list.
+    const viewportLimit = Math.max(4, window.innerHeight - menuHeight - gap);
+    const top = Math.min(Math.max(4, preferredTop), viewportLimit);
     setMenuStyle({
       left: `${rect.left}px`,
-      top: `${Math.max(4, top)}px`,
+      top: `${top}px`,
       width: `${rect.width}px`,
     });
   }

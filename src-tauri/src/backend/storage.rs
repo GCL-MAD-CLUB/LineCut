@@ -1,7 +1,33 @@
 use super::*;
 
+/// Maximum length of a sanitized file-name component (Windows path budget).
+const MAX_COMPONENT_LEN: usize = 120;
+
+/// Truncates `value` to `limit` characters, preserving a trailing file
+/// extension (a `.` suffix of 2–10 chars) when one is present, so a long base
+/// name never loses its extension (e.g. `.mp4`) to the clamp.
+fn clamp_to_limit(value: &str, limit: usize) -> String {
+    if value.chars().count() <= limit {
+        return value.to_string();
+    }
+    if let Some(dot) = value.rfind('.') {
+        if dot > 0 {
+            let ext = &value[dot..];
+            let ext_len = ext.chars().count();
+            if (2..=10).contains(&ext_len) {
+                let stem: String = value[..dot]
+                    .chars()
+                    .take(limit.saturating_sub(ext_len))
+                    .collect();
+                return format!("{stem}{ext}");
+            }
+        }
+    }
+    value.chars().take(limit).collect()
+}
+
 pub(crate) fn safe_component(value: &str) -> String {
-    let mut output = value
+    let sanitized: String = value
         .chars()
         .map(|ch| {
             if ch.is_control() || matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
@@ -11,9 +37,9 @@ pub(crate) fn safe_component(value: &str) -> String {
                 ch
             }
         })
-        .take(120)
-        .collect::<String>();
-    output = output.trim().trim_matches('.').to_string();
+        .collect();
+    let clamped = clamp_to_limit(&sanitized, MAX_COMPONENT_LEN);
+    let output = clamped.trim().trim_matches('.').to_string();
     if output.is_empty() {
         "clip".to_string()
     } else {

@@ -679,7 +679,7 @@ fn storyboard_frame_rate(project: &Project) -> f64 {
         .unwrap_or(DEFAULT_STORYBOARD_FRAME_RATE)
 }
 
-fn parse_frame_rate(value: Option<&str>) -> Option<f64> {
+pub(crate) fn parse_frame_rate(value: Option<&str>) -> Option<f64> {
     let value = value?.trim();
     if value.is_empty() || value == "0/0" {
         return None;

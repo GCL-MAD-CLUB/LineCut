@@ -7,21 +7,19 @@ use super::handle_v1;
 
 mod v2;
 mod v3;
+mod v4;
 
-#[allow(dead_code)] // Required by the uniform model contract before V3 exists.
 pub(super) struct UpgradeParts {
     pub(super) workspace: Value,
     pub(super) saved_at: u64,
     pub(super) app_version: String,
 }
 
-#[allow(dead_code)] // `into_upgrade_parts` becomes production code when the next model is added.
 pub(super) trait ProjectModel: Sized {
     const VERSION: u16;
 
     fn decode(payload: &[u8]) -> AppResult<Self>;
     fn encode(&self) -> AppResult<Vec<u8>>;
-    #[allow(dead_code)] // Silence warning until used by next model upgrade path
     fn into_upgrade_parts(self) -> AppResult<UpgradeParts>;
 }
 
@@ -37,9 +35,19 @@ pub(super) trait CurrentProjectModel: ProjectModel {
     ) -> AppResult<Self>;
 
     fn into_runtime(self) -> AppResult<ProjectWorkspace>;
+
+    /// Stable per-document identity, when the current model carries one. Older
+    /// models default to none, so their impls are untouched.
+    fn project_id(&self) -> &str {
+        ""
+    }
+
+    /// Mutates the in-memory model so a write can stamp a document id onto the
+    /// encoded payload without threading it through every version's constructor.
+    fn set_project_id(&mut self, _project_id: &str) {}
 }
 
-pub(super) type Current = v3::Model;
+pub(super) type Current = v4::Model;
 
 pub(super) fn current_version() -> u16 {
     Current::VERSION
@@ -47,8 +55,11 @@ pub(super) fn current_version() -> u16 {
 
 pub(super) fn decode_current(version: u16, payload: &[u8]) -> AppResult<Current> {
     match version {
-        v2::Model::VERSION => v3::Model::upgrade_from(v2::Model::decode(payload)?),
-        v3::Model::VERSION => v3::Model::decode(payload),
+        v2::Model::VERSION => {
+            v4::Model::upgrade_from(v3::Model::upgrade_from(v2::Model::decode(payload)?)?)
+        }
+        v3::Model::VERSION => v4::Model::upgrade_from(v3::Model::decode(payload)?),
+        v4::Model::VERSION => v4::Model::decode(payload),
         version if version > current_version() => Err(app_error(
             ErrorCode::ProjectVersionUnsupported,
             format!(
@@ -64,27 +75,32 @@ pub(super) fn decode_current(version: u16, payload: &[u8]) -> AppResult<Current>
 }
 
 pub(super) fn upgrade_v1(previous: handle_v1::ProjectFile) -> AppResult<Current> {
-    v3::Model::upgrade_from(v2::Model::upgrade_from(previous)?)
+    v4::Model::upgrade_from(v3::Model::upgrade_from(v2::Model::upgrade_from(previous)?)?)
 }
 
 pub(super) fn from_runtime(
     workspace: &ProjectWorkspace,
+    project_id: &str,
     saved_at: u64,
     app_version: &str,
 ) -> AppResult<Current> {
-    Current::from_runtime(workspace, saved_at, app_version)
+    let mut current = Current::from_runtime(workspace, saved_at, app_version)?;
+    current.set_project_id(project_id);
+    Ok(current)
 }
 
-pub(super) fn into_runtime(model: Current) -> AppResult<ProjectWorkspace> {
-    model.into_runtime()
+pub(super) fn into_runtime(model: Current) -> AppResult<(ProjectWorkspace, String)> {
+    let project_id = model.project_id().to_string();
+    let workspace = model.into_runtime()?;
+    Ok((workspace, project_id))
 }
 
 pub(super) fn encode_current(model: &Current) -> AppResult<Vec<u8>> {
     model.encode()
 }
 
-pub(super) fn content_hash(workspace: &ProjectWorkspace) -> AppResult<String> {
-    let model = Current::from_runtime(workspace, 0, "")?;
+pub(super) fn content_hash(workspace: &ProjectWorkspace, project_id: &str) -> AppResult<String> {
+    let model = from_runtime(workspace, project_id, 0, "")?;
     let encoded = Zeroizing::new(model.encode()?);
     let mut hasher = Sha256::new();
     hasher.update(Current::VERSION.to_le_bytes());
@@ -123,7 +139,7 @@ mod tests {
     }
 
     #[test]
-    fn migrates_v2_workspace_to_empty_v3_storyboards() {
+    fn migrates_v2_workspace_to_empty_storyboards_and_generates_project_id() {
         let payload = br#"{
             "workspace": {
                 "projects": [],
@@ -140,14 +156,16 @@ mod tests {
             "app_version": "0.2.0"
         }"#;
 
-        assert_eq!(current_version(), 3);
-        let workspace = into_runtime(decode_current(2, payload).unwrap()).unwrap();
+        assert_eq!(current_version(), 4);
+        let (workspace, project_id) = into_runtime(decode_current(2, payload).unwrap()).unwrap();
         assert!(workspace.subtitles.is_empty());
         assert!(workspace.storyboards.is_empty());
+        // Older files carry no document id; the V4 upgrade generates one.
+        assert!(!project_id.is_empty());
     }
 
     #[test]
-    fn v3_round_trip_preserves_annotations_without_subtitle_selection() {
+    fn v4_round_trip_preserves_annotations_without_subtitle_selection() {
         let mut workspace = empty_workspace();
         workspace.subtitles.insert(
             "video:asset:fingerprint:track".to_string(),
@@ -222,7 +240,7 @@ mod tests {
             },
         );
 
-        let model = from_runtime(&workspace, 10, "0.2.0").unwrap();
+        let model = from_runtime(&workspace, "id-1", 10, "0.2.0").unwrap();
         let encoded = model.encode().unwrap();
         let encoded_json: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
         assert!(encoded_json["workspace"]["editor"]
@@ -274,7 +292,7 @@ mod tests {
                 "total": 10
             })
         );
-        let restored = into_runtime(decode_current(3, &encoded).unwrap()).unwrap();
+        let (restored, _) = into_runtime(decode_current(4, &encoded).unwrap()).unwrap();
         let subtitle = restored
             .subtitles
             .get("video:asset:fingerprint:track")
@@ -337,9 +355,11 @@ mod tests {
 
     #[test]
     fn v3_reader_discards_unreleased_subtitle_selection_state() {
-        let model = from_runtime(&empty_workspace(), 10, "0.2.0").unwrap();
+        let model = from_runtime(&empty_workspace(), "id-1", 10, "0.2.0").unwrap();
         let mut encoded: serde_json::Value =
             serde_json::from_slice(&model.encode().unwrap()).unwrap();
+        // A genuine V3 file has no top-level `project_id`; strip it before decode.
+        encoded.as_object_mut().unwrap().remove("project_id");
         let workspace = encoded["workspace"].as_object_mut().unwrap();
         workspace.remove("subtitles");
         workspace["editor"]["subtitle_selections"] = serde_json::json!({
@@ -347,7 +367,59 @@ mod tests {
         });
 
         let encoded = serde_json::to_vec(&encoded).unwrap();
-        let restored = into_runtime(decode_current(3, &encoded).unwrap()).unwrap();
+        let (restored, _) = into_runtime(decode_current(3, &encoded).unwrap()).unwrap();
         assert!(restored.subtitles.is_empty());
+    }
+
+    #[test]
+    fn project_id_round_trips_through_the_current_model() {
+        let model = from_runtime(&empty_workspace(), "project-abc", 10, "0.2.0").unwrap();
+        let encoded = model.encode().unwrap();
+        let encoded_json: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(encoded_json["project_id"], "project-abc");
+        // export_state is no longer part of the project file.
+        assert!(encoded_json["workspace"].get("export_state").is_none());
+
+        let (restored, project_id) = into_runtime(decode_current(4, &encoded).unwrap()).unwrap();
+        assert_eq!(project_id, "project-abc");
+        assert!(restored.subtitles.is_empty());
+    }
+
+    #[test]
+    fn v4_upgrade_generates_a_fresh_project_id_for_legacy_files() {
+        let model = from_runtime(&empty_workspace(), "id-1", 10, "0.2.0").unwrap();
+        let mut encoded: serde_json::Value =
+            serde_json::from_slice(&model.encode().unwrap()).unwrap();
+        // A genuine V3 file has neither `project_id` nor `export_state`.
+        encoded.as_object_mut().unwrap().remove("project_id");
+        encoded["workspace"]
+            .as_object_mut()
+            .unwrap()
+            .remove("export_state");
+
+        let encoded = serde_json::to_vec(&encoded).unwrap();
+        let (_, project_id) = into_runtime(decode_current(3, &encoded).unwrap()).unwrap();
+        assert!(!project_id.is_empty());
+        // Each legacy file gets its own id.
+        let (_, another_project_id) = into_runtime(decode_current(3, &encoded).unwrap()).unwrap();
+        assert!(!another_project_id.is_empty());
+    }
+
+    #[test]
+    fn pre_refactor_v4_file_without_project_id_still_decodes() {
+        let model = from_runtime(&empty_workspace(), "id-1", 10, "0.2.0").unwrap();
+        let mut encoded: serde_json::Value =
+            serde_json::from_slice(&model.encode().unwrap()).unwrap();
+        // A dev-build V4 file predates `project_id` and still records export_state.
+        encoded.as_object_mut().unwrap().remove("project_id");
+        encoded["workspace"].as_object_mut().unwrap().insert(
+            "export_state".to_string(),
+            serde_json::json!({ "mode": "merge" }),
+        );
+
+        let encoded = serde_json::to_vec(&encoded).unwrap();
+        let (workspace, project_id) = into_runtime(decode_current(4, &encoded).unwrap()).unwrap();
+        assert!(project_id.is_empty());
+        assert!(workspace.subtitles.is_empty());
     }
 }

@@ -2,6 +2,8 @@ use super::*;
 
 pub(crate) fn hidden_command(program: &str) -> Command {
     let mut command = Command::new(program);
+    // Kill the child when the owning future is dropped so ffmpeg is never orphaned.
+    command.kill_on_drop(true);
     #[cfg(windows)]
     {
         command.creation_flags(CREATE_NO_WINDOW);
@@ -255,6 +257,23 @@ pub(crate) fn stop_running_ffmpeg(tasks: Vec<RunningFfmpeg>) {
         }
         remove_cleanup_paths(&task.cleanup_paths);
     }
+}
+
+pub(crate) fn prune_task_cleanup_paths(
+    task_id: &str,
+    keep: &[PathBuf],
+    state: &AppState,
+) -> AppResult<()> {
+    let mut tasks = state.running_tasks.lock().map_err(|_| {
+        app_error(
+            ErrorCode::TaskStateUnavailable,
+            "Task state lock is poisoned",
+        )
+    })?;
+    if let Some(task) = tasks.get_mut(task_id) {
+        task.cleanup_paths.retain(|path| keep.contains(path));
+    }
+    Ok(())
 }
 
 pub(crate) fn remove_cleanup_paths(paths: &[PathBuf]) {
@@ -542,7 +561,9 @@ pub(crate) async fn run_status_with_ffmpeg_progress(
     let was_cancelled = cancel.load(Ordering::SeqCst);
     clear_running_ffmpeg(progress.state, &task_id);
 
-    if status.success() && !was_cancelled {
+    if status.success() {
+        // Completed files survive: a cancel arriving after completion must not
+        // delete the finished output (mid-encode cancels are handled above).
         emit_ffmpeg_progress(
             progress.app,
             progress.task_id,
