@@ -1,5 +1,6 @@
 import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
+import { getProjectExportContext } from "../ProjectSystem";
 import type { ExportResult, ExportSettings, ExportSource } from "./exportTypes";
 
 const exportDirStorageKey = "linecut:export-dir";
@@ -28,6 +29,8 @@ export interface ExportWorkspaceState {
   source: ExportSource | null;
   selectedClipIds: Set<string>;
   settings: ExportSettings;
+  /** Project id whose recorded settings back `settings`; null before any project load. */
+  settingsProjectId: string | null;
   results: ExportResult | null;
   status: ExportWorkspaceStatus;
   /** The clip currently previewed in the export source player. */
@@ -35,6 +38,8 @@ export interface ExportWorkspaceState {
   /** True while any export is in flight; exports are serialized. */
   isExporting: boolean;
   setSource: (source: ExportSource | null) => void;
+  /** Loads the open project's recorded export settings when the project changed. */
+  applyProjectExportSettings: () => void;
   toggleClip: (clipId: string) => void;
   setAllSelected: (selected: boolean) => void;
   updateSettings: (updates: Partial<ExportSettings>) => void;
@@ -77,25 +82,51 @@ export function defaultExportSettings(): ExportSettings {
   };
 }
 
+function reconcileSettings(
+  settings: ExportSettings,
+  settingsProjectId: string | null,
+): { settings: ExportSettings; settingsProjectId: string | null } {
+  const { projectId, exportState } = getProjectExportContext();
+  if (projectId === settingsProjectId) {
+    return { settings, settingsProjectId };
+  }
+  return {
+    settings: exportState
+      ? { ...defaultExportSettings(), ...exportState }
+      : defaultExportSettings(),
+    settingsProjectId: projectId,
+  };
+}
+
 export const exportWorkspaceStore = createStore<ExportWorkspaceState>()((set) => ({
   source: null,
   selectedClipIds: new Set<string>(),
   settings: defaultExportSettings(),
+  settingsProjectId: null,
   results: null,
   status: "idle",
   previewClipId: null,
   isExporting: false,
   setSource: (source) =>
-    set((state) => ({
-      source,
-      selectedClipIds: source ? new Set(source.clips.map((clip) => clip.id)) : new Set<string>(),
-      previewClipId: source?.clips[0]?.id ?? null,
-      // The output stem is derived by the export workspace from the project/source,
-      // so it is left untouched here.
-      settings: state.settings,
-      results: null,
-      status: "idle",
-    })),
+    set((state) => {
+      const reconciled = reconcileSettings(state.settings, state.settingsProjectId);
+      return {
+        source,
+        selectedClipIds: source ? new Set(source.clips.map((clip) => clip.id)) : new Set<string>(),
+        previewClipId: source?.clips[0]?.id ?? null,
+        // The output stem is derived by the export workspace from the project/source,
+        // so it is left untouched here.
+        settings: reconciled.settings,
+        settingsProjectId: reconciled.settingsProjectId,
+        results: null,
+        status: "idle",
+      };
+    }),
+  applyProjectExportSettings: () =>
+    set((state) => {
+      const reconciled = reconcileSettings(state.settings, state.settingsProjectId);
+      return reconciled.settings === state.settings ? state : reconciled;
+    }),
   toggleClip: (clipId) =>
     set((state) => {
       const selectedClipIds = new Set(state.selectedClipIds);

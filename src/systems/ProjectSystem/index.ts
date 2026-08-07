@@ -2,6 +2,7 @@ export * from "./ProjectHistory";
 export {
   defaultMediaBinFolderColor,
   defaultPreferences,
+  getProjectExportContext,
   getProjectWorkspaceSnapshot,
   isMediaItemEnabled,
   isMediaItemHidden,

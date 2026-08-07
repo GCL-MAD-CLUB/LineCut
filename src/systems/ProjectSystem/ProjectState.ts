@@ -1721,6 +1721,11 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
   },
 }));
 
+export function getProjectExportContext() {
+  const state = projectState.getState();
+  return { projectId: state.projectId, exportState: state.exportState };
+}
+
 function useProjectState<Selection>(selector: (state: ProjectSystemState) => Selection) {
   return useStore(projectState, selector);
 }

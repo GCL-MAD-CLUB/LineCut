@@ -103,10 +103,14 @@ export function ExportWorkspace() {
   const setAllSelected = useExportWorkspaceState((state) => state.setAllSelected);
   const setPreviewClip = useExportWorkspaceState((state) => state.setPreviewClip);
   const updateSettings = useExportWorkspaceState((state) => state.updateSettings);
-  const { projectFilePath, mediaItems, activeVideoId, activeVideoChanged } = useProjectPort(
-    ["projectFilePath", "mediaItems", "activeVideoId"],
-    ["activeVideoChanged"],
+  const applyProjectExportSettings = useExportWorkspaceState(
+    (state) => state.applyProjectExportSettings,
   );
+  const { projectFilePath, projectId, mediaItems, activeVideoId, activeVideoChanged } =
+    useProjectPort(
+      ["projectFilePath", "projectId", "mediaItems", "activeVideoId"],
+      ["activeVideoChanged"],
+    );
 
   const mainRef = useRef<HTMLDivElement | null>(null);
   const [leftRatio, setLeftRatio] = useState(0.3);
@@ -191,6 +195,10 @@ export function ExportWorkspace() {
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onUp);
   }
+
+  useEffect(() => {
+    applyProjectExportSettings();
+  }, [applyProjectExportSettings, projectId]);
 
   const sourceKey = source ? `${source.kind}:${source.clips.length}:${source.assetId ?? ""}` : null;
   const lastSourceKeyRef = useRef<string | null>(null);
