@@ -2,6 +2,8 @@ use super::*;
 
 pub(crate) fn hidden_command(program: &str) -> Command {
     let mut command = Command::new(program);
+    // Kill the child when the owning future is dropped so ffmpeg is never orphaned.
+    command.kill_on_drop(true);
     #[cfg(windows)]
     {
         command.creation_flags(CREATE_NO_WINDOW);
@@ -559,7 +561,9 @@ pub(crate) async fn run_status_with_ffmpeg_progress(
     let was_cancelled = cancel.load(Ordering::SeqCst);
     clear_running_ffmpeg(progress.state, &task_id);
 
-    if status.success() && !was_cancelled {
+    if status.success() {
+        // Completed files survive: a cancel arriving after completion must not
+        // delete the finished output (mid-encode cancels are handled above).
         emit_ffmpeg_progress(
             progress.app,
             progress.task_id,

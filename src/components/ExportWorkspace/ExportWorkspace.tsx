@@ -116,6 +116,38 @@ export function ExportWorkspace() {
   const settingsRatioRef = useRef(settingsRatio);
   settingsRatioRef.current = settingsRatio;
   const dragRef = useRef<ColumnDragState | null>(null);
+  const dragListenersRef = useRef<{
+    onMove: (event: PointerEvent) => void;
+    onUp: () => void;
+  } | null>(null);
+
+  function endColumnDrag() {
+    const listeners = dragListenersRef.current;
+    dragListenersRef.current = null;
+    dragRef.current = null;
+    document.body.classList.remove("is-resizing-x");
+    if (listeners) {
+      window.removeEventListener("pointermove", listeners.onMove);
+      window.removeEventListener("pointerup", listeners.onUp);
+      window.removeEventListener("pointercancel", listeners.onUp);
+    }
+  }
+
+  // If the workspace unmounts mid-drag, drop the window listeners and the
+  // resizing class so nothing is left stuck behind the component.
+  useEffect(() => {
+    return () => {
+      const listeners = dragListenersRef.current;
+      dragListenersRef.current = null;
+      dragRef.current = null;
+      document.body.classList.remove("is-resizing-x");
+      if (listeners) {
+        window.removeEventListener("pointermove", listeners.onMove);
+        window.removeEventListener("pointerup", listeners.onUp);
+        window.removeEventListener("pointercancel", listeners.onUp);
+      }
+    };
+  }, []);
 
   function beginColumnDrag(seam: "left" | "settings", event: ReactPointerEvent<HTMLDivElement>) {
     if (event.button !== 0) {
@@ -128,6 +160,11 @@ export function ExportWorkspace() {
     event.preventDefault();
     const totalWidth = container.clientWidth;
     const startRatio = seam === "left" ? leftRatioRef.current : settingsRatioRef.current;
+    const pointerId = event.pointerId;
+    const seamElement = event.currentTarget;
+    // Capture the pointer so pointermove/pointerup keep firing even when the
+    // cursor leaves the window mid-drag; otherwise the resizing state can stick.
+    seamElement.setPointerCapture(pointerId);
     dragRef.current = { seam, startClientX: event.clientX, startRatio, totalWidth };
     document.body.classList.add("is-resizing-x");
 
@@ -144,15 +181,15 @@ export function ExportWorkspace() {
       }
     };
     const onUp = () => {
-      dragRef.current = null;
-      document.body.classList.remove("is-resizing-x");
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
+      if (seamElement.hasPointerCapture(pointerId)) {
+        seamElement.releasePointerCapture(pointerId);
+      }
+      endColumnDrag();
     };
+    dragListenersRef.current = { onMove, onUp };
     window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp, { once: true });
-    window.addEventListener("pointercancel", onUp, { once: true });
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
   }
 
   const sourceKey = source ? `${source.kind}:${source.clips.length}:${source.assetId ?? ""}` : null;

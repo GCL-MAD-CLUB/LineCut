@@ -49,6 +49,7 @@ import {
   buildMediaBinExportSource,
   requestExport,
   runQuickExport,
+  useExportWorkspaceState,
 } from "../../systems/ExportSystem";
 import { isTauriRuntime } from "../../tauriRuntime";
 import type {
@@ -280,6 +281,8 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
       "mediaBinReadOnlyChanged",
     ],
   );
+  // Exports are serialized; hide/disable quick export while one is in flight.
+  const isExporting = useExportWorkspaceState((state) => state.isExporting);
   const {
     query,
     selectedIds,
@@ -1285,6 +1288,8 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
       messagePublished(`已导出 ${completed} 个片段${failed > 0 ? `，${failed} 个失败` : ""}`);
     } else if (outcome.status === "cancelled") {
       messagePublished("导出已取消");
+    } else if (outcome.status === "busy") {
+      messagePublished("已有导出正在进行");
     }
     setContextMenu(null);
   }
@@ -1950,7 +1955,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                   </PopupMenuItem>
                   <PopupMenuItem
                     mnemonic="W"
-                    disabled={!exportState}
+                    disabled={!exportState || isExporting}
                     onSelect={() => void quickExportWithLastSettings()}
                   >
                     使用上次设置导出(W)

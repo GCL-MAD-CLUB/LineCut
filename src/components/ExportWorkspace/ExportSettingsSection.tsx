@@ -195,14 +195,28 @@ export function ExportSettingsSection({
   const renameRuleOptions = exportRenameRuleOptions(settings.mode, source?.kind ?? "media-bin");
   const renameRuleValid = renameRuleOptions.some(([value]) => value === settings.renameRule);
   const selectedClips = source?.clips.filter((clip) => selectedClipIds.has(clip.id)) ?? [];
-  // The 示例 previews the currently focused (blue-bar) clip's filename, not the
-  // first checked one. When it isn't checked itself, its name is shown standalone.
-  const previewFileName = previewClip
-    ? (computeExportFileNames(
+  // 示例预览实际导出的文件名：合并模式以第一个勾选的片段命名，单段模式以当前选中片段命名。
+  const previewFileName = (() => {
+    if (settings.mode === "merge") {
+      if (!selectedClips[0]) {
+        return "";
+      }
+      return (
+        computeExportFileNames(selectedClips, settings).find(
+          (entry) => entry.clipId === selectedClips[0].id,
+        )?.fileName ?? ""
+      );
+    }
+    if (!previewClip) {
+      return "";
+    }
+    return (
+      computeExportFileNames(
         selectedClips.some((clip) => clip.id === previewClip.id) ? selectedClips : [previewClip],
         settings,
-      ).find((entry) => entry.clipId === previewClip.id)?.fileName ?? "")
-    : "";
+      ).find((entry) => entry.clipId === previewClip.id)?.fileName ?? ""
+    );
+  })();
 
   useEffect(() => {
     if (!renameRuleValid) {

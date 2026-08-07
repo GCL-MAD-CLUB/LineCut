@@ -158,17 +158,24 @@ export function computeClipBaseName(
 /**
  * Disambiguates duplicate base names: the first occurrence keeps the bare name,
  * later ones get `-N` where N starts at `startNumber` and increments.
+ *
+ * Names are compared case-insensitively because NTFS file names are
+ * case-insensitive: `Logo` and `logo` collide on disk, so they must be
+ * disambiguated like exact duplicates.
  */
 export function assignUniqueNames(bases: readonly string[], startNumber: number): string[] {
+  const fold = (value: string) => value.toLowerCase();
   const countByBase = new Map<string, number>();
   for (const base of bases) {
-    countByBase.set(base, (countByBase.get(base) ?? 0) + 1);
+    const key = fold(base);
+    countByBase.set(key, (countByBase.get(key) ?? 0) + 1);
   }
   const emittedByBase = new Map<string, number>();
   return bases.map((base) => {
-    const emitted = emittedByBase.get(base) ?? 0;
-    emittedByBase.set(base, emitted + 1);
-    if ((countByBase.get(base) ?? 1) <= 1 || emitted === 0) {
+    const key = fold(base);
+    const emitted = emittedByBase.get(key) ?? 0;
+    emittedByBase.set(key, emitted + 1);
+    if ((countByBase.get(key) ?? 1) <= 1 || emitted === 0) {
       return base;
     }
     return `${base}-${startNumber + emitted - 1}`;
@@ -180,11 +187,50 @@ export interface ExportFileName {
   fileName: string;
 }
 
+/** Maximum output file-name length; mirrors the backend `safe_component` clamp. */
+export const MAX_FILE_NAME_LENGTH = 120;
+
+/**
+ * Truncates a file name to `MAX_FILE_NAME_LENGTH` characters while preserving a
+ * trailing extension (a `.` suffix of 2–10 chars). Mirrors the backend
+ * `safe_component` clamp so the 示例 preview, the conflict probe, and the
+ * on-disk name all agree.
+ */
+export function clampFileName(fileName: string): string {
+  if (fileName.length <= MAX_FILE_NAME_LENGTH) {
+    return fileName;
+  }
+  const dot = fileName.lastIndexOf(".");
+  const ext = dot > 0 ? fileName.slice(dot) : "";
+  if (ext.length >= 2 && ext.length <= 10) {
+    const keep = MAX_FILE_NAME_LENGTH - ext.length;
+    return `${fileName.slice(0, dot).slice(0, keep)}${ext}`;
+  }
+  return fileName.slice(0, MAX_FILE_NAME_LENGTH);
+}
+
+/**
+ * Clamps a base name to `maxLength`, preserving a trailing `-N` disambiguation
+ * suffix when one is present so truncation never collapses `base-1`/`base-2`
+ * into the same name.
+ */
+function clampBaseName(name: string, maxLength: number): string {
+  if (name.length <= maxLength) {
+    return name;
+  }
+  const suffix = name.match(/-(0|[1-9]\d*)$/)?.[0];
+  if (suffix) {
+    return `${name.slice(0, maxLength - suffix.length)}${suffix}`;
+  }
+  return name.slice(0, maxLength);
+}
+
 /**
  * Computes the final output filename for every clip: rule base name +
- * disambiguation + extension (cased per `extensionCase`). Used both for the
- * 示例 preview and (sent per-clip as `outputName`) for the actual export, so
- * the preview always matches what lands on disk.
+ * disambiguation + extension (cased per `extensionCase`), clamped to the same
+ * 120-char budget the backend applies. Used both for the 示例 preview and (sent
+ * per-clip as `outputName`) for the actual export, so the preview always
+ * matches what lands on disk.
  */
 export function computeExportFileNames(
   clips: readonly ExportClip[],
@@ -193,14 +239,22 @@ export function computeExportFileNames(
     "renameRule" | "customName" | "startNumber" | "extensionCase" | "container"
   >,
 ): ExportFileName[] {
-  const bases = clips.map((clip) =>
-    sanitizeFileNameComponent(computeClipBaseName(clip, settings.renameRule, settings.customName)),
-  );
-  const unique = assignUniqueNames(bases, Math.max(0, Math.floor(settings.startNumber)));
   const ext = containerExtension(settings.container);
   const casedExt = settings.extensionCase === "upper" ? ext.toUpperCase() : ext.toLowerCase();
+  const extWithDot = `.${casedExt}`;
+  const maxBaseLength = MAX_FILE_NAME_LENGTH - extWithDot.length;
+  const bases = clips.map((clip) =>
+    clampBaseName(
+      sanitizeFileNameComponent(
+        computeClipBaseName(clip, settings.renameRule, settings.customName),
+      ),
+      maxBaseLength,
+    ),
+  );
+  const unique = assignUniqueNames(bases, Math.max(0, Math.floor(settings.startNumber)));
+  const finalBases = unique.map((name) => clampBaseName(name, maxBaseLength));
   return clips.map((clip, index) => ({
     clipId: clip.id,
-    fileName: `${unique[index]}.${casedExt}`,
+    fileName: `${finalBases[index]}${extWithDot}`,
   }));
 }

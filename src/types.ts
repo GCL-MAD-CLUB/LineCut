@@ -245,6 +245,8 @@ export interface ProjectExportState {
   customName: string;
   startNumber: number;
   extensionCase: "upper" | "lower";
+  /** Explicit merged-output filename (with extension) round-tripped from the backend. */
+  outputName: string;
   existingFileMode: "ask" | "uniqueName" | "overwrite" | "skip";
 }
 

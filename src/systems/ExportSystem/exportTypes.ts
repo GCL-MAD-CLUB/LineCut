@@ -152,6 +152,8 @@ export interface ExportSettings {
   startNumber: number;
   /** File-extension case. */
   extensionCase: ExportExtensionCase;
+  /** Explicit merged-output filename (with extension) for merge exports. */
+  outputName: string;
   /** How to handle an output file that already exists on disk. */
   existingFileMode: ExportExistingFileMode;
 }

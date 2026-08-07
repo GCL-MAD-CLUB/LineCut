@@ -32,6 +32,8 @@ export interface ExportWorkspaceState {
   status: ExportWorkspaceStatus;
   /** The clip currently previewed in the export source player. */
   previewClipId: string | null;
+  /** True while any export is in flight; exports are serialized. */
+  isExporting: boolean;
   setSource: (source: ExportSource | null) => void;
   toggleClip: (clipId: string) => void;
   setAllSelected: (selected: boolean) => void;
@@ -40,6 +42,7 @@ export interface ExportWorkspaceState {
   setStatus: (status: ExportWorkspaceStatus) => void;
   resetResults: () => void;
   setPreviewClip: (clipId: string | null) => void;
+  setExporting: (isExporting: boolean) => void;
 }
 
 export function defaultExportSettings(): ExportSettings {
@@ -68,6 +71,8 @@ export function defaultExportSettings(): ExportSettings {
     customName: "",
     startNumber: 1,
     extensionCase: "lower",
+    // Key order must match the backend's ExportOptions serialization; exportSettingsEqual compares via JSON.stringify.
+    outputName: "",
     existingFileMode: "ask",
   };
 }
@@ -79,6 +84,7 @@ export const exportWorkspaceStore = createStore<ExportWorkspaceState>()((set) =>
   results: null,
   status: "idle",
   previewClipId: null,
+  isExporting: false,
   setSource: (source) =>
     set((state) => ({
       source,
@@ -112,6 +118,7 @@ export const exportWorkspaceStore = createStore<ExportWorkspaceState>()((set) =>
   setStatus: (status) => set({ status }),
   resetResults: () => set({ results: null, status: "idle" }),
   setPreviewClip: (previewClipId) => set({ previewClipId }),
+  setExporting: (isExporting) => set({ isExporting }),
 }));
 
 export function useExportWorkspaceState<Selection>(

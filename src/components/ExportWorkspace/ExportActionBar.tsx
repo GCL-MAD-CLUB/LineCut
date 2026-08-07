@@ -13,15 +13,14 @@ export function ExportActionBar() {
   const selectedClipIds = useExportWorkspaceState((state) => state.selectedClipIds);
   const settings = useExportWorkspaceState((state) => state.settings);
   const status = useExportWorkspaceState((state) => state.status);
+  const isExporting = useExportWorkspaceState((state) => state.isExporting);
   const setStatus = useExportWorkspaceState((state) => state.setStatus);
   const setResults = useExportWorkspaceState((state) => state.setResults);
   const { exportSettingsRecorded, mediaProjectsAdded, warningsAppended, messagePublished } =
-    useProjectPort([], [
-      "exportSettingsRecorded",
-      "mediaProjectsAdded",
-      "warningsAppended",
-      "messagePublished",
-    ]);
+    useProjectPort(
+      [],
+      ["exportSettingsRecorded", "mediaProjectsAdded", "warningsAppended", "messagePublished"],
+    );
 
   const { tasks } = useTaskProgressStatus("export.run");
   const runningTask = tasks[0];
@@ -31,7 +30,8 @@ export function ExportActionBar() {
     selectedClips.length > 0 &&
     settings.outputDir.trim() !== "" &&
     settings.outputStem.trim() !== "" &&
-    status !== "running";
+    status !== "running" &&
+    !isExporting;
 
   /** 导入项目中开启时，把导出成功的产物逐个登记进媒体箱。 */
   async function importOutputsIntoProject(outputs: ExportOutput[]) {
@@ -69,6 +69,9 @@ export function ExportActionBar() {
       setStatus("done");
     } else if (outcome.status === "cancelled") {
       messagePublished("导出已取消");
+      setStatus("idle");
+    } else if (outcome.status === "busy") {
+      messagePublished("已有导出正在进行");
       setStatus("idle");
     } else {
       setStatus("idle");

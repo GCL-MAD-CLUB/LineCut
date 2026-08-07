@@ -1,4 +1,5 @@
 import { invokeCommand } from "../../errors";
+import { clampFileName } from "./exportRename";
 import type { ExportClip, ExportMode } from "./exportTypes";
 
 /** User choice for every conflicting target file, applied to all of them at once. */
@@ -35,7 +36,7 @@ export function joinPath(dir: string, name: string): string {
  */
 function effectiveOutputName(fileName: string): string {
   const trimmed = fileName.replace(/^[.\s]+/, "").trim();
-  return trimmed.length > 120 ? trimmed.slice(0, 120) : trimmed;
+  return clampFileName(trimmed);
 }
 
 /**
@@ -67,21 +68,19 @@ export function buildExportTargets(
     ];
   }
   return clips
-    .map(
-      (clip): ExportConflict | null => {
-        const fileName = names.get(clip.id);
-        if (!fileName) {
-          return null;
-        }
-        const effective = effectiveOutputName(fileName);
-        return {
-          clipId: clip.id,
-          path: joinPath(outputDir, effective),
-          fileName: effective,
-          clipLabel: clip.label,
-        };
-      },
-    )
+    .map((clip): ExportConflict | null => {
+      const fileName = names.get(clip.id);
+      if (!fileName) {
+        return null;
+      }
+      const effective = effectiveOutputName(fileName);
+      return {
+        clipId: clip.id,
+        path: joinPath(outputDir, effective),
+        fileName: effective,
+        clipLabel: clip.label,
+      };
+    })
     .filter((target): target is ExportConflict => target !== null);
 }
 
@@ -95,7 +94,10 @@ export async function findExistingTargets(
   const existing = await Promise.all(
     targets.map(async (target) => {
       try {
-        return { target, exists: await invokeCommand<boolean>("path_is_file", { path: target.path }) };
+        return {
+          target,
+          exists: await invokeCommand<boolean>("path_is_file", { path: target.path }),
+        };
       } catch {
         return { target, exists: false };
       }

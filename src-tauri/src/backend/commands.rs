@@ -400,12 +400,18 @@ pub(crate) fn resolve_known_folder(kind: KnownFolderKind) -> CommandResult<Strin
                     format!("Failed to resolve known folder {kind:?}: {error}"),
                 )
             })?;
-        let result = unsafe { path.to_string() }.map_err(|error| {
-            app_error(
-                ErrorCode::ExportDestinationResolveFailed,
-                format!("Invalid known folder path: {error}"),
-            )
-        })?;
+        // The CoTaskMemAlloc'd buffer must be freed on every return path, including
+        // when the path cannot be decoded to a UTF-8 string.
+        let result = match unsafe { path.to_string() } {
+            Ok(value) => value,
+            Err(error) => {
+                unsafe { CoTaskMemFree(Some(path.as_ptr().cast())) };
+                return Err(app_error(
+                    ErrorCode::ExportDestinationResolveFailed,
+                    format!("Invalid known folder path: {error}"),
+                ));
+            }
+        };
         unsafe { CoTaskMemFree(Some(path.as_ptr().cast())) }
         Ok(result)
     }

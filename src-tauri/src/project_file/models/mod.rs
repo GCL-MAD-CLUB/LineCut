@@ -97,7 +97,10 @@ pub(super) fn content_hash(workspace: &ProjectWorkspace) -> AppResult<String> {
 mod tests {
     use super::{current_version, decode_current, from_runtime, into_runtime, ProjectModel};
     use crate::{
-        ProjectEditorState, ProjectMediaBinState, ProjectPreviewState, ProjectStoryboardAnnotation,
+        ExportAudioChannels, ExportAudioCodec, ExportContainer, ExportDestination,
+        ExportEncoderSpeed, ExportExistingFileMode, ExportExtensionCase, ExportMode, ExportOptions,
+        ExportQuality, ExportRenameRule, ExportResolution, ProjectEditorState,
+        ProjectMediaBinState, ProjectPreviewState, ProjectStoryboardAnnotation,
         ProjectStoryboardColorLabel, ProjectStoryboardKeywordNode,
         ProjectStoryboardKeywordUsageCounters, ProjectStoryboardShot, ProjectStoryboardStack,
         ProjectStoryboardState, ProjectSubtitleAnnotation, ProjectSubtitleColorLabel,
@@ -356,5 +359,54 @@ mod tests {
         let restored = into_runtime(decode_current(3, &encoded).unwrap()).unwrap();
         assert!(restored.subtitles.is_empty());
         assert!(restored.export_state.is_none());
+    }
+
+    #[test]
+    fn export_state_round_trips_all_options_fields() {
+        let mut workspace = empty_workspace();
+        workspace.export_state = Some(ExportOptions {
+            mode: ExportMode::Individual,
+            container: ExportContainer::Mp4Hevc,
+            resolution: ExportResolution::Custom,
+            custom_width: 1920,
+            custom_height: 1080,
+            frame_rate: Some(30.0),
+            quality: ExportQuality::VeryHigh,
+            encoder_speed: ExportEncoderSpeed::Quality,
+            include_audio: true,
+            audio_codec: ExportAudioCodec::Opus,
+            audio_sample_rate_hz: Some(48000),
+            audio_channels: ExportAudioChannels::Stereo,
+            audio_bitrate_kbps: 256,
+            import_into_project: true,
+            use_proxy: true,
+            destination: ExportDestination::Desktop,
+            use_subfolder: true,
+            subfolder_name: "renders".to_string(),
+            output_dir: r"D:\out".to_string(),
+            output_stem: "clip".to_string(),
+            rename_rule: ExportRenameRule::LabelKeywords,
+            custom_name: "shot".to_string(),
+            start_number: 5,
+            extension_case: ExportExtensionCase::Upper,
+            output_name: "final.mp4".to_string(),
+            existing_file_mode: ExportExistingFileMode::UniqueName,
+        });
+
+        let model = from_runtime(&workspace, 10, "0.2.0").unwrap();
+        let encoded = model.encode().unwrap();
+        let encoded_json: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+        let encoded_export_state = &encoded_json["workspace"]["export_state"];
+        // The persisted export_state carries the fields the frontend records, so the
+        // key set round-trips (outputName mirrors the frontend ExportSettings field).
+        assert_eq!(encoded_export_state["destination"], "desktop");
+        assert_eq!(encoded_export_state["subfolderName"], "renders");
+        assert_eq!(encoded_export_state["existingFileMode"], "uniqueName");
+        assert_eq!(encoded_export_state["outputName"], "final.mp4");
+
+        let restored = into_runtime(decode_current(4, &encoded).unwrap()).unwrap();
+        let before = serde_json::to_value(&workspace.export_state).unwrap();
+        let after = serde_json::to_value(&restored.export_state).unwrap();
+        assert_eq!(before, after);
     }
 }

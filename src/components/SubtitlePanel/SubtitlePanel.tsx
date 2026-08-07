@@ -37,6 +37,7 @@ import {
   buildSubtitleExportSource,
   requestExport,
   runQuickExport,
+  useExportWorkspaceState,
 } from "../../systems/ExportSystem";
 import { requestSubtitleThumbnail } from "../../subtitleThumbnail";
 import { normalizeFrameRate, timeUsToFrame } from "../../timeline";
@@ -748,6 +749,8 @@ export function SubtitlePanel() {
     ["project", "projects", "mediaItems", "activeVideoId", "activeTrackId", "exportState"],
     ["activeTrackChanged", "messagePublished"],
   );
+  // Exports are serialized; disable quick export while one is in flight.
+  const isExporting = useExportWorkspaceState((state) => state.isExporting);
   const {
     query,
     showOnlySelected,
@@ -1498,6 +1501,8 @@ export function SubtitlePanel() {
       messagePublished(`已导出 ${completed} 个片段${failed > 0 ? `，${failed} 个失败` : ""}`);
     } else if (outcome.status === "cancelled") {
       messagePublished("导出已取消");
+    } else if (outcome.status === "busy") {
+      messagePublished("已有导出正在进行");
     }
     setContextMenu(null);
   }
@@ -2915,7 +2920,7 @@ export function SubtitlePanel() {
               </PopupMenuItem>
               <PopupMenuItem
                 mnemonic="W"
-                disabled={!exportState}
+                disabled={!exportState || isExporting}
                 onSelect={() => void quickExportWithLastSettings()}
               >
                 使用上次设置导出(W)

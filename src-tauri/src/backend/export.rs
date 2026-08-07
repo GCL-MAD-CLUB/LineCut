@@ -68,18 +68,21 @@ fn validate_export_options(options: &ExportOptions) -> AppResult<()> {
             ));
         }
     }
-    let codec_matches_container = match options.container {
-        ExportContainer::WebmVp9 => matches!(options.audio_codec, ExportAudioCodec::Opus),
-        _ => matches!(
-            options.audio_codec,
-            ExportAudioCodec::Aac | ExportAudioCodec::Mp2 | ExportAudioCodec::Mp3
-        ),
-    };
-    if !codec_matches_container {
-        return Err(app_error(
-            ErrorCode::ExportOptionsInvalid,
-            "Audio codec is not supported by the selected container",
-        ));
+    // Codec/container compatibility only matters when audio is included (video-only uses `-an`).
+    if options.include_audio {
+        let codec_matches_container = match options.container {
+            ExportContainer::WebmVp9 => matches!(options.audio_codec, ExportAudioCodec::Opus),
+            _ => matches!(
+                options.audio_codec,
+                ExportAudioCodec::Aac | ExportAudioCodec::Mp2 | ExportAudioCodec::Mp3
+            ),
+        };
+        if !codec_matches_container {
+            return Err(app_error(
+                ErrorCode::ExportOptionsInvalid,
+                "Audio codec is not supported by the selected container",
+            ));
+        }
     }
     if let Some(rate) = options.audio_sample_rate_hz {
         if !(8000..=192000).contains(&rate) {
@@ -220,8 +223,10 @@ fn audio_channel_layout(channels: ExportAudioChannels) -> &'static str {
 ///
 /// All per-input normalization (scaling, fps, pixel format, audio resample) happens
 /// inside the graph so concatenated streams share identical dimensions, frame rate,
-/// pixel format, sample rate, and channel layout. `setpts`/`aresample` resets make
-/// `-ss`-trimmed inputs safe to concatenate.
+/// pixel format, sample rate, and channel layout. The input-side `-ss` fast seek
+/// lands on the cut point (and resets each stream's PTS to 0), so `trim`/`atrim`
+/// keep the first `dur` seconds of each input, and `setpts`/`aresample` resets
+/// make the trimmed inputs safe to concatenate.
 ///
 /// Returns `(graph, has_audio_output)`. Audio is dropped for the whole merge when
 /// `include_audio` is false or any input lacks an audio stream.
@@ -236,14 +241,15 @@ fn build_merge_filter_complex(
         targets.width, targets.height, targets.width, targets.height
     );
     let mut parts = Vec::new();
-    for (index, _) in clips.iter().enumerate() {
+    for (index, clip) in clips.iter().enumerate() {
+        let dur_sec = clip.dur_us as f64 / 1_000_000.0;
         parts.push(format!(
-            "[{index}:v:0]setpts=PTS-STARTPTS,{scale},setsar=1,fps={:.6},format={}[{index}v]",
+            "[{index}:v:0]trim=start=0:end={dur_sec:.6},setpts=PTS-STARTPTS,{scale},setsar=1,fps={:.6},format={}[{index}v]",
             targets.fps, targets.pix_fmt
         ));
         if all_have_audio {
             parts.push(format!(
-                "[{index}:a:0]aresample={}:async=1:first_pts=0,aformat=sample_fmts=fltp:channel_layouts={}[{index}a]",
+                "[{index}:a:0]atrim=start=0:end={dur_sec:.6},aresample={}:async=1:first_pts=0,aformat=sample_fmts=fltp:channel_layouts={}[{index}a]",
                 targets.audio_sample_rate, targets.audio_channel_layout
             ));
         }
@@ -430,8 +436,6 @@ async fn run_export_merge(
     for clip in clips {
         args.push("-ss".to_string());
         args.push(format!("{:.6}", clip.start_us as f64 / 1_000_000.0));
-        args.push("-t".to_string());
-        args.push(format!("{:.6}", clip.dur_us as f64 / 1_000_000.0));
         args.push("-i".to_string());
         args.push(clip.source_path.clone());
     }
@@ -518,12 +522,13 @@ async fn run_export_individual(
             "-hide_banner".to_string(),
             "-loglevel".to_string(),
             "error".to_string(),
+            "-i".to_string(),
+            clip.source_path.clone(),
+            // 输出侧 `-ss`/`-t`：重编码时按帧精确裁剪，不依赖输入侧关键帧对齐。
             "-ss".to_string(),
             format!("{:.6}", clip.start_us as f64 / 1_000_000.0),
             "-t".to_string(),
             format!("{:.6}", clip.dur_us as f64 / 1_000_000.0),
-            "-i".to_string(),
-            clip.source_path.clone(),
             "-map".to_string(),
             "0:v:0".to_string(),
         ];
@@ -839,7 +844,8 @@ mod tests {
         let (graph, has_audio) = build_merge_filter_complex(&clips, &test_targets(), true);
         assert!(has_audio);
         assert!(graph.ends_with("[0v][0a][1v][1a]concat=n=2:v=1:a=1[v][a]"));
-        assert!(graph.contains("[0:a:0]aresample=48000:async=1:first_pts=0"));
+        assert!(graph
+            .contains("[0:a:0]atrim=start=0:end=10.000000,aresample=48000:async=1:first_pts=0"));
         assert!(graph.contains("channel_layouts=stereo"));
         assert!(graph.contains("setpts=PTS-STARTPTS"));
         assert!(graph.contains(
@@ -847,6 +853,20 @@ mod tests {
         ));
         assert!(graph.contains("fps=30.000000"));
         assert!(graph.contains("format=yuv420p"));
+    }
+
+    #[test]
+    fn merge_graph_trims_each_input_to_its_duration_from_zero() {
+        let mut clip = test_clip(true, 1920, 1080);
+        clip.start_us = 3_500_000;
+        clip.dur_us = 2_000_000;
+        let (graph, has_audio) = build_merge_filter_complex(&[clip], &test_targets(), true);
+        assert!(has_audio);
+        // The input-side `-ss` resets each stream's PTS to 0, so trim keeps the first
+        // `dur` seconds rather than trimming on absolute source PTS.
+        assert!(graph.contains("[0:v:0]trim=start=0:end=2.000000"));
+        assert!(graph.contains("[0:a:0]atrim=start=0:end=2.000000"));
+        assert!(!graph.contains("trim=start=3.500000"));
     }
 
     #[test]
