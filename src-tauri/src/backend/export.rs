@@ -9,6 +9,7 @@ struct ProbedClip {
     id: String,
     source_path: String,
     label: String,
+    output_name: String,
     start_us: i64,
     dur_us: i64,
     has_video: bool,
@@ -139,6 +140,7 @@ async fn probe_export_clip(
         id: clip.id.clone(),
         source_path: clip.source_path.clone(),
         label: clip.label.clone(),
+        output_name: clip.output_name.clone(),
         start_us,
         dur_us: end_us - start_us,
         has_video,
@@ -474,6 +476,21 @@ async fn run_export_merge(
     })
 }
 
+/// Output file name for a clip: prefer the frontend-computed rename rule
+/// result, falling back to the legacy stem-based name when it is empty.
+fn output_file_name(clip: &ProbedClip, stem: &str, index: usize, ext: &str) -> String {
+    let renamed = safe_component(&clip.output_name);
+    if renamed.is_empty() {
+        format!(
+            "{stem}_{:03}_{}.{ext}",
+            index + 1,
+            safe_component(&clip.label)
+        )
+    } else {
+        renamed
+    }
+}
+
 async fn run_export_individual(
     clips: &[ProbedClip],
     options: &ExportOptions,
@@ -491,11 +508,7 @@ async fn run_export_individual(
     let count = clips.len();
     for (index, clip) in clips.iter().enumerate() {
         ensure_not_cancelled(&cancel)?;
-        let file_name = format!(
-            "{stem}_{:03}_{}.{ext}",
-            index + 1,
-            safe_component(&clip.label)
-        );
+        let file_name = output_file_name(clip, stem, index, ext);
         let output_path = dir.join(file_name);
         // Only the in-flight file may be cleaned up on cancel; completed files survive.
         prune_task_cleanup_paths(task_id, &[output_path.clone()], state)?;
@@ -709,7 +722,16 @@ pub(crate) async fn export_clips(
     let mut outputs = Vec::new();
     match options.mode {
         ExportMode::Merge => {
-            let output_path = dir.join(format!("{stem}.{ext}"));
+            let merged_name = if options.output_name.trim().is_empty() {
+                safe_component(&probed[0].output_name)
+            } else {
+                safe_component(&options.output_name)
+            };
+            let output_path = if merged_name.is_empty() {
+                dir.join(format!("{stem}.{ext}"))
+            } else {
+                dir.join(merged_name)
+            };
             let output = run_export_merge(
                 &probed,
                 &options,
@@ -757,6 +779,7 @@ mod tests {
             id: "clip".to_string(),
             source_path: "/source.mp4".to_string(),
             label: "片段".to_string(),
+            output_name: "result.mp4".to_string(),
             start_us: 0,
             dur_us: 10_000_000,
             has_video: true,
@@ -785,8 +808,17 @@ mod tests {
             audio_bitrate_kbps: 192,
             import_into_project: false,
             use_proxy: false,
+            destination: ExportDestination::Specified,
+            use_subfolder: false,
+            subfolder_name: String::new(),
             output_dir: "/out".to_string(),
             output_stem: "result".to_string(),
+            output_name: String::new(),
+            existing_file_mode: ExportExistingFileMode::Overwrite,
+            rename_rule: ExportRenameRule::Filename,
+            custom_name: String::new(),
+            start_number: 1,
+            extension_case: ExportExtensionCase::Lower,
         }
     }
 

@@ -1,4 +1,5 @@
 import { parseFrameRate } from "../../timeline";
+import { expandedStoryboardKeywordText } from "../../components/StoryboardPanel/storyboardKeywords";
 import type { MediaBinItem, Project, StoryboardState } from "../../types";
 import {
   isMediaItemEnabled,
@@ -56,13 +57,17 @@ function clipFromProject(
   label: string,
   startUs: number,
   endUs: number,
+  sourceName: string,
   thumbnail?: ExportClip["thumbnail"],
+  keywordText?: string,
 ): ExportClip {
   const durationUs = endUs > 0 ? Math.max(0, endUs - startUs) : project.asset.duration_us;
   return {
     id,
     sourcePath: project.asset.path,
     label,
+    sourceName,
+    keywordText,
     startUs,
     endUs,
     hasVideo: project.asset.video_stream_index !== null,
@@ -73,6 +78,14 @@ function clipFromProject(
     proxyPath: project.proxy_path ?? null,
     sourceMedia: sourceMediaFromProject(project),
   };
+}
+
+/** Media-bin display name of a source video (may be a virtual rename). */
+function videoMediaBinName(mediaItems: MediaBinItem[], videoId: string, project: Project) {
+  return (
+    mediaItems.find((item) => item.id === videoId && item.kind === "video")?.file_name ??
+    project.asset.file_name
+  );
 }
 
 function activeVideoProject(
@@ -140,12 +153,19 @@ export function buildStoryboardExportSource({
         storyboardShotTitle(shot, shots.length, storyboard?.shotAnnotations?.[shot.id]?.title),
         shot.start_us,
         shot.end_us,
+        videoMediaBinName(mediaItems, videoId, project),
         {
           kind: "storyboard",
           assetId: project.asset.id,
           timeUs: shot.start_us,
           fingerprint: project.asset.fingerprint,
         },
+        // Filename keyword string: comma-joined without spaces (the shared
+        // helper uses ", " for the panel display).
+        expandedStoryboardKeywordText(
+          storyboard?.shotAnnotations?.[shot.id]?.keywordIds,
+          storyboard?.keywordNodes ?? [],
+        ).replace(/,\s+/g, ","),
       ),
     );
   if (clips.length === 0) {
@@ -195,6 +215,7 @@ export function buildSubtitleExportSource({
         subtitleLabel(cue),
         cue.start_us,
         cue.end_us,
+        videoMediaBinName(mediaItems, videoId, sourceProject),
         {
           kind: "subtitle",
           assetId: sourceProject.asset.id,
@@ -243,7 +264,7 @@ export function buildMediaBinExportSource({
     .map((item) => {
       const project = mediaItemProject(item, projects, mediaItems);
       return project
-        ? clipFromProject(`media:${item.id}`, project, item.file_name, 0, 0, {
+        ? clipFromProject(`media:${item.id}`, project, item.file_name, 0, 0, item.file_name, {
             kind: "video",
             assetId: project.asset.id,
             timeUs: 0,

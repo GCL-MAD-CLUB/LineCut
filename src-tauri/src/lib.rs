@@ -510,6 +510,10 @@ struct ExportClip {
     id: String,
     source_path: String,
     label: String,
+    /// Full output filename (with extension) computed by the frontend rename
+    /// rule; empty falls back to the legacy stem-based naming.
+    #[serde(default)]
+    output_name: String,
     #[serde(default)]
     start_us: i64,
     #[serde(default)]
@@ -576,6 +580,63 @@ enum ExportAudioChannels {
     FivePointOne,
 }
 
+/// Destination category for the 导出到 dropdown. The well-known Windows folder
+/// variants are resolved by the `resolve_known_folder` command on the frontend;
+/// the backend only consumes the resolved `output_dir`, so this is persisted for
+/// UI state round-tripping rather than used for path logic here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ExportDestination {
+    Specified,
+    Source,
+    ChooseLater,
+    Desktop,
+    Documents,
+    User,
+    Videos,
+    Pictures,
+}
+
+/// Output filename rule for the 重命名规则 group. The frontend resolves the
+/// rule into a concrete per-clip `output_name`; this enum only round-trips the
+/// persisted UI state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ExportRenameRule {
+    Label,
+    LabelKeywords,
+    Time,
+    TimeLabel,
+    Filename,
+    FilenameLabel,
+    FilenameTime,
+    Custom,
+    CustomLabel,
+    CustomTime,
+    CustomFilename,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ExportExtensionCase {
+    Upper,
+    Lower,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ExportExistingFileMode {
+    Ask,
+    #[serde(rename = "uniqueName")]
+    UniqueName,
+    Overwrite,
+    Skip,
+}
+
+const fn default_export_existing_file_mode() -> ExportExistingFileMode {
+    ExportExistingFileMode::Ask
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ExportOptions {
@@ -606,14 +667,55 @@ struct ExportOptions {
     /// Persisted with the project; the frontend swaps clip sources to proxies.
     #[serde(default)]
     use_proxy: bool,
+    /// UI state persisted with the project; the frontend resolves the folder.
+    #[serde(default = "default_export_destination")]
+    destination: ExportDestination,
+    #[serde(default)]
+    use_subfolder: bool,
+    #[serde(default)]
+    subfolder_name: String,
     #[serde(default)]
     output_dir: String,
     #[serde(default)]
     output_stem: String,
+    /// UI state persisted with the project; the frontend resolves filenames.
+    #[serde(default = "default_export_rename_rule")]
+    rename_rule: ExportRenameRule,
+    #[serde(default)]
+    custom_name: String,
+    #[serde(default = "default_export_start_number")]
+    start_number: i64,
+    #[serde(default = "default_export_extension_case")]
+    extension_case: ExportExtensionCase,
+    /// Explicit merged-output filename (with extension) sent by the frontend for
+    /// merge exports, so the backend names the merged file exactly like the
+    /// preview instead of after `probed[0]`.
+    #[serde(default)]
+    output_name: String,
+    /// How to handle an output file that already exists (UI state round-trip;
+    /// the conflict resolution itself runs on the frontend).
+    #[serde(default = "default_export_existing_file_mode")]
+    existing_file_mode: ExportExistingFileMode,
 }
 
 const fn default_export_audio_codec() -> ExportAudioCodec {
     ExportAudioCodec::Aac
+}
+
+const fn default_export_destination() -> ExportDestination {
+    ExportDestination::Specified
+}
+
+const fn default_export_rename_rule() -> ExportRenameRule {
+    ExportRenameRule::Filename
+}
+
+const fn default_export_start_number() -> i64 {
+    1
+}
+
+const fn default_export_extension_case() -> ExportExtensionCase {
+    ExportExtensionCase::Lower
 }
 
 const fn default_export_audio_channels() -> ExportAudioChannels {
@@ -808,6 +910,7 @@ pub fn run() {
             sync_project_workspace,
             close_project,
             path_is_file,
+            resolve_known_folder,
             load_workspace_config,
             save_workspace_config,
             detect_storyboard_shots,

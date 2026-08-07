@@ -361,6 +361,70 @@ pub(crate) fn path_is_file(path: String) -> bool {
     Path::new(&path).is_file()
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum KnownFolderKind {
+    Desktop,
+    Documents,
+    User,
+    Videos,
+    Pictures,
+}
+
+/// Resolves a well-known Windows folder to an absolute path for the 导出到
+/// dropdown. Non-Windows platforms (the codebase still compiles cross-platform)
+/// fall back to HOME-relative paths.
+#[tauri::command]
+pub(crate) fn resolve_known_folder(kind: KnownFolderKind) -> CommandResult<String> {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::core::PWSTR;
+        use windows::Win32::System::Com::CoTaskMemFree;
+        use windows::Win32::UI::Shell::{
+            FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Pictures, FOLDERID_Profile,
+            FOLDERID_Videos, SHGetKnownFolderPath, KNOWN_FOLDER_FLAG,
+        };
+
+        let id = match kind {
+            KnownFolderKind::Desktop => &FOLDERID_Desktop,
+            KnownFolderKind::Documents => &FOLDERID_Documents,
+            KnownFolderKind::User => &FOLDERID_Profile,
+            KnownFolderKind::Videos => &FOLDERID_Videos,
+            KnownFolderKind::Pictures => &FOLDERID_Pictures,
+        };
+        // The returned PWSTR is CoTaskMemAlloc'd and must be freed below.
+        let path: PWSTR =
+            unsafe { SHGetKnownFolderPath(id, KNOWN_FOLDER_FLAG(0), None) }.map_err(|error| {
+                app_error(
+                    ErrorCode::ExportDestinationResolveFailed,
+                    format!("Failed to resolve known folder {kind:?}: {error}"),
+                )
+            })?;
+        let result = unsafe { path.to_string() }.map_err(|error| {
+            app_error(
+                ErrorCode::ExportDestinationResolveFailed,
+                format!("Invalid known folder path: {error}"),
+            )
+        })?;
+        unsafe { CoTaskMemFree(Some(path.as_ptr().cast())) }
+        Ok(result)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let base = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        let dir = match kind {
+            KnownFolderKind::Desktop => base.join("Desktop"),
+            KnownFolderKind::Documents => base.join("Documents"),
+            KnownFolderKind::User => base,
+            KnownFolderKind::Videos => base.join("Videos"),
+            KnownFolderKind::Pictures => base.join("Pictures"),
+        };
+        Ok(dir.to_string_lossy().into_owned())
+    }
+}
+
 #[tauri::command]
 pub(crate) fn reveal_in_file_manager(path: String) -> CommandResult<()> {
     let target = PathBuf::from(path);

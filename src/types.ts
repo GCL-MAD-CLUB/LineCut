@@ -217,8 +217,35 @@ export interface ProjectExportState {
   audioBitrateKbps: number;
   importIntoProject: boolean;
   useProxy: boolean;
+  destination:
+    | "specified"
+    | "source"
+    | "choose_later"
+    | "desktop"
+    | "documents"
+    | "user"
+    | "videos"
+    | "pictures";
+  useSubfolder: boolean;
+  subfolderName: string;
   outputDir: string;
   outputStem: string;
+  renameRule:
+    | "label"
+    | "label_keywords"
+    | "time"
+    | "time_label"
+    | "filename"
+    | "filename_label"
+    | "filename_time"
+    | "custom"
+    | "custom_label"
+    | "custom_time"
+    | "custom_filename";
+  customName: string;
+  startNumber: number;
+  extensionCase: "upper" | "lower";
+  existingFileMode: "ask" | "uniqueName" | "overwrite" | "skip";
 }
 
 export interface ProjectWorkspace {

@@ -15,10 +15,13 @@ export function ExportActionBar() {
   const status = useExportWorkspaceState((state) => state.status);
   const setStatus = useExportWorkspaceState((state) => state.setStatus);
   const setResults = useExportWorkspaceState((state) => state.setResults);
-  const { exportSettingsRecorded, mediaProjectsAdded, warningsAppended } = useProjectPort(
-    [],
-    ["exportSettingsRecorded", "mediaProjectsAdded", "warningsAppended"],
-  );
+  const { exportSettingsRecorded, mediaProjectsAdded, warningsAppended, messagePublished } =
+    useProjectPort([], [
+      "exportSettingsRecorded",
+      "mediaProjectsAdded",
+      "warningsAppended",
+      "messagePublished",
+    ]);
 
   const { tasks } = useTaskProgressStatus("export.run");
   const runningTask = tasks[0];
@@ -64,6 +67,9 @@ export function ExportActionBar() {
       }
       setResults(outcome.result);
       setStatus("done");
+    } else if (outcome.status === "cancelled") {
+      messagePublished("导出已取消");
+      setStatus("idle");
     } else {
       setStatus("idle");
     }

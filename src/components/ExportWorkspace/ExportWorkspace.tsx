@@ -11,6 +11,7 @@ import { publishEvent } from "../../runtime/events/react";
 import { sourcePanelType } from "../SourceMonitor";
 import { isMediaItemOffline, useProjectPort } from "../../systems/ProjectSystem";
 import {
+  dirname,
   readRememberedExportDir,
   useExportWorkspaceState,
   type ExportClip,
@@ -163,19 +164,33 @@ export function ExportWorkspace() {
     }
     lastSourceKeyRef.current = sourceKey;
     const updates: Partial<typeof settings> = {};
-    if (!settings.outputStem.trim()) {
-      updates.outputStem = suggestedStem(projectFilePath, source);
-    }
-    if (!settings.outputDir.trim()) {
+    if (settings.destination === "source") {
+      // 原始照片所在的文件夹 follows the first clip's source file.
+      const dir = dirname(source.clips[0]?.sourcePath ?? "");
+      if (dir && dir !== settings.outputDir) {
+        updates.outputDir = dir;
+      }
+    } else if (settings.destination === "specified" && !settings.outputDir.trim()) {
       const remembered = readRememberedExportDir();
       if (remembered) {
         updates.outputDir = remembered;
       }
     }
+    if (!settings.outputStem.trim()) {
+      updates.outputStem = suggestedStem(projectFilePath, source);
+    }
     if (Object.keys(updates).length > 0) {
       updateSettings(updates);
     }
-  }, [projectFilePath, settings.outputDir, settings.outputStem, source, sourceKey, updateSettings]);
+  }, [
+    projectFilePath,
+    settings.destination,
+    settings.outputDir,
+    settings.outputStem,
+    source,
+    sourceKey,
+    updateSettings,
+  ]);
 
   const previewClip = source
     ? (source.clips.find((clip) => clip.id === previewClipId) ?? source.clips[0] ?? null)
@@ -231,7 +246,7 @@ export function ExportWorkspace() {
       <div className="export-workspace-main" ref={mainRef} style={mainGridStyle}>
         <section className="export-zone">
           <header className="export-zone-header export-zone-header-preview">
-            <span className="export-preview-heading">导出片段</span>
+            <span className="export-preview-heading">导出</span>
           </header>
           <div className="export-zone-content">
             {source ? (
@@ -264,6 +279,9 @@ export function ExportWorkspace() {
               settings={settings}
               onUpdateSettings={updateSettings}
               sourceChannels={previewClip?.sourceMedia?.audioChannels ?? null}
+              source={source}
+              selectedClipIds={selectedClipIds}
+              previewClip={previewClip}
             />
           </div>
         </section>

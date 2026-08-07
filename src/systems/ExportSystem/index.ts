@@ -1,4 +1,16 @@
 export * from "./exportTypes";
+export { dirname, resolveExportDestinationDir } from "./exportDestination";
+export {
+  assignUniqueNames,
+  computeClipBaseName,
+  computeExportFileNames,
+  exportExtensionCaseOptions,
+  exportRenameRuleOptions,
+  formatClipTimeRange,
+  renameRuleUsesCustom,
+  sanitizeFileNameComponent,
+} from "./exportRename";
+export type { ExportFileName } from "./exportRename";
 export {
   defaultExportSettings,
   exportWorkspaceStore,
@@ -19,4 +31,16 @@ export type {
 } from "./exportResolvers";
 export { runExportTask, runQuickExport } from "./exportTask";
 export type { ExportTaskOutcome, RunExportTaskOptions } from "./exportTask";
+export {
+  buildExportTargets,
+  filterConflictingClips,
+  findExistingTargets,
+  resolveUniqueFileName,
+} from "./exportConflict";
+export type { ExportConflict, ExportConflictAction } from "./exportConflict";
+export {
+  requestExportConflictAction,
+  resolveExportConflict,
+  useExportConflictDialog,
+} from "./exportConflictDialogState";
 export { requestExport } from "./requestExport";

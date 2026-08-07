@@ -1,0 +1,93 @@
+.export-conflict-dialog {
+  width: min(640px, calc(100vw - 32px));
+}
+
+.export-conflict-dialog-body {
+  display: grid;
+  grid-template-rows: auto minmax(160px, 1fr);
+  row-gap: 12px;
+  min-height: min(320px, calc(100vh - 110px));
+  padding: 24px 24px 14px;
+}
+
+.export-conflict-dialog-intro {
+  margin: 0 0 0 8px;
+  color: var(--color-text);
+  font-size: 12px;
+}
+
+.export-conflict-dialog-list-frame {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--color-surface);
+  border: 1px solid #0d0d0d;
+  border-radius: 4px;
+}
+
+.export-conflict-dialog-list-scroll {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  scrollbar-color: #555 var(--color-surface);
+  scrollbar-gutter: stable;
+}
+
+.export-conflict-dialog-list-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.export-conflict-dialog-list-scroll::-webkit-scrollbar-thumb {
+  background: #555;
+}
+
+.export-conflict-dialog-list-scroll::-webkit-scrollbar-corner {
+  background: var(--color-surface);
+}
+
+.export-conflict-dialog-list {
+  min-width: 560px;
+  background: #151515;
+}
+
+.export-conflict-dialog-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.6fr) minmax(220px, 1.4fr);
+  width: 100%;
+  min-height: 24px;
+  align-items: center;
+  padding: 0;
+  color: #b5b5b5;
+  font-size: 12px;
+  border-bottom: 1px solid #101010;
+}
+
+.export-conflict-dialog-row > span {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  min-width: 0;
+  padding: 0 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-right: 1px solid #1f1f1f;
+}
+
+.export-conflict-dialog-row > span:last-child {
+  border-right: 0;
+}
+
+.export-conflict-dialog-name {
+  color: var(--color-text-highlight);
+}
+
+.export-conflict-dialog .modal-dialog-actions {
+  align-items: center;
+  gap: 10px;
+}
+
+.export-conflict-dialog .modal-dialog-actions button {
+  min-width: 100px;
+}

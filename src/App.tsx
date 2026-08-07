@@ -30,6 +30,7 @@ import { HistoryPanelServicesProvider, historyPanelType } from "./components/His
 import { exportWorkspaceStore } from "./systems/ExportSystem";
 import { ImportWorkspace } from "./components/ImportWorkspace";
 import { mediaBinPanelType, type MediaBinPanelParams } from "./components/MediaBin";
+import { ExportConflictDialog } from "./components/ExportConflictDialog";
 import { PreferencesDialog } from "./components/PreferencesDialog";
 import { ProxyCreationDialog } from "./components/ProxyCreationDialog";
 import { SecondaryTopbar } from "./components/SecondaryTopbar";
@@ -1150,6 +1151,7 @@ function AppContent() {
         )}
 
         <ProxyCreationDialog />
+        <ExportConflictDialog />
         <PreferencesDialog open={preferencesOpen} onClose={() => setPreferencesOpen(false)} />
       </div>
     </HistoryPanelServicesProvider>

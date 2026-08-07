@@ -59,8 +59,16 @@ export function defaultExportSettings(): ExportSettings {
     audioBitrateKbps: 192,
     importIntoProject: false,
     useProxy: false,
+    destination: "specified",
+    useSubfolder: false,
+    subfolderName: "",
     outputDir: "",
     outputStem: "",
+    renameRule: "filename",
+    customName: "",
+    startNumber: 1,
+    extensionCase: "lower",
+    existingFileMode: "ask",
   };
 }
 

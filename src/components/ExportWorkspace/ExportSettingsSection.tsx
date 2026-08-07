@@ -1,14 +1,20 @@
 import { ChevronDown, FolderOpen } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
-import { open, save } from "@tauri-apps/plugin-dialog";
-import { SelectDropdown, selectDropdownItems } from "../SelectDropdown";
+import { open } from "@tauri-apps/plugin-dialog";
+import { SelectDropdown, selectDropdownItems, type SelectDropdownItem } from "../SelectDropdown";
 import type {
   ExportAudioFormat,
+  ExportClip,
+  ExportDestination,
   ExportContainer,
+  ExportExistingFileMode,
+  ExportRenameRule,
   ExportSettings,
+  ExportSource,
 } from "../../systems/ExportSystem";
 import {
   audioFormatOfCodec,
+  computeExportFileNames,
   defaultAudioCodecForFormat,
   exportAudioBitrateOptions,
   exportAudioChannelOptions,
@@ -16,11 +22,16 @@ import {
   exportAudioLayerOptions,
   exportAudioSampleRateOptions,
   exportContainerOptions,
+  exportDestinationOptions,
   exportEncoderSpeedOptions,
+  exportExtensionCaseOptions,
   exportQualityOptions,
+  exportRenameRuleOptions,
   exportResolutionOptions,
   readRememberedExportDir,
   rememberExportDir,
+  renameRuleUsesCustom,
+  resolveExportDestinationDir,
 } from "../../systems/ExportSystem";
 
 const frameRateOptions: Array<readonly [string, string]> = [
@@ -38,26 +49,30 @@ const frameRateOptions: Array<readonly [string, string]> = [
 /** Presets are not implemented yet; the dropdown is a disabled placeholder. */
 const exportPresetOptions: Array<readonly [string, string]> = [["custom", "自定义"]];
 
-export function containerExtension(container: ExportContainer) {
-  switch (container) {
-    case "mp4_h264":
-    case "mp4_hevc":
-      return "mp4";
-    case "mov_prores":
-      return "mov";
-    case "webm_vp9":
-      return "webm";
-  }
-}
+/**
+ * Destination dropdown items: the three source/file categories first, then a
+ * separator, then the well-known Windows folders (they are OS paths, not the
+ * user's own project, so they are visually grouped below the divider).
+ */
+const destinationItems: Array<SelectDropdownItem<ExportDestination>> = [
+  ...selectDropdownItems(exportDestinationOptions.slice(0, 3)),
+  { type: "separator" },
+  ...selectDropdownItems(exportDestinationOptions.slice(3)),
+];
 
-function dirname(path: string) {
-  return path.replace(/[\\/][^\\/]*$/, "") || path;
-}
-
-function fileStem(path: string) {
-  const base = path.split(/[\\/]/).pop() ?? path;
-  return base.replace(/\.[^.]+$/, "") || "导出";
-}
+/**
+ * Existing-file handling dropdown. "询问要执行的操作" sits above the divider:
+ * it prompts on export, while the other modes act automatically.
+ */
+const existingFileModeItems: Array<SelectDropdownItem<ExportExistingFileMode>> = [
+  ...selectDropdownItems([["ask", "询问要执行的操作"]]),
+  { type: "separator" },
+  ...selectDropdownItems([
+    ["uniqueName", "为导出的文件选择一个新名称"],
+    ["overwrite", "无提示覆盖"],
+    ["skip", "跳过"],
+  ]),
+];
 
 /** Snaps `target` to the closest value in a sorted list (used for format-switch resets). */
 function nearestValue(values: number[], target: number) {
@@ -83,7 +98,7 @@ function ExportField({ label, stacked = false, children }: ExportFieldProps) {
   );
 }
 
-type ExportSettingsGroupId = "video" | "audio" | "general";
+type ExportSettingsGroupId = "rename" | "video" | "audio" | "general";
 
 interface ExportSettingsGroupProps {
   title: string;
@@ -142,15 +157,24 @@ interface ExportSettingsSectionProps {
   onUpdateSettings: (updates: Partial<ExportSettings>) => void;
   /** Channel count of the source being previewed; drives the 声道 options. */
   sourceChannels: number | null;
+  /** Export source; its clips resolve the "原始照片所在的文件夹" destination. */
+  source: ExportSource | null;
+  /** Currently selected clip ids; the export set for rename disambiguation. */
+  selectedClipIds: Set<string>;
+  /** The focused (blue-bar) clip on the left; the 示例 previews its filename. */
+  previewClip: ExportClip | null;
 }
 
 export function ExportSettingsSection({
   settings,
   onUpdateSettings,
   sourceChannels,
+  source,
+  selectedClipIds,
+  previewClip,
 }: ExportSettingsSectionProps) {
-  // Only one settings group stays expanded at a time; 视频 is open by default.
-  const [openGroup, setOpenGroup] = useState<ExportSettingsGroupId | null>("video");
+  // Only one settings group stays expanded at a time; 重命名规则 is open by default.
+  const [openGroup, setOpenGroup] = useState<ExportSettingsGroupId | null>("rename");
 
   function toggleGroup(group: ExportSettingsGroupId) {
     setOpenGroup((current) => (current === group ? null : group));
@@ -160,7 +184,31 @@ export function ExportSettingsSection({
   const audioFormat = audioFormatOfCodec(settings.audioCodec);
   const audioSampleRateValue =
     settings.audioSampleRateHz === null ? "source" : String(settings.audioSampleRateHz);
-  const outputDir = settings.outputDir.trim() ? settings.outputDir : readRememberedExportDir();
+  // The 文件夹 row shows the actual resolved target folder. `choose_later` is a
+  // preset-only placeholder with no path, so it gets a hint instead.
+  const folderLabel =
+    settings.destination === "choose_later"
+      ? "将在导出时选择文件夹"
+      : settings.outputDir.trim() || "未选择输出位置";
+  // 重命名规则 options depend on the export mode + source kind; when switching
+  // between them the current rule may leave the option set, so snap it back.
+  const renameRuleOptions = exportRenameRuleOptions(settings.mode, source?.kind ?? "media-bin");
+  const renameRuleValid = renameRuleOptions.some(([value]) => value === settings.renameRule);
+  const selectedClips = source?.clips.filter((clip) => selectedClipIds.has(clip.id)) ?? [];
+  // The 示例 previews the currently focused (blue-bar) clip's filename, not the
+  // first checked one. When it isn't checked itself, its name is shown standalone.
+  const previewFileName = previewClip
+    ? (computeExportFileNames(
+        selectedClips.some((clip) => clip.id === previewClip.id) ? selectedClips : [previewClip],
+        settings,
+      ).find((entry) => entry.clipId === previewClip.id)?.fileName ?? "")
+    : "";
+
+  useEffect(() => {
+    if (!renameRuleValid) {
+      onUpdateSettings({ renameRule: "filename" });
+    }
+  }, [renameRuleValid, onUpdateSettings]);
   // Surround output is only offered when the source actually carries surround
   // audio, and MPEG (MP2/MP3) cannot encode more than two channels.
   const channelOptions = exportAudioChannelOptions(sourceChannels).filter(
@@ -226,27 +274,12 @@ export function ExportSettingsSection({
     onUpdateSettings(updates);
   }
 
+  /**
+   * Picks the target folder for the 指定文件夹 destination. Merge mode also
+   * writes into a folder now (the file name comes from the auto-derived output
+   * stem), so the button is always a directory picker.
+   */
   async function chooseOutputLocation() {
-    if (settings.mode === "merge") {
-      const picked = await save({
-        title: "选择导出位置",
-        defaultPath: `${settings.outputStem.trim() || "导出"}.${containerExtension(settings.container)}`,
-        filters: [
-          {
-            name: "视频文件",
-            extensions: [containerExtension(settings.container)],
-          },
-        ],
-      });
-      if (!picked) {
-        return;
-      }
-      const dir = dirname(picked);
-      const stem = fileStem(picked);
-      onUpdateSettings({ outputDir: dir, outputStem: stem });
-      rememberExportDir(dir);
-      return;
-    }
     const picked = await open({
       directory: true,
       multiple: false,
@@ -259,34 +292,80 @@ export function ExportSettingsSection({
     }
   }
 
+  /** Resolves the destination's target folder and records it as the base output dir. */
+  async function handleDestinationChange(destination: ExportDestination) {
+    if (destination === "specified") {
+      // Restore the last folder the user explicitly picked; the button stays
+      // enabled so they can choose a new one.
+      onUpdateSettings({ destination, outputDir: readRememberedExportDir() });
+      return;
+    }
+    onUpdateSettings({
+      destination,
+      outputDir: await resolveExportDestinationDir(destination, source),
+    });
+  }
+
   return (
     <section className="export-settings-panel">
       <div className="export-settings-fixed">
-        <ExportField label="文件名">
-          <input
-            type="text"
-            className="export-text-input"
-            value={settings.outputStem}
-            placeholder="导出文件名"
-            onChange={(event) => onUpdateSettings({ outputStem: event.target.value })}
+        <ExportField label="导出到">
+          <SelectDropdown
+            className="export-select"
+            ariaLabel="导出到"
+            value={settings.destination}
+            items={destinationItems}
+            onChange={(value) => void handleDestinationChange(value)}
           />
         </ExportField>
 
-        <ExportField label="位置">
+        <ExportField label="文件夹">
           <div className="export-output-location">
-            <span className="export-output-path" title={outputDir}>
-              {outputDir.trim() ? outputDir : "未选择输出位置"}
+            <span className="export-output-path" title={folderLabel}>
+              {folderLabel}
             </span>
             <button
               type="button"
               className="toolbar-button"
               onClick={() => void chooseOutputLocation()}
-              title={settings.mode === "merge" ? "选择导出文件" : "选择导出目录"}
+              disabled={settings.destination !== "specified"}
+              title={
+                settings.destination === "specified"
+                  ? "选择导出目录"
+                  : "仅“指定文件夹”时可手动选择目录"
+              }
             >
               <FolderOpen size={14} />
               <span>选择</span>
             </button>
           </div>
+        </ExportField>
+
+        <div className="export-settings-subfolder">
+          <label className="export-check-label">
+            <input
+              type="checkbox"
+              checked={settings.useSubfolder}
+              onChange={(event) => onUpdateSettings({ useSubfolder: event.target.checked })}
+            />
+            <span>存储到子文件夹：</span>
+          </label>
+          <input
+            type="text"
+            className="export-subfolder-input"
+            value={settings.subfolderName}
+            onChange={(event) => onUpdateSettings({ subfolderName: event.target.value })}
+          />
+        </div>
+
+        <ExportField label="现有文件">
+          <SelectDropdown
+            className="export-select"
+            ariaLabel="现有文件"
+            value={settings.existingFileMode}
+            items={existingFileModeItems}
+            onChange={(value) => onUpdateSettings({ existingFileMode: value })}
+          />
         </ExportField>
 
         <ExportField label="预设">
@@ -313,6 +392,64 @@ export function ExportSettingsSection({
       </div>
 
       <div className="export-settings-groups">
+        <ExportSettingsGroup
+          title="重命名规则"
+          open={openGroup === "rename"}
+          onToggle={() => toggleGroup("rename")}
+        >
+          <ExportField label="重命名为">
+            <SelectDropdown
+              className="export-select"
+              ariaLabel="重命名为"
+              value={settings.renameRule}
+              items={selectDropdownItems(renameRuleOptions)}
+              onChange={(value) => onUpdateSettings({ renameRule: value })}
+            />
+          </ExportField>
+
+          <ExportField label="自定文本">
+            <input
+              type="text"
+              className="export-subfolder-input export-rename-custom-input"
+              value={settings.customName}
+              disabled={!renameRuleUsesCustom(settings.renameRule)}
+              onChange={(event) => onUpdateSettings({ customName: event.target.value })}
+            />
+          </ExportField>
+
+          <div className="export-rename-inline">
+            <ExportField label="起始编号">
+              <input
+                type="number"
+                min={0}
+                className="export-subfolder-input"
+                value={settings.startNumber}
+                aria-label="起始编号"
+                onChange={(event) =>
+                  onUpdateSettings({
+                    startNumber: Math.max(0, Math.round(Number(event.target.value) || 0)),
+                  })
+                }
+              />
+            </ExportField>
+            <ExportField label="扩展名">
+              <SelectDropdown
+                className="export-select"
+                ariaLabel="扩展名大小写"
+                value={settings.extensionCase}
+                items={selectDropdownItems(exportExtensionCaseOptions)}
+                onChange={(value) => onUpdateSettings({ extensionCase: value })}
+              />
+            </ExportField>
+          </div>
+
+          <ExportField label="示例">
+            <span className="export-rename-preview" title={previewFileName}>
+              {previewFileName || "—"}
+            </span>
+          </ExportField>
+        </ExportSettingsGroup>
+
         <ExportSettingsGroup
           title="视频"
           open={openGroup === "video"}

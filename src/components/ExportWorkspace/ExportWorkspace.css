@@ -134,7 +134,7 @@
   flex: 0 0 auto;
   align-items: center;
   gap: 10px;
-  padding: 8px 12px;
+  padding: 8px 16px;
   border-bottom: 1px solid var(--color-border-row);
 }
 
@@ -148,8 +148,7 @@
   white-space: nowrap;
 }
 
-/* Custom box: 1em square matching the label text height. */
-.export-check-label input[type="checkbox"] {
+.export-settings-panel .export-check-label input[type="checkbox"] {
   flex: 0 0 auto;
   box-sizing: border-box;
   width: 1em;
@@ -165,16 +164,16 @@
   cursor: pointer;
 }
 
-.export-check-label input[type="checkbox"]:hover {
+.export-settings-panel .export-check-label input[type="checkbox"]:hover {
   border-color: #d0d0d0;
 }
 
-.export-check-label input[type="checkbox"]:checked {
+.export-settings-panel .export-check-label input[type="checkbox"]:checked {
   background-color: #b0b0b0;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M1.5 6.5 5 10 10.5 2.5' fill='none' stroke='%231d1d1d' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 
-.export-check-label input[type="checkbox"]:checked:hover {
+.export-settings-panel .export-check-label input[type="checkbox"]:checked:hover {
   background-color: #d0d0d0;
   border-color: #d0d0d0;
 }
@@ -329,7 +328,6 @@
   min-height: 0;
   overflow-y: auto;
   scrollbar-color: #555 var(--color-surface);
-  scrollbar-gutter: stable;
 }
 
 .export-settings-groups::-webkit-scrollbar {
@@ -349,7 +347,6 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding-right: 12px;
 }
 
 .export-settings-group-toggle {
@@ -367,7 +364,9 @@
   cursor: pointer;
 }
 
-.export-settings-group-toggle:hover {
+/* Hovering anywhere on the row — including the enable-switch area on the right,
+   which sits outside the toggle button — highlights the whole header width. */
+.export-settings-group-header:hover {
   background: var(--color-surface-hover);
 }
 
@@ -409,6 +408,7 @@
   flex: 0 0 auto;
   width: 30px;
   height: 17px;
+  margin-right: 12px;
 }
 
 .export-switch input {
@@ -543,19 +543,82 @@
   min-height: 22px;
 }
 
-.export-output-path {
+/* The 选择 button only applies to the 指定文件夹 destination. */
+.export-output-location .toolbar-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+/* 存储到子文件夹 row: checkbox + underline input, aligned to the control column. */
+.export-settings-subfolder {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0 8px 86px;
+}
+
+.export-settings-subfolder .export-check-label {
+  flex: 0 0 auto;
+}
+
+/* Matches the keyword-name input in the 创建关键字标记 dialog (underline style). */
+.export-subfolder-input {
+  box-sizing: border-box;
+  flex: 1 1 auto;
+  width: 100%;
   min-width: 0;
-  min-height: 22px;
+  height: 22px;
+  min-height: 0;
   padding: 0 8px;
-  color: var(--color-text);
+  color: #d0d0d0;
+  font: inherit;
   font-size: 12px;
-  line-height: 20px;
+  line-height: 16px;
+  background: #0e0e0e;
+  border: none;
+  border-bottom: 1px solid #373737;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.export-subfolder-input:focus {
+  border-color: var(--color-accent);
+  outline: none;
+}
+
+/* ---- 重命名规则 group ---- */
+
+.export-rename-custom-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.export-rename-inline {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.export-rename-preview {
+  display: block;
+  min-width: 0;
+  color: var(--color-text-highlight);
+  font-size: 12px;
+  line-height: 22px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  background: var(--color-surface-field);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-sm);
+}
+
+/* Plain path text (no input-box chrome); height matches the adjacent 选择 button. */
+.export-output-path {
+  min-width: 0;
+  color: var(--color-text);
+  font-size: 12px;
+  line-height: 22px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .export-path-preview {
