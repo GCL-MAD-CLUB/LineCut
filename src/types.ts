@@ -217,15 +217,7 @@ export interface ProjectExportState {
   audioBitrateKbps: number;
   importIntoProject: boolean;
   useProxy: boolean;
-  destination:
-    | "specified"
-    | "source"
-    | "choose_later"
-    | "desktop"
-    | "documents"
-    | "user"
-    | "videos"
-    | "pictures";
+  destination: "specified" | "source" | "desktop" | "documents" | "user" | "videos" | "pictures";
   useSubfolder: boolean;
   subfolderName: string;
   outputDir: string;

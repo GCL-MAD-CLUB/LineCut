@@ -5,7 +5,7 @@ export function dirname(path: string) {
   return path.replace(/[\\/][^\\/]*$/, "") || path;
 }
 
-/** Resolves the target folder: `"source"` → the first clip's folder, `"choose_later"` → nothing yet, the rest are well-known Windows folders; a failure degrades to `""` rather than a stale folder. */
+/** Resolves the target folder: `"source"` → the first clip's folder, the rest are well-known Windows folders; a failure degrades to `""` rather than a stale folder. */
 export async function resolveExportDestinationDir(
   destination: ExportDestination,
   source: ExportSource | null,
@@ -15,8 +15,6 @@ export async function resolveExportDestinationDir(
       const firstPath = source?.clips[0]?.sourcePath;
       return firstPath ? dirname(firstPath) : "";
     }
-    case "choose_later":
-      return "";
     case "desktop":
     case "documents":
     case "user":

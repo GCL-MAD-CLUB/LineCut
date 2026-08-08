@@ -69,18 +69,10 @@ export type ExportContainer = "mp4_h264" | "mp4_hevc" | "mov_prores" | "webm_vp9
 /**
  * Where the exported files are written. Values below the dropdown divider map
  * to well-known Windows folders resolved by the backend `resolve_known_folder`
- * command; `"choose_later"` is a placeholder for the not-yet-implemented
- * preset flow (no path is resolved, export stays disabled).
+ * command.
  */
 export type ExportDestination =
-  | "specified"
-  | "source"
-  | "choose_later"
-  | "desktop"
-  | "documents"
-  | "user"
-  | "videos"
-  | "pictures";
+  "specified" | "source" | "desktop" | "documents" | "user" | "videos" | "pictures";
 export type ExportResolution = "match_source" | "custom";
 export type ExportQuality = "low" | "medium" | "high" | "very_high";
 export type ExportEncoderSpeed = "fast" | "balanced" | "quality";
@@ -187,7 +179,6 @@ export function containerExtension(container: ExportContainer): "mp4" | "mov" | 
 export const exportDestinationOptions: Array<readonly [ExportDestination, string]> = [
   ["specified", "指定文件夹"],
   ["source", "原始照片所在的文件夹"],
-  ["choose_later", "以后选择文件夹(适用于预设)"],
   ["desktop", "桌面"],
   ["documents", "“我的文档”文件夹"],
   ["user", "用户文件夹"],
