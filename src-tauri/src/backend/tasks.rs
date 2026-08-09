@@ -404,13 +404,13 @@ fn emit_context_progress(progress: &FfmpegProgressContext<'_>, value: f64) {
     }
 }
 
-pub(crate) async fn run_output(
+async fn run_output_bytes_inner(
     program: &str,
     args: &[String],
     state: &AppState,
     logical_task_id: &str,
     cancel: Arc<AtomicBool>,
-) -> AppResult<String> {
+) -> AppResult<Vec<u8>> {
     ensure_not_cancelled(&cancel)?;
     let process_id = Uuid::new_v4().to_string();
     let mut child = hidden_command(program)
@@ -447,7 +447,7 @@ pub(crate) async fn run_output(
     })?;
     ensure_not_cancelled(&cancel)?;
     if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        Ok(output.stdout)
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
         Err(app_error(
@@ -455,6 +455,27 @@ pub(crate) async fn run_output(
             format!("External tool {program} exited unsuccessfully; stderr={stderr}"),
         ))
     }
+}
+
+pub(crate) async fn run_output(
+    program: &str,
+    args: &[String],
+    state: &AppState,
+    logical_task_id: &str,
+    cancel: Arc<AtomicBool>,
+) -> AppResult<String> {
+    let output = run_output_bytes_inner(program, args, state, logical_task_id, cancel).await?;
+    Ok(String::from_utf8_lossy(&output).into_owned())
+}
+
+pub(crate) async fn run_output_bytes(
+    program: &str,
+    args: &[String],
+    state: &AppState,
+    logical_task_id: &str,
+    cancel: Arc<AtomicBool>,
+) -> AppResult<Vec<u8>> {
+    run_output_bytes_inner(program, args, state, logical_task_id, cancel).await
 }
 
 pub(crate) async fn run_status_with_ffmpeg_progress(

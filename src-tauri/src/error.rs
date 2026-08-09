@@ -111,6 +111,7 @@ define_error_codes! {
     ThumbnailCacheReadFailed => ("THUMBNAIL_CACHE_READ_FAILED", Io, true),
     ThumbnailCacheWriteFailed => ("THUMBNAIL_CACHE_WRITE_FAILED", Io, true),
     ProxyWriteFailed => ("PROXY_WRITE_FAILED", Io, true),
+    PcmWindowInvalid => ("PCM_WINDOW_INVALID", Validation, false),
     TaskCleanupFailed => ("TASK_CLEANUP_FAILED", Io, true),
     ProjectFormatInvalid => ("PROJECT_FORMAT_INVALID", Format, false),
     ProjectVersionUnsupported => ("PROJECT_VERSION_UNSUPPORTED", Unsupported, false),

@@ -114,6 +114,7 @@ const clientErrorDefinitions = {
   SUBTITLE_THUMBNAIL_ENCODE_FAILED: { category: "runtime", retryable: true },
   STORYBOARD_THUMBNAIL_ENCODE_FAILED: { category: "runtime", retryable: true },
   VIDEO_FRAME_DIMENSIONS_INVALID: { category: "media", retryable: false },
+  PCM_WINDOW_INVALID: { category: "validation", retryable: false },
   SUBTITLE_THUMBNAIL_CANVAS_UNAVAILABLE: { category: "platform", retryable: false },
   STORYBOARD_THUMBNAIL_CANVAS_UNAVAILABLE: { category: "platform", retryable: false },
   PANEL_INSTANCE_CONTEXT_MISSING: { category: "state", retryable: false },
