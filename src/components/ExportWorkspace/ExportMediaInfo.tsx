@@ -14,7 +14,7 @@ interface ExportMediaInfoProps {
   mediaItems: MediaBinItem[];
 }
 
-const videoCodecLabels: Record<ExportSettings["container"], string> = {
+const videoCodecLabels: Partial<Record<ExportSettings["container"], string>> = {
   mp4_h264: "H.264",
   mp4_hevc: "HEVC",
   mov_prores: "ProRes",
@@ -135,10 +135,11 @@ function estimateFileSizeBytes(
   const scale = (width * height * fps) / (1920 * 1080 * 30);
   const h264Mbps = { low: 5, medium: 9, high: 14, very_high: 24 } as const;
   const proresMbps = { low: 45, medium: 147, high: 220, very_high: 220 } as const;
-  const videoMbps =
-    settings.container === "mov_prores"
+  const videoMbps = settings.includeVideo
+    ? settings.container === "mov_prores"
       ? proresMbps[settings.quality] * scale
-      : h264Mbps[settings.quality] * (settings.container === "mp4_h264" ? 1 : 0.6) * scale;
+      : h264Mbps[settings.quality] * (settings.container === "mp4_h264" ? 1 : 0.6) * scale
+    : 0;
   const audioMbps = settings.includeAudio ? settings.audioBitrateKbps / 1000 : 0;
   return ((videoMbps + audioMbps) * 1e6 * (durationUs / 1e6)) / 8;
 }
@@ -231,9 +232,11 @@ function ExportMediaSection({ settings, sourceClip, selectedDurationUs }: Export
   const speedLabels = { fast: "最快", balanced: "均衡", quality: "高质量" } as const;
   const speed =
     settings.container === "mov_prores" ? "" : ` | 速度 ${speedLabels[settings.encoderSpeed]}`;
-  const video = `${videoCodecLabels[settings.container]} | ${resolution} (1.0) | ${frameRate} | ${duration} | ${outputQualityLabel(
-    settings,
-  )}${speed}`;
+  const video = settings.includeVideo
+    ? `${videoCodecLabels[settings.container] ?? "—"} | ${resolution} (1.0) | ${frameRate} | ${duration} | ${outputQualityLabel(
+        settings,
+      )}${speed}`
+    : "无视频";
   const audio = settings.includeAudio
     ? `${audioCodecLabels[settings.audioCodec]}, ${
         settings.audioSampleRateHz ? formatKiloHz(settings.audioSampleRateHz) : "匹配源"
@@ -251,7 +254,11 @@ function ExportMediaSection({ settings, sourceClip, selectedDurationUs }: Export
         <MediaRow
           label="估计文件大小："
           value={estimated}
-          title="按选中片段总时长与经验码率粗估（CRF 模式无目标码率，仅供参考）"
+          title={
+            settings.includeVideo
+              ? "按选中片段总时长与经验码率粗估（CRF 模式无目标码率，仅供参考）"
+              : "按选中片段总时长与音频比特率估算"
+          }
         />
       </dl>
     </section>

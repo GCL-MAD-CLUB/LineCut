@@ -10,8 +10,8 @@ const cacheDir = join(root, ".cache", "transnetv2-assets");
 const resourcesDir = join(root, "src-tauri", "resources", "transnetv2");
 const extractDir = join(cacheDir, "extract");
 
-const onnxRuntimeVersion = "1.20.1";
-const directMlVersion = "1.15.2";
+const onnxRuntimeVersion = "1.24.4";
+const directMlVersion = "1.15.4";
 const maxDownloadAttempts = 4;
 const requestTimeoutMs = 60_000;
 

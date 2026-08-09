@@ -763,8 +763,9 @@ mod tests {
     fn project_states_round_trip_through_xml() {
         use crate::{
             ExportAudioChannels, ExportAudioCodec, ExportContainer, ExportDestination,
-            ExportEncoderSpeed, ExportExistingFileMode, ExportExtensionCase, ExportMode,
-            ExportOptions, ExportQuality, ExportRenameRule, ExportResolution,
+            ExportEncoderSpeed, ExportExistingFileMode, ExportExtensionCase,
+            ExportHardwareAcceleration, ExportMode, ExportOptions, ExportQuality, ExportRenameRule,
+            ExportResolution,
         };
         let mut config = sample_config();
         config.project_states.insert(
@@ -779,6 +780,8 @@ mod tests {
                     frame_rate: None,
                     quality: ExportQuality::VeryHigh,
                     encoder_speed: ExportEncoderSpeed::Quality,
+                    hardware_acceleration: ExportHardwareAcceleration::Auto,
+                    include_video: true,
                     include_audio: true,
                     audio_codec: ExportAudioCodec::Opus,
                     audio_sample_rate_hz: Some(48000),
@@ -807,6 +810,42 @@ mod tests {
             .into_json()
             .unwrap();
         assert_eq!(restored, config);
+
+        // Configs written before hardware acceleration existed must continue
+        // to load and receive the safe automatic policy.
+        let mut legacy_xml = quick_xml::de::from_str::<WorkspaceConfigXml>(&xml).unwrap();
+        let legacy_state = &mut legacy_xml.project_states.project_state[0].state;
+        let mut legacy_json = serde_json::from_str::<serde_json::Value>(legacy_state).unwrap();
+        legacy_json["exportState"]
+            .as_object_mut()
+            .unwrap()
+            .remove("hardwareAcceleration");
+        *legacy_state = serde_json::to_string(&legacy_json).unwrap();
+        let restored_legacy = legacy_xml.into_json().unwrap();
+        assert_eq!(
+            restored_legacy.project_states["project-1"]
+                .export_state
+                .as_ref()
+                .unwrap()
+                .hardware_acceleration,
+            ExportHardwareAcceleration::Auto
+        );
+
+        // Track switches were added later and both default to enabled.
+        let mut legacy_xml = quick_xml::de::from_str::<WorkspaceConfigXml>(&xml).unwrap();
+        let legacy_state = &mut legacy_xml.project_states.project_state[0].state;
+        let mut legacy_json = serde_json::from_str::<serde_json::Value>(legacy_state).unwrap();
+        let export_state = legacy_json["exportState"].as_object_mut().unwrap();
+        export_state.remove("includeVideo");
+        export_state.remove("includeAudio");
+        *legacy_state = serde_json::to_string(&legacy_json).unwrap();
+        let restored_legacy = legacy_xml.into_json().unwrap();
+        let export_state = restored_legacy.project_states["project-1"]
+            .export_state
+            .as_ref()
+            .unwrap();
+        assert!(export_state.include_video);
+        assert!(export_state.include_audio);
     }
 
     #[test]

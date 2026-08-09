@@ -202,13 +202,15 @@ export interface ProjectEditorState {
 /** The export settings recorded with the last completed export of this project. */
 export interface ProjectExportState {
   mode: "merge" | "individual";
-  container: "mp4_h264" | "mp4_hevc" | "mov_prores" | "webm_vp9";
+  container: "mp4_h264" | "mp4_hevc" | "mov_prores" | "webm_vp9" | "mp3_audio" | "aac_audio";
   resolution: "match_source" | "custom";
   customWidth: number;
   customHeight: number;
   frameRate: number | null;
   quality: "low" | "medium" | "high" | "very_high";
   encoderSpeed: "fast" | "balanced" | "quality";
+  hardwareAcceleration: "auto" | "software";
+  includeVideo: boolean;
   includeAudio: boolean;
   audioCodec: "aac" | "mp2" | "mp3" | "opus";
   /** null means "match the source sample rate". */

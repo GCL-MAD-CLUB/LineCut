@@ -7,6 +7,7 @@ import {
 } from "../../ffmpegProgress";
 import { createTaskProgress } from "../TaskSystem";
 import type { ExportClip, ExportResult, ExportSettings, ExportSource } from "./exportTypes";
+import { isAudioOnlyContainer } from "./exportTypes";
 import { computeExportFileNames } from "./exportRename";
 import { exportWorkspaceStore } from "./exportWorkspaceState";
 import {
@@ -40,8 +41,20 @@ export interface RunExportTaskOptions {
   settings: ExportSettings;
 }
 
-/** Old project files lack the destination/subfolder fields; filling them in keeps quick-export and the workspace on the same defaults. */
+/** Fills fields absent from older project files and repairs invalid track/container combinations. */
 export function normalizeExportSettings(settings: ExportSettings): ExportSettings {
+  const audioOnlyContainer = isAudioOnlyContainer(settings.container);
+  let includeVideo = audioOnlyContainer ? false : (settings.includeVideo ?? true);
+  let includeAudio = audioOnlyContainer ? true : (settings.includeAudio ?? true);
+  if (!includeVideo && !includeAudio) {
+    includeVideo = true;
+  }
+  const audioCodec =
+    settings.container === "mp3_audio"
+      ? "mp3"
+      : settings.container === "aac_audio"
+        ? "aac"
+        : settings.audioCodec;
   return {
     ...settings,
     destination: settings.destination ?? "specified",
@@ -52,6 +65,10 @@ export function normalizeExportSettings(settings: ExportSettings): ExportSetting
     startNumber: settings.startNumber ?? 1,
     extensionCase: settings.extensionCase ?? "lower",
     existingFileMode: settings.existingFileMode ?? "ask",
+    hardwareAcceleration: settings.hardwareAcceleration ?? "auto",
+    includeVideo,
+    includeAudio,
+    audioCodec,
   };
 }
 

@@ -65,7 +65,8 @@ export interface ExportSource {
 }
 
 export type ExportMode = "merge" | "individual";
-export type ExportContainer = "mp4_h264" | "mp4_hevc" | "mov_prores" | "webm_vp9";
+export type ExportContainer =
+  "mp4_h264" | "mp4_hevc" | "mov_prores" | "webm_vp9" | "mp3_audio" | "aac_audio";
 /**
  * Where the exported files are written. Values below the dropdown divider map
  * to well-known Windows folders resolved by the backend `resolve_known_folder`
@@ -76,6 +77,8 @@ export type ExportDestination =
 export type ExportResolution = "match_source" | "custom";
 export type ExportQuality = "low" | "medium" | "high" | "very_high";
 export type ExportEncoderSpeed = "fast" | "balanced" | "quality";
+/** Auto uses a compatible GPU/iGPU encoder when FFmpeg and the driver expose one, then falls back to CPU. */
+export type ExportHardwareAcceleration = "auto" | "software";
 export type ExportAudioCodec = "aac" | "mp2" | "mp3" | "opus";
 export type ExportAudioFormat = "aac" | "mpeg" | "opus";
 export type ExportAudioChannels = "stereo" | "mono" | "5.1";
@@ -114,6 +117,8 @@ export interface ExportSettings {
   frameRate: number | null;
   quality: ExportQuality;
   encoderSpeed: ExportEncoderSpeed;
+  hardwareAcceleration: ExportHardwareAcceleration;
+  includeVideo: boolean;
   includeAudio: boolean;
   audioCodec: ExportAudioCodec;
   /** null means "match source". */
@@ -160,10 +165,14 @@ export const exportContainerOptions: Array<readonly [ExportContainer, string]> =
   ["mp4_hevc", "MP4（HEVC / H.265）"],
   ["mov_prores", "MOV（Apple ProRes）"],
   ["webm_vp9", "WebM（VP9）"],
+  ["mp3_audio", "MP3"],
+  ["aac_audio", "AAC 音频"],
 ];
 
 /** File extension for an export container, used to build output filenames. */
-export function containerExtension(container: ExportContainer): "mp4" | "mov" | "webm" {
+export function containerExtension(
+  container: ExportContainer,
+): "mp4" | "mov" | "webm" | "mp3" | "aac" {
   switch (container) {
     case "mp4_h264":
     case "mp4_hevc":
@@ -172,7 +181,16 @@ export function containerExtension(container: ExportContainer): "mp4" | "mov" | 
       return "mov";
     case "webm_vp9":
       return "webm";
+    case "mp3_audio":
+      return "mp3";
+    case "aac_audio":
+      return "aac";
   }
+}
+
+/** Audio-only containers cannot carry a video stream. */
+export function isAudioOnlyContainer(container: ExportContainer): boolean {
+  return container === "mp3_audio" || container === "aac_audio";
 }
 
 /** Destination options for the 导出到 dropdown; the well-known Windows folders are rendered below a separator, apart from the file/source-based options. */
@@ -204,12 +222,25 @@ export const exportEncoderSpeedOptions: Array<readonly [ExportEncoderSpeed, stri
   ["quality", "高质量"],
 ];
 
-/** Audio formats each container can actually hold (mp4/mov: AAC/MPEG, webm: Opus). */
+export const exportHardwareAccelerationOptions: Array<
+  readonly [ExportHardwareAcceleration, string]
+> = [
+  ["auto", "硬件加速"],
+  ["software", "仅限软件"],
+];
+
+/** Audio formats each container can actually hold. */
 export function exportAudioFormatOptions(
   container: ExportContainer,
 ): Array<readonly [ExportAudioFormat, string]> {
   if (container === "webm_vp9") {
     return [["opus", "Opus"]];
+  }
+  if (container === "mp3_audio") {
+    return [["mpeg", "MPEG"]];
+  }
+  if (container === "aac_audio") {
+    return [["aac", "AAC"]];
   }
   return [
     ["aac", "AAC"],
@@ -302,13 +333,16 @@ const aacBitrateSegments = [
   [256, 512, 64],
 ] as const;
 
-/** Audio bitrate (kbps) options per format family (AAC/Opus: variable ladder 16→512; MPEG: uniform 128→448). */
+/** Audio bitrate (kbps) options per format family and concrete MPEG layer. */
 export function exportAudioBitrateOptions(
   format: ExportAudioFormat,
+  codec?: ExportAudioCodec,
 ): Array<readonly [string, string]> {
   const values =
     format === "mpeg"
-      ? steppedBitrates(128, 448, 32)
+      ? codec === "mp2"
+        ? [128, 160, 192, 224, 256, 320, 384]
+        : [128, 160, 192, 224, 256, 320]
       : [
           ...new Set(
             aacBitrateSegments.flatMap(([from, to, step]) => steppedBitrates(from, to, step)),

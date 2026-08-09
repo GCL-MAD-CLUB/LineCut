@@ -2,7 +2,10 @@ use std::collections::VecDeque;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::{atomic::AtomicBool, Arc, Mutex as StdMutex, OnceLock};
+use std::sync::{
+    atomic::{AtomicBool, AtomicI32, Ordering},
+    Arc, Mutex as StdMutex, OnceLock,
+};
 use std::{env, fmt};
 
 use ort::{
@@ -36,9 +39,11 @@ const STORYBOARD_PROGRESS_PREDICT_END: f64 = 0.98;
 const STORYBOARD_PROGRESS_MIN_DELTA: f64 = 0.0025;
 const STORYBOARD_PROGRESS_FRAME_REPORT_INTERVAL: usize = 25;
 const DEFAULT_STORYBOARD_FRAME_RATE: f64 = 25.0;
+const MAX_DIRECTML_ADAPTERS_TO_PROBE: i32 = 8;
 
 static ORT_INIT_LOCK: StdMutex<()> = StdMutex::new(());
 static ORT_ENV_READY: OnceLock<()> = OnceLock::new();
+static PREFERRED_DIRECTML_ADAPTER: AtomicI32 = AtomicI32::new(-1);
 
 #[derive(Clone)]
 struct StoryboardRuntimePaths {
@@ -284,7 +289,7 @@ async fn run_storyboard_detection(
     let frame_rate = storyboard_frame_rate(project);
     let expected_frames = expected_frame_count(project.asset.duration_us, frame_rate);
     let mut progress = StoryboardProgressReporter::new(app, task_id, expected_frames);
-    let mut session = create_transnet_session(&runtime.model)?;
+    let (mut session, provider) = create_transnet_session(&runtime.model)?;
     let mut child = spawn_storyboard_ffmpeg(project, stream_index, preferences)?;
     let process_id = Uuid::new_v4().to_string();
     let pid = child.id();
@@ -422,25 +427,95 @@ async fn run_storyboard_detection(
         duration_us: project.asset.duration_us,
         frame_count: decoded_frames,
         frame_rate,
-        provider: "DirectML".to_string(),
+        provider,
         cuts,
         shots,
     })
 }
 
-fn create_transnet_session(model_path: &PathBuf) -> AppResult<Session> {
-    Session::builder()
-        .map_err(|error| storyboard_ort_error("create TransNetV2 session builder", error))?
+fn create_transnet_session(model_path: &PathBuf) -> AppResult<(Session, String)> {
+    let preferred_adapter = PREFERRED_DIRECTML_ADAPTER.load(Ordering::Relaxed);
+    let adapters = (0..MAX_DIRECTML_ADAPTERS_TO_PROBE)
+        .filter(|adapter| *adapter != preferred_adapter)
+        .collect::<Vec<_>>();
+    let adapters = (preferred_adapter >= 0)
+        .then_some(preferred_adapter)
+        .into_iter()
+        .chain(adapters);
+    let mut directml_errors = Vec::new();
+
+    for adapter in adapters {
+        match create_directml_transnet_session(model_path, adapter) {
+            Ok(session) => {
+                PREFERRED_DIRECTML_ADAPTER.store(adapter, Ordering::Relaxed);
+                tracing::info!(
+                    provider = "DirectML",
+                    adapter,
+                    "Selected storyboard inference provider"
+                );
+                return Ok((session, format!("DirectML (adapter {adapter})")));
+            }
+            Err(error) => {
+                tracing::warn!(
+                    adapter,
+                    model_path = %model_path.display(),
+                    error_code = ?error.code(),
+                    error_message = error.message(),
+                    "DirectML storyboard initialization failed for display adapter"
+                );
+                directml_errors.push(format!(
+                    "adapter {adapter}: {:?}: {}",
+                    error.code(),
+                    error.message()
+                ));
+            }
+        }
+    }
+
+    tracing::warn!(
+        attempted_adapters = MAX_DIRECTML_ADAPTERS_TO_PROBE,
+        "No usable DirectML display adapter was found; retrying with the CPU provider"
+    );
+    create_cpu_transnet_session(model_path)
+        .map(|session| {
+            tracing::info!(
+                provider = "CPU",
+                "Selected storyboard inference provider after DirectML fallback"
+            );
+            (session, "CPU".to_string())
+        })
+        .map_err(|cpu_error| {
+            let directml_detail = directml_errors.join("; ");
+            storyboard_ort_error(
+                "load TransNetV2 ONNX model with DirectML or CPU",
+                format!(
+                    "DirectML initialization failed on all probed adapters ({directml_detail}); CPU fallback failed: {cpu_error}"
+                ),
+            )
+        })
+}
+
+fn create_directml_transnet_session(model_path: &PathBuf, adapter: i32) -> ort::Result<Session> {
+    Session::builder()?
+        // The DirectML execution provider requires sequential execution and
+        // memory-pattern optimization to be disabled. ort rc.9 does not apply
+        // these provider-specific session options automatically.
+        .with_parallel_execution(false)?
+        .with_memory_pattern(false)?
         .with_execution_providers([DirectMLExecutionProvider::default()
+            .with_device_id(adapter)
             .build()
-            .error_on_failure()])
-        .map_err(|error| storyboard_ort_error("enable DirectML execution provider", error))?
-        .with_optimization_level(GraphOptimizationLevel::Level3)
-        .map_err(|error| storyboard_ort_error("configure graph optimization", error))?
-        .with_intra_threads(1)
-        .map_err(|error| storyboard_ort_error("configure inference threads", error))?
+            .error_on_failure()])?
+        .with_optimization_level(GraphOptimizationLevel::Level3)?
+        .with_intra_threads(1)?
         .commit_from_file(model_path)
-        .map_err(|error| storyboard_ort_error("load TransNetV2 ONNX model", error))
+}
+
+fn create_cpu_transnet_session(model_path: &PathBuf) -> ort::Result<Session> {
+    Session::builder()?
+        .with_optimization_level(GraphOptimizationLevel::Level3)?
+        .with_intra_threads(1)?
+        .commit_from_file(model_path)
 }
 
 fn spawn_storyboard_ffmpeg(
@@ -779,6 +854,49 @@ mod tests {
             storyboard_decision_config(Some(&model_path)).expect("packaged model must be valid");
 
         assert_eq!(config.model_origin, "bootstrap_uncalibrated");
+    }
+
+    #[test]
+    fn packaged_transnet_model_loads_with_cpu_provider() {
+        let runtime_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join(TRANSNET_RESOURCE_DIR);
+        let onnxruntime = runtime_dir
+            .join(ONNXRUNTIME_DLL_FILE)
+            .to_string_lossy()
+            .into_owned();
+
+        prepend_runtime_path(&runtime_dir);
+        ort::init_from(onnxruntime)
+            .with_name("linecut-transnetv2-cpu-test")
+            .with_telemetry(false)
+            .commit()
+            .expect("packaged ONNX Runtime must initialize");
+
+        create_cpu_transnet_session(&runtime_dir.join(TRANSNET_MODEL_FILE))
+            .expect("packaged model must load with the CPU provider");
+    }
+
+    #[test]
+    #[ignore = "requires a DirectX 12 display adapter; run manually before Windows releases"]
+    fn packaged_transnet_model_loads_with_directml_provider() {
+        let runtime_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join(TRANSNET_RESOURCE_DIR);
+        let onnxruntime = runtime_dir
+            .join(ONNXRUNTIME_DLL_FILE)
+            .to_string_lossy()
+            .into_owned();
+
+        prepend_runtime_path(&runtime_dir);
+        ort::init_from(onnxruntime)
+            .with_name("linecut-transnetv2-directml-test")
+            .with_telemetry(false)
+            .commit()
+            .expect("packaged ONNX Runtime must initialize");
+
+        create_directml_transnet_session(&runtime_dir.join(TRANSNET_MODEL_FILE), 0)
+            .expect("packaged model must load with DirectML adapter 0");
     }
 
     #[test]

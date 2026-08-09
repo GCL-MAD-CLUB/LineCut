@@ -20,6 +20,7 @@ tauri-build = { version = "2", features = [] }
 bincode = "1"
 chacha20poly1305 = "=0.10.1"
 encoding_rs = "0.8"
+futures = "0.3"
 getrandom = "=0.2.16"
 hkdf = "=0.12.4"
 quick-xml = { version = "0.37", features = ["serialize"] }

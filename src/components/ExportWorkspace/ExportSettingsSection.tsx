@@ -24,10 +24,12 @@ import {
   exportContainerOptions,
   exportDestinationOptions,
   exportEncoderSpeedOptions,
+  exportHardwareAccelerationOptions,
   exportExtensionCaseOptions,
   exportQualityOptions,
   exportRenameRuleOptions,
   exportResolutionOptions,
+  isAudioOnlyContainer,
   readRememberedExportDir,
   rememberExportDir,
   renameRuleUsesCustom,
@@ -97,6 +99,7 @@ interface ExportSettingsGroupProps {
   /** When provided, the header shows an enable switch bound to these props. */
   enabled?: boolean;
   onEnabledChange?: (enabled: boolean) => void;
+  switchDisabled?: boolean;
   switchAriaLabel?: string;
   children: ReactNode;
 }
@@ -107,6 +110,7 @@ function ExportSettingsGroup({
   onToggle,
   enabled,
   onEnabledChange,
+  switchDisabled = false,
   switchAriaLabel,
   children,
 }: ExportSettingsGroupProps) {
@@ -130,6 +134,7 @@ function ExportSettingsGroup({
             <input
               type="checkbox"
               checked={enabled ?? false}
+              disabled={switchDisabled}
               aria-label={switchAriaLabel ?? `${title}开关`}
               onChange={(event) => onEnabledChange(event.target.checked)}
             />
@@ -171,6 +176,7 @@ export function ExportSettingsSection({
   }
 
   const frameRateValue = settings.frameRate === null ? "source" : String(settings.frameRate);
+  const audioOnlyContainer = isAudioOnlyContainer(settings.container);
   const audioFormat = audioFormatOfCodec(settings.audioCodec);
   const audioSampleRateValue =
     settings.audioSampleRateHz === null ? "source" : String(settings.audioSampleRateHz);
@@ -220,7 +226,7 @@ export function ExportSettingsSection({
   }, [channelsValid, onUpdateSettings]);
 
   // Bitrate and sample-rate choices are format-specific; snap the selection back to the nearest valid value when it falls outside the new format's options.
-  const bitrateOptions = exportAudioBitrateOptions(audioFormat);
+  const bitrateOptions = exportAudioBitrateOptions(audioFormat, settings.audioCodec);
   const bitrateValues = bitrateOptions.map(([value]) => Number(value));
   const bitrateValid = bitrateValues.includes(settings.audioBitrateKbps);
 
@@ -249,10 +255,23 @@ export function ExportSettingsSection({
 
   function changeContainer(container: ExportContainer) {
     const formats = exportAudioFormatOptions(container);
-    const audioCodec = formats.some(([format]) => format === audioFormat)
-      ? settings.audioCodec
-      : defaultAudioCodecForFormat(formats[0][0]);
-    onUpdateSettings({ container, audioCodec });
+    const audioCodec =
+      container === "mp3_audio"
+        ? "mp3"
+        : container === "aac_audio"
+          ? "aac"
+          : formats.some(([format]) => format === audioFormat)
+            ? settings.audioCodec
+            : defaultAudioCodecForFormat(formats[0][0]);
+    const updates: Partial<ExportSettings> = { container, audioCodec };
+    if (isAudioOnlyContainer(container)) {
+      updates.includeVideo = false;
+      updates.includeAudio = true;
+    }
+    if (container === "mp3_audio" && settings.audioChannels === "5.1") {
+      updates.audioChannels = "stereo";
+    }
+    onUpdateSettings(updates);
   }
 
   function changeAudioFormat(format: ExportAudioFormat) {
@@ -433,12 +452,21 @@ export function ExportSettingsSection({
           title="视频"
           open={openGroup === "video"}
           onToggle={() => toggleGroup("video")}
+          enabled={settings.includeVideo}
+          onEnabledChange={(includeVideo) => {
+            if (includeVideo || settings.includeAudio) {
+              onUpdateSettings({ includeVideo });
+            }
+          }}
+          switchDisabled={(settings.includeVideo && !settings.includeAudio) || audioOnlyContainer}
+          switchAriaLabel="包含视频"
         >
           <ExportField label="分辨率" stacked={settings.resolution === "custom"}>
             <div className="export-resolution-control">
               <SelectDropdown
                 className="export-select"
                 ariaLabel="导出分辨率"
+                disabled={!settings.includeVideo}
                 value={settings.resolution}
                 items={selectDropdownItems(exportResolutionOptions)}
                 onChange={(value) => onUpdateSettings({ resolution: value })}
@@ -448,6 +476,7 @@ export function ExportSettingsSection({
                   <input
                     type="number"
                     min={2}
+                    disabled={!settings.includeVideo}
                     value={settings.customWidth}
                     onChange={(event) =>
                       onUpdateSettings({
@@ -460,6 +489,7 @@ export function ExportSettingsSection({
                   <input
                     type="number"
                     min={2}
+                    disabled={!settings.includeVideo}
                     value={settings.customHeight}
                     onChange={(event) =>
                       onUpdateSettings({
@@ -477,6 +507,7 @@ export function ExportSettingsSection({
             <SelectDropdown
               className="export-select"
               ariaLabel="导出帧率"
+              disabled={!settings.includeVideo}
               value={frameRateValue}
               items={selectDropdownItems(frameRateOptions)}
               onChange={(value) =>
@@ -489,6 +520,7 @@ export function ExportSettingsSection({
             <SelectDropdown
               className="export-select"
               ariaLabel="导出质量"
+              disabled={!settings.includeVideo}
               value={settings.quality}
               items={selectDropdownItems(exportQualityOptions)}
               onChange={(value) => onUpdateSettings({ quality: value })}
@@ -499,9 +531,21 @@ export function ExportSettingsSection({
             <SelectDropdown
               className="export-select"
               ariaLabel="编码速度"
+              disabled={!settings.includeVideo}
               value={settings.encoderSpeed}
               items={selectDropdownItems(exportEncoderSpeedOptions)}
               onChange={(value) => onUpdateSettings({ encoderSpeed: value })}
+            />
+          </ExportField>
+
+          <ExportField label="性能">
+            <SelectDropdown
+              className="export-select"
+              ariaLabel="导出性能"
+              disabled={!settings.includeVideo}
+              value={settings.hardwareAcceleration}
+              items={selectDropdownItems(exportHardwareAccelerationOptions)}
+              onChange={(value) => onUpdateSettings({ hardwareAcceleration: value })}
             />
           </ExportField>
         </ExportSettingsGroup>
@@ -511,7 +555,12 @@ export function ExportSettingsSection({
           open={openGroup === "audio"}
           onToggle={() => toggleGroup("audio")}
           enabled={settings.includeAudio}
-          onEnabledChange={(includeAudio) => onUpdateSettings({ includeAudio })}
+          onEnabledChange={(includeAudio) => {
+            if (includeAudio || settings.includeVideo) {
+              onUpdateSettings({ includeAudio });
+            }
+          }}
+          switchDisabled={settings.includeAudio && !settings.includeVideo}
           switchAriaLabel="包含音频"
         >
           <h3 className="export-settings-subheading">音频格式设置</h3>
@@ -554,7 +603,7 @@ export function ExportSettingsSection({
             />
           </ExportField>
 
-          {audioFormat === "mpeg" && (
+          {audioFormat === "mpeg" && settings.container !== "mp3_audio" && (
             <ExportField label="音频层">
               <SelectDropdown
                 className="export-select"
@@ -595,7 +644,7 @@ export function ExportSettingsSection({
                   onUpdateSettings({ mode: event.target.checked ? "merge" : "individual" })
                 }
               />
-              <span>合并为一个视频</span>
+              <span>合并为一个文件</span>
             </label>
             <label className="export-check-label" title="导出成功后把产物自动导入媒体箱">
               <input

@@ -923,6 +923,7 @@ pub(crate) async fn generate_proxy(
                 progress_span: 1.0,
                 duration_us: project.asset.duration_us,
                 cleanup_paths: vec![proxy_path.clone()],
+                progress_callback: None,
             },
         )
         .await?;

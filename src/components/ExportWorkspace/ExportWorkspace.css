@@ -420,6 +420,10 @@
   cursor: pointer;
 }
 
+.export-switch input:disabled {
+  cursor: not-allowed;
+}
+
 .export-switch-track {
   position: relative;
   display: block;
@@ -453,6 +457,16 @@
 .export-switch input:checked + .export-switch-track::after {
   transform: translateX(15px);
   background: #fff;
+}
+
+/* Disabled switches use an explicit neutral palette; no opacity overlay. */
+.export-switch input:disabled + .export-switch-track {
+  background: var(--color-surface-control);
+  border-color: var(--color-border-default);
+}
+
+.export-switch input:disabled + .export-switch-track::after {
+  background: #d0d0d0;
 }
 
 .export-switch input:focus-visible + .export-switch-track {

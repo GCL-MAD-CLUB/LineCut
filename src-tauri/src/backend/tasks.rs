@@ -259,23 +259,6 @@ pub(crate) fn stop_running_ffmpeg(tasks: Vec<RunningFfmpeg>) {
     }
 }
 
-pub(crate) fn prune_task_cleanup_paths(
-    task_id: &str,
-    keep: &[PathBuf],
-    state: &AppState,
-) -> AppResult<()> {
-    let mut tasks = state.running_tasks.lock().map_err(|_| {
-        app_error(
-            ErrorCode::TaskStateUnavailable,
-            "Task state lock is poisoned",
-        )
-    })?;
-    if let Some(task) = tasks.get_mut(task_id) {
-        task.cleanup_paths.retain(|path| keep.contains(path));
-    }
-    Ok(())
-}
-
 pub(crate) fn remove_cleanup_paths(paths: &[PathBuf]) {
     for path in paths.iter().rev() {
         if path.is_dir() {
@@ -389,6 +372,38 @@ pub(crate) fn emit_ffmpeg_progress(app: &tauri::AppHandle, task_id: &str, progre
     }
 }
 
+/// Removes only the paths that have completed successfully.  Parallel export
+/// jobs must not clear each other's in-flight cleanup entries.
+pub(crate) fn unregister_task_cleanup_paths(
+    task_id: &str,
+    completed_paths: &[PathBuf],
+    state: &AppState,
+) -> AppResult<()> {
+    if completed_paths.is_empty() {
+        return Ok(());
+    }
+    let mut tasks = state.running_tasks.lock().map_err(|_| {
+        app_error(
+            ErrorCode::TaskStateUnavailable,
+            "Task state lock is poisoned",
+        )
+    })?;
+    if let Some(task) = tasks.get_mut(task_id) {
+        task.cleanup_paths
+            .retain(|path| !completed_paths.contains(path));
+    }
+    Ok(())
+}
+
+fn emit_context_progress(progress: &FfmpegProgressContext<'_>, value: f64) {
+    let value = value.clamp(0.0, 1.0);
+    if let Some(callback) = &progress.progress_callback {
+        callback(value);
+    } else {
+        emit_ffmpeg_progress(progress.app, progress.task_id, value);
+    }
+}
+
 pub(crate) async fn run_output(
     program: &str,
     args: &[String],
@@ -494,7 +509,7 @@ pub(crate) async fn run_status_with_ffmpeg_progress(
         body
     });
 
-    emit_ffmpeg_progress(progress.app, progress.task_id, progress.base_progress);
+    emit_context_progress(&progress, progress.base_progress);
 
     let mut lines = BufReader::new(stdout).lines();
     let mut last_emitted = progress.base_progress;
@@ -506,7 +521,7 @@ pub(crate) async fn run_status_with_ffmpeg_progress(
             let _ = stderr_task.await;
             remove_cleanup_paths_async(progress.cleanup_paths.clone()).await;
             clear_running_ffmpeg(progress.state, &task_id);
-            emit_ffmpeg_progress(progress.app, progress.task_id, last_emitted);
+            emit_context_progress(&progress, last_emitted);
             return Err(app_error(
                 ErrorCode::TaskCancelled,
                 "Task cancellation was requested",
@@ -532,13 +547,13 @@ pub(crate) async fn run_status_with_ffmpeg_progress(
                 let overall_progress =
                     progress.base_progress + local_progress * progress.progress_span;
                 if overall_progress - last_emitted >= 0.005 || overall_progress >= 1.0 {
-                    emit_ffmpeg_progress(progress.app, progress.task_id, overall_progress);
+                    emit_context_progress(&progress, overall_progress);
                     last_emitted = overall_progress;
                 }
             }
         } else if line.trim() == "progress=end" {
             last_emitted = progress.base_progress + progress.progress_span;
-            emit_ffmpeg_progress(progress.app, progress.task_id, last_emitted);
+            emit_context_progress(&progress, last_emitted);
         }
     }
 
@@ -564,15 +579,11 @@ pub(crate) async fn run_status_with_ffmpeg_progress(
     if status.success() {
         // Completed files survive: a cancel arriving after completion must not
         // delete the finished output (mid-encode cancels are handled above).
-        emit_ffmpeg_progress(
-            progress.app,
-            progress.task_id,
-            progress.base_progress + progress.progress_span,
-        );
+        emit_context_progress(&progress, progress.base_progress + progress.progress_span);
         Ok(())
     } else {
         remove_cleanup_paths_async(progress.cleanup_paths.clone()).await;
-        emit_ffmpeg_progress(progress.app, progress.task_id, last_emitted);
+        emit_context_progress(&progress, last_emitted);
         if was_cancelled {
             Err(app_error(
                 ErrorCode::TaskCancelled,

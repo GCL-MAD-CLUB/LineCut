@@ -59,6 +59,8 @@ export function defaultExportSettings(): ExportSettings {
     frameRate: null,
     quality: "high",
     encoderSpeed: "balanced",
+    hardwareAcceleration: "auto",
+    includeVideo: true,
     includeAudio: true,
     audioCodec: "aac",
     audioSampleRateHz: null,

@@ -538,6 +538,8 @@ enum ExportContainer {
     Mp4Hevc,
     MovProres,
     WebmVp9,
+    Mp3Audio,
+    AacAudio,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -562,6 +564,16 @@ enum ExportEncoderSpeed {
     Fast,
     Balanced,
     Quality,
+}
+
+/// Hardware encoding policy for exports.  `Auto` probes the bundled (or
+/// user-selected) FFmpeg once per export and falls back to software when a
+/// driver, device, or codec is unavailable.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ExportHardwareAcceleration {
+    Auto,
+    Software,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -653,7 +665,11 @@ struct ExportOptions {
     frame_rate: Option<f64>,
     quality: ExportQuality,
     encoder_speed: ExportEncoderSpeed,
-    #[serde(default)]
+    #[serde(default = "default_export_hardware_acceleration")]
+    hardware_acceleration: ExportHardwareAcceleration,
+    #[serde(default = "default_export_track_enabled")]
+    include_video: bool,
+    #[serde(default = "default_export_track_enabled")]
     include_audio: bool,
     #[serde(default = "default_export_audio_codec")]
     audio_codec: ExportAudioCodec,
@@ -699,6 +715,14 @@ struct ExportOptions {
     /// the conflict resolution itself runs on the frontend).
     #[serde(default = "default_export_existing_file_mode")]
     existing_file_mode: ExportExistingFileMode,
+}
+
+const fn default_export_hardware_acceleration() -> ExportHardwareAcceleration {
+    ExportHardwareAcceleration::Auto
+}
+
+const fn default_export_track_enabled() -> bool {
+    true
 }
 
 const fn default_export_audio_codec() -> ExportAudioCodec {
@@ -829,6 +853,10 @@ struct FfmpegProgressContext<'a> {
     progress_span: f64,
     duration_us: i64,
     cleanup_paths: Vec<PathBuf>,
+    /// A logical operation may run more than one FFmpeg process.  In that
+    /// case the caller aggregates every child process' local progress before
+    /// publishing it to the UI.
+    progress_callback: Option<Arc<dyn Fn(f64) + Send + Sync>>,
 }
 
 #[derive(Debug, Deserialize)]
