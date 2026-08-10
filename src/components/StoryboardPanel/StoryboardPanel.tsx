@@ -2006,6 +2006,7 @@ export function StoryboardPanel() {
           fingerprint: thumbnailFingerprint,
           videoPath: thumbnailVideoPath,
           timeUs: shot.start_us,
+          frameRate,
           priority: Math.abs(thumbnailPrefetchStart + offset - thumbnailPriorityCenterIndex),
         }),
       );

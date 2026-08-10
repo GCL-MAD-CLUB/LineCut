@@ -7,6 +7,7 @@ import {
   type TimelineThumbnailOptions,
   type TimelineThumbnailRequest,
 } from "./timelineThumbnailManager";
+import { frameDurationUs } from "./timeline";
 import {
   baseTimelineThumbnailResolution,
   type TimelineThumbnailResolution,
@@ -18,6 +19,7 @@ const videoFramePresentationTimeoutMs = 250;
 interface StoryboardThumbnailOptions extends TimelineThumbnailOptions {
   assetId: string;
   videoPath: string;
+  frameRate?: number;
 }
 
 interface StoryboardThumbnailCacheLookup {
@@ -81,6 +83,11 @@ async function extractThumbnail(
   const tauriRuntime = isTauriRuntime();
   const videoSource = tauriRuntime ? convertFileSrc(options.videoPath) : options.videoPath;
   let extractionTimeUs = normalizedTimeUs(options.timeUs);
+  // Browsers seek to the frame *at or before* currentTime; an exact frame-boundary
+  // timestamp can round to the previous frame. Nudge the seek into the frame's
+  // display interval so the target frame is shown. The cache still keys on
+  // extractionTimeUs (the frame start), which stores exactly this frame.
+  const halfFrameUs = options.frameRate ? Math.round(frameDurationUs(options.frameRate) / 2) : 0;
 
   if (tauriRuntime) {
     try {
@@ -107,7 +114,11 @@ async function extractThumbnail(
 
   if (!unsupportedWebViewSources.has(videoSource)) {
     try {
-      const blob = await extractThumbnailInWebView(videoSource, extractionTimeUs, resolution);
+      const blob = await extractThumbnailInWebView(
+        videoSource,
+        extractionTimeUs + halfFrameUs,
+        resolution,
+      );
       if (tauriRuntime) {
         void persistStoryboardThumbnail(options.assetId, extractionTimeUs, resolution, blob);
       }

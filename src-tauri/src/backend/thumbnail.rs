@@ -26,9 +26,11 @@ const SUBTITLE_THUMBNAIL_CACHE_FOLDER: &str = "Subtitle Thumbnail Cache Files";
 const SUBTITLE_THUMBNAIL_CACHE_KEY_CONTEXT: &[u8] = b"linecut-subtitle-thumbnail-cache-v1";
 const SUBTITLE_THUMBNAIL_BUCKET_US: i64 = 100_000;
 const SUBTITLE_THUMBNAIL_MATCH_TOLERANCE_US: i64 = 100_000;
-const STORYBOARD_THUMBNAIL_CACHE_VERSION: u16 = 1;
+// v2: invalidates thumbnails cached at frame-boundary seek times (which could
+// land on the previous frame) so corrected frames are regenerated on upgrade.
+const STORYBOARD_THUMBNAIL_CACHE_VERSION: u16 = 2;
 const STORYBOARD_THUMBNAIL_CACHE_FOLDER: &str = "Storyboard Thumbnail Cache Files";
-const STORYBOARD_THUMBNAIL_CACHE_KEY_CONTEXT: &[u8] = b"linecut-storyboard-thumbnail-cache-v1";
+const STORYBOARD_THUMBNAIL_CACHE_KEY_CONTEXT: &[u8] = b"linecut-storyboard-thumbnail-cache-v2";
 const MAX_TIMELINE_THUMBNAIL_BYTES: usize = 8 * 1024 * 1024;
 
 static THUMBNAIL_CACHE_LOCK: Mutex<()> = Mutex::new(());
@@ -1288,7 +1290,9 @@ async fn extract_timeline_thumbnail(
         "-loglevel".to_string(),
         "error".to_string(),
         "-ss".to_string(),
-        format!("{:.6}", time_us.max(0) as f64 / 1_000_000.0),
+        // Subtract 1µs so the at-or-after seek lands exactly on the target frame
+        // (a boundary-exact timestamp could round up into the next frame).
+        format!("{:.6}", time_us.saturating_sub(1) as f64 / 1_000_000.0),
     ];
     append_thumbnail_processing_thread_args(&mut args);
     args.extend([

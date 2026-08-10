@@ -141,6 +141,7 @@ function ShotFrameButton({
         fingerprint,
         videoPath,
         timeUs: shot.start_us,
+        frameRate,
         priority,
         resolution: candidate,
       });
