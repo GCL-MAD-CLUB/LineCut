@@ -24,6 +24,7 @@ import {
 import { useTaskProgressStatus } from "../../systems/TaskSystem";
 import {
   clampTimelineStartFrame,
+  frameDurationUs,
   frameToTimeUs,
   normalizeFrameRate,
   timeUsToFrame,
@@ -51,6 +52,11 @@ const previewModeLabels: Record<(typeof previewModeOptions)[number], string> = {
   proxy: "代理",
 };
 type PreviewMode = (typeof previewModeOptions)[number];
+
+function videoFrameSeekUs(frameStartUs: number, frameRate: number) {
+  const epsilonUs = Math.max(1, Math.round(frameDurationUs(frameRate) / 8));
+  return frameStartUs + epsilonUs;
+}
 
 interface PendingPreviewRestore {
   frame: number;
@@ -784,7 +790,7 @@ export function SourceMonitor() {
     videoSeekInFlightRef.current = true;
     lastSeekCommandAtRef.current = performance.now();
     try {
-      video.currentTime = frameToClampedUs(targetFrame) / 1_000_000;
+      video.currentTime = videoFrameSeekUs(frameToClampedUs(targetFrame), frameRate) / 1_000_000;
     } catch {
       videoSeekInFlightRef.current = false;
     }
@@ -1228,7 +1234,8 @@ export function SourceMonitor() {
     if (usToMonitorFrame(element.currentTime * 1_000_000) !== restoredFrame) {
       element.addEventListener("seeked", restorePlayback, { once: true });
       try {
-        element.currentTime = frameToClampedUs(restoredFrame) / 1_000_000;
+        element.currentTime =
+          videoFrameSeekUs(frameToClampedUs(restoredFrame), frameRate) / 1_000_000;
       } catch {
         element.removeEventListener("seeked", restorePlayback);
         restorePlayback();
