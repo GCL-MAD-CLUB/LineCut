@@ -459,7 +459,11 @@
   background: #fff;
 }
 
-/* Disabled switches use an explicit neutral palette; no opacity overlay. */
+/* Disabled switches keep the off-state palette and are additionally dimmed. */
+.export-switch.is-disabled {
+  opacity: 0.5;
+}
+
 .export-switch input:disabled + .export-switch-track {
   background: var(--color-surface-control);
   border-color: var(--color-border-default);

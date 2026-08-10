@@ -18,8 +18,7 @@ import {
   isMediaItemEnabled,
   isMediaItemOffline,
   isMediaVideoDetached,
-  isVirtualMediaItem,
-  mediaItemProject,
+  resolvedMediaAudioSources,
   useProjectPort,
 } from "../../systems/ProjectSystem";
 import { useTaskProgressStatus } from "../../systems/TaskSystem";
@@ -286,22 +285,6 @@ export function SourceMonitor() {
   );
 
   const hasMedia = Boolean(project);
-  const boundAudioItems = useMemo(
-    () =>
-      mediaItems.filter((item) => {
-        const sourceVideo = item.source_video_id
-          ? mediaItems.find((candidate) => candidate.id === item.source_video_id)
-          : null;
-        return (
-          item.kind === "audio" &&
-          isMediaItemEnabled(item) &&
-          !isMediaItemOffline(item) &&
-          !Boolean(sourceVideo && isMediaItemOffline(sourceVideo)) &&
-          item.bound_to_video_id === activeVideoId
-        );
-      }),
-    [activeVideoId, mediaItems],
-  );
   const activeVideoItem = mediaItems.find((item) => item.id === activeVideoId);
   const activeVideoOffline = Boolean(activeVideoItem && isMediaItemOffline(activeVideoItem));
   const sourceAudioDetached = activeVideoItem
@@ -313,39 +296,25 @@ export function SourceMonitor() {
       playedVideoRecorded(activeVideoItem.id);
     }
   }, [activeVideoItem, playedVideoRecorded]);
-  const primaryVirtualAudioEnabled = Boolean(
-    project &&
-    boundAudioItems.some(
-      (item) =>
-        isVirtualMediaItem(item) &&
-        item.source_video_id === project.asset.id &&
-        item.stream_index === project.asset.audio_stream_index,
-    ),
+  const resolvedAudioSources = useMemo(
+    () =>
+      project
+        ? resolvedMediaAudioSources(activeVideoId, project, projects, mediaItems, detachedVideoIds)
+        : [],
+    [activeVideoId, detachedVideoIds, mediaItems, project, projects],
   );
+  const primaryAudioSource = resolvedAudioSources.find((source) => source.primary);
+  const primaryVirtualAudioEnabled = sourceAudioDetached && Boolean(primaryAudioSource);
   const boundAudioSources = useMemo(
     () =>
-      boundAudioItems.flatMap((item) => {
-        if (!isVirtualMediaItem(item)) {
-          return item.path ? [{ itemId: item.id, path: item.path, audioTrackIndex: 0 }] : [];
-        }
-        const sourceProject = mediaItemProject(item, projects, mediaItems);
-        if (!sourceProject) {
-          return [];
-        }
-        if (
-          sourceProject.asset.id === project?.asset.id &&
-          item.stream_index === sourceProject.asset.audio_stream_index
-        ) {
-          return [];
-        }
-        const audioTrackIndex = sourceProject.streams
-          .filter((stream) => stream.codec_type === "audio")
-          .findIndex((stream) => stream.index === item.stream_index);
-        return audioTrackIndex >= 0
-          ? [{ itemId: item.id, path: sourceProject.asset.path, audioTrackIndex }]
-          : [];
-      }),
-    [boundAudioItems, mediaItems, project?.asset.id, projects],
+      resolvedAudioSources
+        .filter((source) => !source.primary)
+        .map((source) => ({
+          itemId: source.id,
+          path: source.path,
+          audioTrackIndex: source.audioTrackIndex,
+        })),
+    [resolvedAudioSources],
   );
   const durationUs = project?.asset.duration_us ?? 0;
   const videoStream = useMemo(() => {
@@ -377,23 +346,11 @@ export function SourceMonitor() {
       audioTrackIndex: source.audioTrackIndex,
     }));
     const primaryAudioPath = activeVideoOffline ? proxyPath : project?.asset.path;
-    const primaryAudioStreams = project?.streams.filter((stream) => stream.codec_type === "audio");
-    const configuredAudioTrackIndex =
-      primaryAudioStreams?.findIndex(
-        (stream) => stream.index === project?.asset.audio_stream_index,
-      ) ?? -1;
-    const primaryHasAudio = Boolean(
-      primaryAudioStreams?.length || project?.asset.audio_stream_index != null,
-    );
     const primaryAudioTrackIndex = activeVideoOffline
-      ? primaryHasAudio
+      ? primaryAudioSource
         ? 0
         : -1
-      : configuredAudioTrackIndex >= 0
-        ? configuredAudioTrackIndex
-        : primaryHasAudio
-          ? 0
-          : -1;
+      : (primaryAudioSource?.audioTrackIndex ?? -1);
     if (
       primaryAudioPath &&
       project &&
@@ -411,10 +368,9 @@ export function SourceMonitor() {
     activeVideoOffline,
     boundAudioSources,
     primaryVirtualAudioEnabled,
-    project?.asset.audio_stream_index,
     project?.asset.id,
     project?.asset.path,
-    project?.streams,
+    primaryAudioSource,
     proxyPath,
     sourceAudioDetached,
   ]);

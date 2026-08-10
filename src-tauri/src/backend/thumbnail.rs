@@ -5,6 +5,7 @@ const ANALYSIS_HEIGHT: usize = 54;
 const ANALYSIS_FRAME_BYTES: usize = ANALYSIS_WIDTH * ANALYSIS_HEIGHT * 3;
 const MAX_ANALYSIS_SAMPLES: usize = 240;
 const MAX_PARALLEL_SEEKS: usize = 4;
+const IMPORT_COVER_WORKERS: usize = 3;
 const SHORT_VIDEO_SAMPLES_PER_SECOND: f64 = 2.0;
 const PREFIX_PERCENT: usize = 37;
 const DETAIL_WEIGHT: f64 = 0.6;
@@ -95,6 +96,14 @@ pub(crate) struct StoryboardThumbnailCacheLookup {
 }
 
 type CoverProgressCallback = dyn Fn(f64) + Send + Sync;
+
+fn thumbnail_processing_thread_budget() -> usize {
+    ffmpeg_worker_thread_budget(IMPORT_COVER_WORKERS.saturating_mul(MAX_PARALLEL_SEEKS))
+}
+
+fn append_thumbnail_processing_thread_args(args: &mut Vec<String>) {
+    append_ffmpeg_processing_thread_args(args, thumbnail_processing_thread_budget());
+}
 
 #[derive(Clone, Copy, Debug)]
 struct CoverCandidate {
@@ -1128,12 +1137,8 @@ fn fast_seek_input_args(input_path: &str, time_us: i64, keyframes_only: bool) ->
     if keyframes_only {
         args.extend(["-skip_frame".to_string(), "nokey".to_string()]);
     }
-    args.extend([
-        "-threads".to_string(),
-        "1".to_string(),
-        "-i".to_string(),
-        input_path.to_string(),
-    ]);
+    append_thumbnail_processing_thread_args(&mut args);
+    args.extend(["-i".to_string(), input_path.to_string()]);
     args
 }
 
@@ -1238,8 +1243,9 @@ async fn extract_cover_frame(
         "image2pipe".to_string(),
         "-vcodec".to_string(),
         "mjpeg".to_string(),
-        "pipe:1".to_string(),
     ]);
+    append_ffmpeg_video_output_thread_args(&mut args, thumbnail_processing_thread_budget());
+    args.push("pipe:1".to_string());
     let output = hidden_command(program)
         .args(args)
         .stdout(Stdio::piped())
@@ -1277,14 +1283,15 @@ async fn extract_timeline_thumbnail(
     time_us: i64,
     resolution: TimelineThumbnailResolution,
 ) -> AppResult<Vec<u8>> {
-    let args = [
+    let mut args = vec![
         "-hide_banner".to_string(),
         "-loglevel".to_string(),
         "error".to_string(),
         "-ss".to_string(),
         format!("{:.6}", time_us.max(0) as f64 / 1_000_000.0),
-        "-threads".to_string(),
-        "1".to_string(),
+    ];
+    append_thumbnail_processing_thread_args(&mut args);
+    args.extend([
         "-i".to_string(),
         input_path.to_string(),
         "-map".to_string(),
@@ -1302,8 +1309,9 @@ async fn extract_timeline_thumbnail(
         "image2pipe".to_string(),
         "-vcodec".to_string(),
         "mjpeg".to_string(),
-        "pipe:1".to_string(),
-    ];
+    ]);
+    append_ffmpeg_video_output_thread_args(&mut args, thumbnail_processing_thread_budget());
+    args.push("pipe:1".to_string());
     let output = hidden_command(program)
         .args(args)
         .stdout(Stdio::piped())

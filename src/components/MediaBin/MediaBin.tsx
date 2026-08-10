@@ -397,8 +397,10 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
   );
   const selectedOfflineItems = selectedFileItems.filter(isMediaItemOffline);
   const selectedOnlineItems = selectedFileItems.filter((item) => !isMediaItemOffline(item));
-  const selectedProjectVideos = selectedVideos.filter((item) =>
-    Boolean(mediaItemProject(item, projects, mediaItems)),
+  const selectedProjectVideos = selectedVideos.filter(
+    (item) =>
+      isMediaItemEnabled(item) &&
+      Boolean(mediaItemProject(item, projects, mediaItems)),
   );
   const selectedVideosWithProxy = selectedProjectVideos.filter((item) =>
     Boolean(mediaItemProject(item, projects, mediaItems)?.proxy_path),
@@ -1263,6 +1265,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
       itemIds: selectedProjectVideos.map((item) => item.id),
       mediaItems,
       projects,
+      detachedVideoIds,
     });
   }
 
@@ -1275,6 +1278,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
   }
 
   async function quickExportWithLastSettings() {
+    setContextMenu(null);
     const source = buildCurrentMediaBinSource();
     if (!source || !exportState) {
       return;
@@ -1291,7 +1295,6 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     } else if (outcome.status === "busy") {
       messagePublished("已有导出正在进行");
     }
-    setContextMenu(null);
   }
 
   function openContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
@@ -1933,7 +1936,9 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                 <PopupMenuSubmenu
                   label="导出"
                   open={contextMenu.exportSubmenuOpen}
-                  disabled={selectedProjectVideos.length === 0}
+                  disabled={
+                    selectedProjectVideos.filter((item) => !isMediaItemOffline(item)).length === 0
+                  }
                   enableMnemonics
                   menuClassName="media-bin-context-menu"
                   onOpenChange={(open) =>

@@ -130,7 +130,7 @@ function ExportSettingsGroup({
           <span>{title}</span>
         </button>
         {onEnabledChange && (
-          <label className="export-switch">
+          <label className={`export-switch ${switchDisabled ? "is-disabled" : ""}`}>
             <input
               type="checkbox"
               checked={enabled ?? false}
@@ -185,6 +185,13 @@ export function ExportSettingsSection({
   const renameRuleOptions = exportRenameRuleOptions(settings.mode, source?.kind ?? "media-bin");
   const renameRuleValid = renameRuleOptions.some(([value]) => value === settings.renameRule);
   const selectedClips = source?.clips.filter((clip) => selectedClipIds.has(clip.id)) ?? [];
+  const sourceHasAudio = (selectedClips.length > 0 ? selectedClips : (source?.clips ?? [])).some(
+    (clip) => clip.hasAudio,
+  );
+  const containerOptions = sourceHasAudio
+    ? exportContainerOptions
+    : exportContainerOptions.filter(([container]) => !isAudioOnlyContainer(container));
+  const audioEnabled = sourceHasAudio && settings.includeAudio;
   // 示例预览实际导出的文件名：合并模式以第一个勾选的片段命名，单段模式以当前选中片段命名。
   const previewFileName = (() => {
     if (settings.mode === "merge") {
@@ -213,6 +220,33 @@ export function ExportSettingsSection({
       onUpdateSettings({ renameRule: "filename" });
     }
   }, [renameRuleValid, onUpdateSettings]);
+
+  useEffect(() => {
+    if (!source || sourceHasAudio) {
+      return;
+    }
+    const updates: Partial<ExportSettings> = {};
+    if (settings.includeAudio) {
+      updates.includeAudio = false;
+    }
+    if (!settings.includeVideo) {
+      updates.includeVideo = true;
+    }
+    if (audioOnlyContainer) {
+      updates.container = "mp4_h264";
+      updates.audioCodec = "aac";
+    }
+    if (Object.keys(updates).length > 0) {
+      onUpdateSettings(updates);
+    }
+  }, [
+    audioOnlyContainer,
+    onUpdateSettings,
+    settings.includeAudio,
+    settings.includeVideo,
+    source,
+    sourceHasAudio,
+  ]);
   // Surround output is only offered when the source carries surround audio, and MPEG (MP2/MP3) cannot encode more than two channels.
   const channelOptions = exportAudioChannelOptions(sourceChannels).filter(
     ([value]) => audioFormat !== "mpeg" || value !== "5.1",
@@ -254,6 +288,9 @@ export function ExportSettingsSection({
   }, [sampleRateValid, settings.audioSampleRateHz, onUpdateSettings]);
 
   function changeContainer(container: ExportContainer) {
+    if (isAudioOnlyContainer(container) && !sourceHasAudio) {
+      return;
+    }
     const formats = exportAudioFormatOptions(container);
     const audioCodec =
       container === "mp3_audio"
@@ -383,7 +420,7 @@ export function ExportSettingsSection({
             className="export-select"
             ariaLabel="导出格式"
             value={settings.container}
-            items={selectDropdownItems(exportContainerOptions)}
+            items={selectDropdownItems(containerOptions)}
             onChange={(value) => changeContainer(value)}
           />
         </ExportField>
@@ -454,11 +491,11 @@ export function ExportSettingsSection({
           onToggle={() => toggleGroup("video")}
           enabled={settings.includeVideo}
           onEnabledChange={(includeVideo) => {
-            if (includeVideo || settings.includeAudio) {
+            if (includeVideo || audioEnabled) {
               onUpdateSettings({ includeVideo });
             }
           }}
-          switchDisabled={(settings.includeVideo && !settings.includeAudio) || audioOnlyContainer}
+          switchDisabled={(settings.includeVideo && !audioEnabled) || audioOnlyContainer}
           switchAriaLabel="包含视频"
         >
           <ExportField label="分辨率" stacked={settings.resolution === "custom"}>
@@ -554,13 +591,13 @@ export function ExportSettingsSection({
           title="音频"
           open={openGroup === "audio"}
           onToggle={() => toggleGroup("audio")}
-          enabled={settings.includeAudio}
+          enabled={audioEnabled}
           onEnabledChange={(includeAudio) => {
             if (includeAudio || settings.includeVideo) {
               onUpdateSettings({ includeAudio });
             }
           }}
-          switchDisabled={settings.includeAudio && !settings.includeVideo}
+          switchDisabled={!sourceHasAudio || (audioEnabled && !settings.includeVideo)}
           switchAriaLabel="包含音频"
         >
           <h3 className="export-settings-subheading">音频格式设置</h3>
@@ -568,7 +605,7 @@ export function ExportSettingsSection({
             <SelectDropdown
               className="export-select"
               ariaLabel="音频格式"
-              disabled={!settings.includeAudio}
+              disabled={!audioEnabled}
               title="可选范围由导出格式决定"
               value={audioFormat}
               items={selectDropdownItems(exportAudioFormatOptions(settings.container))}
@@ -581,7 +618,7 @@ export function ExportSettingsSection({
             <SelectDropdown
               className="export-select"
               ariaLabel="采样率"
-              disabled={!settings.includeAudio}
+              disabled={!audioEnabled}
               title="可选范围由音频格式决定"
               value={audioSampleRateValue}
               items={selectDropdownItems(sampleRateOptions)}
@@ -595,7 +632,7 @@ export function ExportSettingsSection({
             <SelectDropdown
               className="export-select"
               ariaLabel="声道"
-              disabled={!settings.includeAudio}
+              disabled={!audioEnabled}
               title="可选范围取决于源视频的声道数"
               value={settings.audioChannels}
               items={selectDropdownItems(channelOptions)}
@@ -608,7 +645,7 @@ export function ExportSettingsSection({
               <SelectDropdown
                 className="export-select"
                 ariaLabel="音频层"
-                disabled={!settings.includeAudio}
+                disabled={!audioEnabled}
                 value={settings.audioCodec}
                 items={selectDropdownItems(exportAudioLayerOptions)}
                 onChange={(value) => onUpdateSettings({ audioCodec: value })}
@@ -621,7 +658,7 @@ export function ExportSettingsSection({
             <SelectDropdown
               className="export-select"
               ariaLabel="音频比特率"
-              disabled={!settings.includeAudio}
+              disabled={!audioEnabled}
               title="可选范围由音频格式决定"
               value={String(settings.audioBitrateKbps)}
               items={selectDropdownItems(bitrateOptions)}

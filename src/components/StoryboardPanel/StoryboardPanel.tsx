@@ -1116,11 +1116,20 @@ export function StoryboardPanel() {
     activeVideoId,
     mediaItems,
     projects,
+    detachedVideoIds,
     storyboards,
     exportState,
     messagePublished,
   } = useProjectPort(
-    ["project", "activeVideoId", "mediaItems", "projects", "storyboards", "exportState"],
+    [
+      "project",
+      "activeVideoId",
+      "mediaItems",
+      "projects",
+      "detachedVideoIds",
+      "storyboards",
+      "exportState",
+    ],
     ["messagePublished"],
   );
   // Exports are serialized; disable quick export while one is in flight.
@@ -2390,6 +2399,7 @@ export function StoryboardPanel() {
       storyboards,
       mediaItems,
       projects,
+      detachedVideoIds,
     });
   }
 
@@ -2402,6 +2412,7 @@ export function StoryboardPanel() {
   }
 
   async function quickExportWithLastSettings() {
+    setContextMenu(null);
     const source = buildCurrentStoryboardSource();
     if (!source || !exportState) {
       return;
@@ -2418,7 +2429,6 @@ export function StoryboardPanel() {
     } else if (outcome.status === "busy") {
       messagePublished("已有导出正在进行");
     }
-    setContextMenu(null);
   }
 
   function openContextMenu(event: ReactMouseEvent<HTMLDivElement>) {

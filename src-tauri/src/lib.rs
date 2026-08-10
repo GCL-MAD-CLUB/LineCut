@@ -510,9 +510,22 @@ struct ProxyResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ExportAudioSource {
+    source_path: String,
+    /// Zero-based index among the input file's audio streams (`a:N`).
+    #[serde(default)]
+    audio_track_index: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ExportClip {
     id: String,
     source_path: String,
+    /// `None` preserves compatibility with older callers by selecting the
+    /// source file's first audio stream; `Some([])` explicitly means no audio.
+    #[serde(default)]
+    audio_sources: Option<Vec<ExportAudioSource>>,
     label: String,
     /// Full output filename (with extension) computed by the frontend rename
     /// rule; empty falls back to the legacy stem-based naming.
@@ -848,6 +861,8 @@ struct FfmpegProgressContext<'a> {
     app: &'a tauri::AppHandle,
     state: &'a AppState,
     task_id: &'a str,
+    /// Identifies the exact clip/output guarded by this FFmpeg process in logs.
+    watchdog_label: String,
     cancel: Arc<AtomicBool>,
     base_progress: f64,
     progress_span: f64,
@@ -859,20 +874,20 @@ struct FfmpegProgressContext<'a> {
     progress_callback: Option<Arc<dyn Fn(f64) + Send + Sync>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 struct ProbeOutput {
     #[serde(default)]
     streams: Vec<ProbeStream>,
     format: Option<ProbeFormat>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 struct ProbeFormat {
     duration: Option<String>,
     start_time: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 struct ProbeStream {
     index: i32,
     codec_name: Option<String>,

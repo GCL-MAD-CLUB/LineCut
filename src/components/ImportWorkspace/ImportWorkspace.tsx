@@ -12,7 +12,7 @@ import {
   Upload,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { runMediaImportTask } from "../../mediaImportTask";
+import { runMediaImportBatchTask } from "../../mediaImportTask";
 import { runOperation } from "../../errors";
 import { useProjectPort } from "../../systems/ProjectSystem";
 import { useTaskProgressStatus } from "../../systems/TaskSystem";
@@ -247,24 +247,21 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
       setSubtitlePaths([]);
     }
 
-    const outcomes = await Promise.all(
-      probeItems.map((item) =>
-        runMediaImportTask({
-          path: item.path,
-          operation: "media.import",
-          taskIdPrefix: `import-${item.kind}`,
-          onSuccess: (result) => {
-            mediaProjectsAdded([result.project]);
-            warningsAppended(result.warnings);
-            removePendingItem(item);
-          },
-        }),
-      ),
-    );
-    const loadedResults = outcomes.flatMap((outcome) =>
-      outcome.status === "success" ? [outcome.result] : [],
-    );
-    const cancelledCount = outcomes.filter((outcome) => outcome.status === "cancelled").length;
+    const outcome = await runMediaImportBatchTask({
+      paths: probeItems.map((item) => item.path),
+      operation: "media.import",
+      taskIdPrefix: "media-import",
+      onSuccess: (results) => {
+        if (results.length === 0) {
+          return;
+        }
+        mediaProjectsAdded(results.map((result) => result.project));
+        warningsAppended(results.flatMap((result) => result.warnings));
+      },
+    });
+    const loadedResults = outcome.results;
+    const cancelledCount =
+      outcome.status === "cancelled" ? probeItems.length - loadedResults.length : 0;
 
     const importedCount = loadedResults.length + subtitlePaths.length;
     clearPendingItems();

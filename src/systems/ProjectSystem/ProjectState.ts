@@ -15,8 +15,10 @@ import {
 } from "./ProjectHistory";
 import type {
   DemuxMediaResult,
+  ImportResult,
   MediaBinFolder,
   MediaBinItem,
+  MediaStream,
   Preferences,
   Project,
   ProjectExportState,
@@ -206,6 +208,142 @@ export function isMediaVideoDetached(item: MediaBinItem, detachedVideoIds: Set<s
     (detachedVideoIds.has(item.id) ||
       Boolean(item.source_video_id && detachedVideoIds.has(item.source_video_id)))
   );
+}
+
+export interface ResolvedMediaAudioSource {
+  id: string;
+  path: string;
+  /** Zero-based index among the file's audio streams (the FFmpeg `a:N` index). */
+  audioTrackIndex: number;
+  /** The video's original selected audio stream, whether implicit or re-enabled after demux. */
+  primary: boolean;
+  stream: MediaStream | null;
+}
+
+function projectAudioTrackIndex(project: Project, streamIndex: number | null) {
+  if (streamIndex === null) {
+    return -1;
+  }
+  return project.streams
+    .filter((stream) => stream.codec_type === "audio")
+    .findIndex((stream) => stream.index === streamIndex);
+}
+
+/**
+ * Resolves the audio that is actually audible for a media-bin video. This is
+ * the shared binding rule used by preview and export: only enabled, online,
+ * currently-bound tracks are included, while an undemuxed video's primary
+ * audio remains implicit.
+ */
+export function resolvedMediaAudioSources(
+  videoId: string,
+  project: Project,
+  projects: Record<string, Project>,
+  mediaItems: MediaBinItem[],
+  detachedVideoIds: Set<string>,
+): ResolvedMediaAudioSource[] {
+  const mediaItemsById = new Map(mediaItems.map((item) => [item.id, item]));
+  const videoItem = mediaItemsById.get(videoId);
+  if (videoItem?.kind !== "video") {
+    return [];
+  }
+  if (!isMediaItemEnabled(videoItem)) {
+    return [];
+  }
+
+  const projectForItem = (item: MediaBinItem) => {
+    const directProject =
+      projects[item.id] ?? (item.source_video_id ? projects[item.source_video_id] : undefined);
+    if (directProject) {
+      return directProject;
+    }
+    const boundVideo = item.bound_to_video_id
+      ? mediaItemsById.get(item.bound_to_video_id)
+      : undefined;
+    return boundVideo
+      ? (projects[boundVideo.id] ??
+          (boundVideo.source_video_id ? projects[boundVideo.source_video_id] : undefined))
+      : undefined;
+  };
+
+  const boundItems = mediaItems.filter((item) => {
+    const sourceVideo = item.source_video_id ? mediaItemsById.get(item.source_video_id) : undefined;
+    return (
+      item.kind === "audio" &&
+      isMediaItemEnabled(item) &&
+      !isMediaItemOffline(item) &&
+      !Boolean(sourceVideo && isMediaItemOffline(sourceVideo)) &&
+      item.bound_to_video_id === videoId
+    );
+  });
+  const primaryStreamIndex = project.asset.audio_stream_index;
+  const primaryTrackIndex = projectAudioTrackIndex(project, primaryStreamIndex);
+  const primaryVirtualEnabled = boundItems.some(
+    (item) =>
+      isVirtualMediaItem(item) &&
+      item.source_video_id === project.asset.id &&
+      item.stream_index === primaryStreamIndex,
+  );
+  const sources: ResolvedMediaAudioSource[] = [];
+
+  if (
+    primaryTrackIndex >= 0 &&
+    (!isMediaVideoDetached(videoItem, detachedVideoIds) || primaryVirtualEnabled)
+  ) {
+    sources.push({
+      id: `primary:${videoId}:${project.asset.id}`,
+      path: project.asset.path,
+      audioTrackIndex: primaryTrackIndex,
+      primary: true,
+      stream: project.streams.find((stream) => stream.index === primaryStreamIndex) ?? null,
+    });
+  }
+
+  for (const item of boundItems) {
+    const sourceProject = projectForItem(item);
+    if (isVirtualMediaItem(item)) {
+      if (
+        sourceProject?.asset.id === project.asset.id &&
+        item.stream_index === primaryStreamIndex
+      ) {
+        continue;
+      }
+      if (!sourceProject) {
+        continue;
+      }
+      const audioTrackIndex = projectAudioTrackIndex(sourceProject, item.stream_index);
+      if (audioTrackIndex < 0) {
+        continue;
+      }
+      sources.push({
+        id: item.id,
+        path: sourceProject.asset.path,
+        audioTrackIndex,
+        primary: false,
+        stream: sourceProject.streams.find((stream) => stream.index === item.stream_index) ?? null,
+      });
+      continue;
+    }
+
+    if (!item.path) {
+      continue;
+    }
+    const audioTrackIndex = sourceProject
+      ? projectAudioTrackIndex(sourceProject, item.stream_index)
+      : 0;
+    if (sourceProject && audioTrackIndex < 0) {
+      continue;
+    }
+    sources.push({
+      id: item.id,
+      path: item.path,
+      audioTrackIndex: Math.max(0, audioTrackIndex),
+      primary: false,
+      stream: sourceProject?.streams.find((stream) => stream.index === item.stream_index) ?? null,
+    });
+  }
+
+  return sources;
 }
 
 function projectMediaItem(project: Project): MediaBinItem {
@@ -1724,6 +1862,24 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
 export function getProjectExportContext() {
   const state = projectState.getState();
   return { projectId: state.projectId, exportState: state.exportState };
+}
+
+/** Applies completed media imports through one media-bin and project-history operation. */
+export function applyImportedMediaResults(results: readonly ImportResult[]) {
+  if (results.length === 0) {
+    return;
+  }
+  const commands = projectState.getState().commands;
+  commands.mediaProjectsAdded(results.map((result) => result.project));
+  const warnings = results.flatMap((result) => result.warnings);
+  if (warnings.length > 0) {
+    commands.warningsAppended(warnings);
+  }
+}
+
+/** Applies a completed media import through the same project commands used by the UI. */
+export function applyImportedMediaResult(result: ImportResult) {
+  applyImportedMediaResults([result]);
 }
 
 function useProjectState<Selection>(selector: (state: ProjectSystemState) => Selection) {

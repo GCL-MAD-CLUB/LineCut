@@ -23,6 +23,8 @@ export {
   buildMediaBinExportSource,
   buildStoryboardExportSource,
   buildSubtitleExportSource,
+  refreshExportClipAudioBindings,
+  refreshExportSourceAudioBindings,
 } from "./exportResolvers";
 export type {
   MediaBinExportInput,

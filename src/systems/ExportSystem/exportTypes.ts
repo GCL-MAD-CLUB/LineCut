@@ -25,9 +25,20 @@ export interface ExportSourceMedia {
   durationUs: number;
 }
 
+/** One audible source selected by the media bin's current audio binding state. */
+export interface ExportClipAudioSource {
+  sourcePath: string;
+  /** Zero-based index among the file's audio streams (the FFmpeg `a:N` index). */
+  audioTrackIndex: number;
+  /** Lets proxy export replace only the video's own audio, not other streams from the source. */
+  primary: boolean;
+}
+
 /** A single video segment to export, described by its source file and time range. */
 export interface ExportClip {
   id: string;
+  /** Media-bin video identity used to refresh bindings immediately before export. */
+  videoId: string;
   sourcePath: string;
   /** The 字幕/分镜 component value: subtitle text, shot title, or media-bin name. */
   label: string;
@@ -40,6 +51,8 @@ export interface ExportClip {
   endUs: number;
   hasVideo: boolean;
   hasAudio: boolean;
+  /** All enabled, online audio tracks currently bound to this video. */
+  audioSources: ExportClipAudioSource[];
   durationUs: number;
   videoStreamIndex: number | null;
   /** Optional hint used to render a clip thumbnail in the export page. */

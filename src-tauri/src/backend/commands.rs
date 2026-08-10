@@ -918,6 +918,7 @@ pub(crate) async fn generate_proxy(
                 app: &app,
                 state: state.inner(),
                 task_id: &task_id,
+                watchdog_label: format!("proxy -> {}", proxy_path.display()),
                 cancel: task.cancel_token(),
                 base_progress: 0.0,
                 progress_span: 1.0,

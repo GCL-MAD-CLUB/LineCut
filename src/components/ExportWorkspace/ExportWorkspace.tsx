@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -13,6 +14,7 @@ import { isMediaItemOffline, useProjectPort } from "../../systems/ProjectSystem"
 import {
   dirname,
   readRememberedExportDir,
+  refreshExportSourceAudioBindings,
   useExportWorkspaceState,
   type ExportClip,
   type ExportSource,
@@ -95,7 +97,7 @@ function ExportSourceZone() {
 }
 
 export function ExportWorkspace() {
-  const source = useExportWorkspaceState((state) => state.source);
+  const storedSource = useExportWorkspaceState((state) => state.source);
   const selectedClipIds = useExportWorkspaceState((state) => state.selectedClipIds);
   const settings = useExportWorkspaceState((state) => state.settings);
   const previewClipId = useExportWorkspaceState((state) => state.previewClipId);
@@ -106,11 +108,25 @@ export function ExportWorkspace() {
   const applyProjectExportSettings = useExportWorkspaceState(
     (state) => state.applyProjectExportSettings,
   );
-  const { projectFilePath, projectId, mediaItems, activeVideoId, activeVideoChanged } =
-    useProjectPort(
-      ["projectFilePath", "projectId", "mediaItems", "activeVideoId"],
-      ["activeVideoChanged"],
-    );
+  const {
+    projectFilePath,
+    projectId,
+    projects,
+    mediaItems,
+    detachedVideoIds,
+    activeVideoId,
+    activeVideoChanged,
+  } = useProjectPort(
+    ["projectFilePath", "projectId", "projects", "mediaItems", "detachedVideoIds", "activeVideoId"],
+    ["activeVideoChanged"],
+  );
+  const source = useMemo(
+    () =>
+      storedSource
+        ? refreshExportSourceAudioBindings(storedSource, mediaItems, projects, detachedVideoIds)
+        : null,
+    [detachedVideoIds, mediaItems, projects, storedSource],
+  );
 
   const mainRef = useRef<HTMLDivElement | null>(null);
   const [leftRatio, setLeftRatio] = useState(0.3);
@@ -200,7 +216,11 @@ export function ExportWorkspace() {
     applyProjectExportSettings();
   }, [applyProjectExportSettings, projectId]);
 
-  const sourceKey = source ? `${source.kind}:${source.clips.length}:${source.assetId ?? ""}` : null;
+  const sourceKey = source
+    ? `${source.kind}:${source.assetId ?? ""}:${source.clips
+        .map((clip) => `${clip.id}@${clip.sourcePath}`)
+        .join("|")}`
+    : null;
   const lastSourceKeyRef = useRef<string | null>(null);
 
   useEffect(() => {

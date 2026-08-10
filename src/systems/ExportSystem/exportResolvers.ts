@@ -1,14 +1,20 @@
 import { parseFrameRate } from "../../timeline";
 import { expandedStoryboardKeywordText } from "../../components/StoryboardPanel/storyboardKeywords";
-import type { MediaBinItem, Project, StoryboardState } from "../../types";
+import type { MediaBinItem, MediaStream, Project, StoryboardState } from "../../types";
 import {
   isMediaItemEnabled,
   isMediaItemOffline,
   mediaItemProject,
+  resolvedMediaAudioSources,
   subtitleTrackContext,
   subtitleTrackCues,
 } from "../../systems/ProjectSystem";
-import type { ExportClip, ExportSource, ExportSourceMedia } from "./exportTypes";
+import type {
+  ExportClip,
+  ExportClipAudioSource,
+  ExportSource,
+  ExportSourceMedia,
+} from "./exportTypes";
 
 function parseAspectRatio(value?: string | null) {
   if (!value) {
@@ -18,15 +24,15 @@ function parseAspectRatio(value?: string | null) {
   return width > 0 && height > 0 ? width / height : null;
 }
 
-function sourceMediaFromProject(project: Project): ExportSourceMedia {
+function sourceMediaFromProject(
+  project: Project,
+  resolvedAudioStream: MediaStream | null,
+): ExportSourceMedia {
   const videoStream =
     project.asset.video_stream_index !== null
       ? project.streams.find((stream) => stream.index === project.asset.video_stream_index)
       : null;
-  const audioStream =
-    project.asset.audio_stream_index !== null
-      ? project.streams.find((stream) => stream.index === project.asset.audio_stream_index)
-      : null;
+  const audioStream = resolvedAudioStream;
   const extension = project.asset.file_name.split(".").pop()?.toLocaleLowerCase() ?? "";
   const audioSampleRateHz = audioStream?.sample_rate
     ? Number.parseInt(audioStream.sample_rate, 10) || null
@@ -53,17 +59,21 @@ function sourceMediaFromProject(project: Project): ExportSourceMedia {
 
 function clipFromProject(
   id: string,
+  videoId: string,
   project: Project,
   label: string,
   startUs: number,
   endUs: number,
   sourceName: string,
+  audioSources: ExportClipAudioSource[],
+  audioStream: MediaStream | null,
   thumbnail?: ExportClip["thumbnail"],
   keywordText?: string,
 ): ExportClip {
   const durationUs = endUs > 0 ? Math.max(0, endUs - startUs) : project.asset.duration_us;
   return {
     id,
+    videoId,
     sourcePath: project.asset.path,
     label,
     sourceName,
@@ -71,12 +81,37 @@ function clipFromProject(
     startUs,
     endUs,
     hasVideo: project.asset.video_stream_index !== null,
-    hasAudio: project.asset.audio_stream_index !== null,
+    hasAudio: audioSources.length > 0,
+    audioSources,
     durationUs,
     videoStreamIndex: project.asset.video_stream_index,
     thumbnail,
     proxyPath: project.proxy_path ?? null,
-    sourceMedia: sourceMediaFromProject(project),
+    sourceMedia: sourceMediaFromProject(project, audioStream),
+  };
+}
+
+function exportAudioContext(
+  videoId: string,
+  project: Project,
+  projects: Record<string, Project>,
+  mediaItems: MediaBinItem[],
+  detachedVideoIds: Set<string>,
+) {
+  const resolved = resolvedMediaAudioSources(
+    videoId,
+    project,
+    projects,
+    mediaItems,
+    detachedVideoIds,
+  );
+  return {
+    sources: resolved.map((source): ExportClipAudioSource => ({
+      sourcePath: source.path,
+      audioTrackIndex: source.audioTrackIndex,
+      primary: source.primary,
+    })),
+    stream: resolved[0]?.stream ?? null,
   };
 }
 
@@ -124,6 +159,7 @@ export interface StoryboardExportInput {
   storyboards: Record<string, StoryboardState>;
   mediaItems: MediaBinItem[];
   projects: Record<string, Project>;
+  detachedVideoIds: Set<string>;
 }
 
 /** Builds an export source from the storyboard shots currently selected in the editor. */
@@ -135,6 +171,7 @@ export function buildStoryboardExportSource({
   storyboards,
   mediaItems,
   projects,
+  detachedVideoIds,
 }: StoryboardExportInput): ExportSource | null {
   const project = activeVideoProject(mediaItems, projects, videoId);
   if (!project || shotIds.length === 0) {
@@ -143,17 +180,21 @@ export function buildStoryboardExportSource({
   const videoContext = `${videoId}:${assetId}:${fingerprint}`;
   const storyboard = storyboards[videoContext];
   const shots = storyboard?.shots ?? [];
+  const audio = exportAudioContext(videoId, project, projects, mediaItems, detachedVideoIds);
   const shotIdsSet = new Set(shotIds);
   const clips = shots
     .filter((shot) => shotIdsSet.has(shot.id))
     .map((shot) =>
       clipFromProject(
         `shot:${shot.id}`,
+        videoId,
         project,
         storyboardShotTitle(shot, shots.length, storyboard?.shotAnnotations?.[shot.id]?.title),
         shot.start_us,
         shot.end_us,
         videoMediaBinName(mediaItems, videoId, project),
+        audio.sources,
+        audio.stream,
         {
           kind: "storyboard",
           assetId: project.asset.id,
@@ -185,6 +226,7 @@ export interface SubtitleExportInput {
   cueIds: string[];
   mediaItems: MediaBinItem[];
   projects: Record<string, Project>;
+  detachedVideoIds: Set<string>;
 }
 
 /** Builds an export source from the subtitle cues currently selected in the editor. */
@@ -194,6 +236,7 @@ export function buildSubtitleExportSource({
   cueIds,
   mediaItems,
   projects,
+  detachedVideoIds,
 }: SubtitleExportInput): ExportSource | null {
   const video = mediaItems.find(
     (item) => item.id === videoId && item.kind === "video" && isMediaItemEnabled(item),
@@ -203,24 +246,30 @@ export function buildSubtitleExportSource({
     return null;
   }
   const context = subtitleTrackContext(project, projects, mediaItems, videoId, trackId);
-  const sourceProject = context?.project ?? project;
+  if (!context) {
+    return null;
+  }
   const cues = subtitleTrackCues(project, projects, mediaItems, videoId, trackId);
+  const audio = exportAudioContext(videoId, project, projects, mediaItems, detachedVideoIds);
   const cueIdsSet = new Set(cueIds);
   const clips = cues
     .filter((cue) => cueIdsSet.has(cue.id))
     .map((cue) =>
       clipFromProject(
         `cue:${cue.id}`,
-        sourceProject,
+        videoId,
+        project,
         subtitleLabel(cue),
         cue.start_us,
         cue.end_us,
-        videoMediaBinName(mediaItems, videoId, sourceProject),
+        videoMediaBinName(mediaItems, videoId, project),
+        audio.sources,
+        audio.stream,
         {
           kind: "subtitle",
-          assetId: sourceProject.asset.id,
+          assetId: project.asset.id,
           timeUs: cue.start_us,
-          fingerprint: sourceProject.asset.fingerprint,
+          fingerprint: project.asset.fingerprint,
         },
       ),
     );
@@ -231,7 +280,7 @@ export function buildSubtitleExportSource({
     kind: "subtitle",
     title: `${clips.length} 个字幕片段`,
     clips,
-    assetId: sourceProject.asset.id,
+    assetId: project.asset.id,
   };
 }
 
@@ -244,6 +293,7 @@ export interface MediaBinExportInput {
   itemIds: string[];
   mediaItems: MediaBinItem[];
   projects: Record<string, Project>;
+  detachedVideoIds: Set<string>;
 }
 
 /** Builds an export source from the full videos selected in the media bin. */
@@ -251,6 +301,7 @@ export function buildMediaBinExportSource({
   itemIds,
   mediaItems,
   projects,
+  detachedVideoIds,
 }: MediaBinExportInput): ExportSource | null {
   const selected = new Set(itemIds);
   const clips = mediaItems
@@ -263,13 +314,27 @@ export function buildMediaBinExportSource({
     )
     .map((item) => {
       const project = mediaItemProject(item, projects, mediaItems);
+      const audio = project
+        ? exportAudioContext(item.id, project, projects, mediaItems, detachedVideoIds)
+        : null;
       return project
-        ? clipFromProject(`media:${item.id}`, project, item.file_name, 0, 0, item.file_name, {
-            kind: "video",
-            assetId: project.asset.id,
-            timeUs: 0,
-            fingerprint: project.asset.fingerprint,
-          })
+        ? clipFromProject(
+            `media:${item.id}`,
+            item.id,
+            project,
+            item.file_name,
+            0,
+            0,
+            item.file_name,
+            audio?.sources ?? [],
+            audio?.stream ?? null,
+            {
+              kind: "video",
+              assetId: project.asset.id,
+              timeUs: 0,
+              fingerprint: project.asset.fingerprint,
+            },
+          )
         : null;
     })
     .filter((clip): clip is ExportClip => clip !== null);
@@ -281,5 +346,57 @@ export function buildMediaBinExportSource({
     title: `${clips.length} 个视频`,
     clips,
     assetId: clips[0].thumbnail?.assetId,
+  };
+}
+
+/** Refreshes a saved export selection from the media bin's current binding state. */
+export function refreshExportClipAudioBindings(
+  clips: ExportClip[],
+  mediaItems: MediaBinItem[],
+  projects: Record<string, Project>,
+  detachedVideoIds: Set<string>,
+): ExportClip[] {
+  return clips.flatMap((clip) => {
+    if (!clip.videoId) {
+      return [clip];
+    }
+    const video = mediaItems.find(
+      (item) =>
+        item.id === clip.videoId &&
+        item.kind === "video" &&
+        isMediaItemEnabled(item) &&
+        !isMediaItemOffline(item),
+    );
+    if (!video) {
+      return [];
+    }
+    const project = mediaItemProject(video, projects, mediaItems);
+    if (!project) {
+      return [];
+    }
+    const audio = exportAudioContext(video.id, project, projects, mediaItems, detachedVideoIds);
+    return [
+      {
+        ...clip,
+        sourcePath: project.asset.path,
+        hasVideo: project.asset.video_stream_index !== null,
+        hasAudio: audio.sources.length > 0,
+        audioSources: audio.sources,
+        proxyPath: project.proxy_path ?? null,
+        sourceMedia: sourceMediaFromProject(project, audio.stream),
+      },
+    ];
+  });
+}
+
+export function refreshExportSourceAudioBindings(
+  source: ExportSource,
+  mediaItems: MediaBinItem[],
+  projects: Record<string, Project>,
+  detachedVideoIds: Set<string>,
+): ExportSource {
+  return {
+    ...source,
+    clips: refreshExportClipAudioBindings(source.clips, mediaItems, projects, detachedVideoIds),
   };
 }

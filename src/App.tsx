@@ -38,7 +38,7 @@ import { sourcePanelType } from "./components/SourceMonitor";
 import { storyboardPanelType } from "./components/StoryboardPanel";
 import { subtitlePanelType } from "./components/SubtitlePanel";
 import { cancelAllTaskProgress, useTaskProgressStatus } from "./systems/TaskSystem";
-import { runMediaImportTask } from "./mediaImportTask";
+import { runMediaImportBatchTask } from "./mediaImportTask";
 import {
   captureOperationError,
   invokeCommand,
@@ -856,27 +856,27 @@ function AppContent() {
       rememberImportedMedia(subtitlePaths);
     }
 
-    const outcomes = await Promise.all(
-      probePaths.map((path) =>
-        runMediaImportTask({
-          path,
-          operation: "media.import",
-          taskIdPrefix: "media-import",
-          onSuccess: (result) => {
-            mediaProjectsAdded([result.project]);
-            if (folderId) {
-              mediaItemsMovedToFolder([result.project.asset.id], folderId);
-            }
-            warningsAppended(result.warnings);
-            rememberImportedMedia([result.project.asset.path]);
-          },
-        }),
-      ),
-    );
-    const loaded = outcomes.flatMap((outcome) =>
-      outcome.status === "success" ? [outcome.result] : [],
-    );
-    const cancelledCount = outcomes.filter((outcome) => outcome.status === "cancelled").length;
+    const outcome = await runMediaImportBatchTask({
+      paths: probePaths,
+      operation: "media.import",
+      taskIdPrefix: "media-import",
+      onSuccess: (results) => {
+        if (results.length === 0) {
+          return;
+        }
+        mediaProjectsAdded(results.map((result) => result.project));
+        if (folderId) {
+          mediaItemsMovedToFolder(
+            results.map((result) => result.project.asset.id),
+            folderId,
+          );
+        }
+        warningsAppended(results.flatMap((result) => result.warnings));
+        rememberImportedMedia(results.map((result) => result.project.asset.path));
+      },
+    });
+    const loaded = outcome.results;
+    const cancelledCount = outcome.status === "cancelled" ? probePaths.length - loaded.length : 0;
 
     const importedCount = loaded.length + subtitlePaths.length;
     const resultParts = [

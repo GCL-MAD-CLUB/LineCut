@@ -6,8 +6,18 @@ import {
   listenToFfmpegTaskProgress,
 } from "../../ffmpegProgress";
 import { createTaskProgress } from "../TaskSystem";
-import type { ExportClip, ExportResult, ExportSettings, ExportSource } from "./exportTypes";
+import { applyImportedMediaResults, getProjectWorkspaceSnapshot } from "../ProjectSystem";
+import { runMediaImportBatchTask } from "../../mediaImportTask";
+import type {
+  ExportClip,
+  ExportOutput,
+  ExportResult,
+  ExportSettings,
+  ExportSource,
+} from "./exportTypes";
 import { isAudioOnlyContainer } from "./exportTypes";
+import { refreshExportClipAudioBindings } from "./exportResolvers";
+import { resolveExportDestinationDir } from "./exportDestination";
 import { computeExportFileNames } from "./exportRename";
 import { exportWorkspaceStore } from "./exportWorkspaceState";
 import {
@@ -26,9 +36,24 @@ export type ExportTaskOutcome =
   | { status: "busy" };
 
 function backendClip(clip: ExportClip, useProxy: boolean, outputName: string) {
+  // Proxy generation preserves only `0:a:0`. Do not mix a proxy video with a
+  // selected non-primary original track: reject the proxy for this clip so its
+  // video and audio retain the same original timeline.
+  const proxyCanSupplySelectedAudio = !(clip.audioSources ?? []).some(
+    (source) => source.primary && source.audioTrackIndex !== 0,
+  );
+  const proxyPath = useProxy && proxyCanSupplySelectedAudio ? clip.proxyPath : null;
+  const proxySelected = Boolean(proxyPath);
   return {
     id: clip.id,
-    sourcePath: useProxy && clip.proxyPath ? clip.proxyPath : clip.sourcePath,
+    sourcePath: proxyPath ?? clip.sourcePath,
+    audioSources: (clip.audioSources ?? []).map((source) =>
+      // Once a proxy has been selected, every primary audio source is known to
+      // be the proxy's first and only preserved audio stream.
+      proxySelected && source.primary && source.audioTrackIndex === 0
+        ? { sourcePath: proxyPath!, audioTrackIndex: 0 }
+        : { sourcePath: source.sourcePath, audioTrackIndex: source.audioTrackIndex },
+    ),
     label: clip.label,
     startUs: clip.startUs,
     endUs: clip.endUs,
@@ -39,6 +64,33 @@ function backendClip(clip: ExportClip, useProxy: boolean, outputName: string) {
 export interface RunExportTaskOptions {
   clips: ExportClip[];
   settings: ExportSettings;
+  audioBindingsAlreadyRefreshed?: boolean;
+}
+
+function refreshCurrentAudioBindings(clips: ExportClip[]) {
+  const workspace = getProjectWorkspaceSnapshot();
+  const projects = Object.fromEntries(
+    workspace.projects.map((project) => [project.asset.id, project]),
+  );
+  return refreshExportClipAudioBindings(
+    clips,
+    workspace.media_bin.items,
+    projects,
+    new Set(workspace.editor.detached_video_ids),
+  );
+}
+
+async function importCompletedExportOutputs(outputs: ExportOutput[]) {
+  const paths = outputs
+    .filter((output) => output.status === "completed")
+    .map((output) => output.path);
+  await runMediaImportBatchTask({
+    paths,
+    operation: "media.import",
+    taskIdPrefix: "export-import",
+    label: `导入 ${paths.length} 个导出媒体`,
+    onSuccess: applyImportedMediaResults,
+  });
 }
 
 /** Fills fields absent from older project files and repairs invalid track/container combinations. */
@@ -82,7 +134,7 @@ export function composeExportOutputDir(settings: ExportSettings): string {
   return base ? `${base.replace(/[\\/]+$/, "")}\\${sub}` : sub;
 }
 
-/** Rejects a second export while one is in flight (the backend ffmpeg runs with `-y`). */
+/** Rejects a second export while one is in flight. */
 function beginExport() {
   if (exportWorkspaceStore.getState().isExporting) {
     return false;
@@ -99,20 +151,26 @@ function endExport() {
 export async function runExportTask({
   clips,
   settings,
+  audioBindingsAlreadyRefreshed = false,
 }: RunExportTaskOptions): Promise<ExportTaskOutcome> {
   if (!beginExport()) {
     return { status: "busy" };
   }
   try {
+    const currentClips = audioBindingsAlreadyRefreshed ? clips : refreshCurrentAudioBindings(clips);
     const normalized = normalizeExportSettings(settings);
     const outputDir = composeExportOutputDir(normalized);
 
     const names = new Map(
-      computeExportFileNames(clips, normalized).map((entry) => [entry.clipId, entry.fileName]),
+      computeExportFileNames(currentClips, normalized).map((entry) => [
+        entry.clipId,
+        entry.fileName,
+      ]),
     );
 
-    let exportClips = clips;
-    const targets = buildExportTargets(clips, outputDir, names, normalized.mode);
+    let exportClips = currentClips;
+    let resolvedExistingFileMode = normalized.existingFileMode;
+    const targets = buildExportTargets(currentClips, outputDir, names, normalized.mode);
     const conflicts = await findExistingTargets(targets);
     if (conflicts.length > 0) {
       let action: ExportConflictAction;
@@ -124,6 +182,7 @@ export async function runExportTask({
       if (action === "cancel") {
         return { status: "cancelled" };
       }
+      resolvedExistingFileMode = action;
       if (action === "uniqueName") {
         const reserved = new Set(names.values());
         for (const conflict of conflicts) {
@@ -139,7 +198,7 @@ export async function runExportTask({
           }
           reserved.add(resolved);
           // Merge 模式的合并文件以 clips[0] 命名，改名即改合并输出名。
-          const targetId = conflict.clipId ?? clips[0]?.id ?? null;
+          const targetId = conflict.clipId ?? currentClips[0]?.id ?? null;
           if (targetId) {
             names.set(targetId, resolved);
           }
@@ -149,7 +208,7 @@ export async function runExportTask({
           // 合并只产一个文件，跳过它等于不导出。
           return { status: "cancelled" };
         }
-        exportClips = filterConflictingClips(clips, conflicts);
+        exportClips = filterConflictingClips(currentClips, conflicts);
         if (exportClips.length === 0) {
           return { status: "cancelled" };
         }
@@ -186,8 +245,10 @@ export async function runExportTask({
         options: {
           ...normalized,
           outputDir,
+          existingFileMode: resolvedExistingFileMode,
           // Merge 模式显式下发合并输出名，使前端冲突检查与落盘文件名一致。
-          outputName: normalized.mode === "merge" ? (names.get(clips[0]?.id ?? "") ?? "") : "",
+          outputName:
+            normalized.mode === "merge" ? (names.get(currentClips[0]?.id ?? "") ?? "") : "",
         },
         taskId,
       });
@@ -196,6 +257,9 @@ export async function runExportTask({
         return { status: "cancelled" };
       }
       task.remove();
+      if (normalized.importIntoProject) {
+        await importCompletedExportOutputs(result.outputs);
+      }
       return { status: "success", result };
     } catch (error) {
       if (cancelled) {
@@ -220,8 +284,19 @@ export async function runQuickExport(
   if (exportWorkspaceStore.getState().isExporting) {
     return { status: "busy" };
   }
-  exportWorkspaceStore.getState().setSource(source);
-  const outcome = await runExportTask({ clips: source.clips, settings });
+  const currentClips = refreshCurrentAudioBindings(source.clips);
+  const currentSource = { ...source, clips: currentClips };
+  const outputDir =
+    settings.destination === "specified"
+      ? settings.outputDir
+      : await resolveExportDestinationDir(settings.destination, currentSource);
+  const effectiveSettings = { ...settings, outputDir };
+  exportWorkspaceStore.getState().setSource(currentSource);
+  const outcome = await runExportTask({
+    clips: currentClips,
+    settings: effectiveSettings,
+    audioBindingsAlreadyRefreshed: true,
+  });
   if (outcome.status === "success") {
     const store = exportWorkspaceStore.getState();
     store.setResults(outcome.result);

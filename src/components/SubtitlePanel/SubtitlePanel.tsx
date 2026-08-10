@@ -742,11 +742,20 @@ export function SubtitlePanel() {
     mediaItems,
     activeVideoId,
     activeTrackId,
+    detachedVideoIds,
     exportState,
     activeTrackChanged,
     messagePublished,
   } = useProjectPort(
-    ["project", "projects", "mediaItems", "activeVideoId", "activeTrackId", "exportState"],
+    [
+      "project",
+      "projects",
+      "mediaItems",
+      "activeVideoId",
+      "activeTrackId",
+      "detachedVideoIds",
+      "exportState",
+    ],
     ["activeTrackChanged", "messagePublished"],
   );
   // Exports are serialized; disable quick export while one is in flight.
@@ -1476,6 +1485,7 @@ export function SubtitlePanel() {
       cueIds: contextMenuCueIds,
       mediaItems,
       projects,
+      detachedVideoIds,
     });
   }
 
@@ -1488,6 +1498,9 @@ export function SubtitlePanel() {
   }
 
   async function quickExportWithLastSettings() {
+    // Close the menu before awaiting: the export may take a long time or throw,
+    // and a deferred close would otherwise leave the context menu hanging open.
+    setContextMenu(null);
     const source = buildCurrentSubtitleSource();
     if (!source || !exportState) {
       return;
@@ -1504,7 +1517,6 @@ export function SubtitlePanel() {
     } else if (outcome.status === "busy") {
       messagePublished("已有导出正在进行");
     }
-    setContextMenu(null);
   }
 
   function openContextMenu(event: ReactMouseEvent<HTMLDivElement>) {

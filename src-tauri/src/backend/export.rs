@@ -1,10 +1,111 @@
 use super::*;
 use futures::stream::{self, StreamExt};
+use std::collections::VecDeque;
 
 const EXPORT_AUDIO_SAMPLE_RATE_DEFAULT: i64 = 48000;
 const EXPORT_FRAME_RATE_FALLBACK: f64 = 30.0;
 const EXPORT_MATCH_SOURCE_FALLBACK_WIDTH: i64 = 640;
 const EXPORT_MATCH_SOURCE_FALLBACK_HEIGHT: i64 = 360;
+const EXPORT_OUTPUT_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
+const EXPORT_SOURCE_PROBE_TIMEOUT: Duration = Duration::from_secs(45);
+const EXPORT_OUTPUT_DURATION_TOLERANCE_US: i64 = 200_000;
+const EXPORT_CLIP_MAX_ATTEMPTS: usize = 3;
+const EXPORT_INDIVIDUAL_WORKERS: usize = 3;
+
+fn absolute_export_input_path(path: &str, working_dir: &Path) -> AppResult<String> {
+    if path.trim().is_empty() {
+        return Err(app_error(
+            ErrorCode::ExportOptionsInvalid,
+            "Export input path is empty",
+        ));
+    }
+    let path = PathBuf::from(path);
+    let path = if path.is_absolute() {
+        path
+    } else {
+        working_dir.join(path)
+    };
+    Ok(path.to_string_lossy().into_owned())
+}
+
+/// FFmpeg parses a relative input whose first character is `-` as an option.
+/// Normalize inputs once before probing so every later FFmpeg and FFprobe call
+/// receives an absolute, unambiguous path.
+fn normalize_export_input_paths(mut clips: Vec<ExportClip>) -> AppResult<Vec<ExportClip>> {
+    let working_dir = std::env::current_dir().map_err(|error| {
+        app_error(
+            ErrorCode::ExportOptionsInvalid,
+            format!("Failed to resolve the current directory for export inputs: {error}"),
+        )
+    })?;
+    for clip in &mut clips {
+        clip.source_path = absolute_export_input_path(&clip.source_path, &working_dir)?;
+        if let Some(audio_sources) = &mut clip.audio_sources {
+            for source in audio_sources {
+                source.source_path = absolute_export_input_path(&source.source_path, &working_dir)?;
+            }
+        }
+    }
+    Ok(clips)
+}
+
+fn export_output_overwrite_flag(existing_file_mode: ExportExistingFileMode) -> &'static str {
+    if matches!(existing_file_mode, ExportExistingFileMode::Overwrite) {
+        "-y"
+    } else {
+        "-n"
+    }
+}
+
+fn ensure_export_output_available(output_path: &Path, options: &ExportOptions) -> AppResult<()> {
+    if matches!(
+        options.existing_file_mode,
+        ExportExistingFileMode::Overwrite
+    ) {
+        return Ok(());
+    }
+    let exists = output_path.try_exists().map_err(|error| {
+        app_error(
+            ErrorCode::ExportWriteFailed,
+            format!(
+                "Failed to inspect whether export output {} already exists: {error}",
+                output_path.display()
+            ),
+        )
+    })?;
+    if exists {
+        return Err(app_error(
+            ErrorCode::ExportWriteFailed,
+            format!(
+                "Refusing to overwrite an existing export output: {}",
+                output_path.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn log_safe_value(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
+}
+
+#[derive(Clone)]
+struct ProbedAudioSource {
+    source_path: String,
+    audio_track_index: usize,
+    sample_rate: i64,
+    start_offset_us: i64,
+    end_offset_us: i64,
+}
 
 #[derive(Clone)]
 struct ProbedClip {
@@ -16,10 +117,26 @@ struct ProbedClip {
     dur_us: i64,
     has_video: bool,
     has_audio: bool,
+    audio_sources: Vec<ProbedAudioSource>,
     width: i64,
     height: i64,
     fps: f64,
     audio_sample_rate: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AudioInputRef {
+    input_index: usize,
+    audio_track_index: usize,
+    start_offset_us: i64,
+    end_offset_us: i64,
+}
+
+#[derive(Debug, Clone)]
+struct ClipInputLayout {
+    main_input_index: usize,
+    audio_inputs: Vec<AudioInputRef>,
+    input_count: usize,
 }
 
 struct ExportTargets {
@@ -82,6 +199,23 @@ struct IndividualExportResult {
     index: usize,
     output: ExportOutput,
     warnings: Vec<UserNotice>,
+}
+
+#[derive(Clone)]
+struct IndividualExportJob {
+    index: usize,
+    clip: ProbedClip,
+}
+
+struct IndividualExportFailure {
+    job: IndividualExportJob,
+    error: AppError,
+    used_hardware: bool,
+}
+
+enum IndividualExportAttemptOutcome {
+    Completed(IndividualExportResult),
+    Failed(IndividualExportFailure),
 }
 
 #[derive(Clone)]
@@ -256,23 +390,27 @@ fn validate_export_options(options: &ExportOptions) -> AppResult<()> {
     Ok(())
 }
 
-fn probe_export_clip(clip: &ExportClip, probe: &ProbeOutput) -> ProbedClip {
-    let duration_us = probe
+fn probe_duration_us(probe: &ProbeOutput) -> i64 {
+    probe
         .format
         .as_ref()
         .and_then(|format| format.duration.as_deref())
         .map(parse_decimal_seconds_to_us)
-        .unwrap_or(0);
+        .unwrap_or(0)
+}
+
+fn probe_export_clip(
+    clip: &ExportClip,
+    probe: &ProbeOutput,
+    audio_sources: Vec<ProbedAudioSource>,
+) -> ProbedClip {
+    let duration_us = probe_duration_us(probe);
     let video_stream = probe
         .streams
         .iter()
         .find(|stream| stream.codec_type.as_deref() == Some("video"));
-    let audio_stream = probe
-        .streams
-        .iter()
-        .find(|stream| stream.codec_type.as_deref() == Some("audio"));
     let has_video = video_stream.is_some();
-    let has_audio = audio_stream.is_some();
+    let has_audio = !audio_sources.is_empty();
     let width = video_stream.and_then(|stream| stream.width).unwrap_or(0);
     let height = video_stream.and_then(|stream| stream.height).unwrap_or(0);
     let fps = video_stream
@@ -281,9 +419,9 @@ fn probe_export_clip(clip: &ExportClip, probe: &ProbeOutput) -> ProbedClip {
                 .or_else(|| parse_frame_rate(stream.r_frame_rate.as_deref()))
         })
         .unwrap_or(0.0);
-    let audio_sample_rate = audio_stream
-        .and_then(|stream| stream.sample_rate.as_deref())
-        .and_then(|value| value.parse::<i64>().ok())
+    let audio_sample_rate = audio_sources
+        .first()
+        .map(|source| source.sample_rate)
         .unwrap_or(EXPORT_AUDIO_SAMPLE_RATE_DEFAULT);
     let (start_us, end_us) = clamp_range(clip.start_us, clip.end_us, duration_us);
     ProbedClip {
@@ -295,6 +433,7 @@ fn probe_export_clip(clip: &ExportClip, probe: &ProbeOutput) -> ProbedClip {
         dur_us: end_us - start_us,
         has_video,
         has_audio,
+        audio_sources,
         width,
         height,
         fps,
@@ -302,16 +441,199 @@ fn probe_export_clip(clip: &ExportClip, probe: &ProbeOutput) -> ProbedClip {
     }
 }
 
-fn available_cpu_threads() -> usize {
-    std::thread::available_parallelism()
-        .map(|count| count.get())
-        .unwrap_or(1)
+fn resolve_export_audio_sources(
+    clip: &ExportClip,
+    probes: &HashMap<String, ProbeOutput>,
+    probe_failures: &HashMap<String, String>,
+    warnings: &mut Vec<UserNotice>,
+) -> Vec<ProbedAudioSource> {
+    let requested = match &clip.audio_sources {
+        Some(sources) => sources.clone(),
+        None => vec![ExportAudioSource {
+            source_path: clip.source_path.clone(),
+            audio_track_index: 0,
+        }],
+    };
+    let mut resolved = Vec::new();
+    for source in requested {
+        let Some(probe) = probes.get(&source.source_path) else {
+            let detail = probe_failures
+                .get(&source.source_path)
+                .cloned()
+                .unwrap_or_else(|| format!("missing audio source: {}", source.source_path));
+            warnings.push(UserNotice::warning_with_detail(
+                "EXPORT_AUDIO_SOURCE_UNAVAILABLE",
+                format!("音轨不可用，已从导出中忽略：{}", clip.label),
+                detail,
+            ));
+            continue;
+        };
+        let audio_stream = probe
+            .streams
+            .iter()
+            .filter(|stream| stream.codec_type.as_deref() == Some("audio"))
+            .nth(source.audio_track_index);
+        let Some(audio_stream) = audio_stream else {
+            warnings.push(UserNotice::warning_with_detail(
+                "EXPORT_AUDIO_TRACK_MISSING",
+                format!("音轨不可用，已从导出中忽略：{}", clip.label),
+                format!(
+                    "audio track {} does not exist in {}",
+                    source.audio_track_index, source.source_path
+                ),
+            ));
+            continue;
+        };
+        resolved.push(ProbedAudioSource {
+            source_path: source.source_path,
+            audio_track_index: source.audio_track_index,
+            sample_rate: audio_stream
+                .sample_rate
+                .as_deref()
+                .and_then(|value| value.parse::<i64>().ok())
+                .unwrap_or(EXPORT_AUDIO_SAMPLE_RATE_DEFAULT),
+            start_offset_us: 0,
+            end_offset_us: 0,
+        });
+    }
+    resolved
 }
 
 fn probe_parallelism(source_count: usize) -> usize {
     source_count
         .min((available_cpu_threads().saturating_mul(2)).clamp(2, 8))
         .max(1)
+}
+
+async fn probe_export_audio_intervals(
+    mut clips: Vec<ProbedClip>,
+    preferences: &Preferences,
+    state: &AppState,
+    task_id: &str,
+    cancel: Arc<AtomicBool>,
+    warnings: &mut Vec<UserNotice>,
+) -> AppResult<Vec<ProbedClip>> {
+    let requests = clips
+        .iter()
+        .enumerate()
+        .flat_map(|(clip_index, clip)| {
+            clip.audio_sources
+                .iter()
+                .enumerate()
+                .map(move |(source_index, source)| {
+                    (
+                        clip_index,
+                        source_index,
+                        clip.id.clone(),
+                        clip.label.clone(),
+                        source.source_path.clone(),
+                        source.audio_track_index,
+                        clip.start_us,
+                        clip.start_us.saturating_add(clip.dur_us),
+                    )
+                })
+        })
+        .collect::<Vec<_>>();
+    if requests.is_empty() {
+        return Ok(clips);
+    }
+
+    let concurrency = probe_parallelism(requests.len());
+    let probe_results = stream::iter(requests.into_iter().map(
+        |(
+            clip_index,
+            source_index,
+            clip_id,
+            clip_label,
+            source_path,
+            audio_track_index,
+            start_us,
+            end_us,
+        )| {
+            let cancel = cancel.clone();
+            async move {
+                let result = probe_audio_interval(
+                    Path::new(&source_path),
+                    audio_track_index,
+                    start_us..end_us,
+                    preferences,
+                    state,
+                    task_id,
+                    cancel,
+                )
+                .await;
+                (
+                    clip_index,
+                    source_index,
+                    clip_id,
+                    clip_label,
+                    source_path,
+                    audio_track_index,
+                    result,
+                )
+            }
+        },
+    ))
+    .buffer_unordered(concurrency)
+    .collect::<Vec<_>>()
+    .await;
+
+    let mut coverages = HashMap::new();
+    for (clip_index, source_index, clip_id, clip_label, source_path, audio_track_index, result) in
+        probe_results
+    {
+        match result {
+            Ok(Some(coverage)) => {
+                tracing::debug!(
+                    clip_id = %log_safe_value(&clip_id),
+                    audio_source = %log_safe_value(&source_path),
+                    audio_track_index,
+                    start_offset_us = coverage.start_offset_us,
+                    end_offset_us = coverage.end_offset_us,
+                    "audio track has decoded frames in export interval"
+                );
+                coverages.insert((clip_index, source_index), Some(coverage));
+            }
+            Ok(None) => {
+                tracing::info!(
+                    clip_id = %log_safe_value(&clip_id),
+                    audio_source = %log_safe_value(&source_path),
+                    audio_track_index,
+                    "omitting audio track with no decoded frames in export interval"
+                );
+                coverages.insert((clip_index, source_index), None);
+            }
+            Err(error) if error.is(ErrorCode::TaskCancelled) => return Err(error),
+            Err(error) => {
+                warnings.push(UserNotice::warning_with_detail(
+                    "EXPORT_AUDIO_INTERVAL_PROBE_FAILED",
+                    format!("无法读取片段音频区间，已忽略该音轨：{clip_label}"),
+                    error.detail(),
+                ));
+                coverages.insert((clip_index, source_index), None);
+            }
+        }
+    }
+
+    for (clip_index, clip) in clips.iter_mut().enumerate() {
+        clip.audio_sources = std::mem::take(&mut clip.audio_sources)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(source_index, mut source)| {
+                let coverage = coverages.remove(&(clip_index, source_index)).flatten()?;
+                source.start_offset_us = coverage.start_offset_us;
+                source.end_offset_us = coverage.end_offset_us;
+                Some(source)
+            })
+            .collect();
+        clip.has_audio = !clip.audio_sources.is_empty();
+        clip.audio_sample_rate = clip
+            .audio_sources
+            .first()
+            .map(|source| source.sample_rate)
+            .unwrap_or(EXPORT_AUDIO_SAMPLE_RATE_DEFAULT);
+    }
+    Ok(clips)
 }
 
 async fn probe_export_sources(
@@ -335,14 +657,30 @@ async fn probe_export_sources(
         } else if seen_paths.insert(clip.source_path.clone()) {
             source_paths.push(clip.source_path.clone());
         }
+        if let Some(audio_sources) = &clip.audio_sources {
+            for source in audio_sources {
+                if Path::new(&source.source_path).is_file()
+                    && seen_paths.insert(source.source_path.clone())
+                {
+                    source_paths.push(source.source_path.clone());
+                }
+            }
+        }
     }
 
     let concurrency = probe_parallelism(source_paths.len());
     let probe_results = stream::iter(source_paths.into_iter().map(|source_path| {
         let cancel = cancel.clone();
         async move {
-            let result =
-                probe_media(Path::new(&source_path), preferences, state, task_id, cancel).await;
+            let result = probe_media_with_timeout(
+                Path::new(&source_path),
+                preferences,
+                state,
+                task_id,
+                cancel,
+                EXPORT_SOURCE_PROBE_TIMEOUT,
+            )
+            .await;
             (source_path, result)
         }
     }))
@@ -376,7 +714,8 @@ async fn probe_export_sources(
             }
             continue;
         };
-        let probed_clip = probe_export_clip(clip, probe);
+        let audio_sources = resolve_export_audio_sources(clip, &probes, &probe_failures, warnings);
+        let probed_clip = probe_export_clip(clip, probe, audio_sources);
         if probed_clip.dur_us <= 0 {
             warnings.push(UserNotice::warning(
                 "EXPORT_CLIP_ZERO_DURATION",
@@ -387,14 +726,27 @@ async fn probe_export_sources(
                 "EXPORT_CLIP_NO_VIDEO",
                 format!("片段不包含视频流，已跳过：{}", probed_clip.label),
             ));
-        } else if !options.include_video && options.include_audio && !probed_clip.has_audio {
-            warnings.push(UserNotice::warning(
-                "EXPORT_CLIP_NO_AUDIO",
-                format!("片段不包含音频流，已跳过：{}", probed_clip.label),
-            ));
         } else {
             probed.push(probed_clip);
         }
+    }
+    if options.include_audio {
+        probed =
+            probe_export_audio_intervals(probed, preferences, state, task_id, cancel, warnings)
+                .await?;
+    }
+    if !options.include_video && options.include_audio {
+        probed.retain(|clip| {
+            if clip.has_audio {
+                true
+            } else {
+                warnings.push(UserNotice::warning(
+                    "EXPORT_CLIP_NO_AUDIO",
+                    format!("片段不包含音频流，已跳过：{}", clip.label),
+                ));
+                false
+            }
+        });
     }
     Ok(probed)
 }
@@ -480,20 +832,103 @@ fn plan_audio_targets(clips: &[ProbedClip], options: &ExportOptions) -> (i64, &'
     (sample_rate, audio_channel_layout(options.audio_channels))
 }
 
+fn append_clip_audio_filter(
+    parts: &mut Vec<String>,
+    inputs: &[AudioInputRef],
+    clip_index: usize,
+    dur_sec: f64,
+    sample_rate: i64,
+    channel_layout: &str,
+    synthesize_silence: bool,
+) -> bool {
+    let output_label = format!("{clip_index}a");
+    if inputs.is_empty() {
+        if synthesize_silence {
+            parts.push(format!(
+                "anullsrc=r={sample_rate}:cl={channel_layout},atrim=duration={dur_sec:.6}[{output_label}]"
+            ));
+            return true;
+        }
+        return false;
+    }
+
+    // Every retained input was preflighted to decode at least one frame in this
+    // clip. Do not use `apad` on individual branches: FFmpeg's framesync can
+    // deadlock when `apad` and a video output meet exact audio-frame boundaries.
+    // Instead, preserve leading offsets with PTS/aresample, mix real branches,
+    // then concatenate an explicit finite silence tail only when all real audio
+    // ends before the clip.
+    let real_output_label = format!("{clip_index}areal");
+    let mut mix_inputs = String::new();
+    for (audio_index, input) in inputs.iter().enumerate() {
+        let branch_label = format!("{clip_index}a{audio_index}");
+        let start_offset_sec = input.start_offset_us.max(0) as f64 / 1_000_000.0;
+        let available_duration_sec = input
+            .end_offset_us
+            .saturating_sub(input.start_offset_us)
+            .max(1) as f64
+            / 1_000_000.0;
+        parts.push(format!(
+            "[{}:a:{}]atrim=start=0:duration={available_duration_sec:.6},asetpts=PTS-STARTPTS+{start_offset_sec:.6}/TB,aresample={sample_rate}:async=1:first_pts=0,aformat=sample_fmts=fltp:channel_layouts={channel_layout}[{branch_label}]",
+            input.input_index, input.audio_track_index
+        ));
+        mix_inputs.push_str(&format!("[{branch_label}]"));
+    }
+    if inputs.len() == 1 {
+        parts.push(format!("{mix_inputs}anull[{real_output_label}]"));
+    } else {
+        parts.push(format!(
+            "{mix_inputs}amix=inputs={}:duration=longest:dropout_transition=0:normalize=0[{real_output_label}]",
+            inputs.len()
+        ));
+    }
+
+    let duration_us = (dur_sec * 1_000_000.0).round() as i64;
+    let covered_end_us = inputs
+        .iter()
+        .map(|input| input.end_offset_us)
+        .max()
+        .unwrap_or(0)
+        .clamp(0, duration_us);
+    let trailing_silence_us = duration_us.saturating_sub(covered_end_us);
+    if trailing_silence_us > 0 {
+        let trailing_silence_sec = trailing_silence_us as f64 / 1_000_000.0;
+        let trailing_label = format!("{clip_index}atail");
+        parts.push(format!(
+            "anullsrc=r={sample_rate}:cl={channel_layout}:d={trailing_silence_sec:.6}[{trailing_label}]"
+        ));
+        parts.push(format!(
+            "[{real_output_label}][{trailing_label}]concat=n=2:v=0:a=1,atrim=duration={dur_sec:.6}[{output_label}]"
+        ));
+    } else {
+        parts.push(format!(
+            "[{real_output_label}]atrim=duration={dur_sec:.6}[{output_label}]"
+        ));
+    }
+    true
+}
+
 /// Builds a concat graph that touches only audio streams. This avoids all
 /// video decoding, scaling and hardware setup for audio-only exports.
 fn build_audio_merge_filter_complex(
     clips: &[ProbedClip],
+    layouts: &[ClipInputLayout],
     sample_rate: i64,
     channel_layout: &str,
 ) -> String {
     let mut parts = Vec::new();
     let mut concat_inputs = String::new();
-    for (index, clip) in clips.iter().enumerate() {
+    for (index, (clip, layout)) in clips.iter().zip(layouts).enumerate() {
         let dur_sec = clip.dur_us as f64 / 1_000_000.0;
-        parts.push(format!(
-            "[{index}:a:0]atrim=start=0:end={dur_sec:.6},aresample={sample_rate}:async=1:first_pts=0,aformat=sample_fmts=fltp:channel_layouts={channel_layout}[{index}a]"
-        ));
+        append_clip_audio_filter(
+            &mut parts,
+            &layout.audio_inputs,
+            index,
+            dur_sec,
+            sample_rate,
+            channel_layout,
+            false,
+        );
         concat_inputs.push_str(&format!("[{index}a]"));
     }
     parts.push(format!(
@@ -508,45 +943,52 @@ fn build_audio_merge_filter_complex(
 /// All per-input normalization (scaling, fps, pixel format, audio resample) happens
 /// inside the graph so concatenated streams share identical dimensions, frame rate,
 /// pixel format, sample rate, and channel layout. The input-side `-ss` fast seek
-/// lands on the cut point (and resets each stream's PTS to 0), so `trim`/`atrim`
-/// keep the first `dur` seconds of each input, and `setpts`/`aresample` resets
-/// make the trimmed inputs safe to concatenate.
+/// lands on the cut point. Video PTS is reset to zero; decoded-audio preflight
+/// coverage supplies each track's leading offset and real end so silence and
+/// partial tracks retain their original timeline before concatenation.
 ///
-/// Returns `(graph, has_audio_output, video_output_label)`. Audio is dropped for
-/// the whole merge when `include_audio` is false or any input lacks an audio stream.
+/// Returns `(graph, has_audio_output, video_output_label)`. When at least one
+/// clip has audio, clips without it receive silence so timing remains intact.
 fn build_merge_filter_complex(
     clips: &[ProbedClip],
+    layouts: &[ClipInputLayout],
     targets: &ExportTargets,
     include_audio: bool,
     encoder: &ExportVideoEncoder,
 ) -> (String, bool, &'static str) {
-    let all_have_audio = include_audio && clips.iter().all(|clip| clip.has_audio);
+    let has_audio_output = include_audio && clips.iter().any(|clip| clip.has_audio);
     let scale = format!(
         "scale={}:{}:force_original_aspect_ratio=decrease,pad={}:{}:(ow-iw)/2:(oh-ih)/2",
         targets.width, targets.height, targets.width, targets.height
     );
     let mut parts = Vec::new();
-    for (index, clip) in clips.iter().enumerate() {
+    for (index, (clip, layout)) in clips.iter().zip(layouts).enumerate() {
         let dur_sec = clip.dur_us as f64 / 1_000_000.0;
         parts.push(format!(
-            "[{index}:v:0]trim=start=0:end={dur_sec:.6},setpts=PTS-STARTPTS,{scale},setsar=1,fps={:.6},format={}[{index}v]",
+            "[{}:v:0]trim=start=0:end={dur_sec:.6},setpts=PTS-STARTPTS,{scale},setsar=1,fps={:.6},format={}[{index}v]",
+            layout.main_input_index,
             targets.fps, targets.pix_fmt
         ));
-        if all_have_audio {
-            parts.push(format!(
-                "[{index}:a:0]atrim=start=0:end={dur_sec:.6},aresample={}:async=1:first_pts=0,aformat=sample_fmts=fltp:channel_layouts={}[{index}a]",
-                targets.audio_sample_rate, targets.audio_channel_layout
-            ));
+        if has_audio_output {
+            append_clip_audio_filter(
+                &mut parts,
+                &layout.audio_inputs,
+                index,
+                dur_sec,
+                targets.audio_sample_rate,
+                targets.audio_channel_layout,
+                true,
+            );
         }
     }
     let mut concat_inputs = String::new();
     for index in 0..clips.len() {
         concat_inputs.push_str(&format!("[{index}v]"));
-        if all_have_audio {
+        if has_audio_output {
             concat_inputs.push_str(&format!("[{index}a]"));
         }
     }
-    if all_have_audio {
+    if has_audio_output {
         parts.push(format!(
             "{concat_inputs}concat=n={}:v=1:a=1[v][a]",
             clips.len()
@@ -563,7 +1005,7 @@ fn build_merge_filter_complex(
     } else {
         "v"
     };
-    (parts.join(";"), all_have_audio, video_output_label)
+    (parts.join(";"), has_audio_output, video_output_label)
 }
 
 fn export_extension(container: ExportContainer) -> &'static str {
@@ -709,24 +1151,52 @@ fn append_individual_input_args(args: &mut Vec<String>, clip: &ProbedClip) {
     push_args(args, &["-accurate_seek", "-i", &clip.source_path]);
 }
 
-fn append_processing_thread_args(args: &mut Vec<String>, threads: usize) {
-    let threads = threads.clamp(1, 16).to_string();
-    push_args(
-        args,
-        &[
-            "-threads",
-            &threads,
-            "-filter_threads",
-            &threads,
-            "-filter_complex_threads",
-            &threads,
-        ],
-    );
+fn append_clip_inputs(
+    args: &mut Vec<String>,
+    clip: &ProbedClip,
+    first_input_index: usize,
+) -> ClipInputLayout {
+    append_individual_input_args(args, clip);
+    let mut path_inputs = HashMap::from([(clip.source_path.as_str(), first_input_index)]);
+    let mut next_input_index = first_input_index + 1;
+    let mut audio_inputs = Vec::with_capacity(clip.audio_sources.len());
+    for source in &clip.audio_sources {
+        let input_index = if let Some(index) = path_inputs.get(source.source_path.as_str()) {
+            *index
+        } else {
+            push_args(args, &["-ss"]);
+            args.push(format!("{:.6}", clip.start_us as f64 / 1_000_000.0));
+            push_args(args, &["-accurate_seek", "-i", &source.source_path]);
+            let index = next_input_index;
+            next_input_index += 1;
+            path_inputs.insert(source.source_path.as_str(), index);
+            index
+        };
+        audio_inputs.push(AudioInputRef {
+            input_index,
+            audio_track_index: source.audio_track_index,
+            start_offset_us: source.start_offset_us,
+            end_offset_us: source.end_offset_us,
+        });
+    }
+    ClipInputLayout {
+        main_input_index: first_input_index,
+        audio_inputs,
+        input_count: next_input_index - first_input_index,
+    }
 }
 
-fn append_output_thread_args(args: &mut Vec<String>, threads: usize) {
-    let threads = threads.clamp(1, 16).to_string();
-    push_args(args, &["-threads:v", &threads]);
+fn append_video_output_thread_args(
+    args: &mut Vec<String>,
+    encoder: &ExportVideoEncoder,
+    threads: usize,
+) {
+    // `-threads:v` is useful for software encoders, but hardware encoders own
+    // their queue/threading model. Passing a large CPU-derived value to QSV in
+    // particular can leave the driver waiting forever when several exports run.
+    if !encoder.is_hardware() {
+        append_ffmpeg_video_output_thread_args(args, threads);
+    }
 }
 
 fn hardware_quality(options: &ExportOptions) -> i32 {
@@ -1071,8 +1541,8 @@ async fn run_export_merge(
         && clips.iter().any(|clip| !clip.has_audio)
     {
         warnings.push(UserNotice::warning(
-            "EXPORT_AUDIO_DROPPED",
-            "部分片段不包含音轨，合并导出将仅保留画面",
+            "EXPORT_CLIP_AUDIO_MISSING",
+            "部分片段没有可用音轨，合并导出会在对应片段保留静音",
         ));
     }
 
@@ -1125,34 +1595,40 @@ async fn run_export_merge_ffmpeg(
     runtime: &ExportRuntime<'_>,
     progress_callback: Option<Arc<dyn Fn(f64) + Send + Sync>>,
 ) -> AppResult<()> {
-    let (graph, has_audio_output, video_output_label) = if runtime.options.include_video {
-        let targets = plan_merge_targets(clips, runtime.options)?;
-        let (graph, has_audio, video_label) =
-            build_merge_filter_complex(clips, &targets, runtime.options.include_audio, encoder);
-        (graph, has_audio, Some(video_label))
-    } else {
-        let (sample_rate, channel_layout) = plan_audio_targets(clips, runtime.options);
-        (
-            build_audio_merge_filter_complex(clips, sample_rate, channel_layout),
-            true,
-            None,
-        )
-    };
-
+    ensure_export_output_available(output_path, runtime.options)?;
     let mut args = vec![
-        "-y".to_string(),
+        export_output_overwrite_flag(runtime.options.existing_file_mode).to_string(),
         "-hide_banner".to_string(),
         "-loglevel".to_string(),
         "error".to_string(),
     ];
-    append_processing_thread_args(&mut args, available_cpu_threads());
+    append_ffmpeg_processing_thread_args(&mut args, available_cpu_threads());
     append_encoder_input_args(&mut args, encoder);
+    let mut layouts = Vec::with_capacity(clips.len());
+    let mut next_input_index = 0;
     for clip in clips {
-        args.push("-ss".to_string());
-        args.push(format!("{:.6}", clip.start_us as f64 / 1_000_000.0));
-        args.push("-i".to_string());
-        args.push(clip.source_path.clone());
+        let layout = append_clip_inputs(&mut args, clip, next_input_index);
+        next_input_index += layout.input_count;
+        layouts.push(layout);
     }
+    let (graph, has_audio_output, video_output_label) = if runtime.options.include_video {
+        let targets = plan_merge_targets(clips, runtime.options)?;
+        let (graph, has_audio, video_label) = build_merge_filter_complex(
+            clips,
+            &layouts,
+            &targets,
+            runtime.options.include_audio,
+            encoder,
+        );
+        (graph, has_audio, Some(video_label))
+    } else {
+        let (sample_rate, channel_layout) = plan_audio_targets(clips, runtime.options);
+        (
+            build_audio_merge_filter_complex(clips, &layouts, sample_rate, channel_layout),
+            true,
+            None,
+        )
+    };
     args.push("-filter_complex".to_string());
     args.push(graph);
     if let Some(video_output_label) = video_output_label {
@@ -1165,7 +1641,7 @@ async fn run_export_merge_ffmpeg(
     }
     if runtime.options.include_video {
         append_video_encode_args(&mut args, runtime.options, encoder);
-        append_output_thread_args(&mut args, available_cpu_threads());
+        append_video_output_thread_args(&mut args, encoder, available_cpu_threads());
     } else {
         args.push("-vn".to_string());
     }
@@ -1181,6 +1657,10 @@ async fn run_export_merge_ffmpeg(
             app: runtime.app,
             state: runtime.state,
             task_id: runtime.task_id,
+            watchdog_label: format!(
+                "merged export -> {}",
+                log_safe_value(&output_path.display().to_string())
+            ),
             cancel: runtime.cancel.clone(),
             base_progress: 0.0,
             progress_span: 1.0,
@@ -1208,42 +1688,12 @@ fn output_file_name(clip: &ProbedClip, stem: &str, index: usize, ext: &str) -> S
 }
 
 fn planned_individual_export_parallelism(
-    cpu_threads: usize,
-    hardware_encoder: bool,
-    video_enabled: bool,
+    _cpu_threads: usize,
+    _encoder_kind: ExportVideoEncoderKind,
+    _video_enabled: bool,
     clip_count: usize,
 ) -> usize {
-    if clip_count <= 1 {
-        return 1;
-    }
-    let workers = if !video_enabled {
-        // Audio encoders and filters are comparatively light. Scale higher so
-        // short batches do not spend most of their time on process startup.
-        match cpu_threads {
-            0..=2 => 1,
-            3..=4 => 2,
-            5..=8 => 4,
-            9..=16 => 6,
-            _ => 8,
-        }
-    } else if hardware_encoder {
-        // Hardware encoders need a CPU worker for decode/filtering too.  Two
-        // concurrent jobs keep most GPUs/iGPUs busy without swamping their
-        // encode-session limits; higher-core machines can sustain three.
-        match cpu_threads {
-            0..=3 => 1,
-            4..=11 => 2,
-            _ => 3,
-        }
-    } else {
-        match cpu_threads {
-            0..=4 => 1,
-            5..=8 => 2,
-            9..=16 => 3,
-            _ => 4,
-        }
-    };
-    workers.min(clip_count).max(1)
+    EXPORT_INDIVIDUAL_WORKERS.min(clip_count).max(1)
 }
 
 fn individual_export_parallelism(
@@ -1253,15 +1703,14 @@ fn individual_export_parallelism(
 ) -> usize {
     planned_individual_export_parallelism(
         available_cpu_threads(),
-        encoder.is_hardware(),
+        encoder.kind,
         video_enabled,
         clip_count,
     )
 }
 
 fn per_export_thread_budget(worker_count: usize) -> usize {
-    let cpu_threads = available_cpu_threads();
-    ((cpu_threads + worker_count.saturating_sub(1)) / worker_count).clamp(1, 16)
+    ffmpeg_worker_thread_budget(worker_count)
 }
 
 async fn run_individual_export_ffmpeg(
@@ -1270,21 +1719,27 @@ async fn run_individual_export_ffmpeg(
     encoder: &ExportVideoEncoder,
     output_path: &Path,
     context: &IndividualExportContext<'_>,
+    attempt: usize,
+    queue_phase: &'static str,
 ) -> AppResult<()> {
     let options = context.runtime.options;
+    ensure_export_output_available(output_path, options)?;
     let mut args = vec![
-        "-y".to_string(),
+        export_output_overwrite_flag(options.existing_file_mode).to_string(),
         "-hide_banner".to_string(),
         "-loglevel".to_string(),
         "error".to_string(),
     ];
-    append_processing_thread_args(&mut args, context.worker_threads);
+    append_ffmpeg_processing_thread_args(&mut args, context.worker_threads);
     append_encoder_input_args(&mut args, encoder);
-    append_individual_input_args(&mut args, clip);
+    let layout = append_clip_inputs(&mut args, clip, 0);
     push_args(&mut args, &["-t"]);
     args.push(format!("{:.6}", clip.dur_us as f64 / 1_000_000.0));
     if options.include_video {
-        push_args(&mut args, &["-map", "0:v:0"]);
+        push_args(
+            &mut args,
+            &["-map", &format!("{}:v:0", layout.main_input_index)],
+        );
 
         let mut video_filters = Vec::new();
         match options.resolution {
@@ -1311,21 +1766,31 @@ async fn run_individual_export_ffmpeg(
         args.push(video_filters.join(","));
     }
 
-    let audio_enabled = options.include_audio && clip.has_audio;
+    let audio_enabled = options.include_audio && !layout.audio_inputs.is_empty();
     if audio_enabled {
-        push_args(&mut args, &["-map", "0:a:0?"]);
+        let sample_rate = options
+            .audio_sample_rate_hz
+            .filter(|rate| *rate > 0)
+            .unwrap_or(clip.audio_sample_rate);
         let channel_layout = audio_channel_layout(options.audio_channels);
-        let audio_filter = match options.audio_sample_rate_hz.filter(|rate| *rate > 0) {
-            Some(rate) => format!(
-                "aresample={rate}:async=1:first_pts=0,aformat=channel_layouts={channel_layout}"
-            ),
-            None => format!("aformat=channel_layouts={channel_layout}"),
-        };
-        push_args(&mut args, &["-af", &audio_filter]);
+        let mut audio_filter = Vec::new();
+        append_clip_audio_filter(
+            &mut audio_filter,
+            &layout.audio_inputs,
+            0,
+            clip.dur_us as f64 / 1_000_000.0,
+            sample_rate,
+            channel_layout,
+            false,
+        );
+        push_args(
+            &mut args,
+            &["-filter_complex", &audio_filter.join(";"), "-map", "[0a]"],
+        );
     }
     if options.include_video {
         append_video_encode_args(&mut args, options, encoder);
-        append_output_thread_args(&mut args, context.worker_threads);
+        append_video_output_thread_args(&mut args, encoder, context.worker_threads);
     } else {
         args.push("-vn".to_string());
     }
@@ -1340,6 +1805,13 @@ async fn run_individual_export_ffmpeg(
             app: context.runtime.app,
             state: context.runtime.state,
             task_id: context.runtime.task_id,
+            watchdog_label: format!(
+                "individual export phase {} attempt {}/{} -> {}",
+                queue_phase,
+                attempt,
+                EXPORT_CLIP_MAX_ATTEMPTS,
+                log_safe_value(&output_path.display().to_string())
+            ),
             cancel: context.runtime.cancel.clone(),
             base_progress: 0.0,
             progress_span: 1.0,
@@ -1351,88 +1823,343 @@ async fn run_individual_export_ffmpeg(
     .await
 }
 
-async fn run_export_individual_clip(
-    index: usize,
-    clip: ProbedClip,
-    encoder: ExportVideoEncoder,
+fn validate_export_output_probe(
+    output_path: &Path,
+    probe: &ProbeOutput,
+    expected_duration_us: i64,
+    expected_video: bool,
+    expected_audio: bool,
+) -> AppResult<i64> {
+    let has_video = probe
+        .streams
+        .iter()
+        .any(|stream| stream.codec_type.as_deref() == Some("video"));
+    let has_audio = probe
+        .streams
+        .iter()
+        .any(|stream| stream.codec_type.as_deref() == Some("audio"));
+    if has_video != expected_video || has_audio != expected_audio {
+        return Err(app_error(
+            ErrorCode::ExternalToolOutputInvalid,
+            format!(
+                "Export output {} has unexpected streams: video={has_video} (expected {expected_video}), audio={has_audio} (expected {expected_audio})",
+                output_path.display()
+            ),
+        ));
+    }
+
+    let duration_us = probe_duration_us(probe);
+    if duration_us <= 0 {
+        return Err(app_error(
+            ErrorCode::ExternalToolOutputInvalid,
+            format!(
+                "Export output {} has no readable positive duration",
+                output_path.display()
+            ),
+        ));
+    }
+    if duration_us.abs_diff(expected_duration_us.max(0))
+        > EXPORT_OUTPUT_DURATION_TOLERANCE_US as u64
+    {
+        return Err(app_error(
+            ErrorCode::ExternalToolOutputInvalid,
+            format!(
+                "Export output {} duration differs from the requested clip: actual={duration_us}us, expected={expected_duration_us}us",
+                output_path.display()
+            ),
+        ));
+    }
+    Ok(duration_us)
+}
+
+async fn validate_individual_export_output(
+    clip: &ProbedClip,
+    output_path: &Path,
     context: &IndividualExportContext<'_>,
-) -> AppResult<IndividualExportResult> {
+) -> AppResult<i64> {
+    let metadata_path = output_path.to_path_buf();
+    let metadata = spawn_blocking_cancellable(
+        context.runtime.cancel.clone(),
+        "inspect individual export output",
+        move |_| {
+            fs::metadata(&metadata_path).map_err(|error| {
+                app_error(
+                    ErrorCode::ExternalToolOutputInvalid,
+                    format!(
+                        "Failed to inspect export output {}: {error}",
+                        metadata_path.display()
+                    ),
+                )
+            })
+        },
+    )
+    .await?;
+    if metadata.len() == 0 {
+        return Err(app_error(
+            ErrorCode::ExternalToolOutputInvalid,
+            format!("Export output {} is empty", output_path.display()),
+        ));
+    }
+
+    let probe = probe_media_with_timeout(
+        output_path,
+        context.runtime.preferences,
+        context.runtime.state,
+        context.runtime.task_id,
+        context.runtime.cancel.clone(),
+        EXPORT_OUTPUT_PROBE_TIMEOUT,
+    )
+    .await?;
+    let duration_us = validate_export_output_probe(
+        output_path,
+        &probe,
+        clip.dur_us,
+        context.runtime.options.include_video,
+        context.runtime.options.include_audio && clip.has_audio,
+    )?;
+    tracing::info!(
+        clip_id = %log_safe_value(&clip.id),
+        clip_label = %log_safe_value(&clip.label),
+        output = %log_safe_value(&output_path.display().to_string()),
+        file_size = metadata.len(),
+        duration_us,
+        "individual export output passed validation"
+    );
+    Ok(duration_us)
+}
+
+async fn run_and_validate_individual_export(
+    index: usize,
+    clip: &ProbedClip,
+    encoder: &ExportVideoEncoder,
+    output_path: &Path,
+    context: &IndividualExportContext<'_>,
+    attempt: usize,
+    queue_phase: &'static str,
+) -> AppResult<i64> {
+    run_individual_export_ffmpeg(
+        index,
+        clip,
+        encoder,
+        output_path,
+        context,
+        attempt,
+        queue_phase,
+    )
+    .await?;
+    validate_individual_export_output(clip, output_path, context).await
+}
+
+async fn run_export_individual_clip_attempt(
+    job: IndividualExportJob,
+    preferred_encoder: ExportVideoEncoder,
+    context: &IndividualExportContext<'_>,
+    worker_id: usize,
+    attempt: usize,
+    queue_phase: &'static str,
+) -> AppResult<IndividualExportAttemptOutcome> {
     ensure_not_cancelled(&context.runtime.cancel)?;
+    let IndividualExportJob { index, clip } = job;
     let output_path = context
         .dir
         .join(output_file_name(&clip, &context.stem, index, &context.ext));
-    let active_encoder =
-        if encoder.is_hardware() && context.hardware_disabled.load(Ordering::SeqCst) {
+    let encoder =
+        if preferred_encoder.is_hardware() && context.hardware_disabled.load(Ordering::SeqCst) {
             ExportVideoEncoder::software()
         } else {
-            encoder
+            preferred_encoder
         };
-    let mut warnings = Vec::new();
-    let run =
-        run_individual_export_ffmpeg(index, &clip, &active_encoder, &output_path, context).await;
-    let run = match run {
-        Err(error) if error.is(ErrorCode::TaskCancelled) => return Err(error),
-        Err(error) if active_encoder.is_hardware() => {
-            let is_first_failure = !context.hardware_disabled.swap(true, Ordering::SeqCst);
-            if is_first_failure {
-                warnings.push(UserNotice::warning_with_detail(
-                    "EXPORT_HARDWARE_FALLBACK",
-                    format!(
-                        "{} 硬件编码不可用，已自动切换到 CPU 编码继续导出",
-                        active_encoder.name()
-                    ),
-                    error.detail(),
-                ));
-            }
-            run_individual_export_ffmpeg(
-                index,
-                &clip,
-                &ExportVideoEncoder::software(),
-                &output_path,
-                context,
-            )
-            .await
-        }
-        result => result,
-    };
-
-    let output = match run {
-        Ok(()) => {
+    tracing::info!(
+        worker_id,
+        queue_phase,
+        clip_id = %log_safe_value(&clip.id),
+        clip_label = %log_safe_value(&clip.label),
+        output = %log_safe_value(&output_path.display().to_string()),
+        attempt,
+        max_attempts = EXPORT_CLIP_MAX_ATTEMPTS,
+        encoder = encoder.name(),
+        "export worker claimed clip"
+    );
+    match run_and_validate_individual_export(
+        index,
+        &clip,
+        &encoder,
+        &output_path,
+        context,
+        attempt,
+        queue_phase,
+    )
+    .await
+    {
+        Ok(duration_us) => {
             unregister_task_cleanup_paths(
                 context.runtime.task_id,
                 std::slice::from_ref(&output_path),
                 context.runtime.state,
             )?;
             context.progress.report(index, 1.0);
-            ExportOutput {
-                clip_id: Some(clip.id),
-                path: output_path.to_string_lossy().into_owned(),
-                status: "completed".to_string(),
-                error: None,
-                duration_us: clip.dur_us,
-            }
+            tracing::info!(
+                worker_id,
+                queue_phase,
+                clip_id = %log_safe_value(&clip.id),
+                clip_label = %log_safe_value(&clip.label),
+                output = %log_safe_value(&output_path.display().to_string()),
+                attempt,
+                duration_us,
+                "export worker validated and released clip"
+            );
+            Ok(IndividualExportAttemptOutcome::Completed(
+                IndividualExportResult {
+                    index,
+                    output: ExportOutput {
+                        clip_id: Some(clip.id),
+                        path: output_path.to_string_lossy().into_owned(),
+                        status: "completed".to_string(),
+                        error: None,
+                        duration_us,
+                    },
+                    warnings: Vec::new(),
+                },
+            ))
         }
-        Err(error) if error.is(ErrorCode::TaskCancelled) => return Err(error),
+        Err(error) if error.is(ErrorCode::TaskCancelled) => Err(error),
         Err(error) => {
-            context.progress.report(index, 1.0);
-            warnings.push(UserNotice::warning_with_detail(
-                "EXPORT_CLIP_FAILED",
-                format!("片段导出失败：{}", clip.label),
-                error.detail(),
-            ));
-            ExportOutput {
-                clip_id: Some(clip.id),
-                path: output_path.to_string_lossy().into_owned(),
-                status: "failed".to_string(),
-                error: Some(error.detail().to_string()),
-                duration_us: 0,
+            let used_hardware = encoder.is_hardware();
+            if used_hardware {
+                context.hardware_disabled.store(true, Ordering::SeqCst);
             }
+            tracing::warn!(
+                worker_id,
+                queue_phase,
+                clip_id = %log_safe_value(&clip.id),
+                clip_label = %log_safe_value(&clip.label),
+                output = %log_safe_value(&output_path.display().to_string()),
+                attempt,
+                max_attempts = EXPORT_CLIP_MAX_ATTEMPTS,
+                encoder = encoder.name(),
+                error = %error.detail(),
+                "export worker moved failed clip to deferred queue"
+            );
+            remove_cleanup_paths_async(vec![output_path]).await;
+            Ok(IndividualExportAttemptOutcome::Failed(
+                IndividualExportFailure {
+                    job: IndividualExportJob { index, clip },
+                    error,
+                    used_hardware,
+                },
+            ))
         }
-    };
+    }
+}
+
+async fn run_individual_export_round(
+    jobs: Vec<IndividualExportJob>,
+    encoder: ExportVideoEncoder,
+    attempt: usize,
+    queue_phase: &'static str,
+    worker_count: usize,
+    context: &IndividualExportContext<'_>,
+) -> AppResult<(Vec<IndividualExportResult>, Vec<IndividualExportFailure>)> {
+    if jobs.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let active_workers = worker_count.min(jobs.len()).max(1);
+    let job_count = jobs.len();
+    let queue = Arc::new(tokio::sync::Mutex::new(VecDeque::from(jobs)));
+    let completed = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let failed = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    tracing::info!(
+        queue_phase,
+        attempt,
+        job_count,
+        worker_count = active_workers,
+        encoder = encoder.name(),
+        "starting asynchronous competing-consumer export queue"
+    );
+
+    let worker_results = stream::iter(0..active_workers)
+        .map(|worker_id| {
+            let queue = queue.clone();
+            let completed = completed.clone();
+            let failed = failed.clone();
+            let encoder = encoder.clone();
+            let context = context.clone();
+            async move {
+                loop {
+                    ensure_not_cancelled(&context.runtime.cancel)?;
+                    let job = queue.lock().await.pop_front();
+                    let Some(job) = job else {
+                        break;
+                    };
+                    match run_export_individual_clip_attempt(
+                        job,
+                        encoder.clone(),
+                        &context,
+                        worker_id,
+                        attempt,
+                        queue_phase,
+                    )
+                    .await?
+                    {
+                        IndividualExportAttemptOutcome::Completed(result) => {
+                            completed.lock().await.push(result);
+                        }
+                        IndividualExportAttemptOutcome::Failed(failure) => {
+                            failed.lock().await.push(failure);
+                        }
+                    }
+                }
+                AppResult::Ok(())
+            }
+        })
+        .buffer_unordered(active_workers)
+        .collect::<Vec<_>>()
+        .await;
+    for result in worker_results {
+        result?;
+    }
+
+    let completed = std::mem::take(&mut *completed.lock().await);
+    let failed = std::mem::take(&mut *failed.lock().await);
+    tracing::info!(
+        queue_phase,
+        attempt,
+        completed_count = completed.len(),
+        failed_count = failed.len(),
+        "asynchronous competing-consumer export queue completed"
+    );
+    Ok((completed, failed))
+}
+
+fn final_failed_individual_result(
+    failure: IndividualExportFailure,
+    context: &IndividualExportContext<'_>,
+) -> AppResult<IndividualExportResult> {
+    let IndividualExportFailure { job, error, .. } = failure;
+    let IndividualExportJob { index, clip } = job;
+    let output_path = context
+        .dir
+        .join(output_file_name(&clip, &context.stem, index, &context.ext));
+    unregister_task_cleanup_paths(
+        context.runtime.task_id,
+        std::slice::from_ref(&output_path),
+        context.runtime.state,
+    )?;
+    context.progress.report(index, 1.0);
     Ok(IndividualExportResult {
         index,
-        output,
-        warnings,
+        output: ExportOutput {
+            clip_id: Some(clip.id),
+            path: output_path.to_string_lossy().into_owned(),
+            status: "failed".to_string(),
+            error: Some(error.detail().to_string()),
+            duration_us: 0,
+        },
+        warnings: vec![UserNotice::warning_with_detail(
+            "EXPORT_CLIP_FAILED",
+            format!("片段导出失败：{}", clip.label),
+            error.detail(),
+        )],
     })
 }
 
@@ -1463,16 +2190,56 @@ async fn run_export_individual(
         hardware_disabled: Arc::new(AtomicBool::new(false)),
         progress: ExportProgressReporter::new(runtime.app, runtime.task_id, clips),
     };
-    let mut results = stream::iter(clips.iter().cloned().enumerate().map(|(index, clip)| {
-        let encoder = encoder.clone();
-        let context = context.clone();
-        async move { run_export_individual_clip(index, clip, encoder, &context).await }
-    }))
-    .buffer_unordered(worker_count);
+    let normal_jobs = clips
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(index, clip)| IndividualExportJob { index, clip })
+        .collect();
+    let (mut completed, mut failed) = run_individual_export_round(
+        normal_jobs,
+        encoder.clone(),
+        1,
+        "normal",
+        worker_count,
+        &context,
+    )
+    .await?;
 
-    let mut completed = Vec::new();
-    while let Some(result) = results.next().await {
-        completed.push(result?);
+    for attempt in 2..=EXPORT_CLIP_MAX_ATTEMPTS {
+        if failed.is_empty() {
+            break;
+        }
+        let hardware_failure_count = failed
+            .iter()
+            .filter(|failure| failure.used_hardware)
+            .count();
+        tracing::warn!(
+            attempt,
+            deferred_count = failed.len(),
+            hardware_failure_count,
+            "normal export queue drained; starting deferred CPU retry queue"
+        );
+        let retry_jobs = failed.into_iter().map(|failure| failure.job).collect();
+        let queue_phase = if attempt == 2 {
+            "cpu-retry"
+        } else {
+            "cpu-final-retry"
+        };
+        let (retry_completed, retry_failed) = run_individual_export_round(
+            retry_jobs,
+            ExportVideoEncoder::software(),
+            attempt,
+            queue_phase,
+            worker_count,
+            &context,
+        )
+        .await?;
+        completed.extend(retry_completed);
+        failed = retry_failed;
+    }
+    for failure in failed {
+        completed.push(final_failed_individual_result(failure, &context)?);
     }
     completed.sort_by_key(|result| result.index);
     let warnings = completed
@@ -1502,6 +2269,7 @@ pub(crate) async fn export_clips(
         ));
     }
 
+    let clips = normalize_export_input_paths(clips)?;
     let mut warnings = Vec::new();
     let probed = probe_export_sources(
         &clips,
@@ -1612,11 +2380,42 @@ mod tests {
             dur_us: 10_000_000,
             has_video: true,
             has_audio,
+            audio_sources: has_audio
+                .then(|| ProbedAudioSource {
+                    source_path: "/source.mp4".to_string(),
+                    audio_track_index: 0,
+                    sample_rate: 48000,
+                    start_offset_us: 0,
+                    end_offset_us: 10_000_000,
+                })
+                .into_iter()
+                .collect(),
             width,
             height,
             fps: 30.0,
             audio_sample_rate: 48000,
         }
+    }
+
+    fn test_layouts(clips: &[ProbedClip]) -> Vec<ClipInputLayout> {
+        clips
+            .iter()
+            .enumerate()
+            .map(|(index, clip)| ClipInputLayout {
+                main_input_index: index,
+                audio_inputs: clip
+                    .has_audio
+                    .then_some(AudioInputRef {
+                        input_index: index,
+                        audio_track_index: 0,
+                        start_offset_us: 0,
+                        end_offset_us: clip.dur_us,
+                    })
+                    .into_iter()
+                    .collect(),
+                input_count: 1,
+            })
+            .collect()
     }
 
     fn options_with(container: ExportContainer) -> ExportOptions {
@@ -1663,19 +2462,168 @@ mod tests {
         }
     }
 
+    fn output_probe(duration: &str, video: bool, audio: bool) -> ProbeOutput {
+        let mut streams = Vec::new();
+        if video {
+            streams.push(ProbeStream {
+                codec_type: Some("video".to_string()),
+                ..ProbeStream::default()
+            });
+        }
+        if audio {
+            streams.push(ProbeStream {
+                codec_type: Some("audio".to_string()),
+                ..ProbeStream::default()
+            });
+        }
+        ProbeOutput {
+            streams,
+            format: Some(ProbeFormat {
+                duration: Some(duration.to_string()),
+                ..ProbeFormat::default()
+            }),
+        }
+    }
+
+    #[test]
+    fn export_inputs_are_normalized_to_absolute_paths_before_ffmpeg() {
+        let clips = normalize_export_input_paths(vec![ExportClip {
+            id: "clip".to_string(),
+            source_path: "-source.mp4".to_string(),
+            audio_sources: Some(vec![ExportAudioSource {
+                source_path: "-audio.wav".to_string(),
+                audio_track_index: 0,
+            }]),
+            label: "clip".to_string(),
+            output_name: "clip.mp4".to_string(),
+            start_us: 0,
+            end_us: 1_000_000,
+        }])
+        .unwrap();
+
+        assert!(Path::new(&clips[0].source_path).is_absolute());
+        assert!(Path::new(&clips[0].audio_sources.as_ref().unwrap()[0].source_path).is_absolute());
+    }
+
+    #[test]
+    fn export_overwrite_policy_is_explicit_and_safe_by_default() {
+        assert_eq!(
+            export_output_overwrite_flag(ExportExistingFileMode::Ask),
+            "-n"
+        );
+        assert_eq!(
+            export_output_overwrite_flag(ExportExistingFileMode::UniqueName),
+            "-n"
+        );
+        assert_eq!(
+            export_output_overwrite_flag(ExportExistingFileMode::Skip),
+            "-n"
+        );
+        assert_eq!(
+            export_output_overwrite_flag(ExportExistingFileMode::Overwrite),
+            "-y"
+        );
+    }
+
+    #[test]
+    fn log_values_cannot_inject_new_log_lines() {
+        assert_eq!(log_safe_value("clip\r\n\u{1b}[31m"), "clip   [31m");
+    }
+
+    #[test]
+    fn individual_output_validation_requires_expected_streams_and_duration() {
+        let output_path = Path::new("/output.mp4");
+        assert_eq!(
+            validate_export_output_probe(
+                output_path,
+                &output_probe("10.100000", true, true),
+                10_000_000,
+                true,
+                true,
+            )
+            .unwrap(),
+            10_100_000
+        );
+        assert!(validate_export_output_probe(
+            output_path,
+            &output_probe("10.000000", true, false),
+            10_000_000,
+            true,
+            true,
+        )
+        .is_err());
+        assert!(validate_export_output_probe(
+            output_path,
+            &output_probe("8.000000", true, true),
+            10_000_000,
+            true,
+            true,
+        )
+        .is_err());
+        assert!(validate_export_output_probe(
+            output_path,
+            &output_probe("10.250000", true, true),
+            10_000_000,
+            true,
+            true,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn audio_sources_are_resolved_before_decoded_interval_filtering() {
+        let clip = ExportClip {
+            id: "clip-after-bound-audio".to_string(),
+            source_path: "/main.mkv".to_string(),
+            audio_sources: Some(vec![
+                ExportAudioSource {
+                    source_path: "/main.mkv".to_string(),
+                    audio_track_index: 0,
+                },
+                ExportAudioSource {
+                    source_path: "/short.mkv".to_string(),
+                    audio_track_index: 0,
+                },
+            ]),
+            label: "clip".to_string(),
+            output_name: "clip.mp4".to_string(),
+            start_us: 156_200_000,
+            end_us: 157_590_000,
+        };
+        let probes = HashMap::from([
+            (
+                "/main.mkv".to_string(),
+                output_probe("1559.979000", false, true),
+            ),
+            (
+                "/short.mkv".to_string(),
+                output_probe("149.652000", false, true),
+            ),
+        ]);
+        let mut warnings = Vec::new();
+        let sources = resolve_export_audio_sources(&clip, &probes, &HashMap::new(), &mut warnings);
+        assert_eq!(sources.len(), 2);
+        assert_eq!(sources[0].source_path, "/main.mkv");
+        assert_eq!(sources[1].source_path, "/short.mkv");
+        assert!(warnings.is_empty());
+    }
+
     #[test]
     fn merge_graph_concats_audio_when_all_clips_have_audio() {
         let clips = vec![test_clip(true, 1920, 1080), test_clip(true, 1280, 720)];
+        let layouts = test_layouts(&clips);
         let (graph, has_audio, _) = build_merge_filter_complex(
             &clips,
+            &layouts,
             &test_targets(),
             true,
             &ExportVideoEncoder::software(),
         );
         assert!(has_audio);
         assert!(graph.ends_with("[0v][0a][1v][1a]concat=n=2:v=1:a=1[v][a]"));
-        assert!(graph
-            .contains("[0:a:0]atrim=start=0:end=10.000000,aresample=48000:async=1:first_pts=0"));
+        assert!(graph.contains(
+            "[0:a:0]atrim=start=0:duration=10.000000,asetpts=PTS-STARTPTS+0.000000/TB,aresample=48000:async=1:first_pts=0"
+        ));
         assert!(graph.contains("channel_layouts=stereo"));
         assert!(graph.contains("setpts=PTS-STARTPTS"));
         assert!(graph.contains(
@@ -1690,8 +2638,11 @@ mod tests {
         let mut clip = test_clip(true, 1920, 1080);
         clip.start_us = 3_500_000;
         clip.dur_us = 2_000_000;
+        let clips = vec![clip];
+        let layouts = test_layouts(&clips);
         let (graph, has_audio, _) = build_merge_filter_complex(
-            &[clip],
+            &clips,
+            &layouts,
             &test_targets(),
             true,
             &ExportVideoEncoder::software(),
@@ -1700,7 +2651,7 @@ mod tests {
         // The input-side `-ss` resets each stream's PTS to 0, so trim keeps the first
         // `dur` seconds rather than trimming on absolute source PTS.
         assert!(graph.contains("[0:v:0]trim=start=0:end=2.000000"));
-        assert!(graph.contains("[0:a:0]atrim=start=0:end=2.000000"));
+        assert!(graph.contains("[0:a:0]atrim=start=0:duration=2.000000"));
         assert!(!graph.contains("trim=start=3.500000"));
     }
 
@@ -1712,8 +2663,14 @@ mod tests {
             audio_channel_layout: "mono",
             ..test_targets()
         };
-        let (graph, has_audio, _) =
-            build_merge_filter_complex(&clips, &targets, true, &ExportVideoEncoder::software());
+        let layouts = test_layouts(&clips);
+        let (graph, has_audio, _) = build_merge_filter_complex(
+            &clips,
+            &layouts,
+            &targets,
+            true,
+            &ExportVideoEncoder::software(),
+        );
         assert!(has_audio);
         assert!(graph.contains("aresample=44100:async=1:first_pts=0"));
         assert!(graph.contains("channel_layouts=mono"));
@@ -1722,12 +2679,62 @@ mod tests {
     #[test]
     fn audio_only_merge_graph_never_references_video_streams() {
         let clips = vec![test_clip(true, 1920, 1080), test_clip(true, 1280, 720)];
-        let graph = build_audio_merge_filter_complex(&clips, 44100, "stereo");
-        assert!(graph.contains("[0:a:0]atrim=start=0:end=10.000000"));
+        let layouts = test_layouts(&clips);
+        let graph = build_audio_merge_filter_complex(&clips, &layouts, 44100, "stereo");
+        assert!(graph.contains("[0:a:0]atrim=start=0:duration=10.000000"));
         assert!(graph.contains("aresample=44100:async=1:first_pts=0"));
         assert!(graph.ends_with("[0a][1a]concat=n=2:v=0:a=1[a]"));
         assert!(!graph.contains(":v:"));
         assert!(!graph.contains("scale="));
+    }
+
+    #[test]
+    fn clip_audio_filter_mixes_all_bound_tracks() {
+        let clip = test_clip(true, 1920, 1080);
+        let layout = ClipInputLayout {
+            main_input_index: 0,
+            audio_inputs: vec![
+                AudioInputRef {
+                    input_index: 0,
+                    audio_track_index: 1,
+                    start_offset_us: 0,
+                    end_offset_us: clip.dur_us,
+                },
+                AudioInputRef {
+                    input_index: 1,
+                    audio_track_index: 0,
+                    start_offset_us: 0,
+                    end_offset_us: clip.dur_us,
+                },
+            ],
+            input_count: 2,
+        };
+        let graph = build_audio_merge_filter_complex(&[clip], &[layout], 48000, "stereo");
+        assert!(graph.contains("[0:a:1]atrim=start=0:duration=10.000000"));
+        assert!(graph.contains("[1:a:0]atrim=start=0:duration=10.000000"));
+        assert!(graph.contains("amix=inputs=2:duration=longest:dropout_transition=0:normalize=0"));
+        assert!(!graph.contains("anullsrc="));
+        assert!(!graph.contains("apad="));
+    }
+
+    #[test]
+    fn clip_audio_filter_preserves_late_start_and_fills_trailing_silence() {
+        let mut parts = Vec::new();
+        let inputs = [AudioInputRef {
+            input_index: 1,
+            audio_track_index: 0,
+            start_offset_us: 1_000_000,
+            end_offset_us: 6_000_000,
+        }];
+        assert!(append_clip_audio_filter(
+            &mut parts, &inputs, 0, 10.0, 48000, "stereo", false,
+        ));
+        let graph = parts.join(";");
+        assert!(graph.contains("atrim=start=0:duration=5.000000"));
+        assert!(graph.contains("asetpts=PTS-STARTPTS+1.000000/TB"));
+        assert!(graph.contains("anullsrc=r=48000:cl=stereo:d=4.000000[0atail]"));
+        assert!(graph.contains("[0areal][0atail]concat=n=2:v=0:a=1"));
+        assert!(!graph.contains("apad="));
     }
 
     #[test]
@@ -1775,8 +2782,14 @@ mod tests {
             audio_channel_layout: "5.1",
             ..test_targets()
         };
-        let (graph, has_audio, _) =
-            build_merge_filter_complex(&clips, &targets, true, &ExportVideoEncoder::software());
+        let layouts = test_layouts(&clips);
+        let (graph, has_audio, _) = build_merge_filter_complex(
+            &clips,
+            &layouts,
+            &targets,
+            true,
+            &ExportVideoEncoder::software(),
+        );
         assert!(has_audio);
         assert!(graph.contains("channel_layouts=5.1"));
     }
@@ -1794,24 +2807,28 @@ mod tests {
     }
 
     #[test]
-    fn merge_graph_drops_audio_when_a_clip_lacks_audio() {
+    fn merge_graph_inserts_silence_when_a_clip_lacks_audio() {
         let clips = vec![test_clip(true, 1920, 1080), test_clip(false, 1280, 720)];
+        let layouts = test_layouts(&clips);
         let (graph, has_audio, _) = build_merge_filter_complex(
             &clips,
+            &layouts,
             &test_targets(),
             true,
             &ExportVideoEncoder::software(),
         );
-        assert!(!has_audio);
-        assert!(graph.ends_with("[0v][1v]concat=n=2:v=1:a=0[v]"));
-        assert!(!graph.contains("[0:a:0]"));
+        assert!(has_audio);
+        assert!(graph.contains("anullsrc=r=48000:cl=stereo"));
+        assert!(graph.ends_with("[0v][0a][1v][1a]concat=n=2:v=1:a=1[v][a]"));
     }
 
     #[test]
     fn merge_graph_ignores_audio_when_disabled() {
         let clips = vec![test_clip(true, 1920, 1080)];
+        let layouts = test_layouts(&clips);
         let (graph, has_audio, _) = build_merge_filter_complex(
             &clips,
+            &layouts,
             &test_targets(),
             false,
             &ExportVideoEncoder::software(),
@@ -1912,6 +2929,13 @@ mod tests {
         assert!(args.iter().any(|arg| arg == "-global_quality"));
         assert!(args.iter().any(|arg| arg == "nv12"));
         assert!(!args.iter().any(|arg| arg == "libx264"));
+        append_video_output_thread_args(&mut args, &qsv, 16);
+        assert!(!args.iter().any(|arg| arg == "-threads:v"));
+
+        let software = ExportVideoEncoder::software();
+        let mut software_threads = Vec::new();
+        append_video_output_thread_args(&mut software_threads, &software, 8);
+        assert_eq!(software_threads, ["-threads:v", "8"]);
 
         let vaapi = ExportVideoEncoder {
             kind: ExportVideoEncoderKind::Vaapi,
@@ -1941,24 +2965,27 @@ mod tests {
     }
 
     #[test]
-    fn parallelism_scales_with_cpu_and_hardware_capacity() {
-        assert_eq!(planned_individual_export_parallelism(2, false, true, 60), 1);
-        assert_eq!(planned_individual_export_parallelism(8, false, true, 60), 2);
+    fn individual_export_queue_never_exceeds_three_workers() {
+        for (cpu_threads, encoder, video_enabled) in [
+            (2, ExportVideoEncoderKind::Software, true),
+            (32, ExportVideoEncoderKind::Software, true),
+            (2, ExportVideoEncoderKind::QuickSync, true),
+            (32, ExportVideoEncoderKind::QuickSync, true),
+            (16, ExportVideoEncoderKind::Nvenc, true),
+            (8, ExportVideoEncoderKind::Software, false),
+        ] {
+            assert_eq!(
+                planned_individual_export_parallelism(cpu_threads, encoder, video_enabled, 60),
+                EXPORT_INDIVIDUAL_WORKERS
+            );
+        }
         assert_eq!(
-            planned_individual_export_parallelism(16, false, true, 60),
-            3
+            planned_individual_export_parallelism(16, ExportVideoEncoderKind::QuickSync, true, 2),
+            2
         );
         assert_eq!(
-            planned_individual_export_parallelism(32, false, true, 60),
-            4
-        );
-        assert_eq!(planned_individual_export_parallelism(2, true, true, 60), 1);
-        assert_eq!(planned_individual_export_parallelism(8, true, true, 60), 2);
-        assert_eq!(planned_individual_export_parallelism(16, true, true, 60), 3);
-        assert_eq!(planned_individual_export_parallelism(16, true, true, 2), 2);
-        assert_eq!(
-            planned_individual_export_parallelism(8, false, false, 60),
-            4
+            planned_individual_export_parallelism(16, ExportVideoEncoderKind::QuickSync, true, 1),
+            1
         );
     }
 
@@ -1968,12 +2995,10 @@ mod tests {
             kind: ExportVideoEncoderKind::Vaapi,
             vaapi_device: Some("/dev/dri/renderD128".to_string()),
         };
-        let (graph, _, video_label) = build_merge_filter_complex(
-            &[test_clip(true, 1920, 1080)],
-            &test_targets(),
-            true,
-            &encoder,
-        );
+        let clips = vec![test_clip(true, 1920, 1080)];
+        let layouts = test_layouts(&clips);
+        let (graph, _, video_label) =
+            build_merge_filter_complex(&clips, &layouts, &test_targets(), true, &encoder);
         assert!(graph.contains("[v]format=nv12,hwupload[encoded_v]"));
         assert_eq!(video_label, "encoded_v");
     }

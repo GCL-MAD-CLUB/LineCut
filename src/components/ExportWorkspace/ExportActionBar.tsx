@@ -1,11 +1,6 @@
 import { FolderOpen, X } from "lucide-react";
 import { captureOperationError } from "../../errors";
-import { runMediaImportTask } from "../../mediaImportTask";
-import {
-  runExportTask,
-  useExportWorkspaceState,
-  type ExportOutput,
-} from "../../systems/ExportSystem";
+import { runExportTask, useExportWorkspaceState } from "../../systems/ExportSystem";
 import { persistExportState, useProjectPort } from "../../systems/ProjectSystem";
 import { useTaskProgressStatus } from "../../systems/TaskSystem";
 
@@ -17,15 +12,9 @@ export function ExportActionBar() {
   const isExporting = useExportWorkspaceState((state) => state.isExporting);
   const setStatus = useExportWorkspaceState((state) => state.setStatus);
   const setResults = useExportWorkspaceState((state) => state.setResults);
-  const {
-    projectId,
-    exportSettingsRecorded,
-    mediaProjectsAdded,
-    warningsAppended,
-    messagePublished,
-  } = useProjectPort(
+  const { projectId, exportSettingsRecorded, messagePublished } = useProjectPort(
     ["projectId"],
-    ["exportSettingsRecorded", "mediaProjectsAdded", "warningsAppended", "messagePublished"],
+    ["exportSettingsRecorded", "messagePublished"],
   );
 
   const { tasks } = useTaskProgressStatus("export.run");
@@ -38,26 +27,6 @@ export function ExportActionBar() {
     settings.outputStem.trim() !== "" &&
     status !== "running" &&
     !isExporting;
-
-  /** 导入项目中开启时，把导出成功的产物逐个登记进媒体箱。 */
-  async function importOutputsIntoProject(outputs: ExportOutput[]) {
-    for (const output of outputs) {
-      if (output.status !== "completed") {
-        continue;
-      }
-      await runMediaImportTask({
-        path: output.path,
-        operation: "media.import",
-        taskIdPrefix: "export-import",
-        onSuccess: (result) => {
-          mediaProjectsAdded([result.project]);
-          if (result.warnings.length > 0) {
-            warningsAppended(result.warnings);
-          }
-        },
-      });
-    }
-  }
 
   async function handleExport() {
     if (!canExport) {
@@ -74,9 +43,6 @@ export function ExportActionBar() {
         void persistExportState(projectId, settings).catch((error) =>
           captureOperationError("project.exportState.save", error),
         );
-      }
-      if (settings.importIntoProject) {
-        await importOutputsIntoProject(outcome.result.outputs);
       }
       setResults(outcome.result);
       setStatus("done");
