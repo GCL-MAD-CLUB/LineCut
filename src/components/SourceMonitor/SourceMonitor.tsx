@@ -68,6 +68,7 @@ interface BoundAudioElementProps {
 interface PcmPlaybackConfig {
   direction: -1 | 1;
   playbackRate: number;
+  algorithm: "phase-vocoder" | "wsola";
 }
 
 interface SelectableAudioTrack {
@@ -146,6 +147,7 @@ function pcmPlaybackConfig(mode: PlaybackMode, frameRate: number): PcmPlaybackCo
   return {
     direction: effectiveRate < 0 ? -1 : 1,
     playbackRate: absoluteRate,
+    algorithm: isSlowPlaybackMode(mode) ? "phase-vocoder" : "wsola",
   };
 }
 
@@ -968,6 +970,7 @@ export function SourceMonitor() {
       durationSeconds: Math.max(0, durationUs / 1_000_000),
       playbackRate: config.playbackRate,
       direction: config.direction,
+      algorithm: config.algorithm,
     });
   }
 

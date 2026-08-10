@@ -18,6 +18,7 @@ interface RollingPcmPlayback {
   durationSeconds: number;
   playbackRate: number;
   direction: -1 | 1;
+  algorithm: "phase-vocoder" | "wsola";
 }
 
 interface ActivePlayback extends RollingPcmPlayback {
@@ -146,6 +147,7 @@ export class RollingPcmAudioController {
       durationFrames,
       playbackRate: playback.playbackRate,
       direction: playback.direction,
+      algorithm: playback.algorithm,
       windowFrames,
     });
 

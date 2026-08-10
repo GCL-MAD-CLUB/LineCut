@@ -161,8 +161,8 @@ export interface ExportResult {
 }
 
 export const exportContainerOptions: Array<readonly [ExportContainer, string]> = [
-  ["mp4_h264", "MP4（H.264）"],
-  ["mp4_hevc", "MP4（HEVC / H.265）"],
+  ["mp4_h264", "H.264"],
+  ["mp4_hevc", "HEVC（H.265）"],
   ["mov_prores", "MOV（Apple ProRes）"],
   ["webm_vp9", "WebM（VP9）"],
   ["mp3_audio", "MP3"],
