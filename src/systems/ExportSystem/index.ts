@@ -31,8 +31,10 @@ export type {
   StoryboardExportInput,
   SubtitleExportInput,
 } from "./exportResolvers";
-export { runExportTask, runQuickExport } from "./exportTask";
-export type { ExportTaskOutcome, RunExportTaskOptions } from "./exportTask";
+export { enqueueExportTask, enqueueQuickExport, runExportTask, runQuickExport } from "./exportTask";
+export type { ExportTaskOutcome, ExportTaskSubmission, RunExportTaskOptions } from "./exportTask";
+export { exportQueueStore, useExportQueueState } from "./exportQueueState";
+export type { ExportQueueState } from "./exportQueueState";
 export {
   buildExportTargets,
   filterConflictingClips,

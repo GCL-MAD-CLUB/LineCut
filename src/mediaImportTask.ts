@@ -27,6 +27,7 @@ interface RunMediaImportTaskOptions {
   taskIdPrefix: string;
   assetId?: string;
   label?: string;
+  blocking?: boolean;
   onSuccess?: (result: ImportResult) => void;
 }
 
@@ -35,6 +36,7 @@ interface RunMediaImportBatchTaskOptions {
   operation: OperationKey;
   taskIdPrefix: string;
   label?: string;
+  blocking?: boolean;
   onSuccess?: (results: ImportResult[]) => void;
 }
 
@@ -64,6 +66,7 @@ export async function runMediaImportTask({
   taskIdPrefix,
   assetId,
   label,
+  blocking = true,
   onSuccess,
 }: RunMediaImportTaskOptions): Promise<MediaImportTaskOutcome> {
   const taskId = createFfmpegTaskId(taskIdPrefix);
@@ -73,6 +76,7 @@ export async function runMediaImportTask({
     label: label ?? `导入 ${fileName(path)}`,
     current: 0,
     total: 1,
+    blocking,
     listener: listenToFfmpegTaskProgress(taskId),
     on_cancel: async () => {
       cancelled = true;
@@ -113,6 +117,7 @@ export async function runMediaImportBatchTask({
   operation,
   taskIdPrefix,
   label,
+  blocking = true,
   onSuccess,
 }: RunMediaImportBatchTaskOptions): Promise<MediaImportBatchTaskOutcome> {
   const batchPaths = uniquePaths(paths);
@@ -127,6 +132,7 @@ export async function runMediaImportBatchTask({
     label: label ?? `导入 ${batchPaths.length} 个媒体`,
     current: 0,
     total: batchPaths.length,
+    blocking,
     listener: listenToFfmpegTasksProgress(taskIds),
     on_cancel: async () => {
       cancelled = true;

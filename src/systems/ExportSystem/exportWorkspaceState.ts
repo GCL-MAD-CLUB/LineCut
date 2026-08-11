@@ -34,8 +34,6 @@ export interface ExportWorkspaceState {
   results: ExportResult | null;
   status: ExportWorkspaceStatus;
   previewClipId: string | null;
-  /** True while any export is in flight; exports are serialized. */
-  isExporting: boolean;
   setSource: (source: ExportSource | null) => void;
   /** Loads the open project's recorded export settings when the project changed. */
   applyProjectExportSettings: () => void;
@@ -46,7 +44,6 @@ export interface ExportWorkspaceState {
   setStatus: (status: ExportWorkspaceStatus) => void;
   resetResults: () => void;
   setPreviewClip: (clipId: string | null) => void;
-  setExporting: (isExporting: boolean) => void;
 }
 
 export function defaultExportSettings(): ExportSettings {
@@ -107,7 +104,6 @@ export const exportWorkspaceStore = createStore<ExportWorkspaceState>()((set) =>
   results: null,
   status: "idle",
   previewClipId: null,
-  isExporting: false,
   setSource: (source) =>
     set((state) => {
       const reconciled = reconcileSettings(state.settings, state.settingsProjectId);
@@ -150,7 +146,6 @@ export const exportWorkspaceStore = createStore<ExportWorkspaceState>()((set) =>
   setStatus: (status) => set({ status }),
   resetResults: () => set({ results: null, status: "idle" }),
   setPreviewClip: (previewClipId) => set({ previewClipId }),
-  setExporting: (isExporting) => set({ isExporting }),
 }));
 
 export function useExportWorkspaceState<Selection>(

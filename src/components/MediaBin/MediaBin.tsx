@@ -25,6 +25,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { useEditCapability } from "../../runtime/capabilities/EditCapability";
+import { useExportCapability } from "../../runtime/capabilities/ExportCapability";
 import { publishEvent } from "../../runtime/events/react";
 import { useStableIdentity } from "../../runtime/state/react";
 import { usePanelActive, usePanelInstanceId } from "../../runtime/systems/PanelState";
@@ -47,9 +48,8 @@ import {
 } from "../../systems/ProjectSystem";
 import {
   buildMediaBinExportSource,
+  enqueueQuickExport,
   requestExport,
-  runQuickExport,
-  useExportWorkspaceState,
 } from "../../systems/ExportSystem";
 import { isTauriRuntime } from "../../tauriRuntime";
 import type {
@@ -281,8 +281,6 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
       "mediaBinReadOnlyChanged",
     ],
   );
-  // Exports are serialized; hide/disable quick export while one is in flight.
-  const isExporting = useExportWorkspaceState((state) => state.isExporting);
   const {
     query,
     selectedIds,
@@ -398,9 +396,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
   const selectedOfflineItems = selectedFileItems.filter(isMediaItemOffline);
   const selectedOnlineItems = selectedFileItems.filter((item) => !isMediaItemOffline(item));
   const selectedProjectVideos = selectedVideos.filter(
-    (item) =>
-      isMediaItemEnabled(item) &&
-      Boolean(mediaItemProject(item, projects, mediaItems)),
+    (item) => isMediaItemEnabled(item) && Boolean(mediaItemProject(item, projects, mediaItems)),
   );
   const selectedVideosWithProxy = selectedProjectVideos.filter((item) =>
     Boolean(mediaItemProject(item, projects, mediaItems)?.proxy_path),
@@ -1283,7 +1279,13 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     if (!source || !exportState) {
       return;
     }
-    const outcome = await runQuickExport(source, exportState);
+    const submission = enqueueQuickExport(source, exportState);
+    messagePublished(
+      submission.queuePosition === 1
+        ? "已开始导出"
+        : `已加入导出队列，前面有 ${submission.queuePosition - 1} 个任务`,
+    );
+    const outcome = await submission.completion;
     if (outcome.status === "success") {
       const completed = outcome.result.outputs.filter(
         (output) => output.status === "completed",
@@ -1292,10 +1294,19 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
       messagePublished(`已导出 ${completed} 个片段${failed > 0 ? `，${failed} 个失败` : ""}`);
     } else if (outcome.status === "cancelled") {
       messagePublished("导出已取消");
-    } else if (outcome.status === "busy") {
-      messagePublished("已有导出正在进行");
     }
   }
+
+  useExportCapability({
+    identity,
+    active: isEditAuthority,
+    selectedCount: buildCurrentMediaBinSource()?.clips.length ?? 0,
+    hasLastSettings: Boolean(exportState),
+    handlers: {
+      configure: exportSelectedVideos,
+      quick: quickExportWithLastSettings,
+    },
+  });
 
   function openContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
     event.preventDefault();
@@ -1960,7 +1971,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                   </PopupMenuItem>
                   <PopupMenuItem
                     mnemonic="W"
-                    disabled={!exportState || isExporting}
+                    disabled={!exportState}
                     onSelect={() => void quickExportWithLastSettings()}
                   >
                     使用上次设置导出(W)

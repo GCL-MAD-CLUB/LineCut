@@ -173,6 +173,19 @@ export interface ExportResult {
   warnings: UserNotice[];
 }
 
+export type ExportQueueEventStatus = "queued" | "running" | "completed" | "cancelled" | "failed";
+
+/** Immutable export request captured before it enters the serial worker. */
+export interface ExportQueueEvent {
+  id: string;
+  createdAt: number;
+  projectId: string | null;
+  source: ExportSource;
+  settings: ExportSettings;
+  status: ExportQueueEventStatus;
+  result: ExportResult | null;
+}
+
 export const exportContainerOptions: Array<readonly [ExportContainer, string]> = [
   ["mp4_h264", "H.264"],
   ["mp4_hevc", "HEVC（H.265）"],

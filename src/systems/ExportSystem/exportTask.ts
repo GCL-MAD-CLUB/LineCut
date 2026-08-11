@@ -1,4 +1,4 @@
-import { invokeCommand } from "../../errors";
+import { captureOperationError, invokeCommand } from "../../errors";
 import { normalizeError } from "../../errors/runtime";
 import {
   cancelFfmpegTask,
@@ -6,7 +6,11 @@ import {
   listenToFfmpegTaskProgress,
 } from "../../ffmpegProgress";
 import { createTaskProgress } from "../TaskSystem";
-import { applyImportedMediaResults, getProjectWorkspaceSnapshot } from "../ProjectSystem";
+import {
+  applyImportedMediaResults,
+  getProjectExportContext,
+  getProjectWorkspaceSnapshot,
+} from "../ProjectSystem";
 import { runMediaImportBatchTask } from "../../mediaImportTask";
 import type {
   ExportClip,
@@ -19,7 +23,7 @@ import { isAudioOnlyContainer } from "./exportTypes";
 import { refreshExportClipAudioBindings } from "./exportResolvers";
 import { resolveExportDestinationDir } from "./exportDestination";
 import { computeExportFileNames } from "./exportRename";
-import { exportWorkspaceStore } from "./exportWorkspaceState";
+import { exportQueueStore } from "./exportQueueState";
 import {
   buildExportTargets,
   filterConflictingClips,
@@ -30,10 +34,13 @@ import {
 import { requestExportConflictAction } from "./exportConflictDialogState";
 
 export type ExportTaskOutcome =
-  | { status: "success"; result: ExportResult }
-  | { status: "cancelled" }
-  | { status: "failed" }
-  | { status: "busy" };
+  { status: "success"; result: ExportResult } | { status: "cancelled" } | { status: "failed" };
+
+export interface ExportTaskSubmission {
+  eventId: string;
+  queuePosition: number;
+  completion: Promise<ExportTaskOutcome>;
+}
 
 function backendClip(clip: ExportClip, useProxy: boolean, outputName: string) {
   // Proxy generation preserves only `0:a:0`. Do not mix a proxy video with a
@@ -64,7 +71,9 @@ function backendClip(clip: ExportClip, useProxy: boolean, outputName: string) {
 export interface RunExportTaskOptions {
   clips: ExportClip[];
   settings: ExportSettings;
+  source?: ExportSource;
   audioBindingsAlreadyRefreshed?: boolean;
+  projectId?: string | null;
 }
 
 function refreshCurrentAudioBindings(clips: ExportClip[]) {
@@ -80,15 +89,21 @@ function refreshCurrentAudioBindings(clips: ExportClip[]) {
   );
 }
 
-async function importCompletedExportOutputs(outputs: ExportOutput[]) {
+async function importCompletedExportOutputs(outputs: ExportOutput[], projectId: string | null) {
+  // The event owns the project that requested the import. Never add completed
+  // files to a different project if the user switched documents meanwhile.
+  if (!projectId || getProjectExportContext().projectId !== projectId) {
+    return;
+  }
   const paths = outputs
     .filter((output) => output.status === "completed")
     .map((output) => output.path);
   await runMediaImportBatchTask({
     paths,
-    operation: "media.import",
+    operation: "export.run",
     taskIdPrefix: "export-import",
     label: `导入 ${paths.length} 个导出媒体`,
+    blocking: false,
     onSuccess: applyImportedMediaResults,
   });
 }
@@ -134,31 +149,41 @@ export function composeExportOutputDir(settings: ExportSettings): string {
   return base ? `${base.replace(/[\\/]+$/, "")}\\${sub}` : sub;
 }
 
-/** Rejects a second export while one is in flight. */
-function beginExport() {
-  if (exportWorkspaceStore.getState().isExporting) {
-    return false;
-  }
-  exportWorkspaceStore.getState().setExporting(true);
-  return true;
+interface PendingExport {
+  eventId: string;
+  source: ExportSource;
+  settings: ExportSettings;
+  projectId: string | null;
+  resolve: (outcome: ExportTaskOutcome) => void;
 }
 
-function endExport() {
-  exportWorkspaceStore.getState().setExporting(false);
+const pendingExports: PendingExport[] = [];
+let exportQueueDraining = false;
+
+function cloneClip(clip: ExportClip): ExportClip {
+  return {
+    ...clip,
+    audioSources: clip.audioSources.map((source) => ({ ...source })),
+    thumbnail: clip.thumbnail ? { ...clip.thumbnail } : undefined,
+    sourceMedia: clip.sourceMedia ? { ...clip.sourceMedia } : undefined,
+  };
 }
 
-/** Runs an ffmpeg export with topbar progress and cancellation wired to the backend task. */
-export async function runExportTask({
-  clips,
-  settings,
-  audioBindingsAlreadyRefreshed = false,
-}: RunExportTaskOptions): Promise<ExportTaskOutcome> {
-  if (!beginExport()) {
-    return { status: "busy" };
-  }
+function cloneSource(source: ExportSource): ExportSource {
+  return { ...source, clips: source.clips.map(cloneClip) };
+}
+
+/** Executes one already-snapshotted event. Only the queue worker calls this. */
+async function executeExportEvent(event: PendingExport): Promise<ExportTaskOutcome> {
   try {
-    const currentClips = audioBindingsAlreadyRefreshed ? clips : refreshCurrentAudioBindings(clips);
-    const normalized = normalizeExportSettings(settings);
+    const currentClips = event.source.clips;
+    const normalized =
+      event.settings.destination === "specified"
+        ? event.settings
+        : {
+            ...event.settings,
+            outputDir: await resolveExportDestinationDir(event.settings.destination, event.source),
+          };
     const outputDir = composeExportOutputDir(normalized);
 
     const names = new Map(
@@ -222,6 +247,7 @@ export async function runExportTask({
       label: `导出 ${exportClips.length} 个片段`,
       current: 0,
       total: 1,
+      blocking: false,
       listener: listenToFfmpegTaskProgress(taskId),
       on_cancel: async () => {
         cancelled = true;
@@ -258,7 +284,7 @@ export async function runExportTask({
       }
       task.remove();
       if (normalized.importIntoProject) {
-        await importCompletedExportOutputs(result.outputs);
+        await importCompletedExportOutputs(result.outputs, event.projectId);
       }
       return { status: "success", result };
     } catch (error) {
@@ -266,41 +292,115 @@ export async function runExportTask({
         task.remove();
         return { status: "cancelled" };
       }
-      task.fail(error, { displayName: settings.outputStem, resourceKind: "media" });
+      task.fail(error, { displayName: normalized.outputStem, resourceKind: "media" });
       return { status: "failed" };
     }
-  } finally {
-    endExport();
+  } catch (error) {
+    captureOperationError("export.run", error, {
+      displayName: event.settings.outputStem,
+      resourceKind: "media",
+    });
+    return { status: "failed" };
   }
 }
 
+async function drainExportQueue() {
+  if (exportQueueDraining) {
+    return;
+  }
+  exportQueueDraining = true;
+  try {
+    while (pendingExports.length > 0) {
+      const event = pendingExports.shift();
+      if (!event) {
+        continue;
+      }
+      exportQueueStore.getState().updateStatus(event.eventId, "running");
+      const outcome = await executeExportEvent(event);
+      exportQueueStore
+        .getState()
+        .updateStatus(
+          event.eventId,
+          outcome.status === "success" ? "completed" : outcome.status,
+          outcome.status === "success" ? outcome.result : null,
+        );
+      event.resolve(outcome);
+    }
+  } finally {
+    exportQueueDraining = false;
+  }
+}
+
+/** Captures a complete export event and appends it to the serial worker. */
+export function enqueueExportTask({
+  clips,
+  settings,
+  source,
+  audioBindingsAlreadyRefreshed = false,
+  projectId = getProjectExportContext().projectId,
+}: RunExportTaskOptions): ExportTaskSubmission {
+  const refreshedClips = audioBindingsAlreadyRefreshed ? clips : refreshCurrentAudioBindings(clips);
+  const capturedSource = cloneSource(
+    source
+      ? { ...source, clips: refreshedClips }
+      : { kind: "media-bin", title: "导出", clips: refreshedClips },
+  );
+  const capturedSettings = { ...normalizeExportSettings(settings) };
+  const eventId =
+    globalThis.crypto?.randomUUID?.() ??
+    `export:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+  const queueState = exportQueueStore.getState();
+  const queuePosition = queueState.queuedCount + (queueState.activeEventId ? 1 : 0) + 1;
+  let resolveCompletion!: (outcome: ExportTaskOutcome) => void;
+  const completion = new Promise<ExportTaskOutcome>((resolve) => {
+    resolveCompletion = resolve;
+  });
+  const event: PendingExport = {
+    eventId,
+    source: capturedSource,
+    settings: capturedSettings,
+    projectId,
+    resolve: resolveCompletion,
+  };
+  pendingExports.push(event);
+  exportQueueStore.getState().append({
+    id: eventId,
+    createdAt: Date.now(),
+    projectId,
+    source: capturedSource,
+    settings: capturedSettings,
+    status: "queued",
+    result: null,
+  });
+  void drainExportQueue();
+  return { eventId, queuePosition, completion };
+}
+
+/** Queues an export and resolves when that event reaches a terminal state. */
+export function runExportTask(options: RunExportTaskOptions): Promise<ExportTaskOutcome> {
+  return enqueueExportTask(options).completion;
+}
+
 /** Runs an export immediately with the given source and settings, skipping the export workspace; used by the panel's "使用上次设置导出" quick action. */
-export async function runQuickExport(
+export function enqueueQuickExport(
+  source: ExportSource,
+  settings: ExportSettings,
+): ExportTaskSubmission {
+  const projectId = getProjectExportContext().projectId;
+  const currentClips = refreshCurrentAudioBindings(source.clips);
+  const currentSource = { ...source, clips: currentClips };
+  return enqueueExportTask({
+    clips: currentClips,
+    settings,
+    source: currentSource,
+    audioBindingsAlreadyRefreshed: true,
+    projectId,
+  });
+}
+
+export function runQuickExport(
   source: ExportSource,
   settings: ExportSettings,
 ): Promise<ExportTaskOutcome> {
-  // Bail before touching the workspace store so a quick export cannot clobber a
-  // running export's source/status (which would hide its cancel button).
-  if (exportWorkspaceStore.getState().isExporting) {
-    return { status: "busy" };
-  }
-  const currentClips = refreshCurrentAudioBindings(source.clips);
-  const currentSource = { ...source, clips: currentClips };
-  const outputDir =
-    settings.destination === "specified"
-      ? settings.outputDir
-      : await resolveExportDestinationDir(settings.destination, currentSource);
-  const effectiveSettings = { ...settings, outputDir };
-  exportWorkspaceStore.getState().setSource(currentSource);
-  const outcome = await runExportTask({
-    clips: currentClips,
-    settings: effectiveSettings,
-    audioBindingsAlreadyRefreshed: true,
-  });
-  if (outcome.status === "success") {
-    const store = exportWorkspaceStore.getState();
-    store.setResults(outcome.result);
-    store.setStatus("done");
-  }
-  return outcome;
+  return enqueueQuickExport(source, settings).completion;
 }

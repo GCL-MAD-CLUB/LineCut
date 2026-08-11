@@ -13,6 +13,8 @@ import { useProjections } from "./runtime/state/StateHub";
 import {
   EDIT_CAPABILITY_PROJECTION,
   type EditCapabilityProjection,
+  EXPORT_CAPABILITY_PROJECTION,
+  type ExportCapabilityProjection,
 } from "./runtime/state/contracts";
 import { useStableIdentity } from "./runtime/state/react";
 import { ApplicationMenu, type ApplicationMenuModel } from "./components/ApplicationMenu";
@@ -359,6 +361,12 @@ function AppContent() {
   const activeEditCapability = editCapabilities.find(
     (projection) => projection.value.active,
   )?.value;
+  const exportCapabilities = useProjections<ExportCapabilityProjection>(
+    EXPORT_CAPABILITY_PROJECTION,
+  );
+  const activeExportCapability = exportCapabilities.find(
+    (projection) => projection.value.active,
+  )?.value;
   const activeMediaDisplayName = mediaDisplayName(project, mediaItems, activeVideoId);
   const autoSaveProjectName = projectFilePath
     ? fileName(projectFilePath).replace(/\.lcp$/i, "")
@@ -366,7 +374,7 @@ function AppContent() {
   const autoSaveProjectNameRef = useRef(autoSaveProjectName);
   autoSaveProjectNameRef.current = autoSaveProjectName;
   const { tasks: runningTasks } = useTaskProgressStatus();
-  const isBusy = runningTasks.length > 0 || historyNavigating;
+  const isBusy = runningTasks.some((task) => task.blocking) || historyNavigating;
   const hasProject = Boolean(projectFilePath || mediaItems.length > 0 || mediaFolders.length > 0);
   const canUndo = projectHistory.active && projectHistory.cursor > 0;
   const canRedo = projectHistory.active && projectHistory.cursor < projectHistory.entries.length;
@@ -381,6 +389,8 @@ function AppContent() {
   const canDuplicate = activeEditCapability?.capabilities.duplicate ?? false;
   const canSelectAll = activeEditCapability?.capabilities.selectAll ?? false;
   const canClearSelection = activeEditCapability?.capabilities.clearSelection ?? false;
+  const canExportSelection = activeExportCapability?.capabilities.configure ?? false;
+  const canQuickExportSelection = activeExportCapability?.capabilities.quick ?? false;
   const activeStatusLabel =
     runningTasks.length === 1 ? runningTasks[0].label : `正在执行 ${runningTasks.length} 项操作...`;
 
@@ -811,6 +821,14 @@ function AppContent() {
     void publishEvent("edit.clear-selection.requested", {}, identity);
   }
 
+  function exportSelection() {
+    void publishEvent("export.configure-selection.requested", {}, identity);
+  }
+
+  function quickExportSelection() {
+    void publishEvent("export.quick-selection.requested", {}, identity);
+  }
+
   function rememberImportedMedia(paths: string[]) {
     if (paths.length === 0) {
       return;
@@ -984,6 +1002,18 @@ function AppContent() {
         void exitApplication();
         return;
       }
+      if (key === "e" && event.shiftKey) {
+        const canRun = event.altKey ? canQuickExportSelection : canExportSelection;
+        if (canRun) {
+          event.preventDefault();
+          if (event.altKey) {
+            quickExportSelection();
+          } else {
+            exportSelection();
+          }
+        }
+        return;
+      }
       if (key === "z" && !event.altKey && !isEditableKeyboardTarget(event.target)) {
         if (isBusy) {
           return;
@@ -1152,6 +1182,14 @@ function AppContent() {
           title: path,
           execute: () => importMedia([path], focusedMediaFolderId),
         })),
+      },
+      exportSelection: {
+        enabled: canExportSelection,
+        execute: exportSelection,
+      },
+      quickExportSelection: {
+        enabled: canQuickExportSelection,
+        execute: quickExportSelection,
       },
       exit: { enabled: true, execute: exitApplication },
     },

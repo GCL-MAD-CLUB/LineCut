@@ -46,6 +46,8 @@ export interface ApplicationMenuModel {
     saveProjectCopy: ApplicationMenuCommand;
     importMedia: ApplicationMenuCommand;
     recentMedia: ApplicationMenuRecentGroup;
+    exportSelection: ApplicationMenuCommand;
+    quickExportSelection: ApplicationMenuCommand;
     exit: ApplicationMenuCommand;
   };
   edit: {
@@ -146,7 +148,7 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
           文件(F)
         </button>
         {fileMenuOpen && (
-          <PopupMenu enableMnemonics>
+          <PopupMenu className="application-menu-popup" enableMnemonics>
             <PopupMenuItem
               mnemonic="N"
               shortcut="Ctrl+N"
@@ -168,6 +170,7 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
               mnemonic="E"
               open={recentProjectMenuOpen}
               disabled={!file.recentProjects.enabled}
+              menuClassName="application-menu-popup"
               onOpenChange={(open) => {
                 setRecentProjectMenuOpen(open);
                 if (open) {
@@ -233,6 +236,7 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
               mnemonic="F"
               open={recentImportMenuOpen}
               disabled={!file.recentMedia.enabled}
+              menuClassName="application-menu-popup"
               onOpenChange={(open) => {
                 setRecentImportMenuOpen(open);
                 if (open) {
@@ -251,6 +255,23 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
                 </PopupMenuItem>
               ))}
             </PopupMenuSubmenu>
+            <PopupMenuSeparator />
+            <PopupMenuItem
+              mnemonic="E"
+              shortcut="Ctrl+Shift+E"
+              disabled={!file.exportSelection.enabled}
+              onSelect={select(file.exportSelection.execute)}
+            >
+              导出(E)...
+            </PopupMenuItem>
+            <PopupMenuItem
+              mnemonic="W"
+              shortcut="Ctrl+Alt+Shift+E"
+              disabled={!file.quickExportSelection.enabled}
+              onSelect={select(file.quickExportSelection.execute)}
+            >
+              使用上次设置导出(W)
+            </PopupMenuItem>
             <PopupMenuSeparator />
             <PopupMenuItem
               mnemonic="X"
@@ -278,7 +299,7 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
           编辑(E)
         </button>
         {editMenuOpen && (
-          <PopupMenu enableMnemonics>
+          <PopupMenu className="application-menu-popup" enableMnemonics>
             <PopupMenuItem
               mnemonic="U"
               shortcut="Ctrl+Z"
@@ -377,7 +398,7 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
           窗口(W)
         </button>
         {windowMenuOpen && (
-          <PopupMenu enableMnemonics>
+          <PopupMenu className="application-menu-popup" enableMnemonics>
             <PopupMenuItem
               checked={windowMenu.source.checked}
               disabled={!windowMenu.source.enabled}
@@ -390,6 +411,7 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
               label="项目"
               open={projectWindowMenuOpen}
               disabled={!windowMenu.project.enabled}
+              menuClassName="application-menu-popup"
               onOpenChange={setProjectWindowMenuOpen}
             >
               {windowMenu.project.items.map((item) => (

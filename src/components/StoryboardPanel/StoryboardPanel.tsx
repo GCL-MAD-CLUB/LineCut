@@ -27,6 +27,7 @@ import {
 import { createPortal } from "react-dom";
 import { invokeCommand } from "../../errors";
 import { useEditCapability } from "../../runtime/capabilities/EditCapability";
+import { useExportCapability } from "../../runtime/capabilities/ExportCapability";
 import { usePlaybackStatus } from "../../runtime/capabilities/PlaybackCapability";
 import { eventSource } from "../../runtime/events/EventHub";
 import { publishEvent } from "../../runtime/events/react";
@@ -40,9 +41,8 @@ import {
 import { mediaDisplayName, useProjectPort } from "../../systems/ProjectSystem";
 import {
   buildStoryboardExportSource,
+  enqueueQuickExport,
   requestExport,
-  runQuickExport,
-  useExportWorkspaceState,
 } from "../../systems/ExportSystem";
 import { createTaskProgress, useTaskProgressStatus } from "../../systems/TaskSystem";
 import { requestStoryboardThumbnail } from "../../storyboardThumbnail";
@@ -1132,8 +1132,6 @@ export function StoryboardPanel() {
     ],
     ["messagePublished"],
   );
-  // Exports are serialized; disable quick export while one is in flight.
-  const isExporting = useExportWorkspaceState((state) => state.isExporting);
   const {
     query,
     searchScope,
@@ -2418,7 +2416,13 @@ export function StoryboardPanel() {
     if (!source || !exportState) {
       return;
     }
-    const outcome = await runQuickExport(source, exportState);
+    const submission = enqueueQuickExport(source, exportState);
+    messagePublished(
+      submission.queuePosition === 1
+        ? "已开始导出"
+        : `已加入导出队列，前面有 ${submission.queuePosition - 1} 个任务`,
+    );
+    const outcome = await submission.completion;
     if (outcome.status === "success") {
       const completed = outcome.result.outputs.filter(
         (output) => output.status === "completed",
@@ -2427,10 +2431,19 @@ export function StoryboardPanel() {
       messagePublished(`已导出 ${completed} 个片段${failed > 0 ? `，${failed} 个失败` : ""}`);
     } else if (outcome.status === "cancelled") {
       messagePublished("导出已取消");
-    } else if (outcome.status === "busy") {
-      messagePublished("已有导出正在进行");
     }
   }
+
+  useExportCapability({
+    identity,
+    active: isEditAuthority,
+    selectedCount: buildCurrentStoryboardSource()?.clips.length ?? 0,
+    hasLastSettings: Boolean(exportState),
+    handlers: {
+      configure: exportSelectedShots,
+      quick: quickExportWithLastSettings,
+    },
+  });
 
   function openContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
     event.preventDefault();
@@ -4087,7 +4100,7 @@ export function StoryboardPanel() {
               </PopupMenuItem>
               <PopupMenuItem
                 mnemonic="W"
-                disabled={!exportState || isExporting}
+                disabled={!exportState}
                 onSelect={() => void quickExportWithLastSettings()}
               >
                 使用上次设置导出(W)

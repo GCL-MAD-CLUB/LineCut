@@ -1,4 +1,5 @@
 export const EDIT_CAPABILITY_PROJECTION = "edit.capability";
+export const EXPORT_CAPABILITY_PROJECTION = "export.capability";
 export const PLAYBACK_STATUS_PROJECTION = "playback.status";
 
 export interface EditCapabilityProjection {
@@ -12,6 +13,15 @@ export interface EditCapabilityProjection {
     duplicate: boolean;
     selectAll: boolean;
     clearSelection: boolean;
+  };
+}
+
+export interface ExportCapabilityProjection {
+  active: boolean;
+  selectedCount: number;
+  capabilities: {
+    configure: boolean;
+    quick: boolean;
   };
 }
 
