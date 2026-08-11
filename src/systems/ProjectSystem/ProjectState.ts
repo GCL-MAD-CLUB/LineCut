@@ -106,6 +106,7 @@ interface ProjectCommands {
   ) => void;
   projectHistoryJumped: (cursor: number) => boolean;
   projectHistoryFutureDiscarded: () => void;
+  projectRestored: () => boolean;
   exportSettingsRecorded: (settings: ProjectExportState) => void;
 }
 
@@ -132,6 +133,8 @@ interface ProjectSystemState {
   storyboards: Record<string, StoryboardState>;
   exportState: ProjectExportState | null;
   projectHistory: ProjectHistoryState;
+  /** In-memory file state from the most recent successful project save. */
+  savedProjectFileState: ProjectFileState;
   commands: ProjectCommands;
 }
 
@@ -543,6 +546,20 @@ function initialProjectState(project: Project | null) {
   };
 }
 
+function emptyProjectFileState(): ProjectFileState {
+  return {
+    projects: {},
+    mediaFolders: [],
+    mediaItems: [],
+    activeVideoId: "",
+    activeTrackId: "",
+    detachedVideoIds: new Set<string>(),
+    useProxy: false,
+    subtitles: {},
+    storyboards: {},
+  };
+}
+
 function normalizedMediaFolders(folders: MediaBinFolder[] | undefined) {
   const seen = new Set<string>();
   const normalized = (folders ?? []).flatMap((folder) => {
@@ -949,15 +966,19 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
   warnings: [],
   mediaBinReadOnly: false,
   projectHistory: createProjectHistory(),
+  savedProjectFileState: emptyProjectFileState(),
   commands: {
-    projectImported: (project) =>
+    projectImported: (project) => {
+      const importedState = initialProjectState(project);
       set({
-        ...initialProjectState(project),
+        ...importedState,
         projectDirty: true,
         useProxy: false,
         mediaBinReadOnly: false,
         projectHistory: createProjectHistory(true, false),
-      }),
+        savedProjectFileState: emptyProjectFileState(),
+      });
+    },
     projectCreated: (projectId) =>
       set({
         ...initialProjectState(null),
@@ -969,23 +990,31 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
         warnings: [],
         mediaBinReadOnly: false,
         projectHistory: createProjectHistory(true),
+        savedProjectFileState: emptyProjectFileState(),
       }),
-    projectOpened: (workspace, projectFilePath, projectId) =>
-      set({
-        ...openedProjectState(workspace, projectId),
-        projectFilePath,
-        projectId,
-        projectDirty: false,
-        proxyDialogOpen: false,
-        warnings: [],
-        projectHistory: createProjectHistory(true),
-      }),
+    projectOpened: (workspace, projectFilePath, projectId) => {
+      const openedState = openedProjectState(workspace, projectId);
+      set((state) => {
+        const nextState = { ...state, ...openedState };
+        return {
+          ...openedState,
+          projectFilePath,
+          projectId,
+          projectDirty: false,
+          proxyDialogOpen: false,
+          warnings: [],
+          projectHistory: createProjectHistory(true),
+          savedProjectFileState: projectFileStateFromStore(nextState),
+        };
+      });
+    },
     projectSaved: (projectFilePath, projectId) =>
       set((state) => ({
         projectFilePath,
         projectId,
         projectDirty: false,
         projectHistory: markProjectHistorySaved(state.projectHistory),
+        savedProjectFileState: projectFileStateFromStore(state),
       })),
     projectClosed: () =>
       set({
@@ -998,6 +1027,7 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
         warnings: [],
         mediaBinReadOnly: false,
         projectHistory: createProjectHistory(),
+        savedProjectFileState: emptyProjectFileState(),
       }),
     mediaProjectsAdded: (loadedProjects) =>
       commitProjectEvent(
@@ -1850,6 +1880,38 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
           ? state
           : { projectHistory, projectDirty: isProjectHistoryDirty(projectHistory) };
       }),
+    projectRestored: () => {
+      let changed = false;
+      set((state) => {
+        if (!state.projectDirty || !state.projectHistory.active) {
+          return state;
+        }
+        const candidate = {
+          ...state,
+          ...reconciledProjectFileState(state.savedProjectFileState),
+          projectDirty: state.projectDirty,
+        };
+        const entry = createProjectHistoryEntry(
+          "还原到上次保存的状态",
+          "default",
+          projectFileStateFromStore(state),
+          projectFileStateFromStore(candidate),
+        );
+        if (!entry) {
+          return state;
+        }
+        const projectHistory = markProjectHistorySaved(
+          appendProjectHistoryEntry(state.projectHistory, entry),
+        );
+        changed = true;
+        return {
+          ...candidate,
+          projectHistory,
+          projectDirty: false,
+        };
+      });
+      return changed;
+    },
     // Export settings live in the global per-project store (WorkspaceConfig.xml),
     // not the project file, so recording them never dirties the project.
     exportSettingsRecorded: (settings) =>

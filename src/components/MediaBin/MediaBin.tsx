@@ -26,6 +26,7 @@ import {
 import { createPortal } from "react-dom";
 import { useEditCapability } from "../../runtime/capabilities/EditCapability";
 import { useExportCapability } from "../../runtime/capabilities/ExportCapability";
+import { useMediaSelectionCapability } from "../../runtime/capabilities/MediaSelectionCapability";
 import { publishEvent } from "../../runtime/events/react";
 import { useStableIdentity } from "../../runtime/state/react";
 import { usePanelActive, usePanelInstanceId } from "../../runtime/systems/PanelState";
@@ -208,6 +209,14 @@ function readDraggedMediaIds(event: DragEvent) {
   } catch {
     return [plainText];
   }
+}
+
+function isImportedMediaFile(item: MediaBinItem) {
+  return (
+    item.origin === "imported" &&
+    !item.extracted &&
+    (item.kind === "video" || item.kind === "audio")
+  );
 }
 
 export function MediaBin({ rootFolderId = null }: MediaBinProps) {
@@ -393,8 +402,13 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
   const selectedFileItems = selectedItems.filter(
     (item) => item.origin === "imported" && !item.extracted,
   );
+  const directlySelectedMediaFiles = directlySelectedItems.filter(isImportedMediaFile);
   const selectedOfflineItems = selectedFileItems.filter(isMediaItemOffline);
   const selectedOnlineItems = selectedFileItems.filter((item) => !isMediaItemOffline(item));
+  const directlySelectedOfflineItems = directlySelectedMediaFiles.filter(isMediaItemOffline);
+  const directlySelectedOnlineItems = directlySelectedMediaFiles.filter(
+    (item) => !isMediaItemOffline(item),
+  );
   const selectedProjectVideos = selectedVideos.filter(
     (item) => isMediaItemEnabled(item) && Boolean(mediaItemProject(item, projects, mediaItems)),
   );
@@ -1187,8 +1201,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     setLinkDialog({ mode, itemIds: items.map((item) => item.id) });
   }
 
-  async function replaceSelectedMedia() {
-    const item = selectedFileItems.length === 1 ? selectedFileItems[0] : null;
+  async function replaceMediaItem(item: MediaBinItem | null) {
     setContextMenu(null);
     if (!item || isMediaItemOffline(item) || !isTauriRuntime()) {
       if (!isTauriRuntime()) {
@@ -1209,17 +1222,44 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     );
   }
 
-  function makeSelectedMediaOffline() {
-    if (selectedOnlineItems.length === 0) {
+  async function replaceSelectedMedia() {
+    const item = selectedFileItems.length === 1 ? selectedFileItems[0] : null;
+    await replaceMediaItem(item);
+  }
+
+  async function replaceDirectlySelectedMedia() {
+    const item = directlySelectedMediaFiles.length === 1 ? directlySelectedMediaFiles[0] : null;
+    await replaceMediaItem(item);
+  }
+
+  function makeMediaOffline(items: MediaBinItem[]) {
+    if (items.length === 0) {
       return;
     }
     mediaItemsOfflineChanged(
-      selectedOnlineItems.map((item) => item.id),
+      items.map((item) => item.id),
       true,
     );
-    messagePublished(`已将 ${selectedOnlineItems.length} 个媒体设为脱机`);
+    messagePublished(`已将 ${items.length} 个媒体设为脱机`);
     setContextMenu(null);
   }
+
+  function makeSelectedMediaOffline() {
+    makeMediaOffline(selectedOnlineItems);
+  }
+
+  useMediaSelectionCapability({
+    identity,
+    active: isEditAuthority,
+    offlineSelectionCount: directlySelectedOfflineItems.length,
+    onlineSelectionCount: directlySelectedOnlineItems.length,
+    disabled: isReadOnly || isBusy,
+    handlers: {
+      replaceMedia: replaceDirectlySelectedMedia,
+      linkMedia: () => openLinkDialog("media", directlySelectedOfflineItems),
+      makeOffline: () => makeMediaOffline(directlySelectedOnlineItems),
+    },
+  });
 
   function createProxyForSelection() {
     const video = selectedProjectVideos.length === 1 ? selectedProjectVideos[0] : null;

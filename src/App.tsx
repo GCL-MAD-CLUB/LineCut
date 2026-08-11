@@ -15,6 +15,8 @@ import {
   type EditCapabilityProjection,
   EXPORT_CAPABILITY_PROJECTION,
   type ExportCapabilityProjection,
+  MEDIA_SELECTION_CAPABILITY_PROJECTION,
+  type MediaSelectionCapabilityProjection,
 } from "./runtime/state/contracts";
 import { useStableIdentity } from "./runtime/state/react";
 import { ApplicationMenu, type ApplicationMenuModel } from "./components/ApplicationMenu";
@@ -286,6 +288,7 @@ function AppContent() {
   const focusedPanelId = usePanelManagerState((state) => state.focusedPanelId);
   const panelInstances = usePanelManagerState((state) => state.instances);
   const openPanel = usePanelManagerState((state) => state.openPanel);
+  const closePanel = usePanelManagerState((state) => state.closePanel);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [historyNavigating, setHistoryNavigating] = useState(false);
   const [recentMediaPaths, setRecentMediaPaths] = useState(() =>
@@ -320,6 +323,7 @@ function AppContent() {
     warningsAppended,
     projectHistoryJumped,
     projectHistoryFutureDiscarded,
+    projectRestored,
     preferences,
     mediaBinReadOnly,
   } = useProjectPort(
@@ -352,6 +356,7 @@ function AppContent() {
       "warningsAppended",
       "projectHistoryJumped",
       "projectHistoryFutureDiscarded",
+      "projectRestored",
     ],
   );
   const autoSaveIntervalMinutes = preferences.auto_save_interval_minutes;
@@ -367,6 +372,12 @@ function AppContent() {
   const activeExportCapability = exportCapabilities.find(
     (projection) => projection.value.active,
   )?.value;
+  const mediaSelectionCapabilities = useProjections<MediaSelectionCapabilityProjection>(
+    MEDIA_SELECTION_CAPABILITY_PROJECTION,
+  );
+  const activeMediaSelectionCapability = mediaSelectionCapabilities.find(
+    (projection) => projection.value.active,
+  )?.value;
   const activeMediaDisplayName = mediaDisplayName(project, mediaItems, activeVideoId);
   const autoSaveProjectName = projectFilePath
     ? fileName(projectFilePath).replace(/\.lcp$/i, "")
@@ -378,6 +389,8 @@ function AppContent() {
   const hasProject = Boolean(projectFilePath || mediaItems.length > 0 || mediaFolders.length > 0);
   const canUndo = projectHistory.active && projectHistory.cursor > 0;
   const canRedo = projectHistory.active && projectHistory.cursor < projectHistory.entries.length;
+  const canCloseFocusedPanel = activeWorkspace === "edit" && Boolean(focusedPanel) && !isBusy;
+  const canRestoreProject = hasProject && projectDirty && !isBusy;
   const editScope = activeWorkspace === "edit" ? focusedPanel : undefined;
   const mediaEditScopeActive = editScope?.type === mediaBinPanelType;
   const focusedMediaFolderId = mediaEditScopeActive
@@ -391,6 +404,11 @@ function AppContent() {
   const canClearSelection = activeEditCapability?.capabilities.clearSelection ?? false;
   const canExportSelection = activeExportCapability?.capabilities.configure ?? false;
   const canQuickExportSelection = activeExportCapability?.capabilities.quick ?? false;
+  const canReplaceSelectedMedia =
+    activeMediaSelectionCapability?.capabilities.replaceMedia ?? false;
+  const canLinkSelectedMedia = activeMediaSelectionCapability?.capabilities.linkMedia ?? false;
+  const canMakeSelectedMediaOffline =
+    activeMediaSelectionCapability?.capabilities.makeOffline ?? false;
   const activeStatusLabel =
     runningTasks.length === 1 ? runningTasks[0].label : `正在执行 ${runningTasks.length} 项操作...`;
 
@@ -725,6 +743,13 @@ function AppContent() {
     }
   }
 
+  function closeFocusedPanel() {
+    if (activeWorkspace !== "edit" || !focusedPanelId) {
+      return;
+    }
+    closePanel(focusedPanelId);
+  }
+
   async function writeProject(path: string, makeCurrent: boolean) {
     // 另存为 of an already-saved project and 保存副本 write a brand-new file, so
     // each gets a fresh document identity. The first save of an unsaved project
@@ -755,13 +780,23 @@ function AppContent() {
     rememberRecentProject({ path: savedPath, projectId: targetId });
   }
 
-  function suggestedProjectName() {
-    if (projectFilePath) {
-      return projectFilePath;
+  function suggestedProjectName(makeCopy = false) {
+    const projectName =
+      projectFilePath ??
+      (() => {
+        const mediaName =
+          (activeMediaDisplayName || mediaItems[0]?.file_name)?.replace(/\.[^.]+$/, "") ||
+          "未命名项目";
+        return `${mediaName}.lcp`;
+      })();
+    if (!makeCopy) {
+      return projectName;
     }
-    const mediaName =
-      (activeMediaDisplayName || mediaItems[0]?.file_name)?.replace(/\.[^.]+$/, "") || "未命名项目";
-    return `${mediaName}.lcp`;
+    const extensionMatch = projectName.match(/(\.[^./\\]+)$/);
+    if (!extensionMatch) {
+      return `${projectName}_副本.lcp`;
+    }
+    return `${projectName.slice(0, -extensionMatch[1].length)}_副本${extensionMatch[1]}`;
   }
 
   async function saveProjectAs(makeCurrent = true) {
@@ -772,7 +807,7 @@ function AppContent() {
     const pickOutcome = await runOperation("project.save", () =>
       save({
         title: makeCurrent ? "项目另存为" : "保存项目副本",
-        defaultPath: suggestedProjectName(),
+        defaultPath: suggestedProjectName(!makeCurrent),
         filters: projectFilters,
       }),
     );
@@ -795,6 +830,33 @@ function AppContent() {
       displayName: fileName(projectFilePath),
       resourceKind: "project",
     });
+  }
+
+  async function restoreProject() {
+    if (!canRestoreProject) {
+      return;
+    }
+    const previousCursor = projectHistory.cursor;
+    setHistoryNavigating(true);
+    const restored = projectRestored();
+    if (!restored) {
+      setHistoryNavigating(false);
+      return;
+    }
+    const outcome = await runOperation("project.history", async () => {
+      if (isTauriRuntime()) {
+        await invokeCommand("sync_project_workspace", {
+          workspace: getProjectWorkspaceSnapshot(),
+        });
+      }
+    });
+    if (outcome.status !== "success") {
+      projectHistoryJumped(previousCursor);
+      setHistoryNavigating(false);
+      return;
+    }
+    messagePublished("已还原到上次保存的状态");
+    setHistoryNavigating(false);
   }
 
   function copyInEditScope() {
@@ -827,6 +889,18 @@ function AppContent() {
 
   function quickExportSelection() {
     void publishEvent("export.quick-selection.requested", {}, identity);
+  }
+
+  function linkSelectedMedia() {
+    void publishEvent("media.link-selection.requested", {}, identity);
+  }
+
+  function replaceSelectedMedia() {
+    void publishEvent("media.replace-selection.requested", {}, identity);
+  }
+
+  function makeSelectedMediaOffline() {
+    void publishEvent("media.make-selection-offline.requested", {}, identity);
   }
 
   function rememberImportedMedia(paths: string[]) {
@@ -1064,6 +1138,9 @@ function AppContent() {
       if (key === "i" && !event.shiftKey && !event.altKey) {
         action = () => importMedia(undefined, focusedMediaFolderId);
       }
+      if (key === "w" && !event.shiftKey && !event.altKey && canCloseFocusedPanel) {
+        action = closeFocusedPanel;
+      }
       if (key === "w" && event.shiftKey && !event.altKey && hasProject) action = closeProject;
       if (key === "s" && !event.shiftKey && !event.altKey && hasProject) action = saveProject;
       if (key === "s" && event.shiftKey && !event.altKey && hasProject) {
@@ -1157,6 +1234,10 @@ function AppContent() {
           execute: () => openProject(entry.path),
         })),
       },
+      closeFocusedPanel: {
+        enabled: canCloseFocusedPanel,
+        execute: closeFocusedPanel,
+      },
       closeProject: { enabled: hasProject && !isBusy, execute: closeProject },
       saveProject: {
         enabled: hasProject && projectDirty && !isBusy,
@@ -1169,6 +1250,22 @@ function AppContent() {
       saveProjectCopy: {
         enabled: hasProject && !isBusy,
         execute: () => saveProjectAs(false),
+      },
+      restoreProject: {
+        enabled: canRestoreProject,
+        execute: restoreProject,
+      },
+      replaceMedia: {
+        enabled: canReplaceSelectedMedia,
+        execute: replaceSelectedMedia,
+      },
+      linkMedia: {
+        enabled: canLinkSelectedMedia,
+        execute: linkSelectedMedia,
+      },
+      makeMediaOffline: {
+        enabled: canMakeSelectedMediaOffline,
+        execute: makeSelectedMediaOffline,
       },
       importMedia: {
         enabled: !isMediaBinReadOnly && !isBusy,

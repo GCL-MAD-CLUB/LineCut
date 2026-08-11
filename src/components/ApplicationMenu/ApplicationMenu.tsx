@@ -40,10 +40,15 @@ export interface ApplicationMenuModel {
     newProject: ApplicationMenuCommand;
     openProject: ApplicationMenuCommand;
     recentProjects: ApplicationMenuRecentGroup;
+    closeFocusedPanel: ApplicationMenuCommand;
     closeProject: ApplicationMenuCommand;
     saveProject: ApplicationMenuCommand;
     saveProjectAs: ApplicationMenuCommand;
     saveProjectCopy: ApplicationMenuCommand;
+    restoreProject: ApplicationMenuCommand;
+    replaceMedia: ApplicationMenuCommand;
+    linkMedia: ApplicationMenuCommand;
+    makeMediaOffline: ApplicationMenuCommand;
     importMedia: ApplicationMenuCommand;
     recentMedia: ApplicationMenuRecentGroup;
     exportSelection: ApplicationMenuCommand;
@@ -191,6 +196,14 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
             </PopupMenuSubmenu>
             <PopupMenuSeparator />
             <PopupMenuItem
+              mnemonic="C"
+              shortcut="Ctrl+W"
+              disabled={!file.closeFocusedPanel.enabled}
+              onSelect={select(file.closeFocusedPanel.execute)}
+            >
+              关闭(C)
+            </PopupMenuItem>
+            <PopupMenuItem
               mnemonic="P"
               shortcut="Ctrl+Shift+W"
               disabled={!file.closeProject.enabled}
@@ -221,6 +234,34 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
               onSelect={select(file.saveProjectCopy.execute)}
             >
               保存副本(Y)...
+            </PopupMenuItem>
+            <PopupMenuItem
+              mnemonic="R"
+              disabled={!file.restoreProject.enabled}
+              onSelect={select(file.restoreProject.execute)}
+            >
+              还原(R)
+            </PopupMenuItem>
+            <PopupMenuSeparator />
+            <PopupMenuItem
+              disabled={!file.replaceMedia.enabled}
+              onSelect={select(file.replaceMedia.execute)}
+            >
+              替换素材...
+            </PopupMenuItem>
+            <PopupMenuItem
+              mnemonic="L"
+              disabled={!file.linkMedia.enabled}
+              onSelect={select(file.linkMedia.execute)}
+            >
+              链接媒体(L)...
+            </PopupMenuItem>
+            <PopupMenuItem
+              mnemonic="O"
+              disabled={!file.makeMediaOffline.enabled}
+              onSelect={select(file.makeMediaOffline.execute)}
+            >
+              设为脱机(O)...
             </PopupMenuItem>
             <PopupMenuSeparator />
             <PopupMenuItem
