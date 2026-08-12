@@ -13,32 +13,6 @@ export interface MonitorCueRange {
   endFrame: number;
 }
 
-export const shuttlePlaybackRates = [-16, -8, -4, -2, -1, 1, 2, 4, 8, 16] as const;
-export type ShuttlePlaybackRate = (typeof shuttlePlaybackRates)[number];
-export type PlaybackRate = ShuttlePlaybackRate | 0;
-export type SlowPlaybackMode = "slow-reverse" | "slow-forward";
-export type PlaybackMode = PlaybackRate | SlowPlaybackMode;
-
-export function isSlowPlaybackMode(mode: PlaybackMode): mode is SlowPlaybackMode {
-  return typeof mode === "string";
-}
-
-export function nextShuttlePlaybackRate(
-  currentRate: PlaybackRate,
-  direction: -1 | 1,
-): PlaybackRate {
-  if (currentRate === 0) {
-    return direction < 0 ? -1 : 1;
-  }
-
-  const currentIndex = shuttlePlaybackRates.indexOf(currentRate as ShuttlePlaybackRate);
-  const nextIndex = Math.min(
-    shuttlePlaybackRates.length - 1,
-    Math.max(0, currentIndex + direction),
-  );
-  return shuttlePlaybackRates[nextIndex];
-}
-
 type StateUpdate<Value> = Value | ((current: Value) => Value);
 
 function resolveUpdate<Value>(current: Value, update: StateUpdate<Value>) {
@@ -49,7 +23,6 @@ interface SourceMonitorState {
   mediaKey: string;
   playbackHistoryVideoIds: string[];
   currentFrame: number;
-  playbackMode: PlaybackMode;
   isPlaying: boolean;
   zoomLevel: MonitorZoomLevel;
   zoomPan: ZoomPan;
@@ -61,7 +34,7 @@ interface SourceMonitorState {
   playbackHistoryCleared: () => void;
   syncMedia: (mediaKey: string, durationFrames: number) => void;
   setCurrentFrame: (update: StateUpdate<number>) => void;
-  setPlaybackMode: (playbackMode: PlaybackMode) => void;
+  setIsPlaying: (isPlaying: boolean) => void;
   setZoomLevel: (update: StateUpdate<MonitorZoomLevel>) => void;
   setZoomPan: (update: StateUpdate<ZoomPan>) => void;
   setTimelineStartFrame: (update: StateUpdate<number>) => void;
@@ -75,7 +48,6 @@ export const useSourceMonitorState = createPanelState<SourceMonitorState>(() => 
   mediaKey: "",
   playbackHistoryVideoIds: [],
   currentFrame: 0,
-  playbackMode: 0,
   isPlaying: false,
   zoomLevel: "fit",
   zoomPan: { x: 0, y: 0 },
@@ -114,7 +86,6 @@ export const useSourceMonitorState = createPanelState<SourceMonitorState>(() => 
         : {
             mediaKey,
             currentFrame: 0,
-            playbackMode: 0,
             isPlaying: false,
             zoomLevel: "fit",
             zoomPan: { x: 0, y: 0 },
@@ -125,7 +96,7 @@ export const useSourceMonitorState = createPanelState<SourceMonitorState>(() => 
     ),
   setCurrentFrame: (update) =>
     set((state) => ({ currentFrame: resolveUpdate(state.currentFrame, update) })),
-  setPlaybackMode: (playbackMode) => set({ playbackMode, isPlaying: playbackMode !== 0 }),
+  setIsPlaying: (isPlaying) => set({ isPlaying }),
   setZoomLevel: (update) => set((state) => ({ zoomLevel: resolveUpdate(state.zoomLevel, update) })),
   setZoomPan: (update) => set((state) => ({ zoomPan: resolveUpdate(state.zoomPan, update) })),
   setTimelineStartFrame: (update) =>

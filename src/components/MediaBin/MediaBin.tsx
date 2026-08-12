@@ -25,8 +25,6 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { useEditCapability } from "../../runtime/capabilities/EditCapability";
-import { useExportCapability } from "../../runtime/capabilities/ExportCapability";
-import { useMediaSelectionCapability } from "../../runtime/capabilities/MediaSelectionCapability";
 import { publishEvent } from "../../runtime/events/react";
 import { useStableIdentity } from "../../runtime/state/react";
 import { usePanelActive, usePanelInstanceId } from "../../runtime/systems/PanelState";
@@ -47,11 +45,6 @@ import {
   getProjectWorkspaceSnapshot,
   useProjectPort,
 } from "../../systems/ProjectSystem";
-import {
-  buildMediaBinExportSource,
-  enqueueQuickExport,
-  requestExport,
-} from "../../systems/ExportSystem";
 import { isTauriRuntime } from "../../tauriRuntime";
 import type {
   AddExternalSubtitlesResult,
@@ -62,13 +55,7 @@ import type {
 import { runMediaImportTask } from "../../mediaImportTask";
 import { MediaLinkDialog, type MediaLinkCandidate, type MediaLinkMode } from "../MediaLinkDialog";
 import { ModalDialog } from "../ModalDialog";
-import {
-  PopupMenu,
-  PopupMenuItem,
-  PopupMenuSeparator,
-  PopupMenuSubmenu,
-  useCloseOnOutsidePointer,
-} from "../PopupMenu";
+import { PopupMenu, PopupMenuItem, PopupMenuSeparator, PopupMenuSubmenu } from "../PopupMenu";
 import { SelectDropdown, selectDropdownItems } from "../SelectDropdown";
 import { createTaskProgress, useTaskProgressStatus } from "../../systems/TaskSystem";
 import "./MediaBin.css";
@@ -99,7 +86,6 @@ interface MediaBinContextMenuState {
   bindingSubmenuOpen: boolean;
   proxySubmenuOpen: boolean;
   moveSubmenuOpen: boolean;
-  exportSubmenuOpen: boolean;
 }
 
 interface MediaBinProps {
@@ -211,14 +197,6 @@ function readDraggedMediaIds(event: DragEvent) {
   }
 }
 
-function isImportedMediaFile(item: MediaBinItem) {
-  return (
-    item.origin === "imported" &&
-    !item.extracted &&
-    (item.kind === "video" || item.kind === "audio")
-  );
-}
-
 export function MediaBin({ rootFolderId = null }: MediaBinProps) {
   const panelInstanceId = usePanelInstanceId();
   const panelActive = usePanelActive();
@@ -231,7 +209,6 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     mediaItems,
     activeVideoId,
     detachedVideoIds,
-    exportState,
     mediaItemRenamed,
     mediaBinEntriesAdded,
     mediaBinEntriesRemoved,
@@ -263,7 +240,6 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
       "activeVideoId",
       "detachedVideoIds",
       "mediaBinReadOnly",
-      "exportState",
     ],
     [
       "mediaItemRenamed",
@@ -402,15 +378,10 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
   const selectedFileItems = selectedItems.filter(
     (item) => item.origin === "imported" && !item.extracted,
   );
-  const directlySelectedMediaFiles = directlySelectedItems.filter(isImportedMediaFile);
   const selectedOfflineItems = selectedFileItems.filter(isMediaItemOffline);
   const selectedOnlineItems = selectedFileItems.filter((item) => !isMediaItemOffline(item));
-  const directlySelectedOfflineItems = directlySelectedMediaFiles.filter(isMediaItemOffline);
-  const directlySelectedOnlineItems = directlySelectedMediaFiles.filter(
-    (item) => !isMediaItemOffline(item),
-  );
-  const selectedProjectVideos = selectedVideos.filter(
-    (item) => isMediaItemEnabled(item) && Boolean(mediaItemProject(item, projects, mediaItems)),
+  const selectedProjectVideos = selectedVideos.filter((item) =>
+    Boolean(mediaItemProject(item, projects, mediaItems)),
   );
   const selectedVideosWithProxy = selectedProjectVideos.filter((item) =>
     Boolean(mediaItemProject(item, projects, mediaItems)?.proxy_path),
@@ -601,10 +572,27 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     }
   }, [bindingPopoverOpen, isReadOnly, setBindingPopoverOpen]);
 
-  useCloseOnOutsidePointer(Boolean(contextMenu), () => setContextMenu(null), {
-    capturePointerdown: true,
-    ignorePopupMenuTargets: true,
-  });
+  useEffect(() => {
+    if (!contextMenu) {
+      return;
+    }
+    const close = () => setContextMenu(null);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        close();
+      }
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("resize", close);
+    window.addEventListener("blur", close);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("blur", close);
+    };
+  }, [contextMenu]);
 
   useEffect(() => {
     const nextSelection = Array.from(selectedIds).filter((itemId) => scopedEntryIds.has(itemId));
@@ -1201,7 +1189,8 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     setLinkDialog({ mode, itemIds: items.map((item) => item.id) });
   }
 
-  async function replaceMediaItem(item: MediaBinItem | null) {
+  async function replaceSelectedMedia() {
+    const item = selectedFileItems.length === 1 ? selectedFileItems[0] : null;
     setContextMenu(null);
     if (!item || isMediaItemOffline(item) || !isTauriRuntime()) {
       if (!isTauriRuntime()) {
@@ -1222,44 +1211,17 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     );
   }
 
-  async function replaceSelectedMedia() {
-    const item = selectedFileItems.length === 1 ? selectedFileItems[0] : null;
-    await replaceMediaItem(item);
-  }
-
-  async function replaceDirectlySelectedMedia() {
-    const item = directlySelectedMediaFiles.length === 1 ? directlySelectedMediaFiles[0] : null;
-    await replaceMediaItem(item);
-  }
-
-  function makeMediaOffline(items: MediaBinItem[]) {
-    if (items.length === 0) {
+  function makeSelectedMediaOffline() {
+    if (selectedOnlineItems.length === 0) {
       return;
     }
     mediaItemsOfflineChanged(
-      items.map((item) => item.id),
+      selectedOnlineItems.map((item) => item.id),
       true,
     );
-    messagePublished(`已将 ${items.length} 个媒体设为脱机`);
+    messagePublished(`已将 ${selectedOnlineItems.length} 个媒体设为脱机`);
     setContextMenu(null);
   }
-
-  function makeSelectedMediaOffline() {
-    makeMediaOffline(selectedOnlineItems);
-  }
-
-  useMediaSelectionCapability({
-    identity,
-    active: isEditAuthority,
-    offlineSelectionCount: directlySelectedOfflineItems.length,
-    onlineSelectionCount: directlySelectedOnlineItems.length,
-    disabled: isReadOnly || isBusy,
-    handlers: {
-      replaceMedia: replaceDirectlySelectedMedia,
-      linkMedia: () => openLinkDialog("media", directlySelectedOfflineItems),
-      makeOffline: () => makeMediaOffline(directlySelectedOnlineItems),
-    },
-  });
 
   function createProxyForSelection() {
     const video = selectedProjectVideos.length === 1 ? selectedProjectVideos[0] : null;
@@ -1296,58 +1258,6 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     );
   }
 
-  function buildCurrentMediaBinSource() {
-    return buildMediaBinExportSource({
-      itemIds: selectedProjectVideos.map((item) => item.id),
-      mediaItems,
-      projects,
-      detachedVideoIds,
-    });
-  }
-
-  function exportSelectedVideos() {
-    const source = buildCurrentMediaBinSource();
-    if (source) {
-      requestExport(source);
-      setContextMenu(null);
-    }
-  }
-
-  async function quickExportWithLastSettings() {
-    setContextMenu(null);
-    const source = buildCurrentMediaBinSource();
-    if (!source || !exportState) {
-      return;
-    }
-    const submission = enqueueQuickExport(source, exportState);
-    messagePublished(
-      submission.queuePosition === 1
-        ? "已开始导出"
-        : `已加入导出队列，前面有 ${submission.queuePosition - 1} 个任务`,
-    );
-    const outcome = await submission.completion;
-    if (outcome.status === "success") {
-      const completed = outcome.result.outputs.filter(
-        (output) => output.status === "completed",
-      ).length;
-      const failed = outcome.result.outputs.filter((output) => output.status === "failed").length;
-      messagePublished(`已导出 ${completed} 个片段${failed > 0 ? `，${failed} 个失败` : ""}`);
-    } else if (outcome.status === "cancelled") {
-      messagePublished("导出已取消");
-    }
-  }
-
-  useExportCapability({
-    identity,
-    active: isEditAuthority,
-    selectedCount: buildCurrentMediaBinSource()?.clips.length ?? 0,
-    hasLastSettings: Boolean(exportState),
-    handlers: {
-      configure: exportSelectedVideos,
-      quick: quickExportWithLastSettings,
-    },
-  });
-
   function openContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
     event.preventDefault();
     const itemElement = (event.target as HTMLElement | null)?.closest<HTMLElement>(
@@ -1374,7 +1284,6 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
       bindingSubmenuOpen: false,
       proxySubmenuOpen: false,
       moveSubmenuOpen: false,
-      exportSubmenuOpen: false,
     });
   }
 
@@ -1601,7 +1510,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                 <Link2 aria-hidden="true" />
                 <div>
                   <strong>关联所选媒体与目标视频</strong>
-                  <span>绑定后，音频和字幕会归入目标视频，方便集中预览和整理。</span>
+                  <span>绑定后，音频和字幕会归入目标视频，方便集中预览和导出。</span>
                 </div>
               </div>
               <div className="media-bin-bind-dialog-field">
@@ -1723,7 +1632,6 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                       current
                         ? {
                             ...current,
-                            exportSubmenuOpen: open ? false : current.exportSubmenuOpen,
                             moveSubmenuOpen: open,
                             bindingSubmenuOpen: false,
                             proxySubmenuOpen: false,
@@ -1793,7 +1701,6 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                         current
                           ? {
                               ...current,
-                              exportSubmenuOpen: open ? false : current.exportSubmenuOpen,
                               bindingSubmenuOpen: open,
                               proxySubmenuOpen: open ? false : current.proxySubmenuOpen,
                               moveSubmenuOpen: open ? false : current.moveSubmenuOpen,
@@ -1929,13 +1836,12 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                 <PopupMenuSubmenu
                   label="代理"
                   open={contextMenu.proxySubmenuOpen}
-                  menuClassName="media-bin-context-menu"
+                  menuClassName="media-bin-context-menu media-bin-proxy-context-menu"
                   onOpenChange={(open) =>
                     setContextMenu((current) =>
                       current
                         ? {
                             ...current,
-                            exportSubmenuOpen: open ? false : current.exportSubmenuOpen,
                             proxySubmenuOpen: open,
                             bindingSubmenuOpen: open ? false : current.bindingSubmenuOpen,
                             moveSubmenuOpen: open ? false : current.moveSubmenuOpen,
@@ -1981,40 +1887,6 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                     disabled={isReadOnly || isBusy || selectedOfflineProjectVideos.length === 0}
                   >
                     重新连接完整分辨率媒体...
-                  </PopupMenuItem>
-                </PopupMenuSubmenu>
-                <PopupMenuSeparator />
-                <PopupMenuSubmenu
-                  label="导出"
-                  open={contextMenu.exportSubmenuOpen}
-                  disabled={
-                    selectedProjectVideos.filter((item) => !isMediaItemOffline(item)).length === 0
-                  }
-                  enableMnemonics
-                  menuClassName="media-bin-context-menu"
-                  onOpenChange={(open) =>
-                    setContextMenu((current) =>
-                      current
-                        ? {
-                            ...current,
-                            exportSubmenuOpen: open,
-                            bindingSubmenuOpen: open ? false : current.bindingSubmenuOpen,
-                            proxySubmenuOpen: open ? false : current.proxySubmenuOpen,
-                            moveSubmenuOpen: open ? false : current.moveSubmenuOpen,
-                          }
-                        : current,
-                    )
-                  }
-                >
-                  <PopupMenuItem mnemonic="E" onSelect={exportSelectedVideos}>
-                    导出(E)...
-                  </PopupMenuItem>
-                  <PopupMenuItem
-                    mnemonic="W"
-                    disabled={!exportState}
-                    onSelect={() => void quickExportWithLastSettings()}
-                  >
-                    使用上次设置导出(W)
                   </PopupMenuItem>
                 </PopupMenuSubmenu>
               </>

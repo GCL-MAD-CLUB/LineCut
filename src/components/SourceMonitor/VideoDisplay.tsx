@@ -1,3 +1,4 @@
+import { FileVideo } from "lucide-react";
 import {
   useEffect,
   useMemo,
@@ -7,12 +8,15 @@ import {
   type RefObject,
   type SyntheticEvent,
 } from "react";
+import type { Project } from "../../types";
 import { useSourceMonitorState, type MonitorZoomLevel, type ZoomPan } from "./sourceMonitorState";
 
 interface VideoDisplayProps {
+  project: Project | null;
   stageRef: RefObject<HTMLDivElement | null>;
   videoRef: RefObject<HTMLVideoElement | null>;
   videoSrc: string | null;
+  unavailableMessage?: string;
   muted: boolean;
   zoomLevel: MonitorZoomLevel;
   zoomPan: ZoomPan;
@@ -39,9 +43,11 @@ function pointerOffsetFromStageCenter(event: WheelEvent, stageRect: DOMRect) {
 }
 
 export function VideoDisplay({
+  project,
   stageRef,
   videoRef,
   videoSrc,
+  unavailableMessage,
   muted,
   zoomLevel,
   zoomPan,
@@ -198,7 +204,7 @@ export function VideoDisplay({
       tabIndex={-1}
       onPointerDown={() => focusStage()}
     >
-      {videoSrc && (
+      {videoSrc ? (
         <video
           ref={videoRef}
           src={videoSrc}
@@ -213,6 +219,16 @@ export function VideoDisplay({
           onPause={(event) => onPause(currentVideo(event))}
           style={videoStyle}
         />
+      ) : (
+        <div className="empty-preview">
+          <FileVideo size={38} />
+          <span>
+            {unavailableMessage ??
+              (project
+                ? "生成 MP4 代理后可在这里预览并定位台词"
+                : "导入视频后可选择原文件或代理模式预览")}
+          </span>
+        </div>
       )}
     </div>
   );

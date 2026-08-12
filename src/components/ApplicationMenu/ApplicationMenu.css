@@ -11,10 +11,6 @@
   display: flex;
 }
 
-.application-menu-popup {
-  width: 280px;
-}
-
 .application-menu-trigger {
   min-width: 0;
   padding: 0 8px 0 6px;

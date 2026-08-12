@@ -93,16 +93,6 @@ export function ModalDialog({
     [],
   );
 
-  useEffect(() => {
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape" && !event.repeat) {
-        onCancel();
-      }
-    }
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onCancel]);
-
   function requestAttention() {
     void playPromptSound();
     if (attentionTimerRef.current !== null) {

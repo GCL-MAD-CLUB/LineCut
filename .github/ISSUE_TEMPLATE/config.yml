@@ -1,8 +1,0 @@
-blank_issues_enabled: false
-contact_links:
-  - name: 功能讨论 / Feature discussion
-    url: https://github.com/GCL-MAD-CLUB/LineCut/discussions
-    about: 在实现前讨论较大的功能想法和使用场景。
-  - name: 安全漏洞 / Security vulnerability
-    url: https://github.com/GCL-MAD-CLUB/LineCut/security/advisories/new
-    about: 请私下报告安全问题，不要创建公开 Issue。

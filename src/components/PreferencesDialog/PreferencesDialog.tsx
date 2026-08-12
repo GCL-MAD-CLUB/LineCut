@@ -3,6 +3,7 @@ import {
   Clock3,
   FileClock,
   FileVideo,
+  Folder,
   FolderOpen,
   HardDrive,
   Loader2,
@@ -44,7 +45,7 @@ export function PreferencesDialog({ open: isOpen, onClose }: PreferencesDialogPr
     }
   }, [isOpen, preferences]);
 
-  async function choosePreferenceDir() {
+  async function choosePreferenceDir(key: "cache_dir" | "default_export_dir") {
     if (!isTauriRuntime()) {
       setMessage("请在 Tauri 桌面窗口中选择目录。");
       return;
@@ -61,7 +62,7 @@ export function PreferencesDialog({ open: isOpen, onClose }: PreferencesDialogPr
     const picked = outcome.value;
     const path = Array.isArray(picked) ? picked[0] : picked;
     if (path) {
-      setDraftPreferences((current) => ({ ...current, cache_dir: path }));
+      setDraftPreferences((current) => ({ ...current, [key]: path }));
     }
   }
 
@@ -139,7 +140,7 @@ export function PreferencesDialog({ open: isOpen, onClose }: PreferencesDialogPr
             onChange={(value) =>
               setDraftPreferences((current) => ({ ...current, cache_dir: value }))
             }
-            onBrowse={choosePreferenceDir}
+            onBrowse={() => choosePreferenceDir("cache_dir")}
           />
           <NumberField
             label="自动备份检测间隔"
@@ -170,6 +171,15 @@ export function PreferencesDialog({ open: isOpen, onClose }: PreferencesDialogPr
             }
           />
           <PathField
+            label="默认导出路径"
+            value={draftPreferences.default_export_dir}
+            icon={<Folder size={15} />}
+            onChange={(value) =>
+              setDraftPreferences((current) => ({ ...current, default_export_dir: value }))
+            }
+            onBrowse={() => choosePreferenceDir("default_export_dir")}
+          />
+          <PathField
             label="FFmpeg"
             value={draftPreferences.ffmpeg_path}
             icon={<FileVideo size={15} />}
@@ -197,6 +207,7 @@ export function PreferencesDialog({ open: isOpen, onClose }: PreferencesDialogPr
               setDraftPreferences({
                 ...defaults,
                 cache_dir: preferences.cache_dir,
+                default_export_dir: preferences.default_export_dir,
                 auto_save_interval_minutes: preferences.auto_save_interval_minutes,
                 auto_save_max_snapshots: preferences.auto_save_max_snapshots,
               });

@@ -1,24 +1,38 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { captureOperationError, clientError, invokeCommand } from "./errors";
+import {
+  captureOperationError,
+  clientError,
+  invokeCommand,
+  runBackgroundOperation,
+  runOperation,
+} from "./errors";
 import { isTauriRuntime } from "./tauriRuntime";
-import {
-  createTimelineThumbnailManager,
-  type ExtractedTimelineThumbnail,
-  type TimelineThumbnailOptions,
-  type TimelineThumbnailRequest,
-} from "./timelineThumbnailManager";
-import {
-  baseTimelineThumbnailResolution,
-  type TimelineThumbnailResolution,
-} from "./timelineThumbnailResolution";
 
+const thumbnailWidth = 160;
+const thumbnailHeight = 90;
+const maximumCachedThumbnails = 4096;
 const extractionTimeoutMs = 5_000;
 const thumbnailTimeBucketUs = 100_000;
 const thumbnailMatchToleranceUs = 100_000;
+const defaultThumbnailPriority = Number.MAX_SAFE_INTEGER;
 
-interface SubtitleThumbnailOptions extends TimelineThumbnailOptions {
+interface SubtitleThumbnailOptions {
   assetId: string;
+  fingerprint: string;
   videoPath: string;
+  timeUs: number;
+  priority?: number;
+}
+
+interface ThumbnailJob {
+  key: string;
+  options: SubtitleThumbnailOptions;
+  consumers: Map<number, number>;
+  sequence: number;
+  settled: boolean;
+  promise: Promise<string>;
+  resolve: (url: string) => void;
+  reject: (error: unknown) => void;
 }
 
 interface SubtitleThumbnailCacheLookup {
@@ -26,8 +40,31 @@ interface SubtitleThumbnailCacheLookup {
   bytes: number[] | null;
 }
 
+interface CachedThumbnail {
+  url: string;
+  timeUs: number;
+}
+
+interface ExtractedThumbnail {
+  blob: Blob;
+  timeUs: number;
+}
+
+export interface SubtitleThumbnailRequest {
+  promise: Promise<string>;
+  cancel: () => void;
+}
+
+const thumbnailCache = new Map<string, CachedThumbnail>();
+const pendingJobs = new Map<string, ThumbnailJob>();
+const thumbnailQueue: ThumbnailJob[] = [];
 const unsupportedWebViewSources = new Set<string>();
 
+let workerRunning = false;
+let workerScheduled = false;
+let queueOrderDirty = false;
+let nextConsumerId = 0;
+let nextJobSequence = 0;
 let extractorVideo: HTMLVideoElement | null = null;
 let extractorCanvas: HTMLCanvasElement | null = null;
 let loadedVideoSource = "";
@@ -36,62 +73,205 @@ function thumbnailBucket(timeUs: number) {
   return Math.round(Math.max(0, timeUs) / thumbnailTimeBucketUs);
 }
 
-function thumbnailKeyForBucket(
-  fingerprint: string,
-  bucket: number,
-  resolution: TimelineThumbnailResolution,
-) {
-  return `${fingerprint}:${bucket}:${resolution.width}`;
+function thumbnailKeyForBucket(fingerprint: string, bucket: number) {
+  return `${fingerprint}:${bucket}`;
 }
 
-function thumbnailKey(
-  { fingerprint, timeUs }: SubtitleThumbnailOptions,
-  resolution: TimelineThumbnailResolution,
-) {
-  return thumbnailKeyForBucket(fingerprint, thumbnailBucket(timeUs), resolution);
+function thumbnailKey({ fingerprint, timeUs }: SubtitleThumbnailOptions) {
+  return thumbnailKeyForBucket(fingerprint, thumbnailBucket(timeUs));
 }
 
-function candidateThumbnailKeys(
-  options: SubtitleThumbnailOptions,
-  resolution: TimelineThumbnailResolution,
-) {
-  const bucket = thumbnailBucket(options.timeUs);
-  return [bucket, bucket - 1, bucket + 1]
+function cachedThumbnail(options: SubtitleThumbnailOptions) {
+  const requestedTimeUs = Math.max(0, options.timeUs);
+  const bucket = thumbnailBucket(requestedTimeUs);
+  const match = [bucket, bucket - 1, bucket + 1]
     .filter((candidate) => candidate >= 0)
+    .map((candidate) => {
+      const key = thumbnailKeyForBucket(options.fingerprint, candidate);
+      return { key, cached: thumbnailCache.get(key) };
+    })
+    .filter(
+      (candidate): candidate is { key: string; cached: CachedThumbnail } =>
+        Boolean(candidate.cached) &&
+        Math.abs(candidate.cached!.timeUs - requestedTimeUs) <= thumbnailMatchToleranceUs,
+    )
     .sort(
       (left, right) =>
-        Math.abs(left * thumbnailTimeBucketUs - options.timeUs) -
-        Math.abs(right * thumbnailTimeBucketUs - options.timeUs),
-    )
-    .map((candidate) => thumbnailKeyForBucket(options.fingerprint, candidate, resolution));
+        Math.abs(left.cached.timeUs - requestedTimeUs) -
+        Math.abs(right.cached.timeUs - requestedTimeUs),
+    )[0];
+  if (!match) {
+    return null;
+  }
+  thumbnailCache.delete(match.key);
+  thumbnailCache.set(match.key, match.cached);
+  return match.cached.url;
 }
 
-function cachedThumbnailMatches(timeUs: number, options: SubtitleThumbnailOptions) {
-  return Math.abs(timeUs - Math.max(0, options.timeUs)) <= thumbnailMatchToleranceUs;
+function rememberThumbnail(key: string, url: string, timeUs: number) {
+  const previous = thumbnailCache.get(key);
+  if (previous && previous.url !== url) {
+    URL.revokeObjectURL(previous.url);
+  }
+  thumbnailCache.delete(key);
+  thumbnailCache.set(key, { url, timeUs });
+
+  while (thumbnailCache.size > maximumCachedThumbnails) {
+    const oldestKey = thumbnailCache.keys().next().value;
+    if (oldestKey === undefined) {
+      break;
+    }
+    const oldest = thumbnailCache.get(oldestKey);
+    thumbnailCache.delete(oldestKey);
+    if (oldest) {
+      URL.revokeObjectURL(oldest.url);
+    }
+  }
 }
 
-const thumbnailManager = createTimelineThumbnailManager<SubtitleThumbnailOptions>({
-  operation: "thumbnail.subtitle.generate",
-  cancelledError: () =>
-    clientError("SUBTITLE_THUMBNAIL_REQUEST_CANCELLED", "Subtitle thumbnail request was cancelled"),
-  cacheKey: thumbnailKey,
-  candidateCacheKeys: candidateThumbnailKeys,
-  cacheMatches: cachedThumbnailMatches,
-  extract: extractThumbnail,
-});
+function cancelledError() {
+  return clientError(
+    "SUBTITLE_THUMBNAIL_REQUEST_CANCELLED",
+    "Subtitle thumbnail request was cancelled",
+  );
+}
 
-export type SubtitleThumbnailRequest = TimelineThumbnailRequest;
+function normalizedPriority(priority: number | undefined) {
+  return priority !== undefined && Number.isFinite(priority)
+    ? Math.max(0, priority)
+    : defaultThumbnailPriority;
+}
+
+function activeJobPriority(job: ThumbnailJob) {
+  let priority = defaultThumbnailPriority;
+  for (const consumerPriority of job.consumers.values()) {
+    priority = Math.min(priority, consumerPriority);
+  }
+  return priority;
+}
+
+function sortThumbnailQueue() {
+  if (!queueOrderDirty) {
+    return;
+  }
+  thumbnailQueue.sort(
+    (left, right) =>
+      activeJobPriority(left) - activeJobPriority(right) || left.sequence - right.sequence,
+  );
+  queueOrderDirty = false;
+}
+
+function scheduleThumbnailWorker() {
+  if (workerRunning || workerScheduled) {
+    return;
+  }
+  workerScheduled = true;
+  queueMicrotask(() => {
+    workerScheduled = false;
+    runBackgroundOperation("thumbnail.subtitle.generate", drainThumbnailQueue);
+  });
+}
 
 export function requestSubtitleThumbnail(
   options: SubtitleThumbnailOptions,
 ): SubtitleThumbnailRequest {
-  return thumbnailManager.request(options);
+  const key = thumbnailKey(options);
+  const cached = cachedThumbnail(options);
+  if (cached) {
+    return { promise: Promise.resolve(cached), cancel: () => undefined };
+  }
+
+  const consumerId = nextConsumerId++;
+  const priority = normalizedPriority(options.priority);
+  let job = pendingJobs.get(key);
+  if (!job) {
+    let resolve!: (url: string) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<string>((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise;
+      reject = rejectPromise;
+    });
+    job = {
+      key,
+      options,
+      consumers: new Map([[consumerId, priority]]),
+      sequence: nextJobSequence++,
+      settled: false,
+      promise,
+      resolve,
+      reject,
+    };
+    pendingJobs.set(key, job);
+    thumbnailQueue.push(job);
+    queueOrderDirty = true;
+    scheduleThumbnailWorker();
+  } else {
+    job.consumers.set(consumerId, priority);
+    queueOrderDirty = true;
+  }
+  let cancelled = false;
+  return {
+    promise: job.promise,
+    cancel: () => {
+      if (cancelled || job!.settled) {
+        return;
+      }
+      cancelled = true;
+      job!.consumers.delete(consumerId);
+      queueOrderDirty = true;
+    },
+  };
 }
 
-async function extractThumbnail(
-  options: SubtitleThumbnailOptions,
-  resolution: TimelineThumbnailResolution,
-) {
+async function drainThumbnailQueue() {
+  if (workerRunning) {
+    return;
+  }
+  workerRunning = true;
+  try {
+    while (thumbnailQueue.length > 0) {
+      sortThumbnailQueue();
+      const job = thumbnailQueue.shift()!;
+      if (job.consumers.size === 0) {
+        pendingJobs.delete(job.key);
+        job.settled = true;
+        job.reject(cancelledError());
+        continue;
+      }
+      const cached = cachedThumbnail(job.options);
+      if (cached) {
+        pendingJobs.delete(job.key);
+        job.settled = true;
+        job.resolve(cached);
+        continue;
+      }
+
+      const outcome = await runOperation("thumbnail.subtitle.generate", () =>
+        extractThumbnail(job.options),
+      );
+      try {
+        if (outcome.status !== "success") {
+          job.reject(outcome.status === "failed" ? outcome.error : cancelledError());
+          continue;
+        }
+        const extracted = outcome.value;
+        const url = URL.createObjectURL(extracted.blob);
+        rememberThumbnail(job.key, url, extracted.timeUs);
+        job.resolve(url);
+      } finally {
+        pendingJobs.delete(job.key);
+        job.settled = true;
+      }
+    }
+  } finally {
+    workerRunning = false;
+    if (thumbnailQueue.length > 0) {
+      scheduleThumbnailWorker();
+    }
+  }
+}
+
+async function extractThumbnail(options: SubtitleThumbnailOptions) {
   const tauriRuntime = isTauriRuntime();
   const videoSource = tauriRuntime ? convertFileSrc(options.videoPath) : options.videoPath;
   let extractionTimeUs = options.timeUs;
@@ -103,7 +283,6 @@ async function extractThumbnail(
         {
           assetId: options.assetId,
           timeUs: Math.max(0, Math.round(options.timeUs)),
-          width: resolution.width,
         },
       );
       extractionTimeUs = cached.cache_time_us;
@@ -111,7 +290,7 @@ async function extractThumbnail(
         return {
           blob: new Blob([new Uint8Array(cached.bytes)], { type: "image/jpeg" }),
           timeUs: cached.cache_time_us,
-        } satisfies ExtractedTimelineThumbnail;
+        } satisfies ExtractedThumbnail;
       }
     } catch (error) {
       captureOperationError("thumbnail.subtitle.cache.read", error);
@@ -121,11 +300,11 @@ async function extractThumbnail(
 
   if (!unsupportedWebViewSources.has(videoSource)) {
     try {
-      const blob = await extractThumbnailInWebView(videoSource, extractionTimeUs, resolution);
+      const blob = await extractThumbnailInWebView(videoSource, extractionTimeUs);
       if (tauriRuntime) {
-        void persistSubtitleThumbnail(options.assetId, extractionTimeUs, resolution, blob);
+        void persistSubtitleThumbnail(options.assetId, extractionTimeUs, blob);
       }
-      return { blob, timeUs: extractionTimeUs } satisfies ExtractedTimelineThumbnail;
+      return { blob, timeUs: extractionTimeUs } satisfies ExtractedThumbnail;
     } catch (error) {
       captureOperationError("thumbnail.subtitle.generate", error);
       unsupportedWebViewSources.add(videoSource);
@@ -142,26 +321,19 @@ async function extractThumbnail(
   const serializedBytes = await invokeCommand<number[]>("generate_subtitle_thumbnail", {
     assetId: options.assetId,
     timeUs: Math.max(0, Math.round(extractionTimeUs)),
-    width: resolution.width,
   });
   return {
     blob: new Blob([new Uint8Array(serializedBytes)], { type: "image/jpeg" }),
     timeUs: extractionTimeUs,
-  } satisfies ExtractedTimelineThumbnail;
+  } satisfies ExtractedThumbnail;
 }
 
-async function persistSubtitleThumbnail(
-  assetId: string,
-  timeUs: number,
-  resolution: TimelineThumbnailResolution,
-  blob: Blob,
-) {
+async function persistSubtitleThumbnail(assetId: string, timeUs: number, blob: Blob) {
   try {
     const bytes = Array.from(new Uint8Array(await blob.arrayBuffer()));
     await invokeCommand("cache_subtitle_thumbnail", {
       assetId,
       timeUs: Math.max(0, Math.round(timeUs)),
-      width: resolution.width,
       bytes,
     });
   } catch (error) {
@@ -181,13 +353,11 @@ function videoElement() {
   return extractorVideo;
 }
 
-function canvasElement(resolution: TimelineThumbnailResolution) {
+function canvasElement() {
   if (!extractorCanvas) {
     extractorCanvas = document.createElement("canvas");
-  }
-  if (extractorCanvas.width !== resolution.width || extractorCanvas.height !== resolution.height) {
-    extractorCanvas.width = resolution.width;
-    extractorCanvas.height = resolution.height;
+    extractorCanvas.width = thumbnailWidth;
+    extractorCanvas.height = thumbnailHeight;
   }
   return extractorCanvas;
 }
@@ -294,11 +464,7 @@ function thumbnailBlob(canvas: HTMLCanvasElement) {
   });
 }
 
-async function extractThumbnailInWebView(
-  videoSource: string,
-  timeUs: number,
-  resolution: TimelineThumbnailResolution,
-) {
+async function extractThumbnailInWebView(videoSource: string, timeUs: number) {
   const video = videoElement();
   await prepareVideo(video, videoSource);
   await seekVideo(video, timeUs);
@@ -309,7 +475,7 @@ async function extractThumbnailInWebView(
       `Decoded video frame dimensions are invalid: ${video.videoWidth}x${video.videoHeight}`,
     );
   }
-  const canvas = canvasElement(resolution);
+  const canvas = canvasElement();
   const context = canvas.getContext("2d", { alpha: false });
   if (!context) {
     throw clientError(
@@ -318,17 +484,13 @@ async function extractThumbnailInWebView(
     );
   }
 
-  const scale = Math.max(
-    resolution.width / video.videoWidth,
-    resolution.height / video.videoHeight,
-  );
-  const sourceWidth = resolution.width / scale;
-  const sourceHeight = resolution.height / scale;
+  const scale = Math.max(thumbnailWidth / video.videoWidth, thumbnailHeight / video.videoHeight);
+  const sourceWidth = thumbnailWidth / scale;
+  const sourceHeight = thumbnailHeight / scale;
   const sourceX = (video.videoWidth - sourceWidth) / 2;
   const sourceY = (video.videoHeight - sourceHeight) / 2;
   context.imageSmoothingEnabled = true;
-  context.imageSmoothingQuality =
-    resolution.width === baseTimelineThumbnailResolution.width ? "low" : "high";
+  context.imageSmoothingQuality = "low";
   context.drawImage(
     video,
     sourceX,
@@ -337,8 +499,8 @@ async function extractThumbnailInWebView(
     sourceHeight,
     0,
     0,
-    resolution.width,
-    resolution.height,
+    thumbnailWidth,
+    thumbnailHeight,
   );
   return thumbnailBlob(canvas);
 }

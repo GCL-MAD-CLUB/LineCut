@@ -1,63 +1,7 @@
 use super::*;
 
-/// FFmpeg defaults to reporting progress twice per second. A shorter period
-/// keeps the export bar visibly moving for a single output as well as for a
-/// parallel batch, while remaining inexpensive compared with encoding work.
-const FFMPEG_PROGRESS_PERIOD_SECONDS: &str = "0.10";
-const FFMPEG_PROGRESS_MIN_DELTA: f64 = 0.001;
-const FFMPEG_PROGRESS_POLL_INTERVAL: Duration = Duration::from_millis(120);
-const FFMPEG_PROGRESS_STALL_MIN_SECONDS: u64 = 20;
-const FFMPEG_PROGRESS_STALL_MAX_SECONDS: u64 = 60;
-const FFMPEG_FINALIZATION_STALL_TIMEOUT: Duration = Duration::from_secs(180);
-const FFMPEG_MAX_PROCESSING_THREADS: usize = 16;
-
-pub(crate) fn available_cpu_threads() -> usize {
-    std::thread::available_parallelism()
-        .map(|count| count.get())
-        .unwrap_or(1)
-}
-
-/// Splits the CPU budget between concurrent FFmpeg processes. Keep the upper
-/// bound aligned with the export path so an unusually high core count does not
-/// make one short-lived helper process monopolize the machine.
-pub(crate) fn ffmpeg_worker_thread_budget(worker_count: usize) -> usize {
-    let worker_count = worker_count.max(1);
-    let cpu_threads = available_cpu_threads();
-    ((cpu_threads + worker_count.saturating_sub(1)) / worker_count)
-        .clamp(1, FFMPEG_MAX_PROCESSING_THREADS)
-}
-
-pub(crate) fn append_ffmpeg_processing_thread_args(args: &mut Vec<String>, threads: usize) {
-    let threads = threads.clamp(1, FFMPEG_MAX_PROCESSING_THREADS).to_string();
-    args.extend([
-        "-threads".to_string(),
-        threads.clone(),
-        "-filter_threads".to_string(),
-        threads.clone(),
-        "-filter_complex_threads".to_string(),
-        threads,
-    ]);
-}
-
-pub(crate) fn append_ffmpeg_video_output_thread_args(args: &mut Vec<String>, threads: usize) {
-    args.extend([
-        "-threads:v".to_string(),
-        threads.clamp(1, FFMPEG_MAX_PROCESSING_THREADS).to_string(),
-    ]);
-}
-
-fn ffmpeg_progress_stall_timeout(duration_us: i64) -> Duration {
-    let duration_seconds = (duration_us.max(1) as u64).div_ceil(1_000_000);
-    Duration::from_secs(duration_seconds.saturating_mul(2).saturating_add(8).clamp(
-        FFMPEG_PROGRESS_STALL_MIN_SECONDS,
-        FFMPEG_PROGRESS_STALL_MAX_SECONDS,
-    ))
-}
-
 pub(crate) fn hidden_command(program: &str) -> Command {
     let mut command = Command::new(program);
-    // Kill the child when the owning future is dropped so ffmpeg is never orphaned.
-    command.kill_on_drop(true);
     #[cfg(windows)]
     {
         command.creation_flags(CREATE_NO_WINDOW);
@@ -384,15 +328,13 @@ pub(crate) fn kill_process_tree(pid: u32) {
 }
 
 pub(crate) fn ffmpeg_args_with_progress(args: &[String]) -> Vec<String> {
-    let mut next = Vec::with_capacity(args.len() + 5);
+    let mut next = Vec::with_capacity(args.len() + 3);
     let mut inserted = false;
 
     for arg in args {
         next.push(arg.clone());
         if !inserted && arg == "-hide_banner" {
             next.push("-nostats".to_string());
-            next.push("-stats_period".to_string());
-            next.push(FFMPEG_PROGRESS_PERIOD_SECONDS.to_string());
             next.push("-progress".to_string());
             next.push("pipe:1".to_string());
             inserted = true;
@@ -404,8 +346,6 @@ pub(crate) fn ffmpeg_args_with_progress(args: &[String]) -> Vec<String> {
             0..0,
             [
                 "-nostats".to_string(),
-                "-stats_period".to_string(),
-                FFMPEG_PROGRESS_PERIOD_SECONDS.to_string(),
                 "-progress".to_string(),
                 "pipe:1".to_string(),
             ],
@@ -413,33 +353,6 @@ pub(crate) fn ffmpeg_args_with_progress(args: &[String]) -> Vec<String> {
     }
 
     next
-}
-
-/// FFmpeg's modern and older builds use slightly different progress keys.
-/// `out_time_ms` is a historical name but, per FFmpeg's progress protocol,
-/// carries microseconds just like `out_time_us`.
-fn ffmpeg_progress_time_us(line: &str) -> Option<i64> {
-    let value = line
-        .strip_prefix("out_time_us=")
-        .or_else(|| line.strip_prefix("out_time_ms="));
-    if let Some(value) = value {
-        return value.trim().parse::<i64>().ok();
-    }
-
-    let value = line.strip_prefix("out_time=")?.trim();
-    let mut fields = value.split(':');
-    let hours = fields.next()?.parse::<i64>().ok()?;
-    let minutes = fields.next()?.parse::<i64>().ok()?;
-    let seconds = fields.next()?.parse::<f64>().ok()?;
-    if fields.next().is_some() || hours < 0 || minutes < 0 || seconds < 0.0 {
-        return None;
-    }
-    let microseconds = (hours as f64 * 3600.0 + minutes as f64 * 60.0 + seconds) * 1_000_000.0;
-    if !microseconds.is_finite() {
-        return None;
-    }
-
-    Some(microseconds.min(i64::MAX as f64).round() as i64)
 }
 
 pub(crate) fn emit_ffmpeg_progress(app: &tauri::AppHandle, task_id: &str, progress: f64) {
@@ -457,46 +370,13 @@ pub(crate) fn emit_ffmpeg_progress(app: &tauri::AppHandle, task_id: &str, progre
     }
 }
 
-/// Removes only the paths that have completed successfully.  Parallel export
-/// jobs must not clear each other's in-flight cleanup entries.
-pub(crate) fn unregister_task_cleanup_paths(
-    task_id: &str,
-    completed_paths: &[PathBuf],
-    state: &AppState,
-) -> AppResult<()> {
-    if completed_paths.is_empty() {
-        return Ok(());
-    }
-    let mut tasks = state.running_tasks.lock().map_err(|_| {
-        app_error(
-            ErrorCode::TaskStateUnavailable,
-            "Task state lock is poisoned",
-        )
-    })?;
-    if let Some(task) = tasks.get_mut(task_id) {
-        task.cleanup_paths
-            .retain(|path| !completed_paths.contains(path));
-    }
-    Ok(())
-}
-
-fn emit_context_progress(progress: &FfmpegProgressContext<'_>, value: f64) {
-    let value = value.clamp(0.0, 1.0);
-    if let Some(callback) = &progress.progress_callback {
-        callback(value);
-    } else {
-        emit_ffmpeg_progress(progress.app, progress.task_id, value);
-    }
-}
-
-async fn run_output_bytes_inner(
+pub(crate) async fn run_output(
     program: &str,
     args: &[String],
     state: &AppState,
     logical_task_id: &str,
     cancel: Arc<AtomicBool>,
-    max_duration: Option<Duration>,
-) -> AppResult<Vec<u8>> {
+) -> AppResult<String> {
     ensure_not_cancelled(&cancel)?;
     let process_id = Uuid::new_v4().to_string();
     let mut child = hidden_command(program)
@@ -523,23 +403,7 @@ async fn run_output_bytes_inner(
         return Err(error);
     }
 
-    let output = if let Some(max_duration) = max_duration {
-        match tokio::time::timeout(max_duration, child.wait_with_output()).await {
-            Ok(output) => output,
-            Err(_) => {
-                clear_running_ffmpeg(state, &process_id);
-                return Err(app_error(
-                    ErrorCode::ExternalToolExecutionFailed,
-                    format!(
-                        "External tool {program} exceeded its {} second execution limit",
-                        max_duration.as_secs()
-                    ),
-                ));
-            }
-        }
-    } else {
-        child.wait_with_output().await
-    };
+    let output = child.wait_with_output().await;
     clear_running_ffmpeg(state, &process_id);
     let output = output.map_err(|error| {
         app_error(
@@ -549,7 +413,7 @@ async fn run_output_bytes_inner(
     })?;
     ensure_not_cancelled(&cancel)?;
     if output.status.success() {
-        Ok(output.stdout)
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
         Err(app_error(
@@ -559,46 +423,26 @@ async fn run_output_bytes_inner(
     }
 }
 
-pub(crate) async fn run_output(
-    program: &str,
-    args: &[String],
-    state: &AppState,
-    logical_task_id: &str,
-    cancel: Arc<AtomicBool>,
-) -> AppResult<String> {
-    let output =
-        run_output_bytes_inner(program, args, state, logical_task_id, cancel, None).await?;
-    Ok(String::from_utf8_lossy(&output).into_owned())
-}
-
-pub(crate) async fn run_output_with_timeout(
-    program: &str,
-    args: &[String],
-    state: &AppState,
-    logical_task_id: &str,
-    cancel: Arc<AtomicBool>,
-    max_duration: Duration,
-) -> AppResult<String> {
-    let output = run_output_bytes_inner(
-        program,
-        args,
-        state,
-        logical_task_id,
-        cancel,
-        Some(max_duration),
-    )
-    .await?;
-    Ok(String::from_utf8_lossy(&output).into_owned())
-}
-
-pub(crate) async fn run_output_bytes(
-    program: &str,
-    args: &[String],
-    state: &AppState,
-    logical_task_id: &str,
-    cancel: Arc<AtomicBool>,
-) -> AppResult<Vec<u8>> {
-    run_output_bytes_inner(program, args, state, logical_task_id, cancel, None).await
+pub(crate) async fn run_status(program: &str, args: &[String]) -> AppResult<()> {
+    let output = hidden_command(program)
+        .args(args)
+        .output()
+        .await
+        .map_err(|error| {
+            app_error(
+                ErrorCode::ExternalToolStartFailed,
+                format!("Failed to start external tool {program}: {error}"),
+            )
+        })?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(app_error(
+            ErrorCode::ExternalToolExecutionFailed,
+            format!("External tool {program} exited unsuccessfully; stderr={stderr}"),
+        ))
+    }
 }
 
 pub(crate) async fn run_status_with_ffmpeg_progress(
@@ -633,13 +477,6 @@ pub(crate) async fn run_status_with_ffmpeg_progress(
         let _ = child.start_kill();
         return Err(err);
     }
-    tracing::info!(
-        pid,
-        logical_task_id = progress.task_id,
-        watchdog_label = %progress.watchdog_label,
-        expected_duration_us = progress.duration_us,
-        "started monitored FFmpeg process"
-    );
 
     let stdout = child.stdout.take().ok_or_else(|| {
         app_error(
@@ -660,15 +497,11 @@ pub(crate) async fn run_status_with_ffmpeg_progress(
         body
     });
 
-    emit_context_progress(&progress, progress.base_progress);
+    emit_ffmpeg_progress(progress.app, progress.task_id, progress.base_progress);
 
     let mut lines = BufReader::new(stdout).lines();
     let mut last_emitted = progress.base_progress;
-    let duration_us_i64 = progress.duration_us.max(1);
-    let duration_us = duration_us_i64 as f64;
-    let media_stall_timeout = ffmpeg_progress_stall_timeout(duration_us_i64);
-    let mut greatest_out_time_us = 0_i64;
-    let mut last_media_progress_at = tokio::time::Instant::now();
+    let duration_us = progress.duration_us.max(1) as f64;
     loop {
         if cancel.load(Ordering::SeqCst) {
             let _ = child.start_kill();
@@ -676,78 +509,39 @@ pub(crate) async fn run_status_with_ffmpeg_progress(
             let _ = stderr_task.await;
             remove_cleanup_paths_async(progress.cleanup_paths.clone()).await;
             clear_running_ffmpeg(progress.state, &task_id);
-            emit_context_progress(&progress, last_emitted);
+            emit_ffmpeg_progress(progress.app, progress.task_id, last_emitted);
             return Err(app_error(
                 ErrorCode::TaskCancelled,
                 "Task cancellation was requested",
             ));
         }
 
-        let reached_output_end = greatest_out_time_us >= duration_us_i64.saturating_sub(100_000);
-        let stall_timeout = if reached_output_end {
-            FFMPEG_FINALIZATION_STALL_TIMEOUT
-        } else {
-            media_stall_timeout
-        };
-        if last_media_progress_at.elapsed() >= stall_timeout {
-            tracing::warn!(
-                pid,
-                logical_task_id = progress.task_id,
-                watchdog_label = %progress.watchdog_label,
-                greatest_out_time_us,
-                duration_us = duration_us_i64,
-                stall_seconds = stall_timeout.as_secs(),
-                "terminating stalled FFmpeg export"
-            );
-            let _ = child.start_kill();
-            let _ = child.wait().await;
-            let stderr = stderr_task.await.unwrap_or_default();
-            remove_cleanup_paths_async(progress.cleanup_paths.clone()).await;
-            clear_running_ffmpeg(progress.state, &task_id);
-            emit_context_progress(&progress, last_emitted);
-            return Err(app_error(
-                ErrorCode::ExternalToolExecutionFailed,
-                format!(
-                    "External tool {program} made no media progress for {} seconds at {:.3}/{:.3} seconds; stderr={}",
-                    stall_timeout.as_secs(),
-                    greatest_out_time_us as f64 / 1_000_000.0,
-                    duration_us / 1_000_000.0,
-                    stderr.trim()
-                ),
-            ));
-        }
-
-        let line =
-            match tokio::time::timeout(FFMPEG_PROGRESS_POLL_INTERVAL, lines.next_line()).await {
-                Ok(Ok(Some(line))) => line,
-                Ok(Ok(None)) => break,
-                Ok(Err(err)) => {
-                    clear_running_ffmpeg(progress.state, &task_id);
-                    return Err(app_error(
-                        ErrorCode::ExternalToolOutputInvalid,
-                        format!("Failed to read progress from external tool {program}: {err}"),
-                    ));
-                }
-                Err(_) => continue,
-            };
-
-        if let Some(out_time_us) = ffmpeg_progress_time_us(&line) {
-            if out_time_us > greatest_out_time_us {
-                greatest_out_time_us = out_time_us;
-                last_media_progress_at = tokio::time::Instant::now();
+        let line = match tokio::time::timeout(Duration::from_millis(120), lines.next_line()).await {
+            Ok(Ok(Some(line))) => line,
+            Ok(Ok(None)) => break,
+            Ok(Err(err)) => {
+                clear_running_ffmpeg(progress.state, &task_id);
+                return Err(app_error(
+                    ErrorCode::ExternalToolOutputInvalid,
+                    format!("Failed to read progress from external tool {program}: {err}"),
+                ));
             }
-            let local_progress = (out_time_us.max(0) as f64 / duration_us).clamp(0.0, 1.0);
-            let overall_progress = progress.base_progress + local_progress * progress.progress_span;
-            if overall_progress - last_emitted >= FFMPEG_PROGRESS_MIN_DELTA
-                || overall_progress >= 1.0
-            {
-                emit_context_progress(&progress, overall_progress);
-                last_emitted = overall_progress;
+            Err(_) => continue,
+        };
+
+        if let Some(value) = line.strip_prefix("out_time_us=") {
+            if let Ok(out_time_us) = value.trim().parse::<i64>() {
+                let local_progress = (out_time_us.max(0) as f64 / duration_us).clamp(0.0, 1.0);
+                let overall_progress =
+                    progress.base_progress + local_progress * progress.progress_span;
+                if overall_progress - last_emitted >= 0.005 || overall_progress >= 1.0 {
+                    emit_ffmpeg_progress(progress.app, progress.task_id, overall_progress);
+                    last_emitted = overall_progress;
+                }
             }
         } else if line.trim() == "progress=end" {
-            last_media_progress_at = tokio::time::Instant::now();
             last_emitted = progress.base_progress + progress.progress_span;
-            emit_context_progress(&progress, last_emitted);
+            emit_ffmpeg_progress(progress.app, progress.task_id, last_emitted);
         }
     }
 
@@ -770,21 +564,16 @@ pub(crate) async fn run_status_with_ffmpeg_progress(
     let was_cancelled = cancel.load(Ordering::SeqCst);
     clear_running_ffmpeg(progress.state, &task_id);
 
-    if status.success() {
-        // Completed files survive: a cancel arriving after completion must not
-        // delete the finished output (mid-encode cancels are handled above).
-        tracing::info!(
-            pid,
-            logical_task_id = progress.task_id,
-            watchdog_label = %progress.watchdog_label,
-            greatest_out_time_us,
-            "monitored FFmpeg process completed"
+    if status.success() && !was_cancelled {
+        emit_ffmpeg_progress(
+            progress.app,
+            progress.task_id,
+            progress.base_progress + progress.progress_span,
         );
-        emit_context_progress(&progress, progress.base_progress + progress.progress_span);
         Ok(())
     } else {
         remove_cleanup_paths_async(progress.cleanup_paths.clone()).await;
-        emit_context_progress(&progress, last_emitted);
+        emit_ffmpeg_progress(progress.app, progress.task_id, last_emitted);
         if was_cancelled {
             Err(app_error(
                 ErrorCode::TaskCancelled,
@@ -796,83 +585,5 @@ pub(crate) async fn run_status_with_ffmpeg_progress(
                 format!("External tool {program} exited unsuccessfully; stderr={stderr}"),
             ))
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ffmpeg_progress_arguments_request_frequent_machine_readable_updates() {
-        let args = vec![
-            "-hide_banner".to_string(),
-            "-i".to_string(),
-            "input.mp4".to_string(),
-        ];
-        let progress_args = ffmpeg_args_with_progress(&args);
-        assert!(progress_args.windows(2).any(|window| {
-            window[0] == "-stats_period" && window[1] == FFMPEG_PROGRESS_PERIOD_SECONDS
-        }));
-        assert!(progress_args
-            .windows(2)
-            .any(|window| { window[0] == "-progress" && window[1] == "pipe:1" }));
-    }
-
-    #[test]
-    fn processing_thread_arguments_cover_input_filters_and_software_output() {
-        let mut args = Vec::new();
-        append_ffmpeg_processing_thread_args(&mut args, usize::MAX);
-        append_ffmpeg_video_output_thread_args(&mut args, usize::MAX);
-        assert_eq!(
-            args,
-            [
-                "-threads",
-                "16",
-                "-filter_threads",
-                "16",
-                "-filter_complex_threads",
-                "16",
-                "-threads:v",
-                "16",
-            ]
-        );
-    }
-
-    #[test]
-    fn ffmpeg_progress_stall_timeout_scales_for_short_clips_and_is_bounded() {
-        assert_eq!(
-            ffmpeg_progress_stall_timeout(1_390_000),
-            Duration::from_secs(20)
-        );
-        assert_eq!(
-            ffmpeg_progress_stall_timeout(4_890_000),
-            Duration::from_secs(20)
-        );
-        assert_eq!(
-            ffmpeg_progress_stall_timeout(20_000_000),
-            Duration::from_secs(48)
-        );
-        assert_eq!(
-            ffmpeg_progress_stall_timeout(i64::MAX),
-            Duration::from_secs(60)
-        );
-    }
-
-    #[test]
-    fn ffmpeg_progress_time_supports_modern_legacy_and_text_keys() {
-        assert_eq!(
-            ffmpeg_progress_time_us("out_time_us=1234567"),
-            Some(1_234_567)
-        );
-        assert_eq!(
-            ffmpeg_progress_time_us("out_time_ms=1234567"),
-            Some(1_234_567)
-        );
-        assert_eq!(
-            ffmpeg_progress_time_us("out_time=01:02:03.500000"),
-            Some(3_723_500_000)
-        );
-        assert_eq!(ffmpeg_progress_time_us("out_time=N/A"), None);
     }
 }

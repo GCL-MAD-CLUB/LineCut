@@ -26,7 +26,7 @@
   grid-template-columns: minmax(0, 1fr) 24px;
   align-items: center;
   width: 100%;
-  min-height: 22px;
+  min-height: 24px;
   padding: 0;
   color: inherit;
   text-align: left;
@@ -61,27 +61,10 @@
   display: grid;
   gap: 1.5px;
   padding: 4.5px 0;
-  max-height: min(180px, calc(100vh - 16px));
-  overflow-x: hidden;
-  overflow-y: auto;
+  overflow: hidden;
   background: var(--color-surface);
   border: 1px solid var(--color-border-default);
   box-shadow: var(--shadow-drawer);
-  scrollbar-color: var(--color-scrollbar-thumb) var(--color-surface);
-  scrollbar-width: thin;
-  scrollbar-gutter: stable;
-}
-
-.select-dropdown-menu::-webkit-scrollbar {
-  width: 8px;
-}
-
-.select-dropdown-menu::-webkit-scrollbar-thumb {
-  background: var(--color-scrollbar-thumb);
-}
-
-.select-dropdown-menu::-webkit-scrollbar-corner {
-  background: var(--color-surface);
 }
 
 .select-dropdown-option {
@@ -89,11 +72,11 @@
   grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
   width: 100%;
-  min-height: 22px;
-  padding: 0 10px 0 9px;
+  min-height: 24px;
+  padding: 2px 10px 2px 9px;
   color: var(--color-text);
   font-size: 12px;
-  line-height: 22px;
+  line-height: 20px;
   text-align: left;
   background: transparent;
   cursor: pointer;

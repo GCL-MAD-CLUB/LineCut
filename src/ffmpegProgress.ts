@@ -33,26 +33,3 @@ export function listenToFfmpegTaskProgress(taskId: string): TaskProgressListener
       }
     });
 }
-
-/**
- * Aggregates several backend task streams into one task whose total is the
- * number of child tasks. Each child keeps its most recent progress so delayed
- * events cannot make the visible batch progress move backwards.
- */
-export function listenToFfmpegTasksProgress(taskIds: readonly string[]): TaskProgressListener {
-  const progressByTaskId = new Map(taskIds.map((taskId) => [taskId, 0]));
-  return async (publishUpdate) =>
-    listen<FfmpegProgressPayload>("ffmpeg-progress", ({ payload }) => {
-      const previous = progressByTaskId.get(payload.task_id);
-      if (previous === undefined) {
-        return;
-      }
-      progressByTaskId.set(payload.task_id, Math.max(previous, clampProgress(payload.progress)));
-      publishUpdate({
-        current: Array.from(progressByTaskId.values()).reduce(
-          (total, progress) => total + progress,
-          0,
-        ),
-      });
-    });
-}

@@ -1530,7 +1530,13 @@ export function MediaBinTable({
 
   if (viewMode === "grid") {
     if (sortedRows.length === 0) {
-      return null;
+      return (
+        <div className="media-bin-empty media-bin-grid-empty">
+          <Film aria-hidden="true" />
+          <strong>项目为空</strong>
+          <span>使用底部导入按钮添加视频、音频或字幕。</span>
+        </div>
+      );
     }
     return (
       <>
@@ -1851,7 +1857,16 @@ export function MediaBinTable({
           onScroll={syncHeaderScroll}
           onPointerDown={startMarqueeSelection}
         >
-          {sortedRows.length > 0 && (
+          {sortedRows.length === 0 ? (
+            <div className="media-bin-table-empty-content">
+              <div className="media-bin-empty">
+                <Film aria-hidden="true" />
+                <strong>项目为空</strong>
+                <span>使用底部导入按钮或将系统媒体拖入此处。</span>
+              </div>
+              <div className="media-bin-table-tail-spacer" aria-hidden="true" />
+            </div>
+          ) : (
             <div className="media-bin-table-body" role="rowgroup">
               {sortedRows.map((row, rowIndex) => {
                 if (row.type === "folder") {

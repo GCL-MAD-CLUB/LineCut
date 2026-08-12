@@ -17,12 +17,11 @@ pub(super) fn write_snapshot(
     cache_root: &Path,
     project_name: &str,
     workspace: &ProjectWorkspace,
-    project_id: &str,
     max_snapshots: usize,
 ) -> AppResult<Option<PathBuf>> {
     let max_snapshots = max_snapshots.max(1);
     let project_name = sanitized_project_name(project_name);
-    let hash = models::content_hash(workspace, project_id)?;
+    let hash = models::content_hash(workspace)?;
     let directory = cache_root.join(AUTO_SAVE_DIRECTORY);
     fs::create_dir_all(&directory).map_err(|error| {
         app_error(
@@ -46,7 +45,7 @@ pub(super) fn write_snapshot(
         return Ok(None);
     }
 
-    let encrypted = encode_current_workspace(workspace, project_id)?;
+    let encrypted = encode_current_workspace(workspace)?;
     io::write_atomic(&output_path, &encrypted)?;
     prune_to_global_limit(&directory, max_snapshots, Some(&output_path))?;
     Ok(Some(output_path))
@@ -186,11 +185,10 @@ mod tests {
             editor: ProjectEditorState {
                 active_video_id: marker.to_string(),
                 active_track_id: String::new(),
+                subtitle_selections: HashMap::new(),
                 detached_video_ids: Vec::new(),
                 preview: ProjectPreviewState { use_proxy: false },
             },
-            subtitles: HashMap::new(),
-            storyboards: HashMap::new(),
         }
     }
 
@@ -206,21 +204,21 @@ mod tests {
             std::env::temp_dir().join(format!("linecut-auto-save-test-{}", Uuid::new_v4()));
         fs::create_dir_all(&cache_root).unwrap();
 
-        let first = write_snapshot(&cache_root, "Demo.lcp", &workspace("one"), "p-1", 2)
+        let first = write_snapshot(&cache_root, "Demo.lcp", &workspace("one"), 2)
             .unwrap()
             .unwrap();
         assert!(first.is_file());
         assert_eq!(
-            write_snapshot(&cache_root, "Demo.lcp", &workspace("one"), "p-1", 2).unwrap(),
+            write_snapshot(&cache_root, "Demo.lcp", &workspace("one"), 2).unwrap(),
             None
         );
-        let second = write_snapshot(&cache_root, "Demo.lcp", &workspace("two"), "p-1", 2)
+        let second = write_snapshot(&cache_root, "Demo.lcp", &workspace("two"), 2)
             .unwrap()
             .unwrap();
-        let third = write_snapshot(&cache_root, "Demo.lcp", &workspace("three"), "p-1", 2)
+        let third = write_snapshot(&cache_root, "Demo.lcp", &workspace("three"), 2)
             .unwrap()
             .unwrap();
-        let other = write_snapshot(&cache_root, "Other.lcp", &workspace("other"), "p-2", 2)
+        let other = write_snapshot(&cache_root, "Other.lcp", &workspace("other"), 2)
             .unwrap()
             .unwrap();
 
@@ -235,10 +233,9 @@ mod tests {
         assert!(third.exists());
         assert!(other.exists());
         assert_eq!(
-            read_project_file(&other).unwrap().0.editor.active_video_id,
+            read_project_file(&other).unwrap().editor.active_video_id,
             "other"
         );
-        assert!(!read_project_file(&other).unwrap().1.is_empty());
 
         fs::remove_dir_all(cache_root).unwrap();
     }

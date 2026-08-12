@@ -24,66 +24,6 @@ import "./PopupMenu.css";
 
 const popupViewportMargin = 8;
 
-interface UseCloseOnOutsidePointerOptions {
-  /** Listen for pointerdown in the capture phase instead of the bubble phase. Default false. */
-  capturePointerdown?: boolean;
-  /** Ignore pointerdown events whose target is inside a `.popup-menu`. Default false. */
-  ignorePopupMenuTargets?: boolean;
-}
-
-/**
- * While `open` is true, attaches window listeners that dismiss a popup:
- * clicking anywhere, pressing Escape, resizing the window, or losing window focus.
- */
-export function useCloseOnOutsidePointer(
-  open: boolean,
-  onClose: () => void,
-  options: UseCloseOnOutsidePointerOptions = {},
-) {
-  const onCloseRef = useRef(onClose);
-  useEffect(() => {
-    onCloseRef.current = onClose;
-  }, [onClose]);
-  const optionsRef = useRef(options);
-  useEffect(() => {
-    optionsRef.current = options;
-  }, [options]);
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const { capturePointerdown = false, ignorePopupMenuTargets = false } = optionsRef.current;
-    const close = () => onCloseRef.current();
-    const closeOnPointerDown = (event: PointerEvent) => {
-      if (ignorePopupMenuTargets && isPopupMenuEventTarget(event.target)) {
-        return;
-      }
-      close();
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        close();
-      }
-    };
-    window.addEventListener("pointerdown", closeOnPointerDown, capturePointerdown);
-    window.addEventListener("keydown", closeOnEscape);
-    window.addEventListener("resize", close);
-    window.addEventListener("blur", close);
-    return () => {
-      window.removeEventListener("pointerdown", closeOnPointerDown, capturePointerdown);
-      window.removeEventListener("keydown", closeOnEscape);
-      window.removeEventListener("resize", close);
-      window.removeEventListener("blur", close);
-    };
-  }, [open]);
-}
-
-/** Returns whether an event originated inside a PopupMenu, including portal-based submenus. */
-export function isPopupMenuEventTarget(target: EventTarget | null) {
-  return target instanceof Element && target.closest(".popup-menu") !== null;
-}
-
 interface PopupMenuViewportLayout {
   maxHeight: number | undefined;
   translateX: number;
@@ -492,7 +432,6 @@ interface PopupMenuSubmenuProps {
   open: boolean;
   disabled?: boolean;
   mnemonic?: string;
-  enableMnemonics?: boolean;
   menuClassName?: string;
   onOpenChange: (open: boolean) => void;
 }
@@ -503,7 +442,6 @@ export function PopupMenuSubmenu({
   open,
   disabled,
   mnemonic,
-  enableMnemonics = false,
   menuClassName,
   onOpenChange,
 }: PopupMenuSubmenuProps) {
@@ -555,7 +493,6 @@ export function PopupMenuSubmenu({
             ariaLabel={typeof label === "string" ? label : undefined}
             className={menuClassName}
             submenuAnchor={anchor}
-            enableMnemonics={enableMnemonics}
             style={{ position: "fixed", left: anchor.right - 4, top: anchor.top - 3 }}
             onPointerDown={(event) => event.stopPropagation()}
             onContextMenu={(event) => event.preventDefault()}

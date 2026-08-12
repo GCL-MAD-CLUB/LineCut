@@ -1,39 +1,26 @@
-# JavaScript dependencies and build output
+# Dependencies
 node_modules/
-dist/
 
-# Rust and Tauri build output
-target/
+# Build outputs
+dist/
+src-tauri/target/
 src-tauri/target-verify/
 src-tauri/gen/
 
-# Generated or downloaded bundle inputs
-src-tauri/bin/
-.cache/
-
-# Tests and coverage
-coverage/
-playwright-report/
-test-results/
-*.profraw
-lcov.info
-
-# Logs and local processes
+# Logs
 *.log
-*.pid
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# Local environment and release secrets
+# Local environment variables
 .env
-.env.*
-!.env.example
+.env.local
+.env.*.local
+
+# Local release secrets
 src-tauri/.linecut-project-build-secret-v1.local
-*.pfx
-*.p12
-*.pem
 
 # Editor / IDE
 .vscode/*
@@ -41,7 +28,6 @@ src-tauri/.linecut-project-build-secret-v1.local
 !.vscode/settings.json
 .idea/
 *.swp
-*.swo
 *.suo
 *.ntvs*
 *.njsproj
@@ -50,19 +36,12 @@ src-tauri/.linecut-project-build-secret-v1.local
 # OS files
 .DS_Store
 Thumbs.db
-Desktop.ini
 
-# Temporary files
+# Temp files
 *.tmp
 *.temp
-*.bak
-*.orig
+.cache/
+*/bin/
 
-# Local agent tooling
-.agents/
-.claude/
-.playwright-mcp/
-
-# Local patches
-*.diff
-*.patch
+# Codex
+.playwright-mcp

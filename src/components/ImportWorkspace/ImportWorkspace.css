@@ -191,6 +191,7 @@
 }
 
 .import-picker-actions button,
+.import-empty-state button,
 .import-clear-button,
 .import-confirm-button {
   display: inline-flex;
@@ -207,6 +208,7 @@
 }
 
 .import-picker-actions button:hover:not(:disabled),
+.import-empty-state button:hover:not(:disabled),
 .import-clear-button:hover:not(:disabled) {
   color: var(--color-text-highlight);
   background: var(--color-surface-hover);
@@ -364,6 +366,36 @@
 .import-existing-status svg {
   width: 15px;
   height: 15px;
+}
+
+.import-empty-state {
+  display: flex;
+  height: calc(100% - 30px);
+  min-height: 260px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  padding: 32px;
+  color: var(--color-text);
+  text-align: center;
+}
+
+.import-empty-state > svg {
+  width: 42px;
+  height: 42px;
+  margin-bottom: 14px;
+  color: var(--color-text);
+}
+
+.import-empty-state strong {
+  color: var(--color-text);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.import-empty-state span {
+  margin: 7px 0 16px;
+  font-size: 11px;
 }
 
 .import-workspace-footer {

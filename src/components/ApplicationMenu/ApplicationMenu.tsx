@@ -40,19 +40,12 @@ export interface ApplicationMenuModel {
     newProject: ApplicationMenuCommand;
     openProject: ApplicationMenuCommand;
     recentProjects: ApplicationMenuRecentGroup;
-    closeFocusedPanel: ApplicationMenuCommand;
     closeProject: ApplicationMenuCommand;
     saveProject: ApplicationMenuCommand;
     saveProjectAs: ApplicationMenuCommand;
     saveProjectCopy: ApplicationMenuCommand;
-    restoreProject: ApplicationMenuCommand;
-    replaceMedia: ApplicationMenuCommand;
-    linkMedia: ApplicationMenuCommand;
-    makeMediaOffline: ApplicationMenuCommand;
     importMedia: ApplicationMenuCommand;
     recentMedia: ApplicationMenuRecentGroup;
-    exportSelection: ApplicationMenuCommand;
-    quickExportSelection: ApplicationMenuCommand;
     exit: ApplicationMenuCommand;
   };
   edit: {
@@ -69,8 +62,8 @@ export interface ApplicationMenuModel {
   window: {
     source: ApplicationMenuWindowItem;
     project: ApplicationMenuWindowGroup;
+    export: ApplicationMenuWindowItem;
     subtitles: ApplicationMenuWindowItem;
-    storyboard: ApplicationMenuWindowItem;
     history: ApplicationMenuWindowItem;
   };
 }
@@ -153,7 +146,7 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
           文件(F)
         </button>
         {fileMenuOpen && (
-          <PopupMenu className="application-menu-popup" enableMnemonics>
+          <PopupMenu enableMnemonics>
             <PopupMenuItem
               mnemonic="N"
               shortcut="Ctrl+N"
@@ -175,7 +168,6 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
               mnemonic="E"
               open={recentProjectMenuOpen}
               disabled={!file.recentProjects.enabled}
-              menuClassName="application-menu-popup"
               onOpenChange={(open) => {
                 setRecentProjectMenuOpen(open);
                 if (open) {
@@ -195,14 +187,6 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
               ))}
             </PopupMenuSubmenu>
             <PopupMenuSeparator />
-            <PopupMenuItem
-              mnemonic="C"
-              shortcut="Ctrl+W"
-              disabled={!file.closeFocusedPanel.enabled}
-              onSelect={select(file.closeFocusedPanel.execute)}
-            >
-              关闭(C)
-            </PopupMenuItem>
             <PopupMenuItem
               mnemonic="P"
               shortcut="Ctrl+Shift+W"
@@ -235,34 +219,6 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
             >
               保存副本(Y)...
             </PopupMenuItem>
-            <PopupMenuItem
-              mnemonic="R"
-              disabled={!file.restoreProject.enabled}
-              onSelect={select(file.restoreProject.execute)}
-            >
-              还原(R)
-            </PopupMenuItem>
-            <PopupMenuSeparator />
-            <PopupMenuItem
-              disabled={!file.replaceMedia.enabled}
-              onSelect={select(file.replaceMedia.execute)}
-            >
-              替换素材...
-            </PopupMenuItem>
-            <PopupMenuItem
-              mnemonic="L"
-              disabled={!file.linkMedia.enabled}
-              onSelect={select(file.linkMedia.execute)}
-            >
-              链接媒体(L)...
-            </PopupMenuItem>
-            <PopupMenuItem
-              mnemonic="O"
-              disabled={!file.makeMediaOffline.enabled}
-              onSelect={select(file.makeMediaOffline.execute)}
-            >
-              设为脱机(O)...
-            </PopupMenuItem>
             <PopupMenuSeparator />
             <PopupMenuItem
               mnemonic="I"
@@ -277,7 +233,6 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
               mnemonic="F"
               open={recentImportMenuOpen}
               disabled={!file.recentMedia.enabled}
-              menuClassName="application-menu-popup"
               onOpenChange={(open) => {
                 setRecentImportMenuOpen(open);
                 if (open) {
@@ -296,23 +251,6 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
                 </PopupMenuItem>
               ))}
             </PopupMenuSubmenu>
-            <PopupMenuSeparator />
-            <PopupMenuItem
-              mnemonic="E"
-              shortcut="Ctrl+Shift+E"
-              disabled={!file.exportSelection.enabled}
-              onSelect={select(file.exportSelection.execute)}
-            >
-              导出(E)...
-            </PopupMenuItem>
-            <PopupMenuItem
-              mnemonic="W"
-              shortcut="Ctrl+Alt+Shift+E"
-              disabled={!file.quickExportSelection.enabled}
-              onSelect={select(file.quickExportSelection.execute)}
-            >
-              使用上次设置导出(W)
-            </PopupMenuItem>
             <PopupMenuSeparator />
             <PopupMenuItem
               mnemonic="X"
@@ -340,7 +278,7 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
           编辑(E)
         </button>
         {editMenuOpen && (
-          <PopupMenu className="application-menu-popup" enableMnemonics>
+          <PopupMenu enableMnemonics>
             <PopupMenuItem
               mnemonic="U"
               shortcut="Ctrl+Z"
@@ -439,7 +377,7 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
           窗口(W)
         </button>
         {windowMenuOpen && (
-          <PopupMenu className="application-menu-popup" enableMnemonics>
+          <PopupMenu enableMnemonics>
             <PopupMenuItem
               checked={windowMenu.source.checked}
               disabled={!windowMenu.source.enabled}
@@ -452,7 +390,6 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
               label="项目"
               open={projectWindowMenuOpen}
               disabled={!windowMenu.project.enabled}
-              menuClassName="application-menu-popup"
               onOpenChange={setProjectWindowMenuOpen}
             >
               {windowMenu.project.items.map((item) => (
@@ -468,20 +405,20 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
               ))}
             </PopupMenuSubmenu>
             <PopupMenuItem
+              checked={windowMenu.export.checked}
+              disabled={!windowMenu.export.enabled}
+              title={windowMenu.export.title}
+              onSelect={select(windowMenu.export.execute)}
+            >
+              {windowMenu.export.label}
+            </PopupMenuItem>
+            <PopupMenuItem
               checked={windowMenu.subtitles.checked}
               disabled={!windowMenu.subtitles.enabled}
               title={windowMenu.subtitles.title}
               onSelect={select(windowMenu.subtitles.execute)}
             >
               {windowMenu.subtitles.label}
-            </PopupMenuItem>
-            <PopupMenuItem
-              checked={windowMenu.storyboard.checked}
-              disabled={!windowMenu.storyboard.enabled}
-              title={windowMenu.storyboard.title}
-              onSelect={select(windowMenu.storyboard.execute)}
-            >
-              {windowMenu.storyboard.label}
             </PopupMenuItem>
             <PopupMenuItem
               checked={windowMenu.history.checked}

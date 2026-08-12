@@ -3,8 +3,7 @@ export type OperationKey =
   | "app.event"
   | "dragDrop.listen"
   | "dragDrop.region"
-  | "export.reveal"
-  | "export.run"
+  | "export.clips"
   | "feedback.audio"
   | "media.bindSubtitles"
   | "media.closeBackend"
@@ -19,7 +18,6 @@ export type OperationKey =
   | "preferences.update"
   | "project.autosave"
   | "project.close"
-  | "project.exportState.save"
   | "project.history"
   | "project.launchPath"
   | "project.new"
@@ -31,15 +29,11 @@ export type OperationKey =
   | "runtime.render"
   | "runtime.unhandled"
   | "storage.recentPaths"
-  | "storyboard.detect"
   | "task.cancel"
   | "task.listener"
   | "thumbnail.subtitle.cache.read"
   | "thumbnail.subtitle.cache.write"
   | "thumbnail.subtitle.generate"
-  | "thumbnail.storyboard.cache.read"
-  | "thumbnail.storyboard.cache.write"
-  | "thumbnail.storyboard.generate"
   | "thumbnail.video"
   | "window.closeListener"
   | "window.title"
@@ -107,16 +101,11 @@ const clientErrorDefinitions = {
   TASK_NOT_RUNNING: { category: "state", retryable: false },
   SUBTITLE_THUMBNAIL_REQUEST_CANCELLED: { category: "cancelled", retryable: false },
   SUBTITLE_THUMBNAIL_BROWSER_UNAVAILABLE: { category: "unsupported", retryable: false },
-  STORYBOARD_THUMBNAIL_REQUEST_CANCELLED: { category: "cancelled", retryable: false },
-  STORYBOARD_THUMBNAIL_BROWSER_UNAVAILABLE: { category: "unsupported", retryable: false },
   VIDEO_FRAME_DECODE_FAILED: { category: "media", retryable: true },
   VIDEO_FRAME_DECODE_TIMEOUT: { category: "media", retryable: true },
   SUBTITLE_THUMBNAIL_ENCODE_FAILED: { category: "runtime", retryable: true },
-  STORYBOARD_THUMBNAIL_ENCODE_FAILED: { category: "runtime", retryable: true },
   VIDEO_FRAME_DIMENSIONS_INVALID: { category: "media", retryable: false },
-  PCM_WINDOW_INVALID: { category: "validation", retryable: false },
   SUBTITLE_THUMBNAIL_CANVAS_UNAVAILABLE: { category: "platform", retryable: false },
-  STORYBOARD_THUMBNAIL_CANVAS_UNAVAILABLE: { category: "platform", retryable: false },
   PANEL_INSTANCE_CONTEXT_MISSING: { category: "state", retryable: false },
   PANEL_STATE_CONTEXT_MISSING: { category: "state", retryable: false },
   HISTORY_PANEL_SERVICES_UNAVAILABLE: { category: "state", retryable: false },
@@ -126,6 +115,8 @@ const clientErrorDefinitions = {
   PANEL_REGISTRY_CONTEXT_MISSING: { category: "state", retryable: false },
   POPUP_MENU_VALUE_DUPLICATE: { category: "validation", retryable: false },
   POPUP_MENU_GROUP_CONTEXT_MISSING: { category: "state", retryable: false },
+  EXPORT_VIRTUAL_MEDIA_SOURCE_MISSING: { category: "resource", retryable: false },
+  EXPORT_BOUND_MEDIA_PATH_MISSING: { category: "resource", retryable: false },
 } as const satisfies Record<string, { category: ErrorCategory; retryable: boolean }>;
 
 export type ClientErrorCode = keyof typeof clientErrorDefinitions;

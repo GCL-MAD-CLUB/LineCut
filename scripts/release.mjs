@@ -18,10 +18,6 @@ if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) {
   throw new Error(`Invalid semantic version: ${version}`);
 }
 
-if (version.includes("+")) {
-  throw new Error("Build metadata is not supported in LineCut release tags or installer names");
-}
-
 if (!process.env.LINECUT_PROJECT_BUILD_SECRET_V1 && !existsSync(localReleaseSecret)) {
   throw new Error(
     "Official release key is missing. Set LINECUT_PROJECT_BUILD_SECRET_V1 or restore src-tauri/.linecut-project-build-secret-v1.local.",
@@ -74,8 +70,6 @@ run(process.execPath, [
   "src-tauri/tauri.conf.json",
 ]);
 run("cargo", ["fmt", "--manifest-path", "src-tauri/Cargo.toml"]);
-run(process.execPath, [join(root, "scripts", "check-version-consistency.mjs")]);
-run(process.execPath, [join(root, "scripts", "prepare-ffmpeg-assets.mjs")]);
 run(process.execPath, [tauriCli, "build"]);
 
 const installer = join(

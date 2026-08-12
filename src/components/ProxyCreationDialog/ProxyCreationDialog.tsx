@@ -6,7 +6,7 @@ import {
   createFfmpegTaskId,
   listenToFfmpegTaskProgress,
 } from "../../ffmpegProgress";
-import { mediaDisplayName, useProjectPort } from "../../systems/ProjectSystem";
+import { useProjectPort } from "../../systems/ProjectSystem";
 import { isTauriRuntime } from "../../tauriRuntime";
 import type { ProxyResult } from "../../types";
 import { ModalDialog } from "../ModalDialog";
@@ -58,15 +58,13 @@ function labelForLocation(location: ProxyLocation, customLocation: string, cache
 export function ProxyCreationDialog() {
   const {
     preferences,
-    activeVideoId,
-    mediaItems,
     project,
     proxyDialogOpen: isProxyDialogOpen,
     proxyDialogClosed,
     proxyGenerated,
     messagePublished: setMessage,
   } = useProjectPort(
-    ["activeVideoId", "mediaItems", "preferences", "project", "proxyDialogOpen"],
+    ["preferences", "project", "proxyDialogOpen"],
     ["proxyDialogClosed", "proxyGenerated", "messagePublished"],
   );
   const cacheDir = preferences.cache_dir;
@@ -78,7 +76,6 @@ export function ProxyCreationDialog() {
   const [watermark, setWatermark] = useState<ProxyWatermark>("none");
   const [location, setLocation] = useState<ProxyLocation>("source_proxy_folder");
   const [customLocation, setCustomLocation] = useState("");
-  const projectDisplayName = mediaDisplayName(project, mediaItems, activeVideoId);
 
   async function chooseCustomLocation(previousLocation: ProxyLocation) {
     const outcome = await runOperation("proxy.generate", () =>
@@ -151,7 +148,7 @@ export function ProxyCreationDialog() {
     let proxyCancelled = false;
     const proxyTask = await createTaskProgress({
       operation: "proxy.generate",
-      label: `生成代理 ${projectDisplayName}`,
+      label: `生成代理 ${project.asset.file_name}`,
       current: 0,
       total: 1,
       listener: listenToFfmpegTaskProgress(proxyTaskId),
@@ -175,7 +172,7 @@ export function ProxyCreationDialog() {
         setMessage("代理生成已取消");
         return;
       }
-      proxyTask.fail(error, { displayName: projectDisplayName, resourceKind: "proxy" });
+      proxyTask.fail(error, { displayName: project.asset.file_name, resourceKind: "proxy" });
     }
   }
 

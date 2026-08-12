@@ -106,11 +106,6 @@ impl IClassFactory_Impl for ThumbnailProviderFactory_Impl {
     }
 }
 
-/// # Safety
-///
-/// This is a COM DLL entry point called by the Windows loader. `class_id` and `interface_id`
-/// must point to valid `GUID` values, and `result` must point to writable memory that receives
-/// the resulting interface pointer (or null on failure).
 #[no_mangle]
 pub unsafe extern "system" fn DllGetClassObject(
     class_id: *const GUID,

@@ -21,7 +21,6 @@ interface SelectDropdownProps<T extends string> {
   menuClassName?: string;
   placement?: "auto" | "bottom" | "top";
   selectedLabel?: string;
-  title?: string;
   value: T;
   onChange: (value: T) => void;
 }
@@ -50,7 +49,6 @@ export function SelectDropdown<T extends string>({
   menuClassName,
   placement = "auto",
   selectedLabel,
-  title,
   value,
   onChange,
 }: SelectDropdownProps<T>) {
@@ -75,14 +73,10 @@ export function SelectDropdown<T extends string>({
         menuHeight > 0 &&
         rect.bottom + gap + menuHeight > window.innerHeight &&
         rect.top - gap - menuHeight > 0);
-    const preferredTop = shouldOpenUp ? rect.top - gap - menuHeight : rect.bottom + gap;
-    // Keep the (possibly max-height-clamped) menu box fully inside the viewport
-    // even when neither direction has enough room for the whole list.
-    const viewportLimit = Math.max(4, window.innerHeight - menuHeight - gap);
-    const top = Math.min(Math.max(4, preferredTop), viewportLimit);
+    const top = shouldOpenUp ? rect.top - gap - menuHeight : rect.bottom + gap;
     setMenuStyle({
       left: `${rect.left}px`,
-      top: `${top}px`,
+      top: `${Math.max(4, top)}px`,
       width: `${rect.width}px`,
     });
   }
@@ -171,7 +165,6 @@ export function SelectDropdown<T extends string>({
         aria-label={ariaLabel}
         aria-expanded={open}
         disabled={disabled}
-        title={title}
         onClick={() => setOpen((current) => !current)}
       >
         <span>{resolvedSelectedLabel}</span>

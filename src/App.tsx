@@ -2,21 +2,12 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 import { Loader2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import {
-  appPanelRegistry,
-  initialAppPanelState,
-  withoutUnavailableAppPanels,
-  withAppPanelDefaults,
-} from "./appPanelRegistry";
+import { appPanelRegistry, initialAppPanelState } from "./appPanelRegistry";
 import { publishEvent, useBroadcastEvent } from "./runtime/events/react";
 import { useProjections } from "./runtime/state/StateHub";
 import {
   EDIT_CAPABILITY_PROJECTION,
   type EditCapabilityProjection,
-  EXPORT_CAPABILITY_PROJECTION,
-  type ExportCapabilityProjection,
-  MEDIA_SELECTION_CAPABILITY_PROJECTION,
-  type MediaSelectionCapabilityProjection,
 } from "./runtime/state/contracts";
 import { useStableIdentity } from "./runtime/state/react";
 import { ApplicationMenu, type ApplicationMenuModel } from "./components/ApplicationMenu";
@@ -29,20 +20,17 @@ import {
   type OpenPanelRequest,
   type PanelManagerInitialState,
 } from "./components/DockLayout";
-import { ExportWorkspace } from "./components/ExportWorkspace";
+import { exportPanelType } from "./components/ExportPanel";
 import { HistoryPanelServicesProvider, historyPanelType } from "./components/HistoryPanel";
-import { exportWorkspaceStore } from "./systems/ExportSystem";
 import { ImportWorkspace } from "./components/ImportWorkspace";
 import { mediaBinPanelType, type MediaBinPanelParams } from "./components/MediaBin";
-import { ExportConflictDialog } from "./components/ExportConflictDialog";
 import { PreferencesDialog } from "./components/PreferencesDialog";
 import { ProxyCreationDialog } from "./components/ProxyCreationDialog";
 import { SecondaryTopbar } from "./components/SecondaryTopbar";
 import { sourcePanelType } from "./components/SourceMonitor";
-import { storyboardPanelType } from "./components/StoryboardPanel";
 import { subtitlePanelType } from "./components/SubtitlePanel";
 import { cancelAllTaskProgress, useTaskProgressStatus } from "./systems/TaskSystem";
-import { runMediaImportBatchTask } from "./mediaImportTask";
+import { runMediaImportTask } from "./mediaImportTask";
 import {
   captureOperationError,
   invokeCommand,
@@ -50,23 +38,9 @@ import {
   runOperation,
   type OperationKey,
 } from "./errors";
-import {
-  getProjectWorkspaceSnapshot,
-  loadProjectStates,
-  mediaDisplayName,
-  persistExportState,
-  projectStatesLoaded,
-  pruneProjectStates,
-  useProjectPort,
-} from "./systems/ProjectSystem";
+import { getProjectWorkspaceSnapshot, useProjectPort } from "./systems/ProjectSystem";
 import { isTauriRuntime } from "./tauriRuntime";
-import type {
-  MediaBinFolder,
-  MediaBinItem,
-  OpenProjectResult,
-  Preferences,
-  RecentProjectEntry,
-} from "./types";
+import type { MediaBinFolder, MediaBinItem, OpenProjectResult, Preferences } from "./types";
 
 const projectFilters = [
   {
@@ -118,7 +92,6 @@ const recentProjectStorageKey = "linecut:recent-project-paths";
 const recentPathsLimit = 10;
 const warningDisplayDurationMs = 5000;
 const workspaceConfigSaveDelayMs = 120;
-const storyboardPanelDefaultMigrationKey = "linecut:workspace:storyboard-panel-default:v1";
 
 function fileName(path: string) {
   return path.split(/[\\/]/).pop() ?? path;
@@ -184,71 +157,6 @@ function readRecentPaths(storageKey: string) {
   }
 }
 
-/**
- * Reads the recently-opened projects list. Older builds persisted plain paths;
- * those entries are migrated in place to `{ path, projectId }` pairs with an
- * unknown (empty) document id until the project is next opened.
- */
-function readRecentProjects(): RecentProjectEntry[] {
-  try {
-    const stored = window.localStorage.getItem(recentProjectStorageKey);
-    if (!stored) {
-      return [];
-    }
-    const parsed = JSON.parse(stored);
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    if (parsed.every((entry) => typeof entry === "string")) {
-      return parsed
-        .filter((entry): entry is string => typeof entry === "string")
-        .map((path) => ({ path, projectId: "" }))
-        .slice(0, recentPathsLimit);
-    }
-    return parsed
-      .filter(
-        (entry): entry is RecentProjectEntry =>
-          typeof entry?.path === "string" && typeof entry?.projectId === "string",
-      )
-      .slice(0, recentPathsLimit);
-  } catch (error) {
-    captureOperationError("storage.recentPaths", error);
-    return [];
-  }
-}
-
-function markStoryboardPanelDefaultMigrationApplied() {
-  try {
-    window.localStorage.setItem(storyboardPanelDefaultMigrationKey, "1");
-  } catch (error) {
-    captureOperationError("workspace.save", error);
-  }
-}
-
-function storyboardPanelDefaultMigrationApplied() {
-  try {
-    return window.localStorage.getItem(storyboardPanelDefaultMigrationKey) === "1";
-  } catch (error) {
-    captureOperationError("workspace.load", error);
-    return false;
-  }
-}
-
-function restoreAppPanelDefaults(state: PanelManagerInitialState): PanelManagerInitialState {
-  if (state.instances.some((instance) => instance.id === "storyboard")) {
-    markStoryboardPanelDefaultMigrationApplied();
-    return state;
-  }
-  if (storyboardPanelDefaultMigrationApplied()) {
-    return state;
-  }
-  const restored = withAppPanelDefaults(state);
-  if (restored !== state) {
-    markStoryboardPanelDefaultMigrationApplied();
-  }
-  return restored;
-}
-
 function standaloneSubtitleItem(path: string, index: number): MediaBinItem {
   const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${index}`;
   return {
@@ -277,7 +185,6 @@ function standaloneSubtitleItem(path: string, index: number): MediaBinItem {
 const appWorkspaces = [
   { id: "import", label: "导入" },
   { id: "edit", label: "编辑" },
-  { id: "export", label: "导出" },
 ] as const;
 
 type AppWorkspace = (typeof appWorkspaces)[number]["id"];
@@ -288,27 +195,25 @@ function AppContent() {
   const focusedPanelId = usePanelManagerState((state) => state.focusedPanelId);
   const panelInstances = usePanelManagerState((state) => state.instances);
   const openPanel = usePanelManagerState((state) => state.openPanel);
-  const closePanel = usePanelManagerState((state) => state.closePanel);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [historyNavigating, setHistoryNavigating] = useState(false);
   const [recentMediaPaths, setRecentMediaPaths] = useState(() =>
     readRecentPaths(recentMediaStorageKey),
   );
-  const [recentProjects, setRecentProjects] = useState(() => readRecentProjects());
-  const [launchResolved, setLaunchResolved] = useState(false);
+  const [recentProjectPaths, setRecentProjectPaths] = useState(() =>
+    readRecentPaths(recentProjectStorageKey),
+  );
   const closingWindowRef = useRef(false);
 
   const {
     project,
-    activeVideoId,
     mediaFolders,
     mediaItems,
     projectFilePath,
-    projectId,
-    exportState,
     projectDirty,
     message,
     warnings,
+    exportResult,
     projectHistory,
     projectOpened,
     projectCreated,
@@ -321,24 +226,22 @@ function AppContent() {
     messagePublished,
     warningsReplaced,
     warningsAppended,
+    exportResultChanged,
     projectHistoryJumped,
     projectHistoryFutureDiscarded,
-    projectRestored,
     preferences,
     mediaBinReadOnly,
   } = useProjectPort(
     [
       "project",
-      "activeVideoId",
       "mediaFolders",
       "mediaItems",
       "projectFilePath",
-      "projectId",
-      "exportState",
       "projectDirty",
       "preferences",
       "message",
       "warnings",
+      "exportResult",
       "mediaBinReadOnly",
       "projectHistory",
     ],
@@ -354,9 +257,9 @@ function AppContent() {
       "messagePublished",
       "warningsReplaced",
       "warningsAppended",
+      "exportResultChanged",
       "projectHistoryJumped",
       "projectHistoryFutureDiscarded",
-      "projectRestored",
     ],
   );
   const autoSaveIntervalMinutes = preferences.auto_save_interval_minutes;
@@ -366,31 +269,17 @@ function AppContent() {
   const activeEditCapability = editCapabilities.find(
     (projection) => projection.value.active,
   )?.value;
-  const exportCapabilities = useProjections<ExportCapabilityProjection>(
-    EXPORT_CAPABILITY_PROJECTION,
-  );
-  const activeExportCapability = exportCapabilities.find(
-    (projection) => projection.value.active,
-  )?.value;
-  const mediaSelectionCapabilities = useProjections<MediaSelectionCapabilityProjection>(
-    MEDIA_SELECTION_CAPABILITY_PROJECTION,
-  );
-  const activeMediaSelectionCapability = mediaSelectionCapabilities.find(
-    (projection) => projection.value.active,
-  )?.value;
-  const activeMediaDisplayName = mediaDisplayName(project, mediaItems, activeVideoId);
   const autoSaveProjectName = projectFilePath
     ? fileName(projectFilePath).replace(/\.lcp$/i, "")
-    : (activeMediaDisplayName || mediaItems[0]?.file_name)?.replace(/\.[^.]+$/, "") || "未命名项目";
+    : (project?.asset.file_name ?? mediaItems[0]?.file_name)?.replace(/\.[^.]+$/, "") ||
+      "未命名项目";
   const autoSaveProjectNameRef = useRef(autoSaveProjectName);
   autoSaveProjectNameRef.current = autoSaveProjectName;
   const { tasks: runningTasks } = useTaskProgressStatus();
-  const isBusy = runningTasks.some((task) => task.blocking) || historyNavigating;
+  const isBusy = runningTasks.length > 0 || historyNavigating;
   const hasProject = Boolean(projectFilePath || mediaItems.length > 0 || mediaFolders.length > 0);
   const canUndo = projectHistory.active && projectHistory.cursor > 0;
   const canRedo = projectHistory.active && projectHistory.cursor < projectHistory.entries.length;
-  const canCloseFocusedPanel = activeWorkspace === "edit" && Boolean(focusedPanel) && !isBusy;
-  const canRestoreProject = hasProject && projectDirty && !isBusy;
   const editScope = activeWorkspace === "edit" ? focusedPanel : undefined;
   const mediaEditScopeActive = editScope?.type === mediaBinPanelType;
   const focusedMediaFolderId = mediaEditScopeActive
@@ -402,13 +291,6 @@ function AppContent() {
   const canDuplicate = activeEditCapability?.capabilities.duplicate ?? false;
   const canSelectAll = activeEditCapability?.capabilities.selectAll ?? false;
   const canClearSelection = activeEditCapability?.capabilities.clearSelection ?? false;
-  const canExportSelection = activeExportCapability?.capabilities.configure ?? false;
-  const canQuickExportSelection = activeExportCapability?.capabilities.quick ?? false;
-  const canReplaceSelectedMedia =
-    activeMediaSelectionCapability?.capabilities.replaceMedia ?? false;
-  const canLinkSelectedMedia = activeMediaSelectionCapability?.capabilities.linkMedia ?? false;
-  const canMakeSelectedMediaOffline =
-    activeMediaSelectionCapability?.capabilities.makeOffline ?? false;
   const activeStatusLabel =
     runningTasks.length === 1 ? runningTasks[0].label : `正在执行 ${runningTasks.length} 项操作...`;
 
@@ -471,10 +353,6 @@ function AppContent() {
         invokeCommand<string | null>("auto_save_project_snapshot", {
           projectName: autoSaveProjectNameRef.current,
           workspace: getProjectWorkspaceSnapshot(),
-          // A session that only imported media has no document id yet; an empty
-          // id keeps auto-save snapshots content-deduplicated instead of minting
-          // a fresh, ever-changing id every tick.
-          projectId: projectId ?? "",
         }),
       ).finally(() => {
         snapshotRunning = false;
@@ -482,31 +360,20 @@ function AppContent() {
     }, autoSaveIntervalMinutes * 60_000);
 
     return () => window.clearInterval(timer);
-  }, [autoSaveIntervalMinutes, hasProject, projectId]);
+  }, [autoSaveIntervalMinutes, hasProject]);
 
   useEffect(() => {
     if (!isTauriRuntime()) {
       return;
     }
 
-    void runOperation("project.launchPath", async () => {
-      // Load the per-project state store first so a launch-path project's
-      // recorded export settings are available when it is opened.
-      if (!projectStatesLoaded()) {
-        await loadProjectStates();
+    void runOperation("project.launchPath", () =>
+      invokeCommand<string | null>("take_launch_project_path"),
+    ).then((outcome) => {
+      if (outcome.status === "success" && outcome.value) {
+        return openProject(outcome.value);
       }
-      return invokeCommand<string | null>("take_launch_project_path");
-    })
-      .then((outcome) => {
-        if (outcome.status === "success" && outcome.value) {
-          return openProject(outcome.value);
-        }
-      })
-      .finally(() => {
-        // Unlock pruning only after the launch-path project (if any) is open,
-        // so the first prune cannot delete its recorded state.
-        setLaunchResolved(true);
-      });
+    });
   }, []);
 
   useEffect(() => {
@@ -520,38 +387,12 @@ function AppContent() {
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(recentProjectStorageKey, JSON.stringify(recentProjects));
+      window.localStorage.setItem(recentProjectStorageKey, JSON.stringify(recentProjectPaths));
     } catch (error) {
       captureOperationError("storage.recentPaths", error);
       // Recent projects are a convenience feature; opening and saving must still work.
     }
-  }, [recentProjects]);
-
-  // Per-project state retention mirrors the recently-opened list: a project's
-  // global state is dropped exactly when it leaves the list. The current
-  // project is always kept (its id may not be on the list yet while unsaved),
-  // and pruning waits until the launch-path project, if any, has been opened so
-  // it cannot be wiped before its recorded state is read.
-  useEffect(() => {
-    if (!isTauriRuntime() || !launchResolved) {
-      return;
-    }
-    let cancelled = false;
-    const keepProjectIds = [projectId, ...recentProjects.map((entry) => entry.projectId)].filter(
-      (id): id is string => Boolean(id),
-    );
-    void (async () => {
-      if (!projectStatesLoaded()) {
-        await loadProjectStates();
-      }
-      if (!cancelled) {
-        await pruneProjectStates(keepProjectIds);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [launchResolved, projectId, recentProjects]);
+  }, [recentProjectPaths]);
 
   useEffect(() => {
     if (!isTauriRuntime()) {
@@ -659,8 +500,7 @@ function AppContent() {
 
     const outcome = await runOperation("project.new", async () => {
       await removeBackendProject();
-      // A brand-new document gets its own identity, persisted on first save.
-      projectCreated(crypto.randomUUID());
+      projectCreated();
       setActiveWorkspace("import");
     });
     if (outcome.status === "success") {
@@ -668,17 +508,14 @@ function AppContent() {
     }
   }
 
-  function rememberRecentProject(entry: RecentProjectEntry) {
-    setRecentProjects((current) =>
-      [{ ...entry }, ...current.filter((currentEntry) => currentEntry.path !== entry.path)].slice(
-        0,
-        recentPathsLimit,
-      ),
+  function rememberRecentProject(path: string) {
+    setRecentProjectPaths((current) =>
+      Array.from(new Set([path, ...current])).slice(0, recentPathsLimit),
     );
   }
 
   function forgetRecentProject(path: string) {
-    setRecentProjects((current) => current.filter((currentEntry) => currentEntry.path !== path));
+    setRecentProjectPaths((current) => current.filter((currentPath) => currentPath !== path));
   }
 
   async function openProject(pathToOpen?: string) {
@@ -719,9 +556,9 @@ function AppContent() {
     );
     if (outcome.status === "success") {
       const result = outcome.value;
-      projectOpened(result.workspace, result.path, result.project_id);
+      projectOpened(result.workspace, result.path);
       warningsReplaced(result.warnings);
-      rememberRecentProject({ path: result.path, projectId: result.project_id });
+      rememberRecentProject(result.path);
       messagePublished(`已打开项目 ${fileName(result.path)}`);
     } else if (outcome.status === "failed") {
       if (pathToOpen) {
@@ -743,60 +580,28 @@ function AppContent() {
     }
   }
 
-  function closeFocusedPanel() {
-    if (activeWorkspace !== "edit" || !focusedPanelId) {
-      return;
-    }
-    closePanel(focusedPanelId);
-  }
-
   async function writeProject(path: string, makeCurrent: boolean) {
-    // 另存为 of an already-saved project and 保存副本 write a brand-new file, so
-    // each gets a fresh document identity. The first save of an unsaved project
-    // keeps the id minted at 新建 (the file is its first materialization); a
-    // regular save keeps the current id.
-    const isNewFile = !makeCurrent || Boolean(projectFilePath && path !== projectFilePath);
-    const targetId = isNewFile ? crypto.randomUUID() : (projectId ?? crypto.randomUUID());
-    const previousId = projectId;
     const savedPath = await invokeCommand<string>("save_project_file", {
       path,
       workspace: getProjectWorkspaceSnapshot(),
-      projectId: targetId,
     });
     if (makeCurrent) {
-      projectSaved(savedPath, targetId);
+      projectSaved(savedPath);
       messagePublished(`项目已保存到 ${fileName(savedPath)}`);
     } else {
       messagePublished(`项目副本已保存到 ${fileName(savedPath)}`);
     }
-    // A new document identity starts with the current export settings so the
-    // copy/另存为 behaves like the original. The file is already saved, so a
-    // settings-copy failure must not surface as a failed save.
-    if (previousId !== targetId && exportState) {
-      void persistExportState(targetId, exportState).catch((error) =>
-        captureOperationError("project.exportState.save", error),
-      );
-    }
-    rememberRecentProject({ path: savedPath, projectId: targetId });
+    rememberRecentProject(savedPath);
   }
 
-  function suggestedProjectName(makeCopy = false) {
-    const projectName =
-      projectFilePath ??
-      (() => {
-        const mediaName =
-          (activeMediaDisplayName || mediaItems[0]?.file_name)?.replace(/\.[^.]+$/, "") ||
-          "未命名项目";
-        return `${mediaName}.lcp`;
-      })();
-    if (!makeCopy) {
-      return projectName;
+  function suggestedProjectName() {
+    if (projectFilePath) {
+      return projectFilePath;
     }
-    const extensionMatch = projectName.match(/(\.[^./\\]+)$/);
-    if (!extensionMatch) {
-      return `${projectName}_副本.lcp`;
-    }
-    return `${projectName.slice(0, -extensionMatch[1].length)}_副本${extensionMatch[1]}`;
+    const mediaName =
+      (project?.asset.file_name ?? mediaItems[0]?.file_name)?.replace(/\.[^.]+$/, "") ||
+      "未命名项目";
+    return `${mediaName}.lcp`;
   }
 
   async function saveProjectAs(makeCurrent = true) {
@@ -807,7 +612,7 @@ function AppContent() {
     const pickOutcome = await runOperation("project.save", () =>
       save({
         title: makeCurrent ? "项目另存为" : "保存项目副本",
-        defaultPath: suggestedProjectName(!makeCurrent),
+        defaultPath: suggestedProjectName(),
         filters: projectFilters,
       }),
     );
@@ -832,33 +637,6 @@ function AppContent() {
     });
   }
 
-  async function restoreProject() {
-    if (!canRestoreProject) {
-      return;
-    }
-    const previousCursor = projectHistory.cursor;
-    setHistoryNavigating(true);
-    const restored = projectRestored();
-    if (!restored) {
-      setHistoryNavigating(false);
-      return;
-    }
-    const outcome = await runOperation("project.history", async () => {
-      if (isTauriRuntime()) {
-        await invokeCommand("sync_project_workspace", {
-          workspace: getProjectWorkspaceSnapshot(),
-        });
-      }
-    });
-    if (outcome.status !== "success") {
-      projectHistoryJumped(previousCursor);
-      setHistoryNavigating(false);
-      return;
-    }
-    messagePublished("已还原到上次保存的状态");
-    setHistoryNavigating(false);
-  }
-
   function copyInEditScope() {
     void publishEvent("edit.copy.requested", {}, identity);
   }
@@ -881,26 +659,6 @@ function AppContent() {
 
   function clearSelectionInEditScope() {
     void publishEvent("edit.clear-selection.requested", {}, identity);
-  }
-
-  function exportSelection() {
-    void publishEvent("export.configure-selection.requested", {}, identity);
-  }
-
-  function quickExportSelection() {
-    void publishEvent("export.quick-selection.requested", {}, identity);
-  }
-
-  function linkSelectedMedia() {
-    void publishEvent("media.link-selection.requested", {}, identity);
-  }
-
-  function replaceSelectedMedia() {
-    void publishEvent("media.replace-selection.requested", {}, identity);
-  }
-
-  function makeSelectedMediaOffline() {
-    void publishEvent("media.make-selection-offline.requested", {}, identity);
   }
 
   function rememberImportedMedia(paths: string[]) {
@@ -936,6 +694,7 @@ function AppContent() {
 
     const subtitlePaths = paths.filter((path) => subtitleExtensions.has(fileExtension(path)));
     const probePaths = paths.filter((path) => !subtitleExtensions.has(fileExtension(path)));
+    exportResultChanged(null);
     if (subtitlePaths.length > 0) {
       const subtitleItems = subtitlePaths.map(standaloneSubtitleItem);
       mediaItemsAdded(subtitleItems);
@@ -948,27 +707,27 @@ function AppContent() {
       rememberImportedMedia(subtitlePaths);
     }
 
-    const outcome = await runMediaImportBatchTask({
-      paths: probePaths,
-      operation: "media.import",
-      taskIdPrefix: "media-import",
-      onSuccess: (results) => {
-        if (results.length === 0) {
-          return;
-        }
-        mediaProjectsAdded(results.map((result) => result.project));
-        if (folderId) {
-          mediaItemsMovedToFolder(
-            results.map((result) => result.project.asset.id),
-            folderId,
-          );
-        }
-        warningsAppended(results.flatMap((result) => result.warnings));
-        rememberImportedMedia(results.map((result) => result.project.asset.path));
-      },
-    });
-    const loaded = outcome.results;
-    const cancelledCount = outcome.status === "cancelled" ? probePaths.length - loaded.length : 0;
+    const outcomes = await Promise.all(
+      probePaths.map((path) =>
+        runMediaImportTask({
+          path,
+          operation: "media.import",
+          taskIdPrefix: "media-import",
+          onSuccess: (result) => {
+            mediaProjectsAdded([result.project]);
+            if (folderId) {
+              mediaItemsMovedToFolder([result.project.asset.id], folderId);
+            }
+            warningsAppended(result.warnings);
+            rememberImportedMedia([result.project.asset.path]);
+          },
+        }),
+      ),
+    );
+    const loaded = outcomes.flatMap((outcome) =>
+      outcome.status === "success" ? [outcome.result] : [],
+    );
+    const cancelledCount = outcomes.filter((outcome) => outcome.status === "cancelled").length;
 
     const importedCount = loaded.length + subtitlePaths.length;
     const resultParts = [
@@ -1040,12 +799,6 @@ function AppContent() {
     return "handled" as const;
   });
 
-  useBroadcastEvent(identity, "export.requested", async ({ payload }) => {
-    exportWorkspaceStore.getState().setSource(payload.source);
-    setActiveWorkspace("export");
-    return "handled" as const;
-  });
-
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
       if (event.repeat) {
@@ -1074,18 +827,6 @@ function AppContent() {
       if (key === "q" && !event.shiftKey && !event.altKey) {
         event.preventDefault();
         void exitApplication();
-        return;
-      }
-      if (key === "e" && event.shiftKey) {
-        const canRun = event.altKey ? canQuickExportSelection : canExportSelection;
-        if (canRun) {
-          event.preventDefault();
-          if (event.altKey) {
-            quickExportSelection();
-          } else {
-            exportSelection();
-          }
-        }
         return;
       }
       if (key === "z" && !event.altKey && !isEditableKeyboardTarget(event.target)) {
@@ -1138,9 +879,6 @@ function AppContent() {
       if (key === "i" && !event.shiftKey && !event.altKey) {
         action = () => importMedia(undefined, focusedMediaFolderId);
       }
-      if (key === "w" && !event.shiftKey && !event.altKey && canCloseFocusedPanel) {
-        action = closeFocusedPanel;
-      }
       if (key === "w" && event.shiftKey && !event.altKey && hasProject) action = closeProject;
       if (key === "s" && !event.shiftKey && !event.altKey && hasProject) action = saveProject;
       if (key === "s" && event.shiftKey && !event.altKey && hasProject) {
@@ -1163,7 +901,6 @@ function AppContent() {
   const workspaceContent: Record<AppWorkspace, ReactNode> = {
     import: <ImportWorkspace onImportCompleted={() => setActiveWorkspace("edit")} />,
     edit: <DockLayout />,
-    export: <ExportWorkspace />,
   };
 
   function showPanel<Params>(request: OpenPanelRequest<Params>) {
@@ -1226,17 +963,13 @@ function AppContent() {
       newProject: { enabled: !isBusy, execute: newProject },
       openProject: { enabled: !isBusy, execute: openProject },
       recentProjects: {
-        enabled: recentProjects.length > 0 && !isBusy,
-        items: recentProjects.map((entry) => ({
-          id: entry.path,
-          label: fileName(entry.path),
-          title: entry.path,
-          execute: () => openProject(entry.path),
+        enabled: recentProjectPaths.length > 0 && !isBusy,
+        items: recentProjectPaths.map((path) => ({
+          id: path,
+          label: fileName(path),
+          title: path,
+          execute: () => openProject(path),
         })),
-      },
-      closeFocusedPanel: {
-        enabled: canCloseFocusedPanel,
-        execute: closeFocusedPanel,
       },
       closeProject: { enabled: hasProject && !isBusy, execute: closeProject },
       saveProject: {
@@ -1251,22 +984,6 @@ function AppContent() {
         enabled: hasProject && !isBusy,
         execute: () => saveProjectAs(false),
       },
-      restoreProject: {
-        enabled: canRestoreProject,
-        execute: restoreProject,
-      },
-      replaceMedia: {
-        enabled: canReplaceSelectedMedia,
-        execute: replaceSelectedMedia,
-      },
-      linkMedia: {
-        enabled: canLinkSelectedMedia,
-        execute: linkSelectedMedia,
-      },
-      makeMediaOffline: {
-        enabled: canMakeSelectedMediaOffline,
-        execute: makeSelectedMediaOffline,
-      },
       importMedia: {
         enabled: !isMediaBinReadOnly && !isBusy,
         execute: () => importMedia(undefined, focusedMediaFolderId),
@@ -1279,14 +996,6 @@ function AppContent() {
           title: path,
           execute: () => importMedia([path], focusedMediaFolderId),
         })),
-      },
-      exportSelection: {
-        enabled: canExportSelection,
-        execute: exportSelection,
-      },
-      quickExportSelection: {
-        enabled: canQuickExportSelection,
-        execute: quickExportSelection,
       },
       exit: { enabled: true, execute: exitApplication },
     },
@@ -1319,26 +1028,26 @@ function AppContent() {
         enabled: projectWindowItems.length > 0,
         items: projectWindowItems,
       },
+      export: {
+        id: "export",
+        label: "导出设置",
+        checked: Boolean(panelInstances.export),
+        enabled: true,
+        execute: () => showSingletonPanel("export", exportPanelType, {}, "right"),
+      },
       subtitles: {
         id: "subtitles",
-        label: "字幕",
+        label: "字幕轨",
         checked: Boolean(panelInstances.subtitles),
         enabled: true,
         execute: () => showSingletonPanel("subtitles", subtitlePanelType, {}, "middle"),
-      },
-      storyboard: {
-        id: "storyboard",
-        label: "分镜",
-        checked: Boolean(panelInstances.storyboard),
-        enabled: true,
-        execute: () => showSingletonPanel("storyboard", storyboardPanelType, {}, "middle"),
       },
       history: {
         id: "history",
         label: "历史记录",
         checked: Boolean(panelInstances.history),
         enabled: true,
-        execute: () => showSingletonPanel("history", historyPanelType, {}, "middle"),
+        execute: () => showSingletonPanel("history", historyPanelType, {}, "right"),
       },
     },
   };
@@ -1380,20 +1089,25 @@ function AppContent() {
             )}
           </span>
           {warnings.length > 0 && <span>{warnings.length} 条导入提示</span>}
+          {exportResult && <span>导出结果已生成</span>}
         </footer>
 
-        {warnings.length > 0 && (
+        {(warnings.length > 0 || exportResult) && (
           <aside className="event-drawer">
             {warnings.map((warning) => (
               <div key={`${warning.code}:${warning.message}`} className="event warning">
                 {warning.message}
               </div>
             ))}
+            {exportResult?.log.map((item) => (
+              <div key={`${item.code}:${item.message}`} className="event">
+                {item.message}
+              </div>
+            ))}
           </aside>
         )}
 
         <ProxyCreationDialog />
-        <ExportConflictDialog />
         <PreferencesDialog open={preferencesOpen} onClose={() => setPreferencesOpen(false)} />
       </div>
     </HistoryPanelServicesProvider>
@@ -1482,13 +1196,11 @@ function RestoredPanelManager() {
       if (!mounted) {
         return;
       }
-      const availableState =
-        outcome.status === "success" && outcome.value
-          ? withoutUnavailableAppPanels(outcome.value)
-          : null;
       const restoredState =
-        availableState && availableState.instances.length > 0
-          ? restoreAppPanelDefaults(availableState)
+        outcome.status === "success" &&
+        outcome.value &&
+        outcome.value.instances.every((instance) => appPanelRegistry.get(instance.type))
+          ? outcome.value
           : initialAppPanelState;
       setInitialState(restoredState);
     });
