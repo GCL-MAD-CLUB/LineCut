@@ -5,79 +5,79 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  NODE_VERSION: 22.18.0
 
 jobs:
-  format:
-    name: Format check
-    runs-on: ubuntu-latest
+  quality:
+    name: Format, architecture, and frontend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          node-version: 22
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
-      - run: npm ci
+      - name: Install frontend dependencies
+        run: npm ci
 
-      # TS/TSX/JS/JSON/CSS/HTML/Markdown/YAML formatting
-      - name: Prettier check
-        run: npx prettier --check .
+      - name: Check formatting
+        run: npm run format:check
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
+      - name: Check release version consistency
+        run: npm run check:versions
 
-      - name: Rust format check (main crate)
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-
-      - name: Rust format check (thumbnail provider)
-        run: cargo fmt --manifest-path src-tauri/thumbnail-provider/Cargo.toml -- --check
-
-  frontend:
-    name: Frontend (TS / TSX)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - run: npm ci
-
-      # Custom boundary checks + TypeScript type check + production build
       - name: Check error boundaries
         run: npm run check:errors
 
       - name: Check system architecture
         run: npm run check:architecture
 
-      - name: Type check and build
-        run: tsc && vite build
+      - name: Type-check and build frontend
+        run: npx tsc && npx vite build
 
-      # The Rust job needs ../dist to exist for tauri::generate_context!
-      - uses: actions/upload-artifact@v4
+      - name: Upload frontend build
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: frontend-dist
           path: dist
+          if-no-files-found: error
           retention-days: 1
 
   rust:
-    name: Rust (clippy)
-    runs-on: windows-latest
-    needs: frontend
+    name: Rust lint and tests
+    runs-on: windows-2025
+    needs: quality
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
-      - uses: actions/download-artifact@v4
+      - name: Download frontend build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: frontend-dist
           path: dist
 
-      # externalBin sidecars are gitignored, but tauri-build requires the paths to exist
-      # at compile time. Empty placeholders are enough for cargo clippy.
       - name: Create placeholder sidecar binaries
         shell: pwsh
         run: |
@@ -85,18 +85,44 @@ jobs:
           New-Item -ItemType File -Force src-tauri/bin/ffmpeg-x86_64-pc-windows-msvc.exe | Out-Null
           New-Item -ItemType File -Force src-tauri/bin/ffprobe-x86_64-pc-windows-msvc.exe | Out-Null
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
-          components: clippy
+          toolchain: 1.96.0
+          components: clippy,rustfmt
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: |
             src-tauri
             src-tauri/thumbnail-provider
 
+      - name: Check Rust formatting
+        run: npm run format:rust:check
+
       - name: Clippy (main crate)
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
 
+      - name: Test (main crate)
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+
       - name: Clippy (thumbnail provider)
         run: cargo clippy --manifest-path src-tauri/thumbnail-provider/Cargo.toml --all-targets --locked -- -D warnings
+
+      - name: Test (thumbnail provider)
+        run: cargo test --manifest-path src-tauri/thumbnail-provider/Cargo.toml --locked
+
+  required:
+    name: CI required
+    if: ${{ always() }}
+    needs: [quality, rust]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require successful jobs
+        env:
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          RUST_RESULT: ${{ needs.rust.result }}
+        run: |
+          test "$QUALITY_RESULT" = success
+          test "$RUST_RESULT" = success

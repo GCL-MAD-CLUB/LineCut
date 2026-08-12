@@ -1,0 +1,55 @@
+name: Bug 报告
+description: 报告可复现的 LineCut 问题
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: 感谢反馈。请先搜索现有 Issue，并移除项目文件中的隐私或敏感内容。
+  - type: input
+    id: version
+    attributes:
+      label: LineCut 版本
+      description: 可在 GitHub Release 或应用信息中找到。
+      placeholder: 例如 0.3.0-alpha.2
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows 版本
+      placeholder: 例如 Windows 11 24H2
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 实际发生了什么？你原本期望什么？
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开……
+        2. 导入……
+        3. 点击……
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志或截图
+      description: 可直接拖入附件；请先删除媒体路径、项目内容等敏感信息。
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已搜索现有 Issue，未找到相同问题。
+          required: true
+        - label: 我已移除日志和附件中的敏感信息。
+          required: true

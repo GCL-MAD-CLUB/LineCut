@@ -4,9 +4,10 @@ version = "0.2.0"
 description = "Subtitle indexing and media organization tool"
 authors = ["Kotodama"]
 license = "Apache-2.0"
-repository = ""
+repository = "https://github.com/GCL-MAD-CLUB/LineCut"
+homepage = "https://github.com/GCL-MAD-CLUB/LineCut"
 edition = "2021"
-rust-version = "1.77"
+rust-version = "1.85"
 
 [lib]
 name = "linecut_lib"

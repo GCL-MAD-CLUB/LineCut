@@ -7,13 +7,14 @@
 <p align="center">从字幕出发，快速找到并整理视频内容。</p>
 
 <p align="center">
-  <a href="https://github.com/Inexplicable-YL/be/releases"><img src="https://img.shields.io/github/v/release/Inexplicable-YL/be?display_name=tag&label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC" alt="最新版本" /></a>
+  <a href="https://github.com/GCL-MAD-CLUB/LineCut/releases"><img src="https://img.shields.io/github/v/release/GCL-MAD-CLUB/LineCut?display_name=tag&label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC" alt="最新版本" /></a>
+  <a href="https://github.com/GCL-MAD-CLUB/LineCut/actions/workflows/ci.yml"><img src="https://github.com/GCL-MAD-CLUB/LineCut/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <img src="https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows%2010%2F11-0078D4" alt="支持 Windows 10 和 Windows 11" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/%E5%BC%80%E6%BA%90%E8%AE%B8%E5%8F%AF-Apache--2.0-6A4C93" alt="Apache-2.0 许可证" /></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/Inexplicable-YL/be/releases/latest">下载最新版</a>
+  <a href="https://github.com/GCL-MAD-CLUB/LineCut/releases/latest">下载最新版</a>
   ·
   <a href="#快速开始">快速开始</a>
   ·
@@ -38,7 +39,7 @@ LineCut 是一款 Windows 桌面工具，帮助你从字幕或台词出发，在
 
 ## 快速开始
 
-1. 从 [Releases](https://github.com/Inexplicable-YL/be/releases/latest) 下载并安装最新版。
+1. 从 [Releases](https://github.com/GCL-MAD-CLUB/LineCut/releases/latest) 下载并安装最新版。
 2. 首次安装时选择“内置 FFmpeg（推荐）”；如电脑已有 FFmpeg，也可指定现有路径。
 3. 启动 LineCut，新建项目后导入视频、音频或字幕文件。
 4. 在“字幕”面板搜索台词，使用过滤、星级、旗标和标签整理条目，并在源预览中确认内容。
@@ -112,7 +113,9 @@ LineCut 的媒体分析、预览和字幕处理均在本机完成。你的源视
 
 ## 反馈与许可
 
-欢迎通过 [GitHub Issues](https://github.com/Inexplicable-YL/be/issues) 提交问题、建议或使用反馈。
+欢迎通过 [GitHub Issues](https://github.com/GCL-MAD-CLUB/LineCut/issues) 提交问题、建议或使用反馈。
+
+如果你希望参与开发，请先阅读 [贡献指南](CONTRIBUTING.md)。安全漏洞请按照 [安全政策](SECURITY.md) 私下报告；版本发布与维护流程见 [发布指南](docs/releasing.md)。
 
 LineCut 应用代码采用 [Apache License 2.0](LICENSE) 发布。安装包中可选内置的 FFmpeg / FFprobe 及其许可信息请见 [第三方声明](THIRD_PARTY_NOTICES.md)。
 
