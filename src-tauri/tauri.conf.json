@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "LineCut",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "identifier": "com.linecut.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -25,23 +25,32 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["**"]
+        "scope": [
+          "**"
+        ]
       }
     }
   },
   "bundle": {
     "active": true,
     "targets": "nsis",
-    "icon": ["icons/icon.ico"],
+    "icon": [
+      "icons/icon.ico"
+    ],
     "fileAssociations": [
       {
-        "ext": ["lcp"],
+        "ext": [
+          "lcp"
+        ],
         "name": "LineCut.Project",
         "description": "LineCut Project",
         "role": "Editor"
       }
     ],
-    "externalBin": ["bin/ffmpeg", "bin/ffprobe"],
+    "externalBin": [
+      "bin/ffmpeg",
+      "bin/ffprobe"
+    ],
     "resources": {
       "../LICENSE": "LICENSE",
       "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
@@ -52,7 +61,9 @@
       "nsis": {
         "installerHooks": "./windows/ffmpeg-options.nsh",
         "template": "./windows/installer.nsi",
-        "languages": ["SimpChinese"]
+        "languages": [
+          "SimpChinese"
+        ]
       }
     }
   }
