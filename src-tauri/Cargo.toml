@@ -31,13 +31,13 @@ ort = { version = "=2.0.0-rc.9", default-features = false, features = [
   "load-dynamic",
   "ndarray",
 ] }
-ort-sys = { version = "=2.0.0-rc.9", default-features = false }
+ort-sys = { version = "=2.0.0-rc.10", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
-time = "=0.3.47"
+time = "=0.3.55"
 tokio = { version = "1", features = ["process", "io-util", "time"] }
 tracing = "0.1"
 tracing-appender = "0.2"
