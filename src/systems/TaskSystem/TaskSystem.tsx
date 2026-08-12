@@ -8,6 +8,8 @@ export interface CreateTaskProgressOptions {
   label: string;
   current: number;
   total: number;
+  /** Non-blocking tasks remain visible but do not lock normal application commands. */
+  blocking?: boolean;
   listener?: TaskProgressListener;
   on_cancel?: () => void | Promise<void>;
 }
@@ -36,6 +38,7 @@ export interface TaskProgressView {
   current: number;
   total: number;
   percent: number;
+  blocking: boolean;
   cancellable: boolean;
   isCancelling: boolean;
   cancel: () => Promise<void>;
@@ -53,6 +56,7 @@ interface TaskProgressRecord {
   label: string;
   current: number;
   total: number;
+  blocking: boolean;
   is_cancelling: boolean;
   listener_cleanup?: TaskProgressListenerCleanup;
   on_cancel?: () => void | Promise<void>;
@@ -91,6 +95,7 @@ function toViewTask(task: TaskProgressRecord): TaskProgressView {
     current: task.current,
     total: task.total,
     percent: taskPercent(task),
+    blocking: task.blocking,
     cancellable: Boolean(task.on_cancel),
     isCancelling: task.is_cancelling,
     cancel: () => runTaskCancel(task),
@@ -177,6 +182,7 @@ export async function createTaskProgress({
   label,
   current,
   total,
+  blocking = true,
   listener,
   on_cancel,
 }: CreateTaskProgressOptions): Promise<TaskProgressHandle> {
@@ -188,6 +194,7 @@ export async function createTaskProgress({
     label,
     current: clamp(Number.isFinite(current) ? current : 0, 0, normalizedTotal),
     total: normalizedTotal,
+    blocking,
     is_cancelling: false,
     on_cancel,
   };
@@ -279,14 +286,15 @@ export function TaskProgress({ children }: TaskProgressProps) {
 
   if (tasks.length === 1) {
     const task = tasks[0];
-    const percent = Math.round(taskPercent(task));
+    const fillPercent = taskPercent(task);
+    const percent = Math.round(fillPercent);
     return (
       <>
         <div className="topbar-progress" title={`${task.label} ${percent}%`}>
           <span>{task.label}</span>
           <div className="topbar-progress-row">
             <div className="topbar-progress-track">
-              <div className="topbar-progress-fill" style={{ width: `${percent}%` }} />
+              <div className="topbar-progress-fill" style={{ width: `${fillPercent}%` }} />
             </div>
             {task.on_cancel && (
               <button
@@ -314,14 +322,15 @@ export function TaskProgress({ children }: TaskProgressProps) {
           style={{ gridTemplateRows: `repeat(${tasks.length}, minmax(0, 1fr))` }}
         >
           {tasks.map((task) => {
-            const percent = Math.round(taskPercent(task));
+            const fillPercent = taskPercent(task);
+            const percent = Math.round(fillPercent);
             return (
               <div
                 key={task.id}
                 className="topbar-progress-track"
                 title={`${task.label} ${percent}%`}
               >
-                <div className="topbar-progress-fill" style={{ width: `${percent}%` }} />
+                <div className="topbar-progress-fill" style={{ width: `${fillPercent}%` }} />
               </div>
             );
           })}

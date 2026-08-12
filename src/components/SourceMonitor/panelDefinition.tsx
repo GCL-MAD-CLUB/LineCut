@@ -1,5 +1,5 @@
 import { useShallow } from "zustand/shallow";
-import { isMediaItemEnabled, useProjectPort } from "../../systems/ProjectSystem";
+import { isMediaItemEnabled, mediaDisplayName, useProjectPort } from "../../systems/ProjectSystem";
 import { definePanel, type PanelMenuEntryDefinition } from "../DockLayout";
 import { SourceMonitor } from "./SourceMonitor";
 import { useSourceMonitorState } from "./sourceMonitorState";
@@ -10,8 +10,11 @@ export const sourcePanelDefinition = definePanel({
   type: sourcePanelType,
   Component: SourceMonitor,
   useTitle: () => {
-    const { project } = useProjectPort(["project"], []);
-    return `源：${project?.asset.file_name ?? "（无剪辑）"}`;
+    const { activeVideoId, mediaItems, project } = useProjectPort(
+      ["activeVideoId", "mediaItems", "project"],
+      [],
+    );
+    return `源：${mediaDisplayName(project, mediaItems, activeVideoId) || "（无剪辑）"}`;
   },
   useMenuItems: () => {
     const { activeVideoId, mediaItems, activeVideoChanged, sourcePreviewCleared } = useProjectPort(

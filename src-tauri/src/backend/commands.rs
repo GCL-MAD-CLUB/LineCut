@@ -115,10 +115,11 @@ pub(crate) async fn cancel_task(
 pub(crate) async fn save_project_file(
     path: String,
     workspace: ProjectWorkspace,
+    project_id: String,
 ) -> CommandResult<String> {
     let normalized_path = normalize_project_path(&path)?;
     let output_path = normalized_path.clone();
-    tokio::task::spawn_blocking(move || write_project_file(&output_path, workspace))
+    tokio::task::spawn_blocking(move || write_project_file(&output_path, workspace, &project_id))
         .await
         .map_err(|error| {
             app_error(
@@ -133,6 +134,7 @@ pub(crate) async fn save_project_file(
 pub(crate) async fn auto_save_project_snapshot(
     project_name: String,
     workspace: ProjectWorkspace,
+    project_id: String,
     state: tauri::State<'_, AppState>,
 ) -> CommandResult<Option<String>> {
     let (cache_root, max_snapshots) = {
@@ -148,8 +150,14 @@ pub(crate) async fn auto_save_project_snapshot(
         )
     };
     tokio::task::spawn_blocking(move || {
-        write_auto_save_snapshot(&cache_root, &project_name, workspace, max_snapshots)
-            .map(|path| path.map(|path| path.to_string_lossy().into_owned()))
+        write_auto_save_snapshot(
+            &cache_root,
+            &project_name,
+            workspace,
+            &project_id,
+            max_snapshots,
+        )
+        .map(|path| path.map(|path| path.to_string_lossy().into_owned()))
     })
     .await
     .map_err(|error| {
@@ -167,14 +175,15 @@ pub(crate) async fn open_project_file(
 ) -> CommandResult<OpenProjectResult> {
     let input_path = PathBuf::from(path);
     let read_path = input_path.clone();
-    let mut workspace = tokio::task::spawn_blocking(move || read_project_file(&read_path))
-        .await
-        .map_err(|error| {
-            app_error(
-                ErrorCode::BlockingTaskFailed,
-                format!("Project open task failed: {error}"),
-            )
-        })??;
+    let (mut workspace, project_id, migrated) =
+        tokio::task::spawn_blocking(move || read_project_file(&read_path))
+            .await
+            .map_err(|error| {
+                app_error(
+                    ErrorCode::BlockingTaskFailed,
+                    format!("Project open task failed: {error}"),
+                )
+            })??;
     let mut warnings = Vec::new();
 
     for project in &mut workspace.projects {
@@ -292,6 +301,31 @@ pub(crate) async fn open_project_file(
         }
     }
 
+    // A legacy file's id was generated in memory; write it back so the id stays
+    // stable across opens (and the file's recorded per-project state keeps its
+    // identity). Best-effort: a read-only file must still open.
+    if migrated {
+        let write_path = input_path.clone();
+        let write_workspace = workspace.clone();
+        let write_project_id = project_id.clone();
+        if let Err(error) = tokio::task::spawn_blocking(move || {
+            write_project_file(&write_path, write_workspace, &write_project_id)
+        })
+        .await
+        .map_err(|error| {
+            app_error(
+                ErrorCode::BlockingTaskFailed,
+                format!("Project id backfill task failed: {error}"),
+            )
+        })? {
+            warnings.push(UserNotice::warning_with_detail(
+                "PROJECT_ID_BACKFILL_FAILED",
+                "无法将项目标识写回旧项目文件，打开后首次保存将固定该标识",
+                error.detail(),
+            ));
+        }
+    }
+
     let mut projects = state.projects.lock().map_err(|_| {
         app_error(
             ErrorCode::ProjectStateUnavailable,
@@ -309,6 +343,7 @@ pub(crate) async fn open_project_file(
 
     Ok(OpenProjectResult {
         path: input_path.to_string_lossy().into_owned(),
+        project_id,
         workspace,
         warnings,
     })
@@ -359,6 +394,76 @@ pub(crate) fn close_project(
 #[tauri::command]
 pub(crate) fn path_is_file(path: String) -> bool {
     Path::new(&path).is_file()
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum KnownFolderKind {
+    Desktop,
+    Documents,
+    User,
+    Videos,
+    Pictures,
+}
+
+/// Resolves a well-known Windows folder to an absolute path for the 导出到
+/// dropdown. Non-Windows platforms (the codebase still compiles cross-platform)
+/// fall back to HOME-relative paths.
+#[tauri::command]
+pub(crate) fn resolve_known_folder(kind: KnownFolderKind) -> CommandResult<String> {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::core::PWSTR;
+        use windows::Win32::System::Com::CoTaskMemFree;
+        use windows::Win32::UI::Shell::{
+            FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Pictures, FOLDERID_Profile,
+            FOLDERID_Videos, SHGetKnownFolderPath, KNOWN_FOLDER_FLAG,
+        };
+
+        let id = match kind {
+            KnownFolderKind::Desktop => &FOLDERID_Desktop,
+            KnownFolderKind::Documents => &FOLDERID_Documents,
+            KnownFolderKind::User => &FOLDERID_Profile,
+            KnownFolderKind::Videos => &FOLDERID_Videos,
+            KnownFolderKind::Pictures => &FOLDERID_Pictures,
+        };
+        // The returned PWSTR is CoTaskMemAlloc'd and must be freed below.
+        let path: PWSTR =
+            unsafe { SHGetKnownFolderPath(id, KNOWN_FOLDER_FLAG(0), None) }.map_err(|error| {
+                app_error(
+                    ErrorCode::ExportDestinationResolveFailed,
+                    format!("Failed to resolve known folder {kind:?}: {error}"),
+                )
+            })?;
+        // The CoTaskMemAlloc'd buffer must be freed on every return path, including
+        // when the path cannot be decoded to a UTF-8 string.
+        let result = match unsafe { path.to_string() } {
+            Ok(value) => value,
+            Err(error) => {
+                unsafe { CoTaskMemFree(Some(path.as_ptr().cast())) };
+                return Err(app_error(
+                    ErrorCode::ExportDestinationResolveFailed,
+                    format!("Invalid known folder path: {error}"),
+                ));
+            }
+        };
+        unsafe { CoTaskMemFree(Some(path.as_ptr().cast())) }
+        Ok(result)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let base = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        let dir = match kind {
+            KnownFolderKind::Desktop => base.join("Desktop"),
+            KnownFolderKind::Documents => base.join("Documents"),
+            KnownFolderKind::User => base,
+            KnownFolderKind::Videos => base.join("Videos"),
+            KnownFolderKind::Pictures => base.join("Pictures"),
+        };
+        Ok(dir.to_string_lossy().into_owned())
+    }
 }
 
 #[tauri::command]
@@ -813,11 +918,13 @@ pub(crate) async fn generate_proxy(
                 app: &app,
                 state: state.inner(),
                 task_id: &task_id,
+                watchdog_label: format!("proxy -> {}", proxy_path.display()),
                 cancel: task.cancel_token(),
                 base_progress: 0.0,
                 progress_span: 1.0,
                 duration_us: project.asset.duration_us,
                 cleanup_paths: vec![proxy_path.clone()],
+                progress_callback: None,
             },
         )
         .await?;
@@ -893,240 +1000,6 @@ pub(crate) async fn add_external_subtitles(
         tracks: new_tracks,
         cues: new_cues,
         warnings,
-    })
-}
-
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn export_clips(
-    asset_id: String,
-    track_asset_id: String,
-    track_id: String,
-    cue_ids: Vec<String>,
-    options: ExportOptions,
-    bound_media: Vec<ExportBoundMedia>,
-    include_source_audio: bool,
-    task_id: String,
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
-) -> CommandResult<ExportResult> {
-    let task = register_task(&task_id, state.inner())?;
-    let preferences = preferences_clone(&state)?;
-    let project = project_clone(&asset_id, &state)?;
-    let track_project = project_clone(&track_asset_id, &state)?;
-    let track_cues = track_project.cues.get(&track_id).ok_or_else(|| {
-        app_error(
-            ErrorCode::ExportTrackNotFound,
-            format!("Subtitle track was not found for export: {track_id}"),
-        )
-    })?;
-    let selected_ids = cue_ids.into_iter().collect::<HashSet<_>>();
-    let selected_cues = track_cues
-        .iter()
-        .filter(|cue| selected_ids.contains(&cue.id))
-        .cloned()
-        .collect::<Vec<_>>();
-
-    if selected_cues.is_empty() {
-        return Err(app_error(
-            ErrorCode::ExportSelectionEmpty,
-            "No subtitle cues were selected for export",
-        ));
-    }
-
-    let ranges = build_clip_plan(
-        &selected_cues,
-        options.head_padding_ms * 1000,
-        options.tail_padding_ms * 1000,
-        options.merge_gap_ms * 1000,
-        project.asset.duration_us,
-    );
-
-    let output_dir = if options.output_dir.trim().is_empty() {
-        configured_export_root(&preferences)
-            .join(&project.asset.id)
-            .join(now_millis().to_string())
-    } else if options.output_dir_explicit {
-        PathBuf::from(options.output_dir.trim())
-    } else {
-        PathBuf::from(options.output_dir.trim())
-            .join(&project.asset.id)
-            .join(now_millis().to_string())
-    };
-    let output_dir_to_create = output_dir.clone();
-    spawn_blocking_cancellable(task.cancel_token(), "create export directory", move |_| {
-        fs::create_dir_all(&output_dir_to_create).map_err(|error| {
-            app_error(
-                ErrorCode::ExportWriteFailed,
-                format!(
-                    "Failed to create export directory {}: {error}",
-                    output_dir_to_create.display()
-                ),
-            )
-        })
-    })
-    .await?;
-
-    let mut log = Vec::new();
-    let stem = safe_component(
-        &Path::new(&project.asset.path)
-            .file_stem()
-            .map(|value| value.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "clip".to_string()),
-    );
-    let ext = match options.mode {
-        ExportMode::FastCopy => "mkv",
-        ExportMode::PreciseEncode => "mp4",
-    };
-    let part_dir = match options.layout {
-        ExportLayout::Individual => output_dir.clone(),
-        ExportLayout::Merged => output_dir.join("_parts"),
-    };
-    let part_dir_to_create = part_dir.clone();
-    spawn_blocking_cancellable(
-        task.cancel_token(),
-        "create export segment directory",
-        move |_| {
-            fs::create_dir_all(&part_dir_to_create).map_err(|error| {
-                app_error(
-                    ErrorCode::ExportWriteFailed,
-                    format!(
-                        "Failed to create export segment directory {}: {error}",
-                        part_dir_to_create.display()
-                    ),
-                )
-            })
-        },
-    )
-    .await?;
-
-    let cue_lookup = track_cues
-        .iter()
-        .map(|cue| (cue.id.as_str(), cue))
-        .collect::<HashMap<_, _>>();
-    let name_rule = effective_export_name_rule(options.export_name_rule, &options.layout);
-    let mut used_names = HashSet::new();
-    let mut part_files = Vec::new();
-    let is_merged_layout = matches!(options.layout, ExportLayout::Merged);
-    let part_progress_total = if is_merged_layout { 0.92 } else { 1.0 };
-    let mut task_cleanup_paths = if is_merged_layout {
-        vec![part_dir.clone()]
-    } else {
-        Vec::new()
-    };
-    emit_ffmpeg_progress(&app, &task_id, 0.0);
-    for range in &ranges {
-        task.check_cancelled()?;
-        let file_stem = export_file_stem(
-            name_rule,
-            &stem,
-            range,
-            &cue_lookup,
-            &options.dialogue_line_indexes,
-        );
-        let output_path = unique_output_path(&part_dir, &file_stem, ext, &mut used_names);
-        task_cleanup_paths.push(output_path.clone());
-        export_one_range(
-            &project.asset.path,
-            range,
-            &options.mode,
-            include_source_audio && project.asset.audio_stream_index.is_some(),
-            &bound_media,
-            &output_path,
-            &preferences,
-            Some(FfmpegProgressContext {
-                app: &app,
-                state: state.inner(),
-                task_id: &task_id,
-                cancel: task.cancel_token(),
-                base_progress: range.index as f64 * part_progress_total
-                    / ranges.len().max(1) as f64,
-                progress_span: part_progress_total / ranges.len().max(1) as f64,
-                duration_us: range.end_us - range.start_us,
-                cleanup_paths: task_cleanup_paths.clone(),
-            }),
-        )
-        .await?;
-        log.push(UserNotice::info(
-            "EXPORT_CLIP_COMPLETED",
-            format!(
-                "已导出片段 {}：{} - {}",
-                range.index + 1,
-                display_time(range.start_us),
-                display_time(range.end_us)
-            ),
-        ));
-        part_files.push(output_path);
-    }
-
-    let files = match options.layout {
-        ExportLayout::Individual => part_files
-            .iter()
-            .map(|path| path.to_string_lossy().into_owned())
-            .collect::<Vec<_>>(),
-        ExportLayout::Merged => {
-            emit_ffmpeg_progress(&app, &task_id, 0.92);
-            let merged_stem = if ranges.len() == 1 {
-                export_file_stem(
-                    name_rule,
-                    &stem,
-                    &ranges[0],
-                    &cue_lookup,
-                    &options.dialogue_line_indexes,
-                )
-            } else {
-                let start_us = ranges.first().map(|range| range.start_us).unwrap_or(0);
-                let end_us = ranges.last().map(|range| range.end_us).unwrap_or(start_us);
-                safe_component(&format!(
-                    "{}_{}-{}_merged",
-                    stem,
-                    file_time_label(start_us),
-                    file_time_label(end_us)
-                ))
-            };
-            let mut used_merged_names = HashSet::new();
-            let merged = unique_output_path(&output_dir, &merged_stem, ext, &mut used_merged_names);
-            task_cleanup_paths.push(merged.clone());
-            concat_segments(
-                &part_files,
-                &merged,
-                &preferences,
-                Some(FfmpegProgressContext {
-                    app: &app,
-                    state: state.inner(),
-                    task_id: &task_id,
-                    cancel: task.cancel_token(),
-                    base_progress: 0.92,
-                    progress_span: 0.08,
-                    duration_us: ranges
-                        .iter()
-                        .map(|range| range.end_us - range.start_us)
-                        .sum(),
-                    cleanup_paths: task_cleanup_paths.clone(),
-                }),
-            )
-            .await?;
-            log.push(UserNotice::info(
-                "EXPORT_MERGE_COMPLETED",
-                format!(
-                    "已生成合并文件：{}",
-                    merged
-                        .file_name()
-                        .and_then(|value| value.to_str())
-                        .unwrap_or("导出文件")
-                ),
-            ));
-            vec![merged.to_string_lossy().into_owned()]
-        }
-    };
-    task.check_cancelled()?;
-    emit_ffmpeg_progress(&app, &task_id, 1.0);
-
-    Ok(ExportResult {
-        ranges,
-        files,
-        output_dir: output_dir.to_string_lossy().into_owned(),
-        log,
     })
 }
 

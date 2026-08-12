@@ -1,5 +1,6 @@
 import {
   Captions,
+  Clapperboard,
   CircleCheck,
   CircleOff,
   Cloud,
@@ -8,10 +9,10 @@ import {
   Eye,
   EyeOff,
   FileInput,
+  FileOutput,
   FileVideo,
   FolderOpen,
   Link2,
-  ListChecks,
   ListRestart,
   Pencil,
   RefreshCw,
@@ -65,10 +66,12 @@ function historyOperationIcon(category: ProjectHistoryCategory) {
       return <SplitSquareVertical />;
     case "subtitle":
       return <Captions />;
-    case "selection":
-      return <ListChecks />;
+    case "storyboard":
+      return <Clapperboard />;
     case "proxy":
       return <FileVideo />;
+    case "export":
+      return <FileOutput />;
     default:
       return <ListRestart />;
   }
@@ -101,13 +104,7 @@ export function HistoryPanel({ disabled = false, onNavigate, onDelete }: History
   return (
     <section className="history-panel" aria-label="项目历史记录">
       <div className="history-list-frame">
-        {rows.length === 0 ? (
-          <div className="history-empty">
-            <ListRestart aria-hidden="true" />
-            <strong>暂无项目历史</strong>
-            <span>新建或打开项目后，文件编辑操作会显示在这里。</span>
-          </div>
-        ) : (
+        {rows.length > 0 && (
           <div className="history-list" role="listbox" aria-label="最近的项目操作">
             {rows.map((row) => {
               const isCurrent = row.cursor === history.cursor;

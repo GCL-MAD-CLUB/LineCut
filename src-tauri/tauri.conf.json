@@ -7,7 +7,7 @@
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://127.0.0.1:1420",
     "beforeBuildCommand": "npm run build",
-    "beforeBundleCommand": "npm run build:thumbnail-provider",
+    "beforeBundleCommand": "npm run prepare:transnetv2 && npm run build:thumbnail-provider",
     "frontendDist": "../dist"
   },
   "app": {
@@ -45,7 +45,8 @@
     "resources": {
       "../LICENSE": "LICENSE",
       "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
-      "target/release/linecut_thumbnail_provider.dll": "linecut_thumbnail_provider.dll"
+      "target/release/linecut_thumbnail_provider.dll": "linecut_thumbnail_provider.dll",
+      "resources/transnetv2": "transnetv2"
     },
     "windows": {
       "nsis": {

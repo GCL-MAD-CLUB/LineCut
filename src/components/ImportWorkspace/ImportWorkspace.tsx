@@ -12,7 +12,7 @@ import {
   Upload,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { runMediaImportTask } from "../../mediaImportTask";
+import { runMediaImportBatchTask } from "../../mediaImportTask";
 import { runOperation } from "../../errors";
 import { useProjectPort } from "../../systems/ProjectSystem";
 import { useTaskProgressStatus } from "../../systems/TaskSystem";
@@ -141,16 +141,9 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
     mediaItemsAdded,
     messagePublished,
     warningsAppended,
-    exportResultChanged,
   } = useProjectPort(
     ["mediaItems", "mediaBinReadOnly"],
-    [
-      "mediaProjectsAdded",
-      "mediaItemsAdded",
-      "messagePublished",
-      "warningsAppended",
-      "exportResultChanged",
-    ],
+    ["mediaProjectsAdded", "mediaItemsAdded", "messagePublished", "warningsAppended"],
   );
   const { isRunning: isImporting } = useTaskProgressStatus("media.import");
   const pendingItems = useMemo<PendingMediaItem[]>(
@@ -249,30 +242,26 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
     }
 
     const probeItems = pendingItems.filter((item) => item.kind !== "subtitle");
-    exportResultChanged(null);
     if (subtitlePaths.length > 0) {
       mediaItemsAdded(subtitlePaths.map(standaloneSubtitleItem));
       setSubtitlePaths([]);
     }
 
-    const outcomes = await Promise.all(
-      probeItems.map((item) =>
-        runMediaImportTask({
-          path: item.path,
-          operation: "media.import",
-          taskIdPrefix: `import-${item.kind}`,
-          onSuccess: (result) => {
-            mediaProjectsAdded([result.project]);
-            warningsAppended(result.warnings);
-            removePendingItem(item);
-          },
-        }),
-      ),
-    );
-    const loadedResults = outcomes.flatMap((outcome) =>
-      outcome.status === "success" ? [outcome.result] : [],
-    );
-    const cancelledCount = outcomes.filter((outcome) => outcome.status === "cancelled").length;
+    const outcome = await runMediaImportBatchTask({
+      paths: probeItems.map((item) => item.path),
+      operation: "media.import",
+      taskIdPrefix: "media-import",
+      onSuccess: (results) => {
+        if (results.length === 0) {
+          return;
+        }
+        mediaProjectsAdded(results.map((result) => result.project));
+        warningsAppended(results.flatMap((result) => result.warnings));
+      },
+    });
+    const loadedResults = outcome.results;
+    const cancelledCount =
+      outcome.status === "cancelled" ? probeItems.length - loadedResults.length : 0;
 
     const importedCount = loadedResults.length + subtitlePaths.length;
     clearPendingItems();
@@ -364,21 +353,6 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
               <span role="columnheader">所在位置</span>
               <span role="columnheader" aria-label="状态或操作" />
             </div>
-
-            {!hasItems && (
-              <div className="import-empty-state">
-                <Upload aria-hidden="true" />
-                <strong>选择要导入的本地媒体</strong>
-                <span>可以一次添加多个视频、音频和字幕文件。</span>
-                <button
-                  type="button"
-                  onClick={() => void choosePaths("video", videoFilters, "添加多个视频")}
-                  disabled={isMediaBinReadOnly || isImporting}
-                >
-                  选择视频
-                </button>
-              </div>
-            )}
 
             {importedItems.map((item) => (
               <div className="import-file-row is-imported" role="row" key={`imported:${item.id}`}>

@@ -1,5 +1,65 @@
 use super::*;
 
+/// Maximum length of a sanitized file-name component (Windows path budget).
+const MAX_COMPONENT_LEN: usize = 120;
+
+/// Truncates `value` to `limit` characters, preserving a trailing file
+/// extension (a `.` suffix of 2–10 chars) when one is present, so a long base
+/// name never loses its extension (e.g. `.mp4`) to the clamp.
+fn clamp_to_limit(value: &str, limit: usize) -> String {
+    if value.chars().count() <= limit {
+        return value.to_string();
+    }
+    if let Some(dot) = value.rfind('.') {
+        if dot > 0 {
+            let ext = &value[dot..];
+            let ext_len = ext.chars().count();
+            if (2..=10).contains(&ext_len) {
+                let stem: String = value[..dot]
+                    .chars()
+                    .take(limit.saturating_sub(ext_len))
+                    .collect();
+                return format!("{stem}{ext}");
+            }
+        }
+    }
+    value.chars().take(limit).collect()
+}
+
+pub(crate) fn safe_component(value: &str) -> String {
+    let sanitized: String = value
+        .chars()
+        .map(|ch| {
+            if ch.is_control() || matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+            {
+                '_'
+            } else {
+                ch
+            }
+        })
+        .collect();
+    let clamped = clamp_to_limit(&sanitized, MAX_COMPONENT_LEN);
+    let output = clamped.trim().trim_matches('.').to_string();
+    if output.is_empty() {
+        "clip".to_string()
+    } else {
+        output
+    }
+}
+
+pub(crate) fn now_millis() -> u128 {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_millis(),
+        Err(error) => {
+            let _ = app_error(
+                ErrorCode::SystemClockInvalid,
+                format!("System clock is earlier than the Unix epoch: {error}"),
+            );
+            0
+        }
+    }
+}
+
 pub(crate) fn config_root() -> PathBuf {
     if let Some(value) = env::var_os("LINECUT_DATA_DIR") {
         return PathBuf::from(value);
@@ -19,16 +79,8 @@ pub(crate) fn default_cache_root() -> PathBuf {
     config_root().join("cache")
 }
 
-pub(crate) fn default_export_root() -> PathBuf {
-    config_root().join("exports")
-}
-
 pub(crate) fn configured_cache_root(preferences: &Preferences) -> PathBuf {
     path_or_default(&preferences.cache_dir, default_cache_root())
-}
-
-pub(crate) fn configured_export_root(preferences: &Preferences) -> PathBuf {
-    path_or_default(&preferences.default_export_dir, default_export_root())
 }
 
 pub(crate) fn path_or_default(value: &str, default_path: PathBuf) -> PathBuf {
@@ -68,7 +120,7 @@ pub(crate) fn load_preferences() -> AppResult<Preferences> {
 }
 
 /// Remove cache data only when a 0.2.0-or-newer build upgrades a 0.1.x installation.
-/// The marker lives beside the cache, so preferences, projects, and exports remain untouched.
+/// The marker lives beside the cache, so preferences, projects, and other application data remain untouched.
 fn clear_cache_when_version_changes() -> AppResult<()> {
     let root = config_root();
     let marker = root.join("cache-version");
@@ -195,11 +247,6 @@ pub(crate) fn normalize_preferences(preferences: Preferences) -> AppResult<Prefe
         } else {
             preferences.cache_dir.trim().to_string()
         },
-        default_export_dir: if preferences.default_export_dir.trim().is_empty() {
-            default_preferences.default_export_dir
-        } else {
-            preferences.default_export_dir.trim().to_string()
-        },
         ffmpeg_path: if preferences.ffmpeg_path.trim().is_empty() {
             default_preferences.ffmpeg_path
         } else {
@@ -220,13 +267,6 @@ pub(crate) fn normalize_preferences(preferences: Preferences) -> AppResult<Prefe
             format!("Failed to create the configured cache directory: {error}"),
         )
     })?;
-    fs::create_dir_all(configured_export_root(&normalized)).map_err(|error| {
-        app_error(
-            ErrorCode::PreferencesWriteFailed,
-            format!("Failed to create the configured export directory: {error}"),
-        )
-    })?;
-
     Ok(normalized)
 }
 
@@ -379,7 +419,6 @@ mod tests {
         let preferences: Preferences = serde_json::from_str(
             r#"{
                 "cache_dir": "cache",
-                "default_export_dir": "exports",
                 "ffmpeg_path": "ffmpeg",
                 "ffprobe_path": "ffprobe"
             }"#,

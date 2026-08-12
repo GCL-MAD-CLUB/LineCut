@@ -56,7 +56,7 @@ pub(super) fn read(path: &Path) -> AppResult<Vec<u8>> {
     })
 }
 
-pub(super) fn write_atomic(path: &Path, bytes: &[u8]) -> AppResult<()> {
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> AppResult<()> {
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())

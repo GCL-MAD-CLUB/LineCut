@@ -445,7 +445,7 @@ label {
 input,
 select {
   min-width: 0;
-  min-height: var(--control-height);
+  min-height: 0;
   padding: 0 9px;
   color: var(--color-text);
   background: var(--color-surface-field);

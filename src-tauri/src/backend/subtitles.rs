@@ -1,5 +1,7 @@
 use super::*;
 
+const IMPORT_SUBTITLE_WORKERS: usize = 3;
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn parse_embedded_subtitle_async(
     video_path: &Path,
@@ -16,11 +18,17 @@ pub(crate) async fn parse_embedded_subtitle_async(
     } else {
         "srt"
     };
-    let args = vec![
+    let mut args = vec![
         "-nostdin".to_string(),
         "-hide_banner".to_string(),
         "-loglevel".to_string(),
         "error".to_string(),
+    ];
+    append_ffmpeg_processing_thread_args(
+        &mut args,
+        ffmpeg_worker_thread_budget(IMPORT_SUBTITLE_WORKERS),
+    );
+    args.extend([
         "-i".to_string(),
         video_path.to_string_lossy().into_owned(),
         "-map".to_string(),
@@ -28,7 +36,7 @@ pub(crate) async fn parse_embedded_subtitle_async(
         "-f".to_string(),
         output_codec.to_string(),
         "pipe:1".to_string(),
-    ];
+    ]);
     let program = ffmpeg_program(preferences);
     let text = run_output(&program, &args, state, task_id, cancel.clone()).await?;
     let track_id = track_id.to_string();
@@ -416,8 +424,15 @@ pub(crate) fn clean_plain_text(raw: &str) -> String {
     text = ass_tag_re.replace_all(&text, "").into_owned();
     let html_tag_re = Regex::new(r"<[^>]+>").expect("valid html tag regex");
     text = html_tag_re.replace_all(&text, "").into_owned();
-    let whitespace_re = Regex::new(r"[ \t\r\n]+").expect("valid whitespace regex");
-    whitespace_re.replace_all(text.trim(), " ").into_owned()
+    text = text.replace("\r\n", "\n").replace('\r', "\n");
+    // Keep each line of a multi-line cue instead of flattening onto one line,
+    // normalizing inline whitespace and dropping blank lines.
+    let inline_space_re = Regex::new(r"[ \t]+").expect("valid whitespace regex");
+    text.lines()
+        .map(|line| inline_space_re.replace_all(line.trim(), " ").into_owned())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub(crate) fn parse_subtitle_time(value: &str) -> i64 {
@@ -456,11 +471,29 @@ pub(crate) fn parse_seconds_fraction(value: &str, default_fraction_digits: usize
 }
 
 pub(crate) fn parse_decimal_seconds_to_us(value: &str) -> i64 {
+    const MICROS_PER_SECOND: u64 = 1_000_000;
+
     let trimmed = value.trim();
     let negative = trimmed.starts_with('-');
-    let number = trimmed.trim_start_matches('-');
+    let number = if negative {
+        trimmed.strip_prefix('-').unwrap_or(trimmed)
+    } else {
+        trimmed.strip_prefix('+').unwrap_or(trimmed)
+    };
+    let magnitude_limit = if negative {
+        i64::MAX as u64 + 1
+    } else {
+        i64::MAX as u64
+    };
     let mut split = number.split('.');
-    let seconds = parse_i64(split.next().unwrap_or_default());
+    let (seconds, seconds_overflowed) = parse_nonnegative_u64_capped(
+        split.next().unwrap_or_default(),
+        magnitude_limit / MICROS_PER_SECOND,
+    )
+    .unwrap_or((0, false));
+    if seconds_overflowed {
+        return if negative { i64::MIN } else { i64::MAX };
+    }
     let mut fraction = split
         .next()
         .unwrap_or_default()
@@ -470,12 +503,47 @@ pub(crate) fn parse_decimal_seconds_to_us(value: &str) -> i64 {
     while fraction.len() < 6 {
         fraction.push('0');
     }
-    let result = seconds * 1_000_000 + parse_i64(&fraction);
+    let fraction = parse_nonnegative_u64_capped(&fraction, MICROS_PER_SECOND - 1)
+        .map(|(value, _)| value)
+        .unwrap_or(0);
+    let result = seconds
+        .saturating_mul(MICROS_PER_SECOND)
+        .saturating_add(fraction)
+        .min(magnitude_limit);
+
     if negative {
-        -result
+        if result == magnitude_limit {
+            i64::MIN
+        } else {
+            -(result as i64)
+        }
     } else {
-        result
+        result as i64
     }
+}
+
+/// Parses an unsigned decimal value without allowing untrusted input to overflow.
+///
+/// The returned flag reports whether the value exceeded `cap`; callers can then
+/// distinguish a malformed value (which returns `None`) from a value that should
+/// saturate its final representation.
+fn parse_nonnegative_u64_capped(value: &str, cap: u64) -> Option<(u64, bool)> {
+    let mut parsed = 0_u64;
+    let mut overflowed = false;
+
+    for character in value.trim().chars() {
+        let digit = character.to_digit(10)? as u64;
+        if !overflowed {
+            if parsed > cap / 10 || (parsed == cap / 10 && digit > cap % 10) {
+                parsed = cap;
+                overflowed = true;
+            } else {
+                parsed = parsed * 10 + digit;
+            }
+        }
+    }
+
+    Some((parsed, overflowed))
 }
 
 pub(crate) fn parse_i64(value: &str) -> i64 {
@@ -522,5 +590,35 @@ pub(crate) fn codec_from_path(path: &Path) -> String {
         "ssa" => "ssa".to_string(),
         "vtt" | "webvtt" => "webvtt".to_string(),
         _ => "subrip".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_decimal_seconds_to_us;
+
+    #[test]
+    fn parse_decimal_seconds_to_us_saturates_untrusted_timestamps() {
+        assert_eq!(parse_decimal_seconds_to_us("1.25"), 1_250_000);
+        assert_eq!(
+            parse_decimal_seconds_to_us("9223372036854.775807"),
+            i64::MAX
+        );
+        assert_eq!(
+            parse_decimal_seconds_to_us("9223372036854.775808"),
+            i64::MAX
+        );
+        assert_eq!(
+            parse_decimal_seconds_to_us("999999999999999999999999.0"),
+            i64::MAX
+        );
+        assert_eq!(
+            parse_decimal_seconds_to_us("-9223372036854.775808"),
+            i64::MIN
+        );
+        assert_eq!(
+            parse_decimal_seconds_to_us("-999999999999999999999999.0"),
+            i64::MIN
+        );
     }
 }
