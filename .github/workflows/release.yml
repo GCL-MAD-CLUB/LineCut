@@ -101,6 +101,8 @@ jobs:
           }
       - name: Prepare verified FFmpeg bundle assets
         run: npm run prepare:ffmpeg
+      - name: Build thumbnail provider resource
+        run: npm run build:thumbnail-provider
       - name: Build and publish release
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # action-v0.6.2
         env:
