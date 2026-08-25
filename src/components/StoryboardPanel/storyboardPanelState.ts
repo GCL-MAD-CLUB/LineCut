@@ -169,6 +169,7 @@ interface StoryboardPanelState
     colorLabel: StoryboardShotColorLabel | null,
     historyGroupId?: string,
   ) => void;
+  deleteShots: (shotIds: Iterable<string>, ripple: boolean) => void;
   createShotStack: (shotIds: string[]) => void;
   cancelShotStack: (shotId: string) => void;
   removeShotFromStack: (shotId: string) => void;
@@ -229,6 +230,34 @@ function splitIntoStacks(shotIdGroups: string[][]): StoryboardShotStackState[] {
   return shotIdGroups
     .map((shotIds) => createStack(shotIds))
     .filter((stack): stack is StoryboardShotStackState => stack !== null);
+}
+
+function shotsAfterDeletion(
+  shots: readonly StoryboardShot[],
+  deletedShotIds: ReadonlySet<string>,
+  ripple: boolean,
+) {
+  const remainingShots: StoryboardShot[] = [];
+  let rippleStart: Pick<StoryboardShot, "start_frame" | "start_us"> | null = null;
+
+  for (const shot of shots) {
+    if (deletedShotIds.has(shot.id)) {
+      rippleStart ??= shot;
+      continue;
+    }
+    if (ripple && rippleStart) {
+      remainingShots.push({
+        ...shot,
+        start_frame: Math.min(rippleStart.start_frame, shot.end_frame),
+        start_us: Math.min(rippleStart.start_us, shot.end_us),
+      });
+    } else {
+      remainingShots.push(shot);
+    }
+    rippleStart = null;
+  }
+
+  return remainingShots;
 }
 
 function selectionForVisibleStacks(
@@ -974,6 +1003,61 @@ export function useStoryboardPanelState<Selection>(
         uiState.videoContext,
         historyGroupId,
       );
+    },
+    deleteShots: (shotIds, ripple) => {
+      const requestedShotIds = new Set(shotIds);
+      const deletedShotIds = new Set(
+        storyboard.shots.filter((shot) => requestedShotIds.has(shot.id)).map((shot) => shot.id),
+      );
+      if (deletedShotIds.size === 0) {
+        return;
+      }
+      const replacementStacks = storyboard.shotStacks.flatMap((stack) => {
+        const remainingShotIds = stack.shotIds.filter((shotId) => !deletedShotIds.has(shotId));
+        const replacement = createStack(remainingShotIds);
+        return replacement ? [replacement] : [];
+      });
+      const expandedStackIds = new Set(uiState.expandedStackIds);
+      for (const stack of storyboard.shotStacks) {
+        if (!uiState.expandedStackIds.has(stack.id)) {
+          continue;
+        }
+        expandedStackIds.delete(stack.id);
+        const replacement = replacementStacks.find((candidate) =>
+          candidate.shotIds.some((shotId) => stack.shotIds.includes(shotId)),
+        );
+        if (replacement) {
+          expandedStackIds.add(replacement.id);
+        }
+      }
+      commitStoryboard(
+        `${ripple ? "波纹删除" : "删除"} ${deletedShotIds.size} 个分镜`,
+        (current) => {
+          const currentDeletedShotIds = new Set(
+            current.shots.filter((shot) => deletedShotIds.has(shot.id)).map((shot) => shot.id),
+          );
+          if (currentDeletedShotIds.size === 0) {
+            return current;
+          }
+          const shotAnnotations = { ...current.shotAnnotations };
+          for (const shotId of currentDeletedShotIds) {
+            delete shotAnnotations[shotId];
+          }
+          return {
+            ...current,
+            shots: shotsAfterDeletion(current.shots, currentDeletedShotIds, ripple),
+            shotStacks: current.shotStacks.flatMap((stack) => {
+              const remainingShotIds = stack.shotIds.filter(
+                (shotId) => !currentDeletedShotIds.has(shotId),
+              );
+              const replacement = createStack(remainingShotIds);
+              return replacement ? [replacement] : [];
+            }),
+            shotAnnotations,
+          };
+        },
+      );
+      uiState.setExpandedStackIds(expandedStackIds);
     },
     createShotStack: (shotIds) => {
       const flattenedShotIds = new Set(shotIds);
