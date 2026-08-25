@@ -42,8 +42,10 @@ import {
 import { requestSubtitleThumbnail } from "../../subtitleThumbnail";
 import { normalizeFrameRate, timeUsToFrame } from "../../timeline";
 import type { SubtitleCue } from "../../types";
+import { annotationShortcutAction, annotationShortcutAutoAdvances } from "../annotationShortcuts";
 import { usePanelManagerState } from "../DockLayout";
 import {
+  isPopupMenuEventTarget,
   PopupMenu,
   PopupMenuItem,
   PopupMenuSeparator,
@@ -1211,20 +1213,27 @@ export function SubtitlePanel() {
   }, [activeCueId, cueSelectionReplaced, rowVirtualizer, selectedCueIds, sortedCues]);
 
   useEffect(() => {
-    const handleRatingKey = (event: KeyboardEvent) => {
+    const handleAnnotationShortcut = (event: KeyboardEvent) => {
       if (
         !isEditAuthority ||
         selectedCueIds.size === 0 ||
         event.defaultPrevented ||
+        event.repeat ||
+        event.isComposing ||
         event.altKey ||
         event.ctrlKey ||
         event.metaKey ||
-        isEditableKeyboardTarget(event.target)
+        isEditableKeyboardTarget(event.target) ||
+        isPopupMenuEventTarget(event.target)
       ) {
         return;
       }
-      if (contextMenu) {
-        if (!contextMenu.ratingSubmenuOpen || event.key !== "0") {
+      const action = annotationShortcutAction(event);
+      if (!action) {
+        return;
+      }
+      if (anyMenu) {
+        if (!contextMenu?.ratingSubmenuOpen || action.kind !== "rating" || action.value !== 0) {
           return;
         }
         event.preventDefault();
@@ -1232,16 +1241,35 @@ export function SubtitlePanel() {
         setContextMenu(null);
         return;
       }
-      const rating = Number(event.key);
-      if (!Number.isInteger(rating) || rating < 0 || rating > 5) {
-        return;
-      }
       event.preventDefault();
-      setCueRatings(selectedCueIds, rating);
+      if (action.kind === "flag") {
+        setCueFlags(selectedCueIds, action.value);
+      } else if (action.kind === "rating") {
+        setCueRatings(selectedCueIds, action.value);
+      } else if (action.kind === "ratingDelta") {
+        adjustCueRatings(selectedCueIds, action.value);
+      } else {
+        setCueColorLabels(selectedCueIds, action.value);
+      }
+      if (annotationShortcutAutoAdvances(event)) {
+        advanceCueSelection();
+      }
     };
-    window.addEventListener("keydown", handleRatingKey);
-    return () => window.removeEventListener("keydown", handleRatingKey);
-  }, [contextMenu, isEditAuthority, selectedCueIds, setCueRatings]);
+    window.addEventListener("keydown", handleAnnotationShortcut);
+    return () => window.removeEventListener("keydown", handleAnnotationShortcut);
+  }, [
+    adjustCueRatings,
+    anyMenu,
+    contextMenu,
+    cueSelectionReplaced,
+    isEditAuthority,
+    rowVirtualizer,
+    selectedCueIds,
+    setCueColorLabels,
+    setCueFlags,
+    setCueRatings,
+    sortedCues,
+  ]);
 
   useEffect(
     () => () => {
@@ -1394,6 +1422,25 @@ export function SubtitlePanel() {
       return;
     }
     cueSelectionCleared();
+  }
+
+  function advanceCueSelection() {
+    let lastSelectedIndex = -1;
+    for (let index = 0; index < sortedCues.length; index += 1) {
+      if (selectedCueIds.has(sortedCues[index].id)) {
+        lastSelectedIndex = index;
+      }
+    }
+    const targetIndex = lastSelectedIndex + 1;
+    const targetCue = sortedCues[targetIndex];
+    if (lastSelectedIndex < 0 || !targetCue) {
+      return;
+    }
+    selectionAnchorRef.current = targetCue.id;
+    selectionFocusRef.current = targetCue.id;
+    cueSelectionReplaced([targetCue.id], targetCue.id);
+    seekToCue(targetCue);
+    rowVirtualizer.scrollToIndex(targetIndex, { align: "auto" });
   }
 
   function handleCueSelection(
