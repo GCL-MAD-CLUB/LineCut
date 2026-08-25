@@ -50,6 +50,7 @@ import { isTauriRuntime } from "../../tauriRuntime";
 import { normalizeFrameRate } from "../../timeline";
 import type { StoryboardDetectionResult, StoryboardShot } from "../../types";
 import { usePanelManagerState } from "../DockLayout";
+import { annotationShortcutAction, annotationShortcutAutoAdvances } from "../annotationShortcuts";
 import {
   isPopupMenuEventTarget,
   PopupMenu,
@@ -1537,6 +1538,16 @@ export function StoryboardPanel() {
       contextMenu.stackSubmenuOpen ||
       contextMenu.exportSubmenuOpen),
   );
+  const annotationShortcutMenuOpen = Boolean(
+    contextMenu ||
+    annotationMenu ||
+    ratingComparatorMenu ||
+    searchScopeMenu ||
+    searchRuleMenu ||
+    footerSortMenu ||
+    footerSprayMenu ||
+    footerOptionsMenu,
+  );
 
   useEffect(() => {
     if (viewMode === "list") {
@@ -1859,20 +1870,27 @@ export function StoryboardPanel() {
   }, [activeShotId, rowVirtualizer, selectedShotIds, shotSelectionReplaced, sortedShots, viewMode]);
 
   useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
+    const handleAnnotationShortcut = (event: KeyboardEvent) => {
       if (
         !isEditAuthority ||
         selectedShotIds.size === 0 ||
         event.defaultPrevented ||
+        event.repeat ||
+        event.isComposing ||
         event.altKey ||
         event.ctrlKey ||
         event.metaKey ||
-        isEditableKeyboardTarget(event.target)
+        isEditableKeyboardTarget(event.target) ||
+        isPopupMenuEventTarget(event.target)
       ) {
         return;
       }
-      if (contextMenu) {
-        if (!contextMenu.ratingSubmenuOpen || event.key !== "0") {
+      const action = annotationShortcutAction(event);
+      if (!action) {
+        return;
+      }
+      if (annotationShortcutMenuOpen) {
+        if (!contextMenu?.ratingSubmenuOpen || action.kind !== "rating" || action.value !== 0) {
           return;
         }
         event.preventDefault();
@@ -1880,21 +1898,37 @@ export function StoryboardPanel() {
         setContextMenu(null);
         return;
       }
-      const rating = Number(event.key);
-      if (!Number.isInteger(rating) || rating < 0 || rating > 5) {
-        return;
-      }
       event.preventDefault();
-      setShotRatings(selectedAnnotationShotIds, rating);
+      if (action.kind === "flag") {
+        setShotFlags(selectedAnnotationShotIds, action.value);
+      } else if (action.kind === "rating") {
+        setShotRatings(selectedAnnotationShotIds, action.value);
+      } else if (action.kind === "ratingDelta") {
+        adjustShotRatings(selectedAnnotationShotIds, action.value);
+      } else {
+        setShotColorLabels(selectedAnnotationShotIds, action.value);
+      }
+      if (annotationShortcutAutoAdvances(event)) {
+        advanceShotSelection();
+      }
     };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    window.addEventListener("keydown", handleAnnotationShortcut);
+    return () => window.removeEventListener("keydown", handleAnnotationShortcut);
   }, [
+    adjustShotRatings,
+    annotationShortcutMenuOpen,
     contextMenu,
     isEditAuthority,
+    rowVirtualizer,
     selectedAnnotationShotIds,
+    selectedShotIds,
     selectedShotIds.size,
+    setShotColorLabels,
+    setShotFlags,
     setShotRatings,
+    shotSelectionReplaced,
+    sortedShots,
+    viewMode,
   ]);
 
   useEffect(
@@ -2042,6 +2076,31 @@ export function StoryboardPanel() {
       return;
     }
     shotSelectionCleared();
+  }
+
+  function advanceShotSelection() {
+    let lastSelectedIndex = -1;
+    for (let index = 0; index < sortedShots.length; index += 1) {
+      if (selectedShotIds.has(sortedShots[index].id)) {
+        lastSelectedIndex = index;
+      }
+    }
+    const targetIndex = lastSelectedIndex + 1;
+    const targetShot = sortedShots[targetIndex];
+    if (lastSelectedIndex < 0 || !targetShot) {
+      return;
+    }
+    selectionAnchorRef.current = targetShot.id;
+    selectionFocusRef.current = targetShot.id;
+    shotSelectionReplaced([targetShot.id], targetShot.id);
+    seekToShot(targetShot);
+    if (viewMode === "list") {
+      rowVirtualizer.scrollToIndex(targetIndex, { align: "auto" });
+      return;
+    }
+    Array.from(listRef.current?.querySelectorAll<HTMLElement>("[data-storyboard-shot-id]") ?? [])
+      .find((element) => element.dataset.storyboardShotId === targetShot.id)
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
 
   function deactivateSprayTool() {
