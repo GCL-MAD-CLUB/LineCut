@@ -3129,6 +3129,7 @@ export function StoryboardPanel() {
           />
         )}
         <StoryboardKeywordPanel
+          active={isEditAuthority && keywordPanelOpen}
           shotIds={keywordPanelShotIds}
           resetKey={videoContext}
           onSetQuickKeyword={setSprayKeywordInput}

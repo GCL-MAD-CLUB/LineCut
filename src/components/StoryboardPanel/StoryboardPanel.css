@@ -972,10 +972,13 @@ body.is-resizing-storyboard-keyword-panel * {
 
 .storyboard-keyword-grid > button,
 .storyboard-keyword-grid > span {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
   min-width: 0;
   height: 20px;
   overflow: hidden;
-  padding: 0 8px;
+  padding: 0;
   color: #999;
   font-size: 11px;
   font-weight: 400;
@@ -988,6 +991,29 @@ body.is-resizing-storyboard-keyword-panel * {
   border-right: 1px solid var(--color-border-row);
   border-bottom: 1px solid var(--color-border-row);
   border-radius: 0;
+}
+
+.storyboard-keyword-grid > .storyboard-keyword-grid-cell.has-shortcut-hint {
+  grid-template-columns: 12px minmax(0, 1fr);
+}
+
+.storyboard-keyword-grid-shortcut {
+  width: 12px;
+  overflow: hidden;
+  color: #666;
+  font-variant-numeric: tabular-nums;
+  line-height: 20px;
+  text-align: left;
+}
+
+.storyboard-keyword-grid-label {
+  min-width: 0;
+  padding: 0 8px;
+  overflow: hidden;
+  line-height: 20px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .storyboard-keyword-grid > button:nth-child(3n),

@@ -48,14 +48,14 @@ export function disableBrowserBehaviors(): void {
     { capture: true },
   );
 
-  window.addEventListener(
-    "keydown",
-    (event) => {
-      if (isDevToolsShortcut(event)) {
-        event.preventDefault();
-        event.stopPropagation();
-      }
-    },
-    { capture: true },
-  );
+  const preventBrowserKeyboardBehavior = (event: KeyboardEvent) => {
+    if (event.key === "Alt" || isDevToolsShortcut(event)) {
+      // Cancel only the browser default action. Application shortcut listeners
+      // must still be able to observe the event in every propagation phase.
+      event.preventDefault();
+    }
+  };
+
+  window.addEventListener("keydown", preventBrowserKeyboardBehavior, { capture: true });
+  window.addEventListener("keyup", preventBrowserKeyboardBehavior, { capture: true });
 }

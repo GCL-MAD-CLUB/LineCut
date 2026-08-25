@@ -413,23 +413,6 @@ function AppContent() {
     runningTasks.length === 1 ? runningTasks[0].label : `正在执行 ${runningTasks.length} 项操作...`;
 
   useEffect(() => {
-    const suppressBareAltKey = (event: KeyboardEvent) => {
-      if (event.key !== "Alt") {
-        return;
-      }
-      event.preventDefault();
-      event.stopPropagation();
-    };
-
-    window.addEventListener("keydown", suppressBareAltKey, true);
-    window.addEventListener("keyup", suppressBareAltKey, true);
-    return () => {
-      window.removeEventListener("keydown", suppressBareAltKey, true);
-      window.removeEventListener("keyup", suppressBareAltKey, true);
-    };
-  }, []);
-
-  useEffect(() => {
     if (warnings.length === 0) {
       return;
     }
