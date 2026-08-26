@@ -334,7 +334,7 @@ export function StoryboardShotThumbnail({
           className={`shot-thumbnail-flag is-${flag}`}
           onClick={(event) => {
             event.stopPropagation();
-            onSetFlag(flag === "none" ? "retained" : "none");
+            onSetFlag(flag === "none" ? (event.altKey ? "excluded" : "retained") : "none");
           }}
           onContextMenu={onOpenFlagMenu}
           onDoubleClick={(event) => event.stopPropagation()}
