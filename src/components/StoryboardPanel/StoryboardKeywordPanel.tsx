@@ -1,5 +1,13 @@
 import { ChevronsUpDown, ChevronDown, Minus, Plus, Search, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { createPortal } from "react-dom";
 import { ModalDialog } from "../ModalDialog";
 import {
@@ -29,6 +37,8 @@ import { useStoryboardPanelState } from "./storyboardPanelState";
 import { usePanelInstanceId } from "../../runtime/systems/PanelState";
 
 interface StoryboardKeywordPanelProps {
+  active: boolean;
+  draggedKeywordHoverId: string | null;
   shotIds: readonly string[];
   resetKey: string;
   onSetQuickKeyword?: (keywordLabel: string) => void;
@@ -36,6 +46,33 @@ interface StoryboardKeywordPanelProps {
 }
 
 const keywordModeMenuWidth = 176;
+const keywordGridShortcutNumbers = [7, 8, 9, 4, 5, 6, 1, 2, 3] as const;
+
+function isAltKeyEvent(event: KeyboardEvent): boolean {
+  return event.key === "Alt" || event.code === "AltLeft" || event.code === "AltRight";
+}
+
+function keywordGridShortcutIndex(event: KeyboardEvent) {
+  const codeMatch = /^(?:Digit|Numpad)([1-9])$/.exec(event.code);
+  const shortcutNumber = codeMatch
+    ? Number(codeMatch[1])
+    : /^[1-9]$/.test(event.key)
+      ? Number(event.key)
+      : 0;
+  return keywordGridShortcutNumbers.indexOf(
+    shortcutNumber as (typeof keywordGridShortcutNumbers)[number],
+  );
+}
+
+function isEditableKeyboardTarget(target: EventTarget | null) {
+  const element = target as HTMLElement | null;
+  return (
+    element?.tagName === "INPUT" ||
+    element?.tagName === "TEXTAREA" ||
+    element?.tagName === "SELECT" ||
+    Boolean(element?.isContentEditable)
+  );
+}
 
 interface KeywordPanelSectionProps {
   title: ReactNode;
@@ -88,6 +125,8 @@ function keywordNodeOrder(left: StoryboardKeywordNode, right: StoryboardKeywordN
 }
 
 export function StoryboardKeywordPanel({
+  active,
+  draggedKeywordHoverId,
   shotIds,
   resetKey,
   onSetQuickKeyword,
@@ -150,10 +189,15 @@ export function StoryboardKeywordPanel({
     name: string;
     keywordId: string | null;
   } | null>(null);
+  const [altShortcutHintsVisible, setAltShortcutHintsVisible] = useState(false);
+  const [shortcutKeywordIds, setShortcutKeywordIds] = useState<readonly string[]>([]);
+  const [panelHasVerticalOverflow, setPanelHasVerticalOverflow] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const keywordEditorRef = useRef<HTMLTextAreaElement | null>(null);
+  const panelScrollRef = useRef<HTMLElement | null>(null);
   const cancelKeywordEditRef = useRef(false);
   const portalContainerRef = useRef<Element | null>(null);
+  const shortcutKeywordIdsRef = useRef<readonly string[]>([]);
   const targetShotIds = useMemo(() => Array.from(new Set(shotIds)), [shotIds]);
   const keywordParseResult = parseStoryboardKeywordInput(keywordInput);
   const mediaShotIds = useMemo(() => shots.map((shot) => shot.id), [shots]);
@@ -175,10 +219,48 @@ export function StoryboardKeywordPanel({
     setDuplicateNameRequest(null);
     setKeywordModeMenu(null);
     setTreeContextMenu(null);
+    setAltShortcutHintsVisible(false);
+    setShortcutKeywordIds([]);
+    shortcutKeywordIdsRef.current = [];
   }, [resetKey]);
 
   useCloseOnOutsidePointer(Boolean(treeContextMenu), () => setTreeContextMenu(null));
   useCloseOnOutsidePointer(Boolean(keywordModeMenu), () => setKeywordModeMenu(null));
+
+  useLayoutEffect(() => {
+    const panel = panelScrollRef.current;
+    if (!panel) {
+      return;
+    }
+    let animationFrameId: number | null = null;
+    const measureOverflow = () => {
+      animationFrameId = null;
+      const hasOverflow = panel.scrollHeight > panel.clientHeight + 1;
+      setPanelHasVerticalOverflow((current) => (current === hasOverflow ? current : hasOverflow));
+    };
+    const scheduleMeasure = () => {
+      if (animationFrameId !== null) {
+        return;
+      }
+      animationFrameId = window.requestAnimationFrame(measureOverflow);
+    };
+    const resizeObserver = new ResizeObserver(scheduleMeasure);
+    resizeObserver.observe(panel);
+    const mutationObserver = new MutationObserver(scheduleMeasure);
+    mutationObserver.observe(panel, {
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
+    measureOverflow();
+    return () => {
+      if (animationFrameId !== null) {
+        window.cancelAnimationFrame(animationFrameId);
+      }
+      resizeObserver.disconnect();
+      mutationObserver.disconnect();
+    };
+  }, []);
 
   useEffect(() => {
     portalContainerRef.current = document.querySelector(".app-shell");
@@ -194,6 +276,87 @@ export function StoryboardKeywordPanel({
       .filter((keywordId) => validIds.has(keywordId))
       .slice(0, 18);
   }, [keywordNodes, recentKeywordIds]);
+  const keywordShortcutBlocked = Boolean(
+    keywordModeMenu ||
+    treeContextMenu ||
+    keywordBatchDeleteRequest ||
+    keywordDeleteRequest ||
+    createDialogOpen ||
+    editKeywordDialog ||
+    duplicateNameRequest,
+  );
+
+  useEffect(() => {
+    if (!active || !panelOpen || !recentOpen || keywordShortcutBlocked) {
+      setAltShortcutHintsVisible(false);
+      setShortcutKeywordIds([]);
+      shortcutKeywordIdsRef.current = [];
+      return;
+    }
+
+    const hideShortcutHints = () => {
+      setAltShortcutHintsVisible(false);
+      setShortcutKeywordIds([]);
+      shortcutKeywordIdsRef.current = [];
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isAltKeyEvent(event)) {
+        if (event.ctrlKey || event.metaKey || isEditableKeyboardTarget(event.target)) {
+          return;
+        }
+        event.preventDefault();
+        if (!event.repeat) {
+          const keywordIds = visibleRecentIds.slice(0, 9);
+          shortcutKeywordIdsRef.current = keywordIds;
+          setShortcutKeywordIds(keywordIds);
+          setAltShortcutHintsVisible(true);
+        }
+        return;
+      }
+      if (
+        !event.altKey ||
+        event.shiftKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.repeat ||
+        event.isComposing ||
+        event.defaultPrevented ||
+        isEditableKeyboardTarget(event.target) ||
+        targetShotIds.length === 0
+      ) {
+        return;
+      }
+      const shortcutIndex = keywordGridShortcutIndex(event);
+      const keywordId = shortcutKeywordIdsRef.current[shortcutIndex];
+      if (shortcutIndex < 0 || !keywordId) {
+        return;
+      }
+      event.preventDefault();
+      setShotKeywordActivation(targetShotIds, keywordId, true);
+    };
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (isAltKeyEvent(event)) {
+        hideShortcutHints();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown, true);
+    window.addEventListener("keyup", handleKeyUp, true);
+    window.addEventListener("blur", hideShortcutHints);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+      window.removeEventListener("keyup", handleKeyUp, true);
+      window.removeEventListener("blur", hideShortcutHints);
+    };
+  }, [
+    active,
+    keywordShortcutBlocked,
+    panelOpen,
+    recentOpen,
+    setShotKeywordActivation,
+    targetShotIds,
+    visibleRecentIds,
+  ]);
 
   const effectiveCountById = useMemo(() => {
     const counts = new Map<string, number>();
@@ -322,6 +485,29 @@ export function StoryboardKeywordPanel({
   }, [keywordNodes]);
 
   const normalizedFilter = filter.trim().toLocaleLowerCase();
+
+  useEffect(() => {
+    if (
+      !draggedKeywordHoverId ||
+      normalizedFilter ||
+      !collapsedNodeIds.has(draggedKeywordHoverId) ||
+      (childrenByParent.get(draggedKeywordHoverId)?.length ?? 0) === 0
+    ) {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => {
+      setCollapsedNodeIds((current) => {
+        if (!current.has(draggedKeywordHoverId)) {
+          return current;
+        }
+        const next = new Set(current);
+        next.delete(draggedKeywordHoverId);
+        return next;
+      });
+    }, 600);
+    return () => window.clearTimeout(timeoutId);
+  }, [childrenByParent, collapsedNodeIds, draggedKeywordHoverId, normalizedFilter]);
+
   const matchingTreeNodeIds = useMemo(() => {
     if (!normalizedFilter) {
       return new Set(keywordNodes.map((node) => node.id));
@@ -717,13 +903,24 @@ export function StoryboardKeywordPanel({
 
   const handleCancelKeywordTagEdit = useCallback(() => setEditKeywordDialog(null), []);
 
-  function renderKeywordGrid(keywordIds: readonly string[]) {
+  function renderKeywordGrid(keywordIds: readonly string[], shortcutsEnabled = false) {
     const cells = Array.from({ length: 9 }, (_, index) => keywordIds[index] ?? null);
     return (
       <div className="storyboard-keyword-grid">
         {cells.map((keywordId, index) => {
+          const shortcutNumber = keywordGridShortcutNumbers[index];
+          const showShortcutHint = shortcutsEnabled && altShortcutHintsVisible;
+          const cellClassName = `storyboard-keyword-grid-cell ${
+            showShortcutHint ? "has-shortcut-hint" : ""
+          }`.trim();
           if (!keywordId) {
-            return <span key={`empty-${index}`} aria-hidden="true" />;
+            return (
+              <span key={`empty-${index}`} className={cellClassName} aria-hidden="true">
+                {showShortcutHint && (
+                  <span className="storyboard-keyword-grid-shortcut">{shortcutNumber}</span>
+                )}
+              </span>
+            );
           }
           const label = storyboardKeywordLabel(keywordId, keywordNodes);
           const { active, mixed } = keywordActivationState(keywordId);
@@ -731,13 +928,23 @@ export function StoryboardKeywordPanel({
             <button
               key={keywordId}
               type="button"
-              className={`${active ? "is-active" : ""} ${mixed ? "is-mixed" : ""}`.trim()}
+              className={`${cellClassName} ${active ? "is-active" : ""} ${
+                mixed ? "is-mixed" : ""
+              }`.trim()}
               onClick={() => toggleKeyword(keywordId)}
               disabled={targetShotIds.length === 0}
               title={`${label} · 已用于 ${usageCounts.get(keywordId) ?? 0} 个分镜`}
               aria-pressed={active ? true : mixed ? "mixed" : false}
+              aria-keyshortcuts={shortcutsEnabled ? `Alt+${shortcutNumber}` : undefined}
             >
-              {renderStoryboardKeywordLabel(label)}
+              {showShortcutHint && (
+                <span className="storyboard-keyword-grid-shortcut" aria-hidden="true">
+                  {shortcutNumber}
+                </span>
+              )}
+              <span className="storyboard-keyword-grid-label">
+                {renderStoryboardKeywordLabel(label)}
+              </span>
             </button>
           );
         })}
@@ -758,6 +965,7 @@ export function StoryboardKeywordPanel({
       return (
         <div key={node.id} className="storyboard-keyword-tree-branch">
           <div
+            data-storyboard-keyword-drop-id={node.id}
             className={`storyboard-keyword-tree-row ${
               selectedTreeNodeIds.has(node.id) ? "is-active" : ""
             }`.trim()}
@@ -905,7 +1113,13 @@ export function StoryboardKeywordPanel({
           </filter>
         </defs>
       </svg>
-      <aside className="storyboard-keyword-panel">
+      <aside
+        ref={panelScrollRef}
+        className={`storyboard-keyword-panel ${
+          panelHasVerticalOverflow ? "has-vertical-overflow" : ""
+        }`.trim()}
+        data-storyboard-keyword-scroll-container=""
+      >
         <header
           className={`storyboard-keyword-panel-heading ${panelOpen ? "" : "is-collapsed"}`.trim()}
         >
@@ -1086,7 +1300,10 @@ export function StoryboardKeywordPanel({
               open={recentOpen}
               onToggle={() => setRecentOpen((current) => !current)}
             >
-              {renderKeywordGrid(visibleRecentIds)}
+              {renderKeywordGrid(
+                altShortcutHintsVisible ? shortcutKeywordIds : visibleRecentIds,
+                true,
+              )}
             </KeywordPanelSection>
           </>
         )}
@@ -1138,7 +1355,11 @@ export function StoryboardKeywordPanel({
                   aria-label="过滤关键字"
                 />
               </label>
-              <div className="storyboard-keyword-tree" role="tree">
+              <div
+                className="storyboard-keyword-tree"
+                data-storyboard-keyword-drop-list=""
+                role="tree"
+              >
                 {renderTreeNodes(null, 0)}
               </div>
             </div>

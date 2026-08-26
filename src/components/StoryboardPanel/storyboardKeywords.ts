@@ -145,6 +145,39 @@ export function resolveStoryboardKeywordPaths(
   return { keywordNodes, keywordIds };
 }
 
+export function existingStoryboardKeywordIdsForPaths(
+  currentNodes: readonly StoryboardKeywordNode[],
+  paths: readonly StoryboardKeywordPath[],
+) {
+  const nodesBySibling = new Map<string, StoryboardKeywordNode>();
+  for (const node of currentNodes) {
+    const key = siblingKey(node.parentId ?? null, node.name);
+    if (!nodesBySibling.has(key)) {
+      nodesBySibling.set(key, node);
+    }
+  }
+
+  const keywordIds: string[] = [];
+  const matched = new Set<string>();
+  for (const path of paths) {
+    let parentId: string | null = null;
+    let pathExists = true;
+    for (const name of path.names) {
+      const node = nodesBySibling.get(siblingKey(parentId, name));
+      if (!node) {
+        pathExists = false;
+        break;
+      }
+      parentId = node.id;
+    }
+    if (pathExists && parentId && !matched.has(parentId)) {
+      matched.add(parentId);
+      keywordIds.push(parentId);
+    }
+  }
+  return keywordIds;
+}
+
 export function normalizeStoryboardKeywordIds(keywordIds: Iterable<string>) {
   return Array.from(new Set(keywordIds));
 }

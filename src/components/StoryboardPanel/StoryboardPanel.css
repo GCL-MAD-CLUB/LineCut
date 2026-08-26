@@ -589,13 +589,49 @@ body.is-resizing-storyboard-keyword-panel * {
   min-width: 0;
   min-height: 0;
   flex-direction: column;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: scroll;
   color: #aaa;
   background: var(--color-surface);
   border: 1px solid #0d0d0d;
   border-radius: 5px;
   box-shadow: inset 0 0 0 1px #292929;
+  scrollbar-color: transparent var(--color-surface);
+  scrollbar-gutter: stable;
   user-select: none;
+}
+
+.storyboard-keyword-panel.has-vertical-overflow {
+  scrollbar-color: #555 var(--color-surface);
+}
+
+.storyboard-keyword-panel::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.storyboard-keyword-panel::-webkit-scrollbar-track,
+.storyboard-keyword-panel::-webkit-scrollbar-corner {
+  background: var(--color-surface);
+}
+
+.storyboard-keyword-panel::-webkit-scrollbar-thumb {
+  background: transparent;
+}
+
+.storyboard-keyword-panel.has-vertical-overflow::-webkit-scrollbar-thumb {
+  background: #555;
+}
+
+.storyboard-keyword-panel:not(.has-vertical-overflow)::-webkit-scrollbar-button {
+  visibility: hidden;
+}
+
+.storyboard-keyword-panel > .storyboard-keyword-panel-heading,
+.storyboard-keyword-panel > .storyboard-keyword-section,
+.storyboard-keyword-panel > .storyboard-keyword-tree-section {
+  box-sizing: border-box;
+  border-right: 1px solid var(--color-border-panel);
 }
 
 .storyboard-keyword-panel input,
@@ -972,10 +1008,13 @@ body.is-resizing-storyboard-keyword-panel * {
 
 .storyboard-keyword-grid > button,
 .storyboard-keyword-grid > span {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
   min-width: 0;
   height: 20px;
   overflow: hidden;
-  padding: 0 8px;
+  padding: 0;
   color: #999;
   font-size: 11px;
   font-weight: 400;
@@ -988,6 +1027,29 @@ body.is-resizing-storyboard-keyword-panel * {
   border-right: 1px solid var(--color-border-row);
   border-bottom: 1px solid var(--color-border-row);
   border-radius: 0;
+}
+
+.storyboard-keyword-grid > .storyboard-keyword-grid-cell.has-shortcut-hint {
+  grid-template-columns: 12px minmax(0, 1fr);
+}
+
+.storyboard-keyword-grid-shortcut {
+  width: 12px;
+  overflow: hidden;
+  color: #666;
+  font-variant-numeric: tabular-nums;
+  line-height: 20px;
+  text-align: left;
+}
+
+.storyboard-keyword-grid-label {
+  min-width: 0;
+  padding: 0 8px;
+  overflow: hidden;
+  line-height: 20px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .storyboard-keyword-grid > button:nth-child(3n),
@@ -1086,9 +1148,9 @@ body.is-resizing-storyboard-keyword-panel * {
 .storyboard-keyword-tree-section {
   display: flex;
   min-height: 124px;
-  flex: 1 1 220px;
+  flex: 1 0 auto;
   flex-direction: column;
-  overflow: hidden;
+  overflow: visible;
   background: var(--color-surface);
 }
 
@@ -1164,11 +1226,11 @@ body.is-resizing-storyboard-keyword-panel * {
 
 .storyboard-keyword-tree-body {
   display: flex;
-  min-height: 0;
-  flex: 1 1 auto;
+  min-height: auto;
+  flex: 0 0 auto;
   flex-direction: column;
   padding: 7px 0;
-  overflow: hidden;
+  overflow: visible;
   border-top: 1px solid var(--color-border-panel);
 }
 
@@ -1197,10 +1259,10 @@ body.is-resizing-storyboard-keyword-panel * {
 }
 
 .storyboard-keyword-tree {
-  min-height: 0;
-  flex: 1 1 auto;
+  min-height: auto;
+  flex: 0 0 auto;
   margin-top: 7px;
-  overflow: auto;
+  overflow: visible;
   border-top: 1px solid var(--color-border-row);
 }
 
@@ -2239,7 +2301,7 @@ body.is-resizing-storyboard-keyword-panel * {
   border: 1px solid #000;
   border-radius: 0;
   box-shadow: none;
-  cursor: pointer;
+  cursor: default;
 }
 
 .shot-row.is-selected .shot-frame-button {
@@ -2375,6 +2437,61 @@ body.is-marquee-selecting * {
   background: color-mix(in srgb, var(--color-text) 14%, transparent);
   border: 1px solid var(--color-text);
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 5%);
+}
+
+body.is-dragging-storyboard-shot,
+body.is-dragging-storyboard-shot * {
+  cursor: not-allowed !important;
+  user-select: none !important;
+}
+
+body.is-dragging-storyboard-shot.is-storyboard-shot-drag-allowed,
+body.is-dragging-storyboard-shot.is-storyboard-shot-drag-allowed * {
+  cursor: grabbing !important;
+}
+
+.storyboard-shot-keyword-drag-preview {
+  position: fixed;
+  z-index: 1400;
+  display: none;
+  pointer-events: none;
+}
+
+body.is-dragging-storyboard-shot.is-storyboard-shot-drag-allowed
+  .storyboard-shot-keyword-drag-preview {
+  display: block;
+}
+
+.storyboard-shot-keyword-drag-layer {
+  position: absolute;
+  box-sizing: border-box;
+  display: grid;
+  padding: 1px;
+  overflow: hidden;
+  color: #777;
+  background: #fff;
+  border: 0.5px solid #000;
+  place-items: center;
+}
+
+.storyboard-shot-keyword-drag-layer.is-front {
+  background: #fff;
+}
+
+.storyboard-shot-keyword-drag-layer.is-front > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.storyboard-shot-keyword-drag-layer.is-front > svg {
+  width: 25px;
+  height: 25px;
+  color: #777;
+}
+
+.storyboard-shot-keyword-drag-layer.is-front.is-placeholder {
+  background: #111;
 }
 
 .shot-time-cell {

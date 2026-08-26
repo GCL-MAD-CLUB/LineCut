@@ -51,6 +51,7 @@ import { normalizeFrameRate } from "../../timeline";
 import type { StoryboardDetectionResult, StoryboardShot } from "../../types";
 import { usePanelManagerState } from "../DockLayout";
 import { annotationShortcutAction, annotationShortcutAutoAdvances } from "../annotationShortcuts";
+import { sprayEraserCursor, useSprayToolModifiers } from "../sprayToolModifiers";
 import {
   isPopupMenuEventTarget,
   PopupMenu,
@@ -281,6 +282,16 @@ interface StoryboardMarqueeSelection {
   currentY: number;
 }
 
+interface StoryboardShotKeywordDragPreview {
+  x: number;
+  y: number;
+  thumbnailSrc: string | null;
+  width: number;
+  height: number;
+  layerCount: number;
+  hoveredKeywordId: string | null;
+}
+
 interface StoryboardContextMenuState {
   x: number;
   y: number;
@@ -344,6 +355,12 @@ const defaultStoryboardFooterAreaVisibility: StoryboardFooterAreaVisibility = {
 };
 
 const MARQUEE_DRAG_THRESHOLD = 4;
+const SHOT_KEYWORD_DRAG_THRESHOLD = 4;
+const SHOT_KEYWORD_DRAG_MAX_SIZE = 40;
+const SHOT_KEYWORD_DRAG_BORDER_SIZE = 3;
+const SHOT_KEYWORD_DRAG_LAYER_OFFSET = 1.5;
+const SHOT_KEYWORD_DRAG_SCROLL_EDGE_SIZE = 40;
+const SHOT_KEYWORD_DRAG_SCROLL_MAX_SPEED = 12;
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(Math.max(value, minimum), maximum);
@@ -789,8 +806,8 @@ function storyboardSprayCursor(
   customLabel: boolean,
 ) {
   const mark = storyboardSprayBottleMarkSvg(mode, flag, rating, customLabel);
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="17" height="20" viewBox="0 0 20 24"><path d="M8.25 1.5h3.5v2h-3.5zM9 3.5h2v2H9zM6.5 5.5h7v2.25h-7z" fill="#d0d0d0"/><path d="M6.25 8.25h7.5l1.5 2.25v10.25H4.75V10.5l1.5-2.25Z" fill="${fillColor}" stroke="#d0d0d0" stroke-width="1.25" stroke-linejoin="round"/><path d="M4 21.25h12v1.5H4z" fill="${fillColor}" stroke="#d0d0d0"/><path d="M6.25 11h7.5M6.25 18.75h7.5" stroke="#686868" stroke-width=".75"/>${mark}</svg>`;
-  return `url("data:image/svg+xml,${encodeURIComponent(svg)}") 8 2, crosshair`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="24" viewBox="0 0 20 24"><path d="M8.25 1.5h3.5v2h-3.5zM9 3.5h2v2H9zM6.5 5.5h7v2.25h-7z" fill="#d0d0d0"/><path d="M6.25 8.25h7.5l1.5 2.25v10.25H4.75V10.5l1.5-2.25Z" fill="${fillColor}" stroke="#d0d0d0" stroke-width="1.25" stroke-linejoin="round"/><path d="M4 21.25h12v1.5H4z" fill="${fillColor}" stroke="#d0d0d0"/><path d="M6.25 11h7.5M6.25 18.75h7.5" stroke="#686868" stroke-width=".75"/>${mark}</svg>`;
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}") 10 2, crosshair`;
 }
 
 interface StoryboardSprayBottleIconProps {
@@ -1172,7 +1189,9 @@ export function StoryboardPanel() {
     setShotFlags,
     setShotColorLabels,
     setShotCustomLabels,
+    setShotKeywordActivation,
     appendShotKeywords,
+    removeShotKeywords,
     createShotStack,
     cancelShotStack,
     removeShotFromStack,
@@ -1196,6 +1215,8 @@ export function StoryboardPanel() {
   const selectionFocusRef = useRef<string | null>(null);
   const marqueeCleanupRef = useRef<(() => void) | null>(null);
   const sprayGestureCleanupRef = useRef<(() => void) | null>(null);
+  const shotKeywordDragCleanupRef = useRef<(() => void) | null>(null);
+  const suppressShotClickRef = useRef(false);
   const keywordResizeCleanupRef = useRef<(() => void) | null>(null);
   const hadShotsRef = useRef(shots.length > 0);
   const [shotSort, setShotSort] = useState<StoryboardSort>(defaultStoryboardSort);
@@ -1221,6 +1242,8 @@ export function StoryboardPanel() {
     defaultStoryboardFooterAreaVisibility,
   );
   const [marqueeSelection, setMarqueeSelection] = useState<StoryboardMarqueeSelection | null>(null);
+  const [shotKeywordDragPreview, setShotKeywordDragPreview] =
+    useState<StoryboardShotKeywordDragPreview | null>(null);
   const [contextMenu, setContextMenu] = useState<StoryboardContextMenuState | null>(null);
   const [annotationMenu, setAnnotationMenu] = useState<StoryboardAnnotationMenuState | null>(null);
   const [storyboardColumnWidths, setStoryboardColumnWidths] = useState(
@@ -1319,18 +1342,26 @@ export function StoryboardPanel() {
   const sprayKeywords = sprayKeywordParseResult.paths;
   const sprayKeywordsDisplay = formatParsedStoryboardKeywords(sprayKeywords);
   const sprayUsesCustomLabel = sprayMode === "colorLabel" && sprayCustomLabel.trim().length > 0;
+  const sprayAltPressed = useSprayToolModifiers(sprayActive, sprayMode === "keywords");
+  const sprayCanEraseWithAlt =
+    sprayMode === "keywords" ||
+    (sprayMode === "colorLabel" && (sprayColorLabel !== null || sprayUsesCustomLabel)) ||
+    (sprayMode === "flag" && sprayFlag !== "none");
+  const sprayErasing = sprayAltPressed && sprayCanEraseWithAlt;
   const sprayBottleFillColor =
     sprayMode === "colorLabel" && sprayColorLabel
       ? storyboardShotColorLabelValues[sprayColorLabel]
       : "#252525";
   const panelStyle = {
-    "--storyboard-spray-cursor": storyboardSprayCursor(
-      sprayBottleFillColor,
-      sprayMode,
-      sprayFlag,
-      sprayRating,
-      sprayUsesCustomLabel,
-    ),
+    "--storyboard-spray-cursor": sprayErasing
+      ? sprayEraserCursor
+      : storyboardSprayCursor(
+          sprayBottleFillColor,
+          sprayMode,
+          sprayFlag,
+          sprayRating,
+          sprayUsesCustomLabel,
+        ),
   } as CSSProperties;
   const currentFrame = playback?.currentFrame ?? 0;
   const isPlaying = playback?.isPlaying ?? false;
@@ -1938,7 +1969,9 @@ export function StoryboardPanel() {
       }
       marqueeCleanupRef.current?.();
       sprayGestureCleanupRef.current?.();
+      shotKeywordDragCleanupRef.current?.();
       keywordResizeCleanupRef.current?.();
+      suppressShotClickRef.current = false;
       document.body.classList.remove("is-resizing-storyboard-column");
       document.body.classList.remove("is-resizing-storyboard-keyword-panel");
     },
@@ -2109,13 +2142,21 @@ export function StoryboardPanel() {
     setSprayActive(false);
   }
 
-  function applySprayToShot(shotId: string, historyGroupId: string) {
+  function applySprayToShot(shotId: string, historyGroupId: string, eraseWithAlt = false) {
     const targetShotIds = annotationShotIdsForSelection([shotId], shotStacksByShotId);
     if (sprayMode === "keywords") {
-      appendShotKeywords(targetShotIds, sprayKeywordInput, historyGroupId);
+      if (eraseWithAlt) {
+        removeShotKeywords(targetShotIds, sprayKeywordInput, historyGroupId);
+      } else {
+        appendShotKeywords(targetShotIds, sprayKeywordInput, historyGroupId);
+      }
       return;
     }
     if (sprayMode === "colorLabel") {
+      if (eraseWithAlt) {
+        setShotColorLabels(targetShotIds, null, historyGroupId);
+        return;
+      }
       const customLabel = sprayCustomLabel.trim();
       if (customLabel) {
         setShotCustomLabels(targetShotIds, customLabel, historyGroupId);
@@ -2125,7 +2166,7 @@ export function StoryboardPanel() {
       return;
     }
     if (sprayMode === "flag") {
-      setShotFlags(targetShotIds, sprayFlag, historyGroupId);
+      setShotFlags(targetShotIds, eraseWithAlt ? "none" : sprayFlag, historyGroupId);
       return;
     }
     setShotRatings(targetShotIds, sprayRating, historyGroupId);
@@ -2166,13 +2207,18 @@ export function StoryboardPanel() {
     const pointerId = event.pointerId;
     const historyGroupId = `storyboard-spray-${Date.now()}-${pointerId}`;
     const paintedShotIds = new Set<string>();
-    const paintTarget = (target: EventTarget | null, clientX: number, clientY: number) => {
+    const paintTarget = (
+      target: EventTarget | null,
+      clientX: number,
+      clientY: number,
+      altKey: boolean,
+    ) => {
       const shotId = sprayShotIdFromPoint(target, clientX, clientY);
       if (!shotId || paintedShotIds.has(shotId)) {
         return;
       }
       paintedShotIds.add(shotId);
-      applySprayToShot(shotId, historyGroupId);
+      applySprayToShot(shotId, historyGroupId, altKey && sprayCanEraseWithAlt);
     };
     const cleanup = () => {
       window.removeEventListener("pointermove", onMove);
@@ -2192,6 +2238,7 @@ export function StoryboardPanel() {
         document.elementFromPoint(moveEvent.clientX, moveEvent.clientY),
         moveEvent.clientX,
         moveEvent.clientY,
+        moveEvent.altKey,
       );
     };
     const onFinish = (finishEvent: globalThis.PointerEvent) => {
@@ -2202,7 +2249,7 @@ export function StoryboardPanel() {
 
     sprayGestureCleanupRef.current = cleanup;
     paintedShotIds.add(initialShotId);
-    applySprayToShot(initialShotId, historyGroupId);
+    applySprayToShot(initialShotId, historyGroupId, event.altKey && sprayCanEraseWithAlt);
     window.addEventListener("pointermove", onMove, { passive: false });
     window.addEventListener("pointerup", onFinish);
     window.addEventListener("pointercancel", onFinish);
@@ -2219,6 +2266,169 @@ export function StoryboardPanel() {
     }
     event.preventDefault();
     event.stopPropagation();
+  }
+
+  function shotKeywordDragTargetFromPoint(clientX: number, clientY: number) {
+    const element = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+    if (!element || !panelRef.current?.contains(element)) {
+      return { allowed: false, keywordId: null };
+    }
+    const keywordRow = element.closest<HTMLElement>("[data-storyboard-keyword-drop-id]");
+    if (keywordRow) {
+      return {
+        allowed: true,
+        keywordId: keywordRow.dataset.storyboardKeywordDropId ?? null,
+      };
+    }
+    return {
+      allowed: Boolean(
+        element.closest("[data-storyboard-shot-drag-surface], [data-storyboard-keyword-drop-list]"),
+      ),
+      keywordId: null,
+    };
+  }
+
+  function startShotKeywordDrag(event: ReactPointerEvent<HTMLButtonElement>, shot: StoryboardShot) {
+    if (event.button !== 0 || !event.isPrimary || sprayActive) {
+      return;
+    }
+    const frameButton = event.currentTarget;
+    const thumbnail = frameButton.querySelector<HTMLImageElement>("img.shot-frame");
+    const frameBounds = frameButton.getBoundingClientRect();
+    const sourceWidth = thumbnail?.naturalWidth || frameBounds.width;
+    const sourceHeight = thumbnail?.naturalHeight || frameBounds.height;
+    const aspectRatio = sourceWidth > 0 && sourceHeight > 0 ? sourceWidth / sourceHeight : 16 / 9;
+    const maximumContentSize = SHOT_KEYWORD_DRAG_MAX_SIZE - SHOT_KEYWORD_DRAG_BORDER_SIZE;
+    const contentWidth = aspectRatio >= 1 ? maximumContentSize : maximumContentSize * aspectRatio;
+    const contentHeight = aspectRatio >= 1 ? maximumContentSize / aspectRatio : maximumContentSize;
+    const previewWidth = contentWidth + SHOT_KEYWORD_DRAG_BORDER_SIZE;
+    const previewHeight = contentHeight + SHOT_KEYWORD_DRAG_BORDER_SIZE;
+    const sourceIsSelected = selectedShotIds.has(shot.id);
+    const selectedSourceIds = sourceIsSelected ? selectedShotIds : [shot.id];
+    const dragShotIds = annotationShotIdsForSelection(selectedSourceIds, shotStacksByShotId);
+    const layerCount = Math.min(10, sourceIsSelected ? selectedShotIds.size : 1);
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const pointerId = event.pointerId;
+    let dragging = false;
+    let latestClientX = startX;
+    let latestClientY = startY;
+    let autoScrollAnimationFrameId: number | null = null;
+
+    shotKeywordDragCleanupRef.current?.();
+
+    const updateDragPreview = (clientX: number, clientY: number) => {
+      const target = shotKeywordDragTargetFromPoint(clientX, clientY);
+      document.body.classList.toggle("is-storyboard-shot-drag-allowed", target.allowed);
+      setShotKeywordDragPreview({
+        x: clientX,
+        y: clientY,
+        thumbnailSrc: thumbnail?.currentSrc || thumbnail?.src || null,
+        width: previewWidth,
+        height: previewHeight,
+        layerCount,
+        hoveredKeywordId: target.keywordId,
+      });
+    };
+    const scrollKeywordPanelAtEdge = () => {
+      if (!dragging) {
+        autoScrollAnimationFrameId = null;
+        return;
+      }
+      const element = document.elementFromPoint(latestClientX, latestClientY) as HTMLElement | null;
+      const scrollContainer = element?.closest<HTMLElement>(
+        "[data-storyboard-keyword-scroll-container]",
+      );
+      if (scrollContainer) {
+        const bounds = scrollContainer.getBoundingClientRect();
+        const edgeSize = Math.min(SHOT_KEYWORD_DRAG_SCROLL_EDGE_SIZE, bounds.height / 3);
+        let scrollDelta = 0;
+        if (latestClientY < bounds.top + edgeSize) {
+          const strength = 1 - Math.max(0, latestClientY - bounds.top) / edgeSize;
+          scrollDelta = -Math.max(1, strength * SHOT_KEYWORD_DRAG_SCROLL_MAX_SPEED);
+        } else if (latestClientY > bounds.bottom - edgeSize) {
+          const strength = 1 - Math.max(0, bounds.bottom - latestClientY) / edgeSize;
+          scrollDelta = Math.max(1, strength * SHOT_KEYWORD_DRAG_SCROLL_MAX_SPEED);
+        }
+        if (scrollDelta !== 0) {
+          const previousScrollTop = scrollContainer.scrollTop;
+          scrollContainer.scrollTop += scrollDelta;
+          if (scrollContainer.scrollTop !== previousScrollTop) {
+            updateDragPreview(latestClientX, latestClientY);
+          }
+        }
+      }
+      autoScrollAnimationFrameId = window.requestAnimationFrame(scrollKeywordPanelAtEdge);
+    };
+
+    const cleanup = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      window.removeEventListener("blur", onBlur);
+      if (autoScrollAnimationFrameId !== null) {
+        window.cancelAnimationFrame(autoScrollAnimationFrameId);
+        autoScrollAnimationFrameId = null;
+      }
+      document.body.classList.remove(
+        "is-dragging-storyboard-shot",
+        "is-storyboard-shot-drag-allowed",
+      );
+      setShotKeywordDragPreview(null);
+      if (shotKeywordDragCleanupRef.current === cleanup) {
+        shotKeywordDragCleanupRef.current = null;
+      }
+    };
+    const finish = (finishEvent: globalThis.PointerEvent, cancelled: boolean) => {
+      if (finishEvent.pointerId !== pointerId) {
+        return;
+      }
+      if (dragging) {
+        finishEvent.preventDefault();
+        const target = shotKeywordDragTargetFromPoint(finishEvent.clientX, finishEvent.clientY);
+        if (!cancelled && target.keywordId) {
+          setShotKeywordActivation(dragShotIds, target.keywordId, true);
+        }
+        window.setTimeout(() => {
+          suppressShotClickRef.current = false;
+        }, 0);
+      }
+      cleanup();
+    };
+    const onMove = (moveEvent: globalThis.PointerEvent) => {
+      if (moveEvent.pointerId !== pointerId) {
+        return;
+      }
+      if (
+        !dragging &&
+        Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) <
+          SHOT_KEYWORD_DRAG_THRESHOLD
+      ) {
+        return;
+      }
+      if (!dragging) {
+        dragging = true;
+        suppressShotClickRef.current = true;
+        document.body.classList.add("is-dragging-storyboard-shot");
+        autoScrollAnimationFrameId = window.requestAnimationFrame(scrollKeywordPanelAtEdge);
+      }
+      moveEvent.preventDefault();
+      latestClientX = moveEvent.clientX;
+      latestClientY = moveEvent.clientY;
+      updateDragPreview(latestClientX, latestClientY);
+    };
+    const onUp = (upEvent: globalThis.PointerEvent) => finish(upEvent, false);
+    const onCancel = (cancelEvent: globalThis.PointerEvent) => finish(cancelEvent, true);
+    const onBlur = () => {
+      suppressShotClickRef.current = false;
+      cleanup();
+    };
+
+    shotKeywordDragCleanupRef.current = cleanup;
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+    window.addEventListener("blur", onBlur);
   }
 
   function startMarqueeSelection(event: ReactPointerEvent<HTMLDivElement>) {
@@ -2379,6 +2589,51 @@ export function StoryboardPanel() {
         style={{ left, top, width, height }}
         aria-hidden="true"
       />,
+      document.body,
+    );
+  }
+
+  function renderShotKeywordDragPreview() {
+    if (!shotKeywordDragPreview) {
+      return null;
+    }
+    const { x, y, thumbnailSrc, width, height, layerCount } = shotKeywordDragPreview;
+    return createPortal(
+      <div
+        className="storyboard-shot-keyword-drag-preview"
+        style={{
+          left: x - width / 2,
+          top: y - height / 2,
+          width: width + (layerCount - 1) * SHOT_KEYWORD_DRAG_LAYER_OFFSET,
+          height: height + (layerCount - 1) * SHOT_KEYWORD_DRAG_LAYER_OFFSET,
+        }}
+        aria-hidden="true"
+      >
+        {Array.from({ length: layerCount }, (_, layerIndex) => (
+          <span
+            key={layerIndex}
+            className={`storyboard-shot-keyword-drag-layer ${
+              layerIndex === 0
+                ? `is-front ${thumbnailSrc ? "has-thumbnail" : "is-placeholder"}`
+                : "is-stacked"
+            }`}
+            style={{
+              left: layerIndex * SHOT_KEYWORD_DRAG_LAYER_OFFSET,
+              top: layerIndex * SHOT_KEYWORD_DRAG_LAYER_OFFSET,
+              zIndex: layerCount - layerIndex,
+              width,
+              height,
+            }}
+          >
+            {layerIndex === 0 &&
+              (thumbnailSrc ? (
+                <img src={thumbnailSrc} alt="" draggable={false} />
+              ) : (
+                <Film aria-hidden="true" />
+              ))}
+          </span>
+        ))}
+      </div>,
       document.body,
     );
   }
@@ -2548,6 +2803,11 @@ export function StoryboardPanel() {
     shot: StoryboardShot,
     focusRange = false,
   ) {
+    if (suppressShotClickRef.current) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     const additive = event.ctrlKey || event.metaKey;
     selectionFocusRef.current = shot.id;
     const currentSelection = new Set(selectedShotIds);
@@ -3094,6 +3354,7 @@ export function StoryboardPanel() {
               onContextMenu={openContextMenu}
               onSelectShot={handleShotSelection}
               onDoubleClickShot={handleShotDoubleClick}
+              onStartKeywordDrag={startShotKeywordDrag}
               onOpenAnnotationMenu={openAnnotationMenu}
               shotTitle={(shot) => storyboardShotTitle(shot, shotCount, shotAnnotations[shot.id])}
               shotLabel={(shot) => storyboardShotLabel(shotAnnotations[shot.id])}
@@ -3113,6 +3374,7 @@ export function StoryboardPanel() {
               onContextMenu={openContextMenu}
               onSelectShot={handleShotSelection}
               onDoubleClickShot={handleShotDoubleClick}
+              onStartKeywordDrag={startShotKeywordDrag}
               onOpenAnnotationMenu={openAnnotationMenu}
               shotTitle={(shot) => storyboardShotTitle(shot, shotCount, shotAnnotations[shot.id])}
               shotLabel={(shot) => storyboardShotLabel(shotAnnotations[shot.id])}
@@ -3129,6 +3391,8 @@ export function StoryboardPanel() {
           />
         )}
         <StoryboardKeywordPanel
+          active={isEditAuthority && keywordPanelOpen && !sprayActive}
+          draggedKeywordHoverId={shotKeywordDragPreview?.hoveredKeywordId ?? null}
           shotIds={keywordPanelShotIds}
           resetKey={videoContext}
           onSetQuickKeyword={setSprayKeywordInput}
@@ -3148,6 +3412,7 @@ export function StoryboardPanel() {
       </div>
 
       {renderMarqueeOverlay()}
+      {renderShotKeywordDragPreview()}
 
       <footer className="storyboard-footer">
         <div className="storyboard-selection-tools">
