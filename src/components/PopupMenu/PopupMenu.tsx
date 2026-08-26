@@ -128,8 +128,16 @@ export function PopupMenu({
 }: PopupMenuProps) {
   const menuRef = useRef<HTMLDivElement | null>(null);
   const viewportLayoutRef = useRef(initialViewportLayout);
+  const positionedRef = useRef(false);
   const [viewportLayout, setViewportLayout] = useState(initialViewportLayout);
   const [positioned, setPositioned] = useState(false);
+  const contextMenuAnchorX = contextMenuAnchor?.x;
+  const contextMenuAnchorY = contextMenuAnchor?.y;
+  const submenuAnchorLeft = submenuAnchor?.left;
+  const submenuAnchorRight = submenuAnchor?.right;
+  const submenuAnchorTop = submenuAnchor?.top;
+  const hasContextMenuAnchor = contextMenuAnchor !== undefined;
+  const hasSubmenuAnchor = submenuAnchor !== undefined;
 
   const fitToViewport = useCallback(() => {
     const menu = menuRef.current;
@@ -138,12 +146,12 @@ export function PopupMenu({
     }
     const current = viewportLayoutRef.current;
     const rect = menu.getBoundingClientRect();
-    const anchorLeft = submenuAnchor
-      ? submenuAnchor.right - 4
-      : (contextMenuAnchor?.x ?? rect.left - current.translateX);
-    const anchorTop = submenuAnchor
-      ? submenuAnchor.top - 3
-      : (contextMenuAnchor?.y ?? rect.top - current.translateY);
+    const anchorLeft = hasSubmenuAnchor
+      ? (submenuAnchorRight ?? 0) - 4
+      : (contextMenuAnchorX ?? rect.left - current.translateX);
+    const anchorTop = hasSubmenuAnchor
+      ? (submenuAnchorTop ?? 0) - 3
+      : (contextMenuAnchorY ?? rect.top - current.translateY);
     const borderHeight = Math.max(0, rect.height - menu.clientHeight);
     const naturalHeight = menu.scrollHeight + borderHeight;
     const maximumViewportHeight = Math.max(0, window.innerHeight - popupViewportMargin * 2);
@@ -151,7 +159,7 @@ export function PopupMenu({
     let renderedHeight = Math.min(naturalHeight, maximumHeight + borderHeight);
     let targetTop: number;
 
-    if (contextMenuAnchor) {
+    if (hasContextMenuAnchor) {
       const spaceAbove = Math.max(0, anchorTop - popupViewportMargin);
       const spaceBelow = Math.max(0, window.innerHeight - popupViewportMargin - anchorTop);
 
@@ -181,8 +189,8 @@ export function PopupMenu({
       window.innerWidth - popupViewportMargin - rect.width,
     );
     let targetLeft = Math.min(Math.max(anchorLeft, popupViewportMargin), maximumLeft);
-    if (submenuAnchor && anchorLeft + rect.width > window.innerWidth - popupViewportMargin) {
-      targetLeft = Math.max(popupViewportMargin, submenuAnchor.left - rect.width + 4);
+    if (hasSubmenuAnchor && anchorLeft + rect.width > window.innerWidth - popupViewportMargin) {
+      targetLeft = Math.max(popupViewportMargin, (submenuAnchorLeft ?? 0) - rect.width + 4);
     }
 
     const next: PopupMenuViewportLayout = {
@@ -201,11 +209,25 @@ export function PopupMenu({
     }
     viewportLayoutRef.current = next;
     setViewportLayout(next);
-  }, [contextMenuAnchor, submenuAnchor]);
+  }, [
+    contextMenuAnchorX,
+    contextMenuAnchorY,
+    hasContextMenuAnchor,
+    hasSubmenuAnchor,
+    submenuAnchorLeft,
+    submenuAnchorRight,
+    submenuAnchorTop,
+  ]);
 
   useLayoutEffect(() => {
     fitToViewport();
-    setPositioned(true);
+    if (!positionedRef.current) {
+      positionedRef.current = true;
+      setPositioned(true);
+    }
+  }, [children, fitToViewport, style]);
+
+  useLayoutEffect(() => {
     const menu = menuRef.current;
     if (!menu) {
       return;
@@ -219,7 +241,7 @@ export function PopupMenu({
       window.removeEventListener("resize", fitToViewport);
       window.removeEventListener("scroll", fitToViewport, true);
     };
-  }, [children, fitToViewport, style]);
+  }, [fitToViewport]);
 
   useEffect(() => {
     if (!enableMnemonics) {

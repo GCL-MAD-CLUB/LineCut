@@ -98,6 +98,7 @@ interface ShotFrameButtonProps {
   frameRate: number;
   priority: number;
   onSelect: (event: ReactMouseEvent<HTMLButtonElement>) => void;
+  onStartKeywordDrag: (event: ReactPointerEvent<HTMLButtonElement>) => void;
 }
 
 function ShotFrameButton({
@@ -109,6 +110,7 @@ function ShotFrameButton({
   frameRate,
   priority,
   onSelect,
+  onStartKeywordDrag,
 }: ShotFrameButtonProps) {
   const { resolution, thumbnailContainerRef } = useTimelineThumbnailResolution<HTMLButtonElement>();
   const thumbnailIdentity = `${fingerprint}:${videoPath}:${shot.start_us}`;
@@ -234,6 +236,7 @@ function ShotFrameButton({
       type="button"
       className="shot-frame-button"
       onClick={onSelect}
+      onPointerDown={onStartKeywordDrag}
       onDoubleClick={(event) => event.stopPropagation()}
       onPointerMove={updateHoverPreview}
       onPointerLeave={() => setHoverProgress(null)}
@@ -290,6 +293,7 @@ export interface StoryboardShotThumbnailProps {
   frameRate: number;
   priority: number;
   onSelectFrame: (event: ReactMouseEvent<HTMLButtonElement>) => void;
+  onStartKeywordDrag: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   onToggleStack: () => void;
   onSetRating: (rating: number) => void;
   onSetFlag: (flag: StoryboardShotFlag) => void;
@@ -312,6 +316,7 @@ export function StoryboardShotThumbnail({
   frameRate,
   priority,
   onSelectFrame,
+  onStartKeywordDrag,
   onToggleStack,
   onSetRating,
   onSetFlag,
@@ -350,6 +355,7 @@ export function StoryboardShotThumbnail({
           previewVideoPath={previewVideoPath}
           frameRate={frameRate}
           priority={priority}
+          onStartKeywordDrag={onStartKeywordDrag}
           onSelect={(event) => {
             event.stopPropagation();
             onSelectFrame(event);

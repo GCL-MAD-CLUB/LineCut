@@ -1,5 +1,13 @@
 import { ChevronsUpDown, ChevronDown, Minus, Plus, Search, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { createPortal } from "react-dom";
 import { ModalDialog } from "../ModalDialog";
 import {
@@ -30,6 +38,7 @@ import { usePanelInstanceId } from "../../runtime/systems/PanelState";
 
 interface StoryboardKeywordPanelProps {
   active: boolean;
+  draggedKeywordHoverId: string | null;
   shotIds: readonly string[];
   resetKey: string;
   onSetQuickKeyword?: (keywordLabel: string) => void;
@@ -117,6 +126,7 @@ function keywordNodeOrder(left: StoryboardKeywordNode, right: StoryboardKeywordN
 
 export function StoryboardKeywordPanel({
   active,
+  draggedKeywordHoverId,
   shotIds,
   resetKey,
   onSetQuickKeyword,
@@ -181,8 +191,10 @@ export function StoryboardKeywordPanel({
   } | null>(null);
   const [altShortcutHintsVisible, setAltShortcutHintsVisible] = useState(false);
   const [shortcutKeywordIds, setShortcutKeywordIds] = useState<readonly string[]>([]);
+  const [panelHasVerticalOverflow, setPanelHasVerticalOverflow] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const keywordEditorRef = useRef<HTMLTextAreaElement | null>(null);
+  const panelScrollRef = useRef<HTMLElement | null>(null);
   const cancelKeywordEditRef = useRef(false);
   const portalContainerRef = useRef<Element | null>(null);
   const shortcutKeywordIdsRef = useRef<readonly string[]>([]);
@@ -214,6 +226,41 @@ export function StoryboardKeywordPanel({
 
   useCloseOnOutsidePointer(Boolean(treeContextMenu), () => setTreeContextMenu(null));
   useCloseOnOutsidePointer(Boolean(keywordModeMenu), () => setKeywordModeMenu(null));
+
+  useLayoutEffect(() => {
+    const panel = panelScrollRef.current;
+    if (!panel) {
+      return;
+    }
+    let animationFrameId: number | null = null;
+    const measureOverflow = () => {
+      animationFrameId = null;
+      const hasOverflow = panel.scrollHeight > panel.clientHeight + 1;
+      setPanelHasVerticalOverflow((current) => (current === hasOverflow ? current : hasOverflow));
+    };
+    const scheduleMeasure = () => {
+      if (animationFrameId !== null) {
+        return;
+      }
+      animationFrameId = window.requestAnimationFrame(measureOverflow);
+    };
+    const resizeObserver = new ResizeObserver(scheduleMeasure);
+    resizeObserver.observe(panel);
+    const mutationObserver = new MutationObserver(scheduleMeasure);
+    mutationObserver.observe(panel, {
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
+    measureOverflow();
+    return () => {
+      if (animationFrameId !== null) {
+        window.cancelAnimationFrame(animationFrameId);
+      }
+      resizeObserver.disconnect();
+      mutationObserver.disconnect();
+    };
+  }, []);
 
   useEffect(() => {
     portalContainerRef.current = document.querySelector(".app-shell");
@@ -438,6 +485,29 @@ export function StoryboardKeywordPanel({
   }, [keywordNodes]);
 
   const normalizedFilter = filter.trim().toLocaleLowerCase();
+
+  useEffect(() => {
+    if (
+      !draggedKeywordHoverId ||
+      normalizedFilter ||
+      !collapsedNodeIds.has(draggedKeywordHoverId) ||
+      (childrenByParent.get(draggedKeywordHoverId)?.length ?? 0) === 0
+    ) {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => {
+      setCollapsedNodeIds((current) => {
+        if (!current.has(draggedKeywordHoverId)) {
+          return current;
+        }
+        const next = new Set(current);
+        next.delete(draggedKeywordHoverId);
+        return next;
+      });
+    }, 600);
+    return () => window.clearTimeout(timeoutId);
+  }, [childrenByParent, collapsedNodeIds, draggedKeywordHoverId, normalizedFilter]);
+
   const matchingTreeNodeIds = useMemo(() => {
     if (!normalizedFilter) {
       return new Set(keywordNodes.map((node) => node.id));
@@ -895,6 +965,7 @@ export function StoryboardKeywordPanel({
       return (
         <div key={node.id} className="storyboard-keyword-tree-branch">
           <div
+            data-storyboard-keyword-drop-id={node.id}
             className={`storyboard-keyword-tree-row ${
               selectedTreeNodeIds.has(node.id) ? "is-active" : ""
             }`.trim()}
@@ -1042,7 +1113,13 @@ export function StoryboardKeywordPanel({
           </filter>
         </defs>
       </svg>
-      <aside className="storyboard-keyword-panel">
+      <aside
+        ref={panelScrollRef}
+        className={`storyboard-keyword-panel ${
+          panelHasVerticalOverflow ? "has-vertical-overflow" : ""
+        }`.trim()}
+        data-storyboard-keyword-scroll-container=""
+      >
         <header
           className={`storyboard-keyword-panel-heading ${panelOpen ? "" : "is-collapsed"}`.trim()}
         >
@@ -1278,7 +1355,11 @@ export function StoryboardKeywordPanel({
                   aria-label="过滤关键字"
                 />
               </label>
-              <div className="storyboard-keyword-tree" role="tree">
+              <div
+                className="storyboard-keyword-tree"
+                data-storyboard-keyword-drop-list=""
+                role="tree"
+              >
                 {renderTreeNodes(null, 0)}
               </div>
             </div>

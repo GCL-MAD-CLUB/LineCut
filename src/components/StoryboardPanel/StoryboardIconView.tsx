@@ -73,6 +73,7 @@ interface StoryboardIconViewProps {
     focusRange?: boolean,
   ) => void;
   onDoubleClickShot: (event: ReactMouseEvent<HTMLElement>, shot: StoryboardShot) => void;
+  onStartKeywordDrag: (event: ReactPointerEvent<HTMLButtonElement>, shot: StoryboardShot) => void;
   onOpenAnnotationMenu: (
     event: ReactMouseEvent<HTMLButtonElement>,
     shotId: string,
@@ -196,6 +197,7 @@ export function StoryboardIconView({
   onContextMenu,
   onSelectShot,
   onDoubleClickShot,
+  onStartKeywordDrag,
   onOpenAnnotationMenu,
   shotTitle,
   shotLabel,
@@ -282,6 +284,7 @@ export function StoryboardIconView({
       <div
         ref={scrollRef}
         className="storyboard-icon-view"
+        data-storyboard-shot-drag-surface=""
         role="list"
         aria-label="分镜图标视图"
         onPointerDown={onPointerDown}
@@ -351,6 +354,7 @@ export function StoryboardIconView({
                     frameRate={frameRate}
                     priority={index}
                     onSelectFrame={(event) => onSelectShot(event, shot, true)}
+                    onStartKeywordDrag={(event) => onStartKeywordDrag(event, shot)}
                     onToggleStack={() => stack && setShotStackExpanded(shot.id, !stack.expanded)}
                     onSetRating={(nextRating) => setShotRatings(targetShotIds(), nextRating)}
                     onSetFlag={(nextFlag) => setShotFlags(targetShotIds(), nextFlag)}
