@@ -51,6 +51,7 @@ import { normalizeFrameRate } from "../../timeline";
 import type { StoryboardDetectionResult, StoryboardShot } from "../../types";
 import { usePanelManagerState } from "../DockLayout";
 import { annotationShortcutAction, annotationShortcutAutoAdvances } from "../annotationShortcuts";
+import { sprayEraserCursor, useSprayToolModifiers } from "../sprayToolModifiers";
 import {
   isPopupMenuEventTarget,
   PopupMenu,
@@ -805,8 +806,8 @@ function storyboardSprayCursor(
   customLabel: boolean,
 ) {
   const mark = storyboardSprayBottleMarkSvg(mode, flag, rating, customLabel);
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="17" height="20" viewBox="0 0 20 24"><path d="M8.25 1.5h3.5v2h-3.5zM9 3.5h2v2H9zM6.5 5.5h7v2.25h-7z" fill="#d0d0d0"/><path d="M6.25 8.25h7.5l1.5 2.25v10.25H4.75V10.5l1.5-2.25Z" fill="${fillColor}" stroke="#d0d0d0" stroke-width="1.25" stroke-linejoin="round"/><path d="M4 21.25h12v1.5H4z" fill="${fillColor}" stroke="#d0d0d0"/><path d="M6.25 11h7.5M6.25 18.75h7.5" stroke="#686868" stroke-width=".75"/>${mark}</svg>`;
-  return `url("data:image/svg+xml,${encodeURIComponent(svg)}") 8 2, crosshair`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="24" viewBox="0 0 20 24"><path d="M8.25 1.5h3.5v2h-3.5zM9 3.5h2v2H9zM6.5 5.5h7v2.25h-7z" fill="#d0d0d0"/><path d="M6.25 8.25h7.5l1.5 2.25v10.25H4.75V10.5l1.5-2.25Z" fill="${fillColor}" stroke="#d0d0d0" stroke-width="1.25" stroke-linejoin="round"/><path d="M4 21.25h12v1.5H4z" fill="${fillColor}" stroke="#d0d0d0"/><path d="M6.25 11h7.5M6.25 18.75h7.5" stroke="#686868" stroke-width=".75"/>${mark}</svg>`;
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}") 10 2, crosshair`;
 }
 
 interface StoryboardSprayBottleIconProps {
@@ -1190,6 +1191,7 @@ export function StoryboardPanel() {
     setShotCustomLabels,
     setShotKeywordActivation,
     appendShotKeywords,
+    removeShotKeywords,
     createShotStack,
     cancelShotStack,
     removeShotFromStack,
@@ -1340,18 +1342,26 @@ export function StoryboardPanel() {
   const sprayKeywords = sprayKeywordParseResult.paths;
   const sprayKeywordsDisplay = formatParsedStoryboardKeywords(sprayKeywords);
   const sprayUsesCustomLabel = sprayMode === "colorLabel" && sprayCustomLabel.trim().length > 0;
+  const sprayAltPressed = useSprayToolModifiers(sprayActive, sprayMode === "keywords");
+  const sprayCanEraseWithAlt =
+    sprayMode === "keywords" ||
+    (sprayMode === "colorLabel" && (sprayColorLabel !== null || sprayUsesCustomLabel)) ||
+    (sprayMode === "flag" && sprayFlag !== "none");
+  const sprayErasing = sprayAltPressed && sprayCanEraseWithAlt;
   const sprayBottleFillColor =
     sprayMode === "colorLabel" && sprayColorLabel
       ? storyboardShotColorLabelValues[sprayColorLabel]
       : "#252525";
   const panelStyle = {
-    "--storyboard-spray-cursor": storyboardSprayCursor(
-      sprayBottleFillColor,
-      sprayMode,
-      sprayFlag,
-      sprayRating,
-      sprayUsesCustomLabel,
-    ),
+    "--storyboard-spray-cursor": sprayErasing
+      ? sprayEraserCursor
+      : storyboardSprayCursor(
+          sprayBottleFillColor,
+          sprayMode,
+          sprayFlag,
+          sprayRating,
+          sprayUsesCustomLabel,
+        ),
   } as CSSProperties;
   const currentFrame = playback?.currentFrame ?? 0;
   const isPlaying = playback?.isPlaying ?? false;
@@ -2132,13 +2142,21 @@ export function StoryboardPanel() {
     setSprayActive(false);
   }
 
-  function applySprayToShot(shotId: string, historyGroupId: string) {
+  function applySprayToShot(shotId: string, historyGroupId: string, eraseWithAlt = false) {
     const targetShotIds = annotationShotIdsForSelection([shotId], shotStacksByShotId);
     if (sprayMode === "keywords") {
-      appendShotKeywords(targetShotIds, sprayKeywordInput, historyGroupId);
+      if (eraseWithAlt) {
+        removeShotKeywords(targetShotIds, sprayKeywordInput, historyGroupId);
+      } else {
+        appendShotKeywords(targetShotIds, sprayKeywordInput, historyGroupId);
+      }
       return;
     }
     if (sprayMode === "colorLabel") {
+      if (eraseWithAlt) {
+        setShotColorLabels(targetShotIds, null, historyGroupId);
+        return;
+      }
       const customLabel = sprayCustomLabel.trim();
       if (customLabel) {
         setShotCustomLabels(targetShotIds, customLabel, historyGroupId);
@@ -2148,7 +2166,7 @@ export function StoryboardPanel() {
       return;
     }
     if (sprayMode === "flag") {
-      setShotFlags(targetShotIds, sprayFlag, historyGroupId);
+      setShotFlags(targetShotIds, eraseWithAlt ? "none" : sprayFlag, historyGroupId);
       return;
     }
     setShotRatings(targetShotIds, sprayRating, historyGroupId);
@@ -2189,13 +2207,18 @@ export function StoryboardPanel() {
     const pointerId = event.pointerId;
     const historyGroupId = `storyboard-spray-${Date.now()}-${pointerId}`;
     const paintedShotIds = new Set<string>();
-    const paintTarget = (target: EventTarget | null, clientX: number, clientY: number) => {
+    const paintTarget = (
+      target: EventTarget | null,
+      clientX: number,
+      clientY: number,
+      altKey: boolean,
+    ) => {
       const shotId = sprayShotIdFromPoint(target, clientX, clientY);
       if (!shotId || paintedShotIds.has(shotId)) {
         return;
       }
       paintedShotIds.add(shotId);
-      applySprayToShot(shotId, historyGroupId);
+      applySprayToShot(shotId, historyGroupId, altKey && sprayCanEraseWithAlt);
     };
     const cleanup = () => {
       window.removeEventListener("pointermove", onMove);
@@ -2215,6 +2238,7 @@ export function StoryboardPanel() {
         document.elementFromPoint(moveEvent.clientX, moveEvent.clientY),
         moveEvent.clientX,
         moveEvent.clientY,
+        moveEvent.altKey,
       );
     };
     const onFinish = (finishEvent: globalThis.PointerEvent) => {
@@ -2225,7 +2249,7 @@ export function StoryboardPanel() {
 
     sprayGestureCleanupRef.current = cleanup;
     paintedShotIds.add(initialShotId);
-    applySprayToShot(initialShotId, historyGroupId);
+    applySprayToShot(initialShotId, historyGroupId, event.altKey && sprayCanEraseWithAlt);
     window.addEventListener("pointermove", onMove, { passive: false });
     window.addEventListener("pointerup", onFinish);
     window.addEventListener("pointercancel", onFinish);
@@ -3367,7 +3391,7 @@ export function StoryboardPanel() {
           />
         )}
         <StoryboardKeywordPanel
-          active={isEditAuthority && keywordPanelOpen}
+          active={isEditAuthority && keywordPanelOpen && !sprayActive}
           draggedKeywordHoverId={shotKeywordDragPreview?.hoveredKeywordId ?? null}
           shotIds={keywordPanelShotIds}
           resetKey={videoContext}

@@ -10,6 +10,7 @@ import type {
 } from "../../types";
 import {
   ensureStoryboardKeywordNode,
+  existingStoryboardKeywordIdsForPaths,
   normalizeStoryboardKeywordIds,
   parseStoryboardKeywordInput,
   resolveStoryboardKeywordPaths,
@@ -113,6 +114,11 @@ interface StoryboardPanelState
     historyGroupId?: string,
   ) => void;
   appendShotKeywords: (
+    shotIds: Iterable<string>,
+    keywords: string | Iterable<string>,
+    historyGroupId?: string,
+  ) => void;
+  removeShotKeywords: (
     shotIds: Iterable<string>,
     keywords: string | Iterable<string>,
     historyGroupId?: string,
@@ -550,6 +556,45 @@ export function useStoryboardPanelState<Selection>(
     );
   };
 
+  const removeShotKeywords = (
+    shotIds: Iterable<string>,
+    keywords: string | Iterable<string>,
+    historyGroupId?: string,
+  ) => {
+    const uniqueShotIds = Array.from(new Set(shotIds));
+    const parsed = parseStoryboardKeywordInput(keywords);
+    if (uniqueShotIds.length === 0 || parsed.error || parsed.paths.length === 0) {
+      return;
+    }
+    commitStoryboard(
+      "移除分镜关键字",
+      (current) => {
+        const removableIds = new Set(
+          existingStoryboardKeywordIdsForPaths(current.keywordNodes, parsed.paths),
+        );
+        if (removableIds.size === 0) {
+          return current;
+        }
+        const shotAnnotations = { ...current.shotAnnotations };
+        let changed = false;
+        for (const shotId of uniqueShotIds) {
+          const previous = shotAnnotations[shotId];
+          const keywordIds = normalizeStoryboardKeywordIds(previous?.keywordIds ?? []).filter(
+            (keywordId) => !removableIds.has(keywordId),
+          );
+          if (keywordCollectionsEqual(previous?.keywordIds, keywordIds)) {
+            continue;
+          }
+          shotAnnotations[shotId] = annotationWithDefaults(previous, { keywordIds });
+          changed = true;
+        }
+        return changed ? { ...current, shotAnnotations } : current;
+      },
+      uiState.videoContext,
+      historyGroupId,
+    );
+  };
+
   const state: StoryboardPanelState = {
     ...uiState,
     ...storyboard,
@@ -570,6 +615,7 @@ export function useStoryboardPanelState<Selection>(
       }),
     setShotKeywords,
     appendShotKeywords,
+    removeShotKeywords,
     setShotKeywordActivation: (shotIds, keywordId, active, historyGroupId) => {
       const uniqueShotIds = Array.from(new Set(shotIds));
       if (

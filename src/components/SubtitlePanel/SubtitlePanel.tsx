@@ -43,6 +43,7 @@ import { requestSubtitleThumbnail } from "../../subtitleThumbnail";
 import { normalizeFrameRate, timeUsToFrame } from "../../timeline";
 import type { SubtitleCue } from "../../types";
 import { annotationShortcutAction, annotationShortcutAutoAdvances } from "../annotationShortcuts";
+import { sprayEraserCursor, useSprayToolModifiers } from "../sprayToolModifiers";
 import { usePanelManagerState } from "../DockLayout";
 import {
   isPopupMenuEventTarget,
@@ -588,8 +589,8 @@ function subtitleSprayCursor(
   customLabel: boolean,
 ) {
   const mark = subtitleSprayBottleMarkSvg(mode, flag, rating, customLabel);
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="17" height="20" viewBox="0 0 20 24"><path d="M8.25 1.5h3.5v2h-3.5zM9 3.5h2v2H9zM6.5 5.5h7v2.25h-7z" fill="#d0d0d0"/><path d="M6.25 8.25h7.5l1.5 2.25v10.25H4.75V10.5l1.5-2.25Z" fill="${fillColor}" stroke="#d0d0d0" stroke-width="1.25" stroke-linejoin="round"/><path d="M4 21.25h12v1.5H4z" fill="${fillColor}" stroke="#d0d0d0"/><path d="M6.25 11h7.5M6.25 18.75h7.5" stroke="#686868" stroke-width=".75"/>${mark}</svg>`;
-  return `url("data:image/svg+xml,${encodeURIComponent(svg)}") 8 2, crosshair`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="24" viewBox="0 0 20 24"><path d="M8.25 1.5h3.5v2h-3.5zM9 3.5h2v2H9zM6.5 5.5h7v2.25h-7z" fill="#d0d0d0"/><path d="M6.25 8.25h7.5l1.5 2.25v10.25H4.75V10.5l1.5-2.25Z" fill="${fillColor}" stroke="#d0d0d0" stroke-width="1.25" stroke-linejoin="round"/><path d="M4 21.25h12v1.5H4z" fill="${fillColor}" stroke="#d0d0d0"/><path d="M6.25 11h7.5M6.25 18.75h7.5" stroke="#686868" stroke-width=".75"/>${mark}</svg>`;
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}") 10 2, crosshair`;
 }
 
 interface SubtitleSprayBottleIconProps {
@@ -878,18 +879,25 @@ export function SubtitlePanel() {
   const footerSortLabel =
     subtitleSortOptions.find((option) => option.id === cueSort.columnId)?.label ?? "媒体开始";
   const sprayUsesCustomLabel = sprayMode === "colorLabel" && sprayCustomLabel.trim().length > 0;
+  const sprayAltPressed = useSprayToolModifiers(sprayActive, false);
+  const sprayCanEraseWithAlt =
+    (sprayMode === "colorLabel" && (sprayColorLabel !== null || sprayUsesCustomLabel)) ||
+    (sprayMode === "flag" && sprayFlag !== "none");
+  const sprayErasing = sprayAltPressed && sprayCanEraseWithAlt;
   const sprayBottleFillColor =
     sprayMode === "colorLabel" && sprayColorLabel
       ? subtitleCueColorLabelValues[sprayColorLabel]
       : "#252525";
   const panelStyle = {
-    "--subtitle-spray-cursor": subtitleSprayCursor(
-      sprayBottleFillColor,
-      sprayMode,
-      sprayFlag,
-      sprayRating,
-      sprayUsesCustomLabel,
-    ),
+    "--subtitle-spray-cursor": sprayErasing
+      ? sprayEraserCursor
+      : subtitleSprayCursor(
+          sprayBottleFillColor,
+          sprayMode,
+          sprayFlag,
+          sprayRating,
+          sprayUsesCustomLabel,
+        ),
   } as CSSProperties;
   const thumbnailAssetId = project?.asset.id ?? "";
   const thumbnailFingerprint = project?.asset.fingerprint ?? "";
@@ -1760,8 +1768,12 @@ export function SubtitlePanel() {
     window.addEventListener("pointercancel", onCancel);
   }
 
-  function applySprayToCue(cueId: string, historyGroupId: string) {
+  function applySprayToCue(cueId: string, historyGroupId: string, eraseWithAlt = false) {
     if (sprayMode === "colorLabel") {
+      if (eraseWithAlt) {
+        setCueColorLabels([cueId], null, historyGroupId);
+        return;
+      }
       const customLabel = sprayCustomLabel.trim();
       if (customLabel) {
         setCueCustomLabels([cueId], customLabel, historyGroupId);
@@ -1769,7 +1781,7 @@ export function SubtitlePanel() {
         setCueColorLabels([cueId], sprayColorLabel, historyGroupId);
       }
     } else if (sprayMode === "flag") {
-      setCueFlags([cueId], sprayFlag, historyGroupId);
+      setCueFlags([cueId], eraseWithAlt ? "none" : sprayFlag, historyGroupId);
     } else {
       setCueRatings([cueId], sprayRating, historyGroupId);
     }
@@ -1809,13 +1821,18 @@ export function SubtitlePanel() {
     const pointerId = event.pointerId;
     const historyGroupId = `subtitle-spray-${Date.now()}-${pointerId}`;
     const paintedCueIds = new Set<string>();
-    const paintTarget = (target: EventTarget | null, clientX: number, clientY: number) => {
+    const paintTarget = (
+      target: EventTarget | null,
+      clientX: number,
+      clientY: number,
+      altKey: boolean,
+    ) => {
       const cueId = cueIdFromPoint(target, clientX, clientY);
       if (!cueId || paintedCueIds.has(cueId)) {
         return;
       }
       paintedCueIds.add(cueId);
-      applySprayToCue(cueId, historyGroupId);
+      applySprayToCue(cueId, historyGroupId, altKey && sprayCanEraseWithAlt);
     };
     const cleanup = () => {
       window.removeEventListener("pointermove", onMove);
@@ -1835,6 +1852,7 @@ export function SubtitlePanel() {
         document.elementFromPoint(moveEvent.clientX, moveEvent.clientY),
         moveEvent.clientX,
         moveEvent.clientY,
+        moveEvent.altKey,
       );
     };
     const onFinish = (finishEvent: globalThis.PointerEvent) => {
@@ -1844,7 +1862,7 @@ export function SubtitlePanel() {
     };
     sprayGestureCleanupRef.current = cleanup;
     paintedCueIds.add(initialCueId);
-    applySprayToCue(initialCueId, historyGroupId);
+    applySprayToCue(initialCueId, historyGroupId, event.altKey && sprayCanEraseWithAlt);
     window.addEventListener("pointermove", onMove, { passive: false });
     window.addEventListener("pointerup", onFinish);
     window.addEventListener("pointercancel", onFinish);
