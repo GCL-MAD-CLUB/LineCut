@@ -880,7 +880,7 @@ export function SubtitlePanel() {
   const footerSortLabel =
     subtitleSortOptions.find((option) => option.id === cueSort.columnId)?.label ?? "媒体开始";
   const sprayUsesCustomLabel = sprayMode === "colorLabel" && sprayCustomLabel.trim().length > 0;
-  const sprayAltPressed = useSprayToolModifiers(sprayActive, false);
+  const { altPressed: sprayAltPressed } = useSprayToolModifiers(sprayActive, false);
   const sprayCanEraseWithAlt =
     (sprayMode === "colorLabel" && (sprayColorLabel !== null || sprayUsesCustomLabel)) ||
     (sprayMode === "flag" && sprayFlag !== "none");
