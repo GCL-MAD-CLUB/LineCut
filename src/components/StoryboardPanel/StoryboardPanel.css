@@ -1761,6 +1761,18 @@ body.is-resizing-storyboard-keyword-panel * {
   transform-origin: top left;
 }
 
+.storyboard-icon-card .shot-thumbnail-keyword-indicator {
+  --storyboard-keyword-indicator-color: #dedede;
+  --storyboard-keyword-indicator-background: #050505;
+
+  position: absolute;
+  right: 10%;
+  bottom: 27.272727%;
+  z-index: 5;
+  width: 14px;
+  height: 14px;
+}
+
 .storyboard-icon-card .shot-thumbnail-rating {
   top: calc(72.727273% + 4px);
   bottom: auto;
@@ -2118,6 +2130,7 @@ body.is-resizing-storyboard-keyword-panel * {
 
 .shot-thumbnail-topline {
   top: 3.5px;
+  width: var(--storyboard-thumbnail-width);
   height: 11.5px;
   gap: 6px;
   font-family: DengXian, "Microsoft YaHei", sans-serif;
@@ -2125,6 +2138,53 @@ body.is-resizing-storyboard-keyword-panel * {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   line-height: 11.5px;
+}
+
+.shot-thumbnail-keyword-indicator {
+  --storyboard-keyword-indicator-color: #1d1d1d;
+  --storyboard-keyword-indicator-background: #e1e1e1;
+
+  position: relative;
+  display: grid;
+  box-sizing: border-box;
+  flex: 0 0 10px;
+  width: 10px;
+  height: 10px;
+  margin-left: auto;
+  place-items: center;
+  color: var(--storyboard-keyword-indicator-color);
+  background:
+    linear-gradient(currentColor, currentColor) right 0.5px top 0.5px / calc(32% - 1.5px) 1px
+      no-repeat,
+    linear-gradient(currentColor, currentColor) right 0.5px top 0.5px / 1px calc(32% - 1.5px)
+      no-repeat,
+    linear-gradient(currentColor, currentColor) left 0.5px bottom 0.5px / calc(32% - 1.5px) 1px
+      no-repeat,
+    linear-gradient(currentColor, currentColor) left 0.5px bottom 0.5px / 1px calc(32% - 1.5px)
+      no-repeat,
+    linear-gradient(currentColor, currentColor) right 0.5px bottom 0.5px / calc(32% - 0.5px) 1px
+      no-repeat,
+    linear-gradient(currentColor, currentColor) right 0.5px bottom 0.5px / 1px calc(32% - 0.5px)
+      no-repeat,
+    var(--storyboard-keyword-indicator-background);
+  pointer-events: none;
+}
+
+.shot-thumbnail-keyword-indicator > svg {
+  position: relative;
+  z-index: 1;
+  display: block;
+  box-sizing: border-box;
+  width: calc(100% + 2px);
+  height: calc(100% + 2px);
+  padding: 1px;
+  fill: none;
+  stroke: currentColor;
+}
+
+.shot-thumbnail-keyword-indicator > svg path {
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
 }
 
 .shot-thumbnail-row-number {

@@ -342,6 +342,7 @@ export function StoryboardIconView({
                   <StoryboardShotThumbnail
                     shot={shot}
                     rowNumber={index + 1}
+                    hasKeywords={Boolean(annotation?.keywordIds?.length)}
                     rating={rating}
                     flag={flag}
                     colorLabel={visualLabel}
