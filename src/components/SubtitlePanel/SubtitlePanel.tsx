@@ -749,6 +749,7 @@ export function SubtitlePanel() {
     exportState,
     activeTrackChanged,
     messagePublished,
+    subtitleCuesDeleted,
   } = useProjectPort(
     [
       "project",
@@ -759,7 +760,7 @@ export function SubtitlePanel() {
       "detachedVideoIds",
       "exportState",
     ],
-    ["activeTrackChanged", "messagePublished"],
+    ["activeTrackChanged", "messagePublished", "subtitleCuesDeleted"],
   );
   const {
     query,
@@ -1175,7 +1176,12 @@ export function SubtitlePanel() {
       if (target !== panel && !target?.closest("[data-subtitle-cue-id]")) {
         return;
       }
-      const direction = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
+      const direction =
+        event.key === "ArrowLeft" || event.key === "ArrowUp"
+          ? -1
+          : event.key === "ArrowRight" || event.key === "ArrowDown"
+            ? 1
+            : 0;
       if (direction === 0 || (!event.shiftKey && (event.ctrlKey || event.metaKey))) {
         return;
       }
@@ -1196,6 +1202,7 @@ export function SubtitlePanel() {
       if (!event.shiftKey) {
         selectionAnchorRef.current = targetId;
         cueSelectionReplaced([targetId], targetId);
+        seekToCue(sortedCues[targetIndex]);
         rowVirtualizer.scrollToIndex(targetIndex, { align: "auto" });
         return;
       }
@@ -1219,6 +1226,28 @@ export function SubtitlePanel() {
     panel.addEventListener("keydown", handleSelectionKeyDown);
     return () => panel.removeEventListener("keydown", handleSelectionKeyDown);
   }, [activeCueId, cueSelectionReplaced, rowVirtualizer, selectedCueIds, sortedCues]);
+
+  useEffect(() => {
+    const handleRippleDeleteKey = (event: KeyboardEvent) => {
+      if (
+        !isEditAuthority ||
+        selectedCueIds.size === 0 ||
+        event.defaultPrevented ||
+        event.key !== "Delete" ||
+        !event.shiftKey ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        isEditableKeyboardTarget(event.target)
+      ) {
+        return;
+      }
+      event.preventDefault();
+      deleteSelectedCues(true);
+    };
+    window.addEventListener("keydown", handleRippleDeleteKey);
+    return () => window.removeEventListener("keydown", handleRippleDeleteKey);
+  });
 
   useEffect(() => {
     const handleAnnotationShortcut = (event: KeyboardEvent) => {
@@ -1449,6 +1478,18 @@ export function SubtitlePanel() {
     cueSelectionReplaced([targetCue.id], targetCue.id);
     seekToCue(targetCue);
     rowVirtualizer.scrollToIndex(targetIndex, { align: "auto" });
+  }
+
+  function deleteSelectedCues(ripple: boolean) {
+    if (!activeTrack || selectedCueIds.size === 0) {
+      return;
+    }
+    subtitleCuesDeleted(activeVideoId, trackContext, activeTrack.id, selectedCueIds, ripple);
+    selectionAnchorRef.current = null;
+    selectionFocusRef.current = null;
+    cueSelectionCleared();
+    setContextMenu(null);
+    setAnnotationMenu(null);
   }
 
   function handleCueSelection(
@@ -2042,6 +2083,7 @@ export function SubtitlePanel() {
     selectedCount,
     visibleCount: sortedCues.length,
     handlers: {
+      clear: () => deleteSelectedCues(false),
       selectAll: selectVisibleCues,
       clearSelection: hasSecondarySelection ? clearCueSelection : undefined,
     },
@@ -2861,6 +2903,19 @@ export function SubtitlePanel() {
             onPointerDown={(event) => event.stopPropagation()}
             onContextMenu={(event) => event.preventDefault()}
           >
+            <PopupMenuItem
+              disabled={contextMenuCueIds.length === 0}
+              onSelect={() => deleteSelectedCues(false)}
+            >
+              删除
+            </PopupMenuItem>
+            <PopupMenuItem
+              disabled={contextMenuCueIds.length === 0}
+              onSelect={() => deleteSelectedCues(true)}
+            >
+              波纹删除
+            </PopupMenuItem>
+            <PopupMenuSeparator />
             <PopupMenuSubmenu
               label="设置旗标(F)"
               mnemonic="F"

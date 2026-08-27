@@ -81,6 +81,13 @@ interface ProjectCommands {
     itemIds: string[],
   ) => void;
   activeTrackChanged: (trackId: string) => void;
+  subtitleCuesDeleted: (
+    videoId: string,
+    trackContext: string,
+    trackId: string,
+    cueIds: Iterable<string>,
+    ripple: boolean,
+  ) => void;
   proxyDialogOpened: () => void;
   proxyDialogClosed: () => void;
   sourcePreviewCleared: () => void;
@@ -493,6 +500,30 @@ export function subtitleTrackCues(
 ) {
   const context = subtitleTrackContext(project, projects, mediaItems, videoId, trackId);
   return context?.project.cues[trackId] ?? [];
+}
+
+function subtitleCuesAfterDeletion(
+  cues: readonly SubtitleCue[],
+  deletedCueIds: ReadonlySet<string>,
+  ripple: boolean,
+) {
+  const remainingCues: SubtitleCue[] = [];
+  let rippleStartUs: number | null = null;
+
+  for (const cue of cues) {
+    if (deletedCueIds.has(cue.id)) {
+      rippleStartUs ??= cue.start_us;
+      continue;
+    }
+    if (ripple && rippleStartUs !== null) {
+      remainingCues.push({ ...cue, start_us: Math.min(rippleStartUs, cue.end_us) });
+    } else {
+      remainingCues.push(cue);
+    }
+    rippleStartUs = null;
+  }
+
+  return remainingCues;
 }
 
 function preferredTrackId(
@@ -1734,6 +1765,61 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
         activeTrackId,
         projectDirty: true,
       })),
+    subtitleCuesDeleted: (videoId, trackContext, trackId, cueIds, ripple) => {
+      const requestedCueIds = new Set(cueIds);
+      if (!videoId || !trackId || requestedCueIds.size === 0) {
+        return;
+      }
+      commitProjectEvent(
+        set,
+        `${ripple ? "波纹删除" : "删除"} ${requestedCueIds.size} 条字幕`,
+        "delete",
+        (state) => {
+          const context = subtitleTrackContext(
+            state.project,
+            state.projects,
+            state.mediaItems,
+            videoId,
+            trackId,
+          );
+          if (!context) {
+            return state;
+          }
+          const sourceCues = context.project.cues[trackId] ?? [];
+          const deletedCueIds = new Set(
+            sourceCues.filter((cue) => requestedCueIds.has(cue.id)).map((cue) => cue.id),
+          );
+          if (deletedCueIds.size === 0) {
+            return state;
+          }
+          const nextCues = subtitleCuesAfterDeletion(sourceCues, deletedCueIds, ripple);
+          const nextProject: Project = {
+            ...context.project,
+            tracks: context.project.tracks.map((track) =>
+              track.id === trackId ? { ...track, cue_count: nextCues.length } : track,
+            ),
+            cues: { ...context.project.cues, [trackId]: nextCues },
+          };
+          const currentSubtitle = state.subtitles[trackContext];
+          let subtitles = state.subtitles;
+          if (currentSubtitle) {
+            const cueAnnotations = { ...currentSubtitle.cueAnnotations };
+            for (const cueId of deletedCueIds) {
+              delete cueAnnotations[cueId];
+            }
+            subtitles = {
+              ...state.subtitles,
+              [trackContext]: { ...currentSubtitle, cueAnnotations },
+            };
+          }
+          return {
+            project: state.project?.asset.id === nextProject.asset.id ? nextProject : state.project,
+            projects: { ...state.projects, [nextProject.asset.id]: nextProject },
+            subtitles,
+          };
+        },
+      );
+    },
     proxyDialogOpened: () => set({ proxyDialogOpen: true }),
     proxyDialogClosed: () => set({ proxyDialogOpen: false }),
     sourcePreviewCleared: () =>

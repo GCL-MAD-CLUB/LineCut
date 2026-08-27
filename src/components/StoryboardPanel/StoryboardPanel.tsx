@@ -1192,6 +1192,7 @@ export function StoryboardPanel() {
     setShotKeywordActivation,
     appendShotKeywords,
     removeShotKeywords,
+    deleteShots,
     createShotStack,
     cancelShotStack,
     removeShotFromStack,
@@ -1873,6 +1874,7 @@ export function StoryboardPanel() {
       if (!event.shiftKey) {
         selectionAnchorRef.current = targetId;
         shotSelectionReplaced([targetId], targetId);
+        seekToShot(sortedShots[targetIndex]);
         scrollToTarget();
         return;
       }
@@ -1899,6 +1901,28 @@ export function StoryboardPanel() {
     panel.addEventListener("keydown", handleSelectionKeyDown);
     return () => panel.removeEventListener("keydown", handleSelectionKeyDown);
   }, [activeShotId, rowVirtualizer, selectedShotIds, shotSelectionReplaced, sortedShots, viewMode]);
+
+  useEffect(() => {
+    const handleRippleDeleteKey = (event: KeyboardEvent) => {
+      if (
+        !isEditAuthority ||
+        selectedShotIds.size === 0 ||
+        event.defaultPrevented ||
+        event.key !== "Delete" ||
+        !event.shiftKey ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        isEditableKeyboardTarget(event.target)
+      ) {
+        return;
+      }
+      event.preventDefault();
+      deleteSelectedShots(true);
+    };
+    window.addEventListener("keydown", handleRippleDeleteKey);
+    return () => window.removeEventListener("keydown", handleRippleDeleteKey);
+  });
 
   useEffect(() => {
     const handleAnnotationShortcut = (event: KeyboardEvent) => {
@@ -2134,6 +2158,18 @@ export function StoryboardPanel() {
     Array.from(listRef.current?.querySelectorAll<HTMLElement>("[data-storyboard-shot-id]") ?? [])
       .find((element) => element.dataset.storyboardShotId === targetShot.id)
       ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+
+  function deleteSelectedShots(ripple: boolean) {
+    if (selectedAnnotationShotIds.size === 0) {
+      return;
+    }
+    deleteShots(selectedAnnotationShotIds, ripple);
+    selectionAnchorRef.current = null;
+    selectionFocusRef.current = null;
+    shotSelectionCleared();
+    setContextMenu(null);
+    setAnnotationMenu(null);
   }
 
   function deactivateSprayTool() {
@@ -2992,6 +3028,7 @@ export function StoryboardPanel() {
     selectedCount,
     visibleCount: sortedShots.length,
     handlers: {
+      clear: () => deleteSelectedShots(false),
       selectAll: selectVisibleShots,
       clearSelection: hasSecondarySelection ? clearShotSelection : undefined,
     },
@@ -4136,6 +4173,19 @@ export function StoryboardPanel() {
             onPointerDown={(event) => event.stopPropagation()}
             onContextMenu={(event) => event.preventDefault()}
           >
+            <PopupMenuItem
+              disabled={contextMenuShotIds.length === 0}
+              onSelect={() => deleteSelectedShots(false)}
+            >
+              删除
+            </PopupMenuItem>
+            <PopupMenuItem
+              disabled={contextMenuShotIds.length === 0}
+              onSelect={() => deleteSelectedShots(true)}
+            >
+              波纹删除
+            </PopupMenuItem>
+            <PopupMenuSeparator />
             <PopupMenuSubmenu
               label="设置旗标(F)"
               mnemonic="F"
