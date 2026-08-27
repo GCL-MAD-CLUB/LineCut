@@ -36,30 +36,30 @@ export function useSprayToolModifiers(active: boolean, blockShift: boolean) {
   const [shiftPressed, setShiftPressed] = useState(false);
 
   useEffect(() => {
+    if (!active) {
+      setAltPressed(false);
+      setShiftPressed(false);
+      return;
+    }
+
     const handleKeyDown = (event: KeyboardEvent) => {
       if (isAltKeyEvent(event) || event.altKey) {
         setAltPressed(true);
-        if (active) {
-          event.preventDefault();
-        }
+        event.preventDefault();
       }
       if (blockShift && (isShiftKeyEvent(event) || event.shiftKey)) {
         setShiftPressed(true);
-        if (active) {
-          event.preventDefault();
-        }
+        event.preventDefault();
       }
     };
     const handleKeyUp = (event: KeyboardEvent) => {
       if (isAltKeyEvent(event)) {
         setAltPressed(false);
-        if (active) {
-          event.preventDefault();
-        }
+        event.preventDefault();
       }
       if (isShiftKeyEvent(event)) {
         setShiftPressed(false);
-        if (active && blockShift) {
+        if (blockShift) {
           event.preventDefault();
         }
       }
