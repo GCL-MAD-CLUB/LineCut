@@ -1519,7 +1519,10 @@ export function StoryboardPanel() {
     () => annotationShotIdsForSelection(selectedShotIds, shotStacksByShotId),
     [selectedShotIds, shotStacksByShotId],
   );
-  const contextMenuShotIds = Array.from(selectedAnnotationShotIds);
+  const contextMenuShotIds = useMemo(
+    () => Array.from(selectedAnnotationShotIds),
+    [selectedAnnotationShotIds],
+  );
   const keywordPanelShotIds = contextMenuShotIds;
   const contextMenuRatings = contextMenuShotIds.map(
     (shotId) => shotAnnotations[shotId]?.rating ?? 0,
