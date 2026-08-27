@@ -51,7 +51,13 @@ import { normalizeFrameRate } from "../../timeline";
 import type { StoryboardDetectionResult, StoryboardShot } from "../../types";
 import { usePanelManagerState } from "../DockLayout";
 import { annotationShortcutAction, annotationShortcutAutoAdvances } from "../annotationShortcuts";
-import { sprayEraserCursor, useSprayToolModifiers } from "../sprayToolModifiers";
+import {
+  sprayEraserCursor,
+  sprayEyedropperAddCursor,
+  sprayEyedropperImageUrl,
+  sprayEyedropperRemoveCursor,
+  useSprayToolModifiers,
+} from "../sprayToolModifiers";
 import {
   isPopupMenuEventTarget,
   PopupMenu,
@@ -69,8 +75,12 @@ import {
 import { StoryboardIconView } from "./StoryboardIconView";
 import { StoryboardKeywordPanel } from "./StoryboardKeywordPanel";
 import {
+  existingStoryboardKeywordIdsForPaths,
+  formatStoryboardKeywordPath,
   formatParsedStoryboardKeywords,
   parseStoryboardKeywordInput,
+  renderStoryboardKeywordLabel,
+  storyboardKeywordLabel,
   storyboardKeywordSearchValues,
   storyboardMatchesQuickFilter,
 } from "./storyboardKeywords";
@@ -1165,6 +1175,7 @@ export function StoryboardPanel() {
     shots,
     shotStacks,
     keywordNodes,
+    recentKeywordIds,
     selectedShotIds,
     shotAnnotations,
     detectingVideoContext,
@@ -1216,6 +1227,7 @@ export function StoryboardPanel() {
   const selectionFocusRef = useRef<string | null>(null);
   const marqueeCleanupRef = useRef<(() => void) | null>(null);
   const sprayGestureCleanupRef = useRef<(() => void) | null>(null);
+  const lastPointerPositionRef = useRef<StoryboardMenuAnchor | null>(null);
   const shotKeywordDragCleanupRef = useRef<(() => void) | null>(null);
   const suppressShotClickRef = useRef(false);
   const keywordResizeCleanupRef = useRef<(() => void) | null>(null);
@@ -1237,6 +1249,8 @@ export function StoryboardPanel() {
   const [sprayCustomLabel, setSprayCustomLabel] = useState("");
   const [sprayFlag, setSprayFlag] = useState<StoryboardShotFlag>("none");
   const [sprayRating, setSprayRating] = useState(0);
+  const [sprayKeywordPickerAnchor, setSprayKeywordPickerAnchor] =
+    useState<StoryboardMenuAnchor | null>(null);
   const [storyboardViewRatio, setStoryboardViewRatio] = useState(2 / 3);
   const [keywordPanelOpen, setKeywordPanelOpen] = useState(true);
   const [footerAreaVisibility, setFooterAreaVisibility] = useState(
@@ -1341,9 +1355,22 @@ export function StoryboardPanel() {
   const footerSortVisible = footerAreaVisibility.sort[viewMode];
   const sprayKeywordParseResult = parseStoryboardKeywordInput(sprayKeywordInput);
   const sprayKeywords = sprayKeywordParseResult.paths;
+  const sprayPickerKeywordIds = useMemo(() => {
+    const validIds = new Set(keywordNodes.map((node) => node.id));
+    return Array.from(new Set(recentKeywordIds))
+      .filter((keywordId) => validIds.has(keywordId))
+      .slice(0, 9);
+  }, [keywordNodes, recentKeywordIds]);
+  const selectedSprayKeywordIds = useMemo(
+    () => new Set(existingStoryboardKeywordIdsForPaths(keywordNodes, sprayKeywords)),
+    [keywordNodes, sprayKeywords],
+  );
   const sprayKeywordsDisplay = formatParsedStoryboardKeywords(sprayKeywords);
   const sprayUsesCustomLabel = sprayMode === "colorLabel" && sprayCustomLabel.trim().length > 0;
-  const sprayAltPressed = useSprayToolModifiers(sprayActive, sprayMode === "keywords");
+  const { altPressed: sprayAltPressed, shiftPressed: sprayPickingKeywords } = useSprayToolModifiers(
+    sprayActive,
+    sprayMode === "keywords",
+  );
   const sprayCanEraseWithAlt =
     sprayMode === "keywords" ||
     (sprayMode === "colorLabel" && (sprayColorLabel !== null || sprayUsesCustomLabel)) ||
@@ -1580,6 +1607,32 @@ export function StoryboardPanel() {
     footerSprayMenu ||
     footerOptionsMenu,
   );
+
+  useEffect(() => {
+    const rememberPointerPosition = (event: PointerEvent) => {
+      lastPointerPositionRef.current = { x: event.clientX, y: event.clientY };
+    };
+    window.addEventListener("pointermove", rememberPointerPosition, true);
+    window.addEventListener("pointerdown", rememberPointerPosition, true);
+    return () => {
+      window.removeEventListener("pointermove", rememberPointerPosition, true);
+      window.removeEventListener("pointerdown", rememberPointerPosition, true);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!sprayPickingKeywords) {
+      setSprayKeywordPickerAnchor(null);
+      return;
+    }
+    const panelBounds = panelRef.current?.getBoundingClientRect();
+    setSprayKeywordPickerAnchor(
+      lastPointerPositionRef.current ?? {
+        x: panelBounds ? panelBounds.left + panelBounds.width / 2 : window.innerWidth / 2,
+        y: panelBounds ? panelBounds.top + panelBounds.height / 2 : window.innerHeight / 2,
+      },
+    );
+  }, [sprayPickingKeywords]);
 
   useEffect(() => {
     if (viewMode === "list") {
@@ -2629,6 +2682,114 @@ export function StoryboardPanel() {
     );
   }
 
+  function sprayKeywordLabelsFromInput() {
+    if (sprayKeywordParseResult.error) {
+      return [];
+    }
+    return sprayKeywords.map(formatStoryboardKeywordPath);
+  }
+
+  function toggleSprayPickerKeyword(keywordId: string) {
+    const label = storyboardKeywordLabel(keywordId, keywordNodes);
+    if (!label) {
+      return;
+    }
+    const labels = sprayKeywordLabelsFromInput();
+    const nextLabels = selectedSprayKeywordIds.has(keywordId)
+      ? labels.filter((candidate) => candidate !== label)
+      : [...labels, label];
+    setSprayKeywordInput(Array.from(new Set(nextLabels)).join(", "));
+  }
+
+  function selectAllSprayPickerKeywords() {
+    const labels = sprayKeywordLabelsFromInput();
+    for (const keywordId of sprayPickerKeywordIds) {
+      const label = storyboardKeywordLabel(keywordId, keywordNodes);
+      if (label) {
+        labels.push(label);
+      }
+    }
+    setSprayKeywordInput(Array.from(new Set(labels)).join(", "));
+  }
+
+  function renderSprayKeywordPicker() {
+    if (!sprayPickingKeywords || !sprayKeywordPickerAnchor) {
+      return null;
+    }
+    const cells = Array.from({ length: 9 }, (_, index) => sprayPickerKeywordIds[index] ?? null);
+    const allSelected =
+      sprayPickerKeywordIds.length > 0 &&
+      sprayPickerKeywordIds.every((keywordId) => selectedSprayKeywordIds.has(keywordId));
+    return createPortal(
+      <div
+        className="storyboard-spray-keyword-picker"
+        role="dialog"
+        aria-label="选择喷瓶关键字"
+        style={
+          {
+            left: sprayKeywordPickerAnchor.x,
+            top: sprayKeywordPickerAnchor.y,
+          } as CSSProperties
+        }
+        onPointerDown={(event) => event.stopPropagation()}
+        onContextMenu={(event) => event.preventDefault()}
+      >
+        <header className="storyboard-spray-keyword-picker-header">
+          <span className="storyboard-spray-keyword-picker-title">关键字集</span>
+          <span className="storyboard-spray-keyword-picker-dropdown">
+            <span>最近使用过的关键字</span>
+            <ChevronsUpDown aria-hidden="true" />
+          </span>
+        </header>
+        <div className="storyboard-spray-keyword-picker-grid">
+          {cells.map((keywordId, index) => {
+            if (!keywordId) {
+              return <span key={`empty-${index}`} aria-hidden="true" />;
+            }
+            const label = storyboardKeywordLabel(keywordId, keywordNodes);
+            const selected = selectedSprayKeywordIds.has(keywordId);
+            return (
+              <button
+                key={keywordId}
+                type="button"
+                className={selected ? "is-active" : ""}
+                style={
+                  {
+                    "--storyboard-spray-keyword-picker-cursor": selected
+                      ? sprayEyedropperRemoveCursor
+                      : sprayEyedropperAddCursor,
+                  } as CSSProperties
+                }
+                onClick={() => toggleSprayPickerKeyword(keywordId)}
+                title={selected ? `从喷瓶移除“${label}”` : `装入关键字“${label}”`}
+                aria-pressed={selected}
+              >
+                {renderStoryboardKeywordLabel(label)}
+              </button>
+            );
+          })}
+        </div>
+        <footer className="storyboard-spray-keyword-picker-footer">
+          <button
+            type="button"
+            onClick={selectAllSprayPickerKeywords}
+            disabled={sprayPickerKeywordIds.length === 0 || allSelected}
+          >
+            全选
+          </button>
+          <button
+            type="button"
+            onClick={() => setSprayKeywordInput("")}
+            disabled={!sprayKeywordInput.trim()}
+          >
+            清除
+          </button>
+        </footer>
+      </div>,
+      document.body,
+    );
+  }
+
   function renderShotKeywordDragPreview() {
     if (!shotKeywordDragPreview) {
       return null;
@@ -3450,6 +3611,7 @@ export function StoryboardPanel() {
 
       {renderMarqueeOverlay()}
       {renderShotKeywordDragPreview()}
+      {renderSprayKeywordPicker()}
 
       <footer className="storyboard-footer">
         <div className="storyboard-selection-tools">
@@ -3533,19 +3695,29 @@ export function StoryboardPanel() {
                   </div>
                   <span className="storyboard-filter-separator storyboard-footer-separator" />
                   {sprayMode === "keywords" && (
-                    <input
-                      className="shot-title-editor storyboard-footer-spray-keyword-input"
-                      value={sprayKeywordInput}
-                      aria-label="喷涂关键字"
-                      aria-invalid={Boolean(sprayKeywordParseResult.error)}
-                      title={
-                        sprayKeywordParseResult.error ??
-                        "支持 父>子、子<父、父|子；多个关键字用逗号分隔"
-                      }
-                      autoComplete="off"
-                      spellCheck={false}
-                      onChange={(event) => setSprayKeywordInput(event.currentTarget.value)}
-                    />
+                    <div className="storyboard-footer-spray-keyword-control">
+                      <span
+                        className="storyboard-footer-spray-eyedropper"
+                        title="在关键字喷涂工具处于活动状态时，按 SHIFT 键以激活吸管"
+                        aria-hidden="true"
+                      >
+                        <img src={sprayEyedropperImageUrl} alt="" draggable={false} />
+                      </span>
+                      <input
+                        className="shot-title-editor storyboard-footer-spray-keyword-input"
+                        value={sprayKeywordInput}
+                        aria-label="喷涂关键字"
+                        placeholder="在此处输入关键字"
+                        aria-invalid={Boolean(sprayKeywordParseResult.error)}
+                        title={
+                          sprayKeywordParseResult.error ??
+                          "支持 父>子、子<父、父|子；多个关键字用逗号分隔"
+                        }
+                        autoComplete="off"
+                        spellCheck={false}
+                        onChange={(event) => setSprayKeywordInput(event.currentTarget.value)}
+                      />
+                    </div>
                   )}
                   {sprayMode === "colorLabel" && (
                     <div className="storyboard-footer-spray-label-controls">

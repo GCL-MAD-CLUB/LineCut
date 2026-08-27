@@ -421,6 +421,7 @@ export function StoryboardListView({
                     <StoryboardShotThumbnail
                       shot={shot}
                       rowNumber={virtualRow.index + 1}
+                      hasKeywords={Boolean(annotation?.keywordIds?.length)}
                       rating={rating}
                       flag={flag}
                       colorLabel={visualLabel}

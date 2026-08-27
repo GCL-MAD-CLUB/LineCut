@@ -1,5 +1,5 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { Film, Star } from "lucide-react";
+import { Film, Star, Tags } from "lucide-react";
 import {
   useEffect,
   useMemo,
@@ -281,6 +281,7 @@ function ShotFrameButton({
 export interface StoryboardShotThumbnailProps {
   shot: StoryboardShot;
   rowNumber: number;
+  hasKeywords: boolean;
   rating: number;
   flag: StoryboardShotFlag;
   colorLabel: StoryboardShotVisualLabel | undefined;
@@ -304,6 +305,7 @@ export interface StoryboardShotThumbnailProps {
 export function StoryboardShotThumbnail({
   shot,
   rowNumber,
+  hasKeywords,
   rating,
   flag,
   colorLabel,
@@ -342,6 +344,16 @@ export function StoryboardShotThumbnail({
           aria-label={flag === "none" ? "设为留用旗标" : `取消${storyboardShotFlagLabels[flag]}`}
           aria-pressed={flag !== "none"}
         />
+        {hasKeywords && (
+          <span
+            className="shot-thumbnail-keyword-indicator"
+            role="img"
+            aria-label="该分镜包含关键字"
+            title="该分镜包含关键字"
+          >
+            <Tags aria-hidden="true" />
+          </span>
+        )}
       </div>
       {stack && (
         <StoryboardStackBadge stack={stack} shotIndex={stackIndex} onToggle={onToggleStack} />
