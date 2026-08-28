@@ -26,7 +26,7 @@ LineCut 的 `.lcp` 项目只记录素材路径、项目内容和工作状态，�
 - 代理输出位置；
 - 导出目标目录。
 
-如果素材位于可移动磁盘、网络盘或稍后会改名的目录，先阅读[项目文件与素材位置](/projects/project-files-media)和[脱机、替换和重新链接](/media/offline-relink)。
+如果素材位于可移动磁盘、网络盘或稍后会改名的目录，先阅读[项目文件与素材位置](/projects/projects)和[脱机、替换和重新链接](/media/offline-proxies)。
 
 <GuideImage src="/images/getting-started/system-requirements.png" alt="推荐的目录规划示意" />
 
@@ -34,7 +34,7 @@ LineCut 的 `.lcp` 项目只记录素材路径、项目内容和工作状态，�
 
 - 高分辨率、高码率或很长的视频可能需要较长时间生成缩略图、检测镜头切点或创建代理。
 - 可用的 DirectML 环境会用于分镜检测的 GPU 加速；不能使用时会回退到 CPU。
-- 预览不流畅时，优先使用[代理](/media/proxies)，而不是移动或重新编码原始素材。
+- 预览不流畅时，优先使用[代理](/media/offline-proxies)，而不是移动或重新编码原始素材。
 - 缓存存储在空间不足的系统盘时，生成缩略图、代理或导出可能失败；可在[首选项](/projects/preferences)中更改缓存路径。
 
 ## 下一步

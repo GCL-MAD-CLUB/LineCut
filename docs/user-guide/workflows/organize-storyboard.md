@@ -30,4 +30,4 @@ description: 检测镜头、用标记筛选，并用层级关键字把视觉内�
 - 星级和旗标表达“是否值得使用”，关键字表达“画面是什么”；不要用一种标记代替另一种。
 - 连续镜头需要作为整体使用时再堆叠；只要希望仍能单独选择它们，就保持未堆叠。
 
-详见[检测镜头切点](/storyboard/detection)、[堆叠、展开和拆分分镜](/storyboard/stacks)和[关键字系统概览](/storyboard/keywords)。
+详见[检测镜头切点](/storyboard/storyboards)、[堆叠、展开和拆分分镜](/storyboard/storyboards)和[关键字系统概览](/storyboard/use-keywords)。

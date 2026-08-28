@@ -8,6 +8,7 @@ on:
       - "docs/user-guide/**"
       - "docs/user-guide-maintenance.md"
       - "scripts/check-user-guide.mjs"
+      - "scripts/user-guide-operations.mjs"
       - "package.json"
       - "package-lock.json"
   workflow_dispatch:
