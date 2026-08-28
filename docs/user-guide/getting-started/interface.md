@@ -39,6 +39,6 @@ description: 了解菜单、工作区和默认面板的职责，以及它们之�
 
 ## 下一步
 
-- 想自定义面板位置，阅读[面板、停靠与工作区布局](/workspace/panels)。
+- 想自定义面板位置，阅读[面板、停靠与工作区布局](/workspace/workspace)。
 - 想提高效率，阅读[键盘快捷键](/workspace/shortcuts)。
-- 想立即管理素材，阅读[导入媒体](/media/import)。
+- 想立即管理素材，阅读[导入媒体](/media/import-organize)。

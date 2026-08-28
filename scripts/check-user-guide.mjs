@@ -1,6 +1,7 @@
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { userGuideOperationGroups } from "./user-guide-operations.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const guideRoot = path.join(repositoryRoot, "docs", "user-guide");
@@ -8,6 +9,7 @@ const imagesRoot = path.join(guideRoot, "public", "images");
 const configPath = path.join(guideRoot, ".vitepress", "config.ts");
 const errors = [];
 const imageReferences = new Map();
+const markdownSources = new Map();
 
 async function listFiles(directory, extension) {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -45,6 +47,7 @@ const markdownFiles = (await listFiles(guideRoot, ".md")).filter(
 
 for (const filePath of markdownFiles) {
   const source = await readFile(filePath, "utf8");
+  markdownSources.set(relativeToGuide(filePath), source);
   const route = pageRoute(filePath);
   const isHome = route === "/";
   const frontmatterMatch = source.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
@@ -164,6 +167,42 @@ for (const route of sidebarRoutes) {
   }
 }
 
+const operationIds = new Set();
+let operationCount = 0;
+
+for (const group of userGuideOperationGroups) {
+  const guideSource = markdownSources.get(group.guide);
+  if (!guideSource) {
+    errors.push(`scripts/user-guide-operations.mjs: ${group.id} 的页面不存在：${group.guide}`);
+    continue;
+  }
+  if (!guideSource.includes(group.heading)) {
+    errors.push(
+      `scripts/user-guide-operations.mjs: ${group.id} 的章节不存在：${group.guide} → ${group.heading}`,
+    );
+  }
+  for (const sourcePath of group.sources) {
+    const sourceTarget = path.join(repositoryRoot, sourcePath);
+    try {
+      await stat(sourceTarget);
+    } catch {
+      errors.push(`scripts/user-guide-operations.mjs: ${group.id} 的源码依据不存在：${sourcePath}`);
+    }
+  }
+  for (const [operationId, label, evidence = label] of group.operations) {
+    operationCount += 1;
+    if (operationIds.has(operationId)) {
+      errors.push(`scripts/user-guide-operations.mjs: 操作 id 重复：${operationId}`);
+    }
+    operationIds.add(operationId);
+    if (!guideSource.includes(evidence)) {
+      errors.push(
+        `scripts/user-guide-operations.mjs: ${group.guide} 缺少“${label}”的说明依据：${evidence}`,
+      );
+    }
+  }
+}
+
 if (errors.length > 0) {
   console.error(`用户指南检查失败（${errors.length} 项）：`);
   for (const error of errors) {
@@ -174,6 +213,6 @@ if (errors.length > 0) {
   const placeholders = [...managedAssets.values()].filter((asset) => asset.txt).length;
   const screenshots = [...managedAssets.values()].filter((asset) => asset.png).length;
   console.log(
-    `用户指南检查通过：${markdownFiles.length} 个页面，${screenshots} 张截图，${placeholders} 个待补截图。`,
+    `用户指南检查通过：${markdownFiles.length} 个页面，${operationCount} 项用户操作，${screenshots} 张截图，${placeholders} 个待补截图。`,
   );
 }

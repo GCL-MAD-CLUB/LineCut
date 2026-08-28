@@ -7,6 +7,8 @@ description: 配置缓存路径、自动备份、FFmpeg 和 ffprobe，并了解�
 
 在 **编辑 → 首选项…** 打开“路径、自动备份与媒体工具”对话框。更改只会在点击**保存**后写入应用首选项。
 
+单击右上角关闭按钮或对话框外的遮罩会关闭窗口而不保存当前草稿。路径既可直接键入，也可用右侧**浏览**按钮选择；数值框只接受整数，并受界面标注的最小值和最大值约束。
+
 ## 设置说明
 
 | 设置                 | 可填内容                   | 用途                                               |
@@ -34,6 +36,8 @@ description: 配置缓存路径、自动备份、FFmpeg 和 ffprobe，并了解�
 
 **重置工具路径**只会将 FFmpeg 和 ffprobe 恢复为默认命令名；缓存路径和自动备份设置保持不变。
 
+重置只是修改当前对话框草稿，仍需点击**保存**才会生效；关闭对话框会放弃这次重置。
+
 ## 自动备份的实际范围
 
 自动备份会按设置的间隔检查项目变化，并在缓存相关目录中维护快照。它是恢复意外退出或误操作的辅助，不是替代手动保存、项目副本或版本管理的机制。间隔越短、保留数越大，对磁盘写入和占用的需求越高；长视频项目和可用空间有限时，应在恢复能力与磁盘负担之间取舍。
@@ -42,4 +46,4 @@ description: 配置缓存路径、自动备份、FFmpeg 和 ffprobe，并了解�
 
 <GuideImage src="/images/projects/preferences.png" alt="首选项完整对话框" />
 
-常见错误见[FFmpeg、ffprobe 与工具路径](/troubleshooting/ffmpeg)及[性能、缓存与代理](/troubleshooting/performance)。
+常见错误见[FFmpeg、ffprobe 与工具路径](/troubleshooting/troubleshooting)及[性能、缓存与代理](/troubleshooting/troubleshooting)。

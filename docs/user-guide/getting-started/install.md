@@ -12,7 +12,7 @@ description: 安装 LineCut、选择 FFmpeg 方案，并确认首次启动状态
 3. 安装程序询问 FFmpeg 方案时，首次使用建议选择**内置 FFmpeg**。它用于探测媒体、导入字幕、生成代理和导出。
 4. 从开始菜单或桌面快捷方式启动 LineCut。
 
-如果已安装并维护了自己的 FFmpeg，也可以不安装内置版本，随后在 **编辑 → 首选项** 中填写 `FFmpeg` 与 `ffprobe` 的可执行文件路径。具体排查方式见[FFmpeg、ffprobe 与工具路径](/troubleshooting/ffmpeg)。
+如果已安装并维护了自己的 FFmpeg，也可以不安装内置版本，随后在 **编辑 → 首选项** 中填写 `FFmpeg` 与 `ffprobe` 的可执行文件路径。具体排查方式见[FFmpeg、ffprobe 与工具路径](/troubleshooting/troubleshooting)。
 
 <GuideImage src="/images/getting-started/install.png" alt="安装程序的 FFmpeg 选择页" />
 

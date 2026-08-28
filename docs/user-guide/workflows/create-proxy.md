@@ -27,4 +27,4 @@ description: 为高分辨率或高码率素材创建代理，并在不改变原�
 - 原始媒体脱机但代理已连接时，项目仍可用代理继续预览；导出前应确认是否允许在导出设置中使用代理。
 - 分离代理只解除项目与代理文件的关系，不等同于删除磁盘上的代理文件。
 
-更多说明见[创建、连接和分离代理](/media/proxies)和[性能、缓存与代理](/troubleshooting/performance)。
+更多说明见[创建、连接和分离代理](/media/offline-proxies)和[性能、缓存与代理](/troubleshooting/troubleshooting)。
