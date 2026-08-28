@@ -503,6 +503,94 @@ pub(crate) fn reveal_in_file_manager(path: String) -> CommandResult<()> {
     })
 }
 
+fn spawn_system_opener(mut command: StdCommand) -> std::io::Result<()> {
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    command.spawn().map(|_| ())
+}
+
+#[tauri::command]
+pub(crate) fn open_user_guide() -> CommandResult<()> {
+    const USER_GUIDE_URL: &str = "https://linecut.lycoreco.dpdns.org/";
+
+    #[cfg(target_os = "windows")]
+    let command = {
+        let mut command = StdCommand::new("rundll32");
+        command
+            .arg("url.dll,FileProtocolHandler")
+            .arg(USER_GUIDE_URL);
+        command
+    };
+    #[cfg(target_os = "macos")]
+    let command = {
+        let mut command = StdCommand::new("open");
+        command.arg(USER_GUIDE_URL);
+        command
+    };
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let command = {
+        let mut command = StdCommand::new("xdg-open");
+        command.arg(USER_GUIDE_URL);
+        command
+    };
+
+    spawn_system_opener(command).map_err(|error| {
+        app_error(
+            ErrorCode::DocumentationOpenFailed,
+            format!("Failed to open the LineCut user guide with the system handler: {error}"),
+        )
+    })
+}
+
+#[tauri::command]
+pub(crate) fn open_log_directory(app: tauri::AppHandle) -> CommandResult<()> {
+    let log_dir = app.path().app_log_dir().map_err(|error| {
+        app_error(
+            ErrorCode::LogDirectoryOpenFailed,
+            format!("Failed to resolve the application log directory: {error}"),
+        )
+    })?;
+    std::fs::create_dir_all(&log_dir).map_err(|error| {
+        app_error(
+            ErrorCode::LogDirectoryOpenFailed,
+            format!(
+                "Failed to prepare application log directory {}: {error}",
+                log_dir.display()
+            ),
+        )
+    })?;
+
+    #[cfg(target_os = "windows")]
+    let command = {
+        let mut command = StdCommand::new("explorer");
+        command.arg(&log_dir);
+        command
+    };
+    #[cfg(target_os = "macos")]
+    let command = {
+        let mut command = StdCommand::new("open");
+        command.arg(&log_dir);
+        command
+    };
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let command = {
+        let mut command = StdCommand::new("xdg-open");
+        command.arg(&log_dir);
+        command
+    };
+
+    spawn_system_opener(command).map_err(|error| {
+        app_error(
+            ErrorCode::LogDirectoryOpenFailed,
+            format!(
+                "Failed to open application log directory {} with the system handler: {error}",
+                log_dir.display()
+            ),
+        )
+    })
+}
+
 #[tauri::command]
 pub(crate) async fn import_media(
     path: String,

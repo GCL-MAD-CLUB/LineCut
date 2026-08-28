@@ -966,6 +966,8 @@ pub fn run() {
             detect_storyboard_shots,
             set_media_import_drop_region,
             reveal_in_file_manager,
+            open_user_guide,
+            open_log_directory,
             cancel_task,
             play_system_sound,
             record_frontend_incident
