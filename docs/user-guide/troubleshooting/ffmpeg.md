@@ -1,8 +1,13 @@
+---
+title: FFmpeg 与 ffprobe 问题
+description: 排查工具路径、可执行权限和硬件编码导致的媒体处理问题。
+---
+
 # FFmpeg 与 ffprobe 问题
 
 LineCut 使用 FFmpeg 执行媒体处理和导出，使用 ffprobe 读取媒体信息。路径配置不正确、可执行文件不可运行或硬件编码不可用时，导入分析、代理和导出都可能失败。
 
-<GuideImage src="/images/troubleshooting/ffmpeg.png" alt="截图占位：首选项中的 FFmpeg / ffprobe 设置" />
+<GuideImage src="/images/troubleshooting/ffmpeg.png" alt="首选项中的 FFmpeg / ffprobe 设置" />
 
 ## 先检查首选项路径
 

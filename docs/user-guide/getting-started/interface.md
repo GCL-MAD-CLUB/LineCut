@@ -35,7 +35,7 @@ description: 了解菜单、工作区和默认面板的职责，以及它们之�
 | 分镜     | 检测镜头、浏览画面、标记、堆叠并给镜头添加关键字   |
 | 历史记录 | 回到任意项目操作状态，管理后续分支                 |
 
-<GuideImage src="/images/getting-started/interface.png" alt="截图占位：编辑工作区标注图" />
+<GuideImage src="/images/getting-started/interface.png" alt="编辑工作区标注图" />
 
 ## 下一步
 

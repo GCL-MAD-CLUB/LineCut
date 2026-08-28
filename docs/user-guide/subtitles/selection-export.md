@@ -27,6 +27,6 @@ description: 选择字幕条目、删除或波纹删除字幕范围，并把选�
 
 具体结果取决于当前项目内容和选择范围。若目标只是“不导出”，不要删除，改用取消选择或设置排除旗标。
 
-<GuideImage src="/images/subtitles/selection-export.png" alt="截图占位：字幕右键导出菜单" />
+<GuideImage src="/images/subtitles/selection-export.png" alt="字幕右键导出菜单" />
 
 继续学习[导出工作区概览](/export/overview)。

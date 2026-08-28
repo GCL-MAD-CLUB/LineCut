@@ -14,7 +14,7 @@ description: 安装 LineCut、选择 FFmpeg 方案，并确认首次启动状态
 
 如果已安装并维护了自己的 FFmpeg，也可以不安装内置版本，随后在 **编辑 → 首选项** 中填写 `FFmpeg` 与 `ffprobe` 的可执行文件路径。具体排查方式见[FFmpeg、ffprobe 与工具路径](/troubleshooting/ffmpeg)。
 
-<GuideImage src="/images/getting-started/install.png" alt="截图占位：安装程序的 FFmpeg 选择页" />
+<GuideImage src="/images/getting-started/install.png" alt="安装程序的 FFmpeg 选择页" />
 
 ## 首次启动后应看到什么
 
@@ -22,7 +22,7 @@ description: 安装 LineCut、选择 FFmpeg 方案，并确认首次启动状态
 
 默认工作区包含“导入、编辑、导出”三个入口。它们不创建不同的项目，而是切换你在当前项目中完成任务的工作界面。
 
-<GuideImage src="/images/getting-started/install-2.png" alt="截图占位：首次启动的空工作区" />
+<GuideImage src="/images/getting-started/install-2.png" alt="首次启动的空工作区" />
 
 ## 首次检查清单
 

@@ -7,7 +7,7 @@ description: 逐项说明文件、编辑和窗口菜单的入口、启用条件�
 
 顶部菜单是对当前工作区和当前选择的快捷入口。灰色项目不是故障：它表示当前没有满足该命令的项目、面板、选择或任务状态。
 
-<GuideImage src="/images/workspace/application-menu.png" alt="截图占位：展开的文件、编辑和窗口菜单" />
+<GuideImage src="/images/workspace/application-menu.png" alt="展开的文件、编辑和窗口菜单" />
 
 ## 文件菜单
 

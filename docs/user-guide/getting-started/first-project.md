@@ -36,7 +36,7 @@ description: 从新建项目、导入视频和字幕，到搜索一句台词并�
 3. 选择输出位置和输出模式；第一次导出时先保留默认视频、音频设置。
 4. 点击**导出**。任务会进入队列；完成后按你的设置写入目标目录。
 
-<GuideImage src="/images/getting-started/first-project.png" alt="截图占位：第一个项目的完成状态" />
+<GuideImage src="/images/getting-started/first-project.png" alt="第一个项目的完成状态" />
 
 ## 5. 保存项目
 

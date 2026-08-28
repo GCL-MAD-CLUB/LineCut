@@ -1,8 +1,13 @@
+---
+title: 媒体离线、绑定和预览问题
+description: 恢复离线素材，并排查媒体绑定、字幕轨和预览异常。
+---
+
 # 媒体离线、绑定和预览问题
 
 媒体离线意味着项目保存的路径已经找不到原文件，常见原因是移动磁盘、重命名文件夹、改盘符或只复制了 `.lcp` 而未复制素材。离线项不会自动变成可用素材。
 
-<GuideImage src="/images/troubleshooting/media.png" alt="截图占位：素材箱中的离线媒体与重新链接入口" />
+<GuideImage src="/images/troubleshooting/media.png" alt="素材箱中的离线媒体与重新链接入口" />
 
 ## 恢复离线媒体
 

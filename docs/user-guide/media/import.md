@@ -25,7 +25,7 @@ LineCut 支持在一个项目中导入多个视频、音频和字幕。视频和
 4. 检查列表中的名称、类型和所在位置，点击**导入全部**。
 5. 导入完成后，视频、音频和字幕会出现在项目中；若有媒体探测提示，会显示在应用顶部的导入提示区域。
 
-<GuideImage src="/images/media/import.png" alt="截图占位：导入工作区的待导入列表" />
+<GuideImage src="/images/media/import.png" alt="导入工作区的待导入列表" />
 
 ## 从媒体箱快速导入
 

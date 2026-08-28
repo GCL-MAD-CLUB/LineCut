@@ -31,7 +31,7 @@ description: 了解 .lcp 保存的内容、不会保存的内容，以及把项�
 4. 检查绑定的音频和字幕是否仍归属正确视频，检查代理预览是否指向可用文件。
 5. 在新电脑保存一次项目，使新的有效媒体路径写入项目。
 
-<GuideImage src="/images/projects/project-files-media.png" alt="截图占位：可交付项目包的文件结构" />
+<GuideImage src="/images/projects/project-files-media.png" alt="可交付项目包的文件结构" />
 
 ## 项目版本兼容性
 

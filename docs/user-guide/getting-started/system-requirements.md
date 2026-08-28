@@ -28,7 +28,7 @@ LineCut 的 `.lcp` 项目只记录素材路径、项目内容和工作状态，�
 
 如果素材位于可移动磁盘、网络盘或稍后会改名的目录，先阅读[项目文件与素材位置](/projects/project-files-media)和[脱机、替换和重新链接](/media/offline-relink)。
 
-<GuideImage src="/images/getting-started/system-requirements.png" alt="截图占位：推荐的目录规划示意" />
+<GuideImage src="/images/getting-started/system-requirements.png" alt="推荐的目录规划示意" />
 
 ## 性能预期
 

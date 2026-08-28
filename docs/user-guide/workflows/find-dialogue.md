@@ -20,7 +20,7 @@ description: 用搜索、筛选、标注和选择从长视频中定位需要的�
 7. 继续搜索并重复标注。完成后按标注条件筛选，检查所有已选择条目。
 8. 从字幕面板的**导出**菜单，或切换至导出工作区，输出所选片段。
 
-<GuideImage src="/images/workflows/find-dialogue.png" alt="截图占位：字幕检索工作流" />
+<GuideImage src="/images/workflows/find-dialogue.png" alt="字幕检索工作流" />
 
 ## 提高结果质量
 

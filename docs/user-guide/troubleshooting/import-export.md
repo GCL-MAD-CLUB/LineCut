@@ -1,8 +1,13 @@
+---
+title: 导入与导出失败排查清单
+description: 按顺序定位媒体导入、分析和导出任务失败的原因。
+---
+
 # 导入与导出失败排查清单
 
 下面的清单按“最容易验证、最少改变项目”的顺序排列。每执行一步后，先在短样本上复测，避免在未知状态下反复改动大量设置。
 
-<GuideImage src="/images/troubleshooting/import-export.png" alt="截图占位：任务进度或错误通知" />
+<GuideImage src="/images/troubleshooting/import-export.png" alt="任务进度或错误通知" />
 
 ## 导入失败
 

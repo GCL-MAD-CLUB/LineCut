@@ -31,7 +31,7 @@ description: 在素材移动、丢失或需要换源时恢复项目连接，并�
 
 当前实现实际使用**文件名**（默认勾选）和可选的**文件扩展名**判断自动匹配。界面中还显示“媒体开始”“磁带名称”两个匹配复选框，但 v0.3.0 的自动链接逻辑尚未用它们筛选候选文件；不要依赖它们防止误匹配。对同名文件，应逐条确认。
 
-<GuideImage src="/images/media/offline-relink.png" alt="截图占位：链接媒体对话框" />
+<GuideImage src="/images/media/offline-relink.png" alt="链接媒体对话框" />
 
 ## 重新连接完整分辨率媒体
 

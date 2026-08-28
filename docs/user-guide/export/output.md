@@ -1,8 +1,13 @@
+---
+title: 输出位置、子文件夹与现有文件
+description: 选择导出目录、子文件夹结构以及现有文件的处理方式。
+---
+
 # 输出位置、子文件夹与现有文件
 
 输出位置位于导出设置顶部，决定成品写入何处。应用会记住最近一次手动选择的“指定文件夹”，便于下一次继续使用。
 
-<GuideImage src="/images/export/output.png" alt="截图占位：输出位置设置" />
+<GuideImage src="/images/export/output.png" alt="输出位置设置" />
 
 ## 目的地类型
 

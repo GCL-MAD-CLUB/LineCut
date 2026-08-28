@@ -1,8 +1,13 @@
+---
+title: 视频导出设置
+description: 配置导出视频的容器、编码器、画面尺寸、帧率和质量。
+---
+
 # 视频导出设置
 
 “视频”分组控制输出画面。它可单独关闭，但视频和音频不能同时关闭；输出为纯音频容器时，视频会自动关闭。
 
-<GuideImage src="/images/export/video.png" alt="截图占位：视频设置展开状态" />
+<GuideImage src="/images/export/video.png" alt="视频设置展开状态" />
 
 ## 容器与视频编码
 

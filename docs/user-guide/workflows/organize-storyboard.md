@@ -21,7 +21,7 @@ description: 检测镜头、用标记筛选，并用层级关键字把视觉内�
 8. 使用关键字、标记和搜索组合筛选，检查分类是否一致；将连续且相关的镜头堆叠起来。
 9. 选择最终镜头并进入导出工作区。
 
-<GuideImage src="/images/workflows/organize-storyboard.png" alt="截图占位：带关键字树的分镜面板" />
+<GuideImage src="/images/workflows/organize-storyboard.png" alt="带关键字树的分镜面板" />
 
 ## 组织建议
 

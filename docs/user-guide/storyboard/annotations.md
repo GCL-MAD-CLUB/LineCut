@@ -40,6 +40,6 @@ description: 给镜头设置标题、星级、旗标、色标、自定义标签�
 
 一次拖动会归为同一历史操作，方便整体撤销。
 
-<GuideImage src="/images/storyboard/annotations.png" alt="截图占位：分镜标记与喷涂工具" />
+<GuideImage src="/images/storyboard/annotations.png" alt="分镜标记与喷涂工具" />
 
 想让内容语义可检索，请继续[关键字系统概览](/storyboard/keywords)。

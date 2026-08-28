@@ -2,11 +2,21 @@ import { defineConfig } from "vitepress";
 
 const repository = "GCL-MAD-CLUB/LineCut";
 
+function normalizeBase(value: string | undefined) {
+  const candidate = (value ?? "/").trim();
+
+  if (!candidate || candidate === "/") {
+    return "/";
+  }
+
+  return `/${candidate.replace(/^\/+|\/+$/g, "")}/`;
+}
+
 export default defineConfig({
   lang: "zh-CN",
   title: "LineCut 帮助中心",
   description: "从字幕出发，快速找到并整理视频内容。",
-  base: process.env.DOCS_BASE ?? "/LineCut/",
+  base: normalizeBase(process.env.DOCS_BASE),
   cleanUrls: false,
   lastUpdated: true,
   head: [

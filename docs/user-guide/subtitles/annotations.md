@@ -33,6 +33,6 @@ description: 为字幕条目设置可保存的整理标记，并区分选择、�
 
 不要仅因要导出一次就把所有字幕都设为留用旗标；如果它们不代表长期“可用”判断，单纯选择即可。
 
-<GuideImage src="/images/subtitles/annotations.png" alt="截图占位：同一条字幕的标记控件" />
+<GuideImage src="/images/subtitles/annotations.png" alt="同一条字幕的标记控件" />
 
 批量连续处理时使用[喷涂工具批量标注](/subtitles/spray)。

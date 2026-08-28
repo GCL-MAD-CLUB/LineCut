@@ -47,6 +47,6 @@ description: 浏览、搜索、筛选、排序和批量选择自动检测得到�
 - 在空白区域拖拽框选可批量选择卡片或列表行；配合修饰键可以与原选择组合。
 - **编辑 → 全选**只选择当前筛选后可见的分镜；**编辑 → 取消选择**清空当前选择。
 
-<GuideImage src="/images/storyboard/views-selection.png" alt="截图占位：分镜列表的搜索、过滤与多选" />
+<GuideImage src="/images/storyboard/views-selection.png" alt="分镜列表的搜索、过滤与多选" />
 
 选好分镜后，可以[标记分镜](/storyboard/annotations)、[建立关键字](/storyboard/keywords)或进入导出工作区。

@@ -31,6 +31,6 @@ description: 选择内嵌或外部字幕轨，理解字幕条目、轨道提示�
 
 如果字幕轨带有提示或警告，字幕面板会在列表上方显示。常见原因包括解析格式限制、位图字幕不能像文本字幕一样检索，或时间信息存在异常。
 
-<GuideImage src="/images/subtitles/tracks.png" alt="截图占位：字幕轨选择与字幕列表" />
+<GuideImage src="/images/subtitles/tracks.png" alt="字幕轨选择与字幕列表" />
 
 下一步阅读[搜索、过滤和排序字幕](/subtitles/search-filter)。

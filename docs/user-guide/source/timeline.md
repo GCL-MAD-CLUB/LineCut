@@ -29,7 +29,7 @@ description: 在源播放器中定位、滚动和缩放时间线，以及使用�
 
 输入内容无效或超出媒体范围时，LineCut 会限制在当前视频可用的帧范围内。
 
-<GuideImage src="/images/source/timeline.png" alt="截图占位：放大的源播放器时间线" />
+<GuideImage src="/images/source/timeline.png" alt="放大的源播放器时间线" />
 
 ## 操作建议
 

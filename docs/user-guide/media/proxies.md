@@ -37,4 +37,4 @@ description: 逐项说明媒体箱中“代理”菜单的创建、连接、显�
 > [!WARNING]
 > 导出是否使用代理由导出设置决定。需要最高质量交付时，应重新连接原始媒体，并在导出前核对“使用代理”设置。
 
-<GuideImage src="/images/media/proxies.png" alt="截图占位：媒体箱的“代理”子菜单" />
+<GuideImage src="/images/media/proxies.png" alt="媒体箱的“代理”子菜单" />

@@ -5,7 +5,7 @@ description: 汇总菜单、源播放器和字幕/分镜标注的可用快捷键
 
 # 键盘快捷键
 
-<GuideImage src="/images/workspace/shortcuts.png" alt="截图占位：源监视器与字幕面板的快捷键提示" />
+<GuideImage src="/images/workspace/shortcuts.png" alt="源监视器与字幕面板的快捷键提示" />
 
 快捷键在焦点位于可编辑文字输入框时可能由输入控件优先处理。以下 `Ctrl` 在 macOS 语义中可由主修饰键替代；LineCut 当前主要面向 Windows。
 

@@ -30,7 +30,7 @@ description: 理解 .lcp 项目的生命周期，以及保存、另存为、保�
 
 保存副本适合在尝试大范围整理或交付一个版本前留出可恢复的独立文件。不要把“保存副本”误当成原始媒体备份：项目文件不包含视频本身。
 
-<GuideImage src="/images/projects/create-open-save.png" alt="截图占位：文件菜单中的项目保存命令" />
+<GuideImage src="/images/projects/create-open-save.png" alt="文件菜单中的项目保存命令" />
 
 ## 关闭项目与退出
 

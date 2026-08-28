@@ -1,8 +1,13 @@
+---
+title: 性能、缓存与稳定性
+description: 通过代理、缓存和工作集调整改善预览与分析性能。
+---
+
 # 性能、缓存与稳定性
 
 长视频、高分辨率素材、多轨音频、密集缩略图和自动分镜检测都会增加 CPU、GPU、内存、磁盘与媒体解码的负担。性能问题应先通过缩小工作集和验证代理来定位，而不是直接改变全部项目设置。
 
-<GuideImage src="/images/troubleshooting/performance.png" alt="截图占位：缓存与代理相关设置" />
+<GuideImage src="/images/troubleshooting/performance.png" alt="缓存与代理相关设置" />
 
 ## 预览不流畅
 

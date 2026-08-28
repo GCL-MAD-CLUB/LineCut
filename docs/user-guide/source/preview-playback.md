@@ -29,7 +29,7 @@ description: 使用源播放器查看活动视频、关联音频、播放速度�
 
 播放器工具栏的缩放选项可使用“适合”或指定百分比。缩放只改变播放器显示，不改变项目、素材分辨率或最终导出尺寸。
 
-<GuideImage src="/images/source/preview-playback.png" alt="截图占位：源播放器控制区" />
+<GuideImage src="/images/source/preview-playback.png" alt="源播放器控制区" />
 
 ## 拖入视频
 

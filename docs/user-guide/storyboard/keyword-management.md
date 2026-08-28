@@ -46,6 +46,6 @@ description: 通过输入路径、树菜单和对话框创建、编辑、嵌套�
 
 树节点右侧的快捷过滤箭头可立即把该节点加入当前分镜过滤。右键节点的“设为快捷关键字”可把它带入关键字喷涂输入，方便连续标注。
 
-<GuideImage src="/images/storyboard/keyword-management.png" alt="截图占位：创建关键字标记对话框与树右键菜单" />
+<GuideImage src="/images/storyboard/keyword-management.png" alt="创建关键字标记对话框与树右键菜单" />
 
 完成建树后，用[列表、图标与选择分镜](/storyboard/views-selection)中的“范围：关键字”搜索和快捷过滤验证分类结果。

@@ -1,8 +1,13 @@
+---
+title: 导出命名规则
+description: 使用文件名、自定义名称和序号为单个或批量导出结果命名。
+---
+
 # 导出命名规则
 
 命名规则决定导出文件名，且会因“合并/逐项输出”和导出来源不同而变化。中间设置的“示例”会显示当前聚焦片段实际将使用的文件名；批量导出前务必看它。
 
-<GuideImage src="/images/export/naming.png" alt="截图占位：命名规则与文件名示例" />
+<GuideImage src="/images/export/naming.png" alt="命名规则与文件名示例" />
 
 ## 可用规则
 

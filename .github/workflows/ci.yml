@@ -53,6 +53,9 @@ jobs:
       - name: Type-check and build frontend
         run: npx tsc && npx vite build
 
+      - name: Check and build user guide
+        run: npm run docs:build
+
       - name: Upload frontend build
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:

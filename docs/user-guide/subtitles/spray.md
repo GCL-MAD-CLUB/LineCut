@@ -41,6 +41,6 @@ description: 在字幕列表中拖动喷涂星级、旗标或标签，并使用 
 
 **使用后**，可按旗标、色标、星级或自定义标签过滤结果。发现整笔错误时优先使用一次撤销；逐条反向喷涂只适合少量修正。
 
-<GuideImage src="/images/subtitles/spray.png" alt="截图占位：字幕喷涂状态" />
+<GuideImage src="/images/subtitles/spray.png" alt="字幕喷涂状态" />
 
 同一套概念也用于分镜标记；见[标记分镜](/storyboard/annotations)。

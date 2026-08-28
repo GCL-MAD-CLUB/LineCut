@@ -25,7 +25,7 @@ LineCut 会按照**首选项中的自动备份检测间隔**在缓存目录创�
 
 自动备份用于降低意外退出造成的损失，不能替代有明确文件名和保存位置的手动保存。
 
-<GuideImage src="/images/projects/recent-restore-autosave.png" alt="截图占位：首选项中的自动备份设置" />
+<GuideImage src="/images/projects/recent-restore-autosave.png" alt="首选项中的自动备份设置" />
 
 ## 从快照恢复时的原则
 

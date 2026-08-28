@@ -26,7 +26,7 @@ description: 用层级媒体箱整理项目条目，切换列表/图标视图，
 
 两种视图使用同一项目内容，切换不会改变素材顺序、绑定或项目文件。
 
-<GuideImage src="/images/media/bins.png" alt="截图占位：同一媒体箱的列表与图标视图" />
+<GuideImage src="/images/media/bins.png" alt="同一媒体箱的列表与图标视图" />
 
 ## 选择、复制、粘贴和重复
 

@@ -14,7 +14,7 @@ description: 从一个视频的容器中创建可管理的虚拟音频和字幕�
 3. 等待媒体探测任务完成。LineCut 会创建可用的虚拟音轨和虚拟字幕条目。
 4. 在媒体箱中检查新条目的语言、编码和来源关系；如有多个字幕轨，按[字幕轨与字幕显示](/subtitles/tracks)选择要使用的轨道。
 
-<GuideImage src="/images/media/embedded-tracks.png" alt="截图占位：分解后的视频及虚拟音轨/字幕" />
+<GuideImage src="/images/media/embedded-tracks.png" alt="分解后的视频及虚拟音轨/字幕" />
 
 ## 重要说明
 

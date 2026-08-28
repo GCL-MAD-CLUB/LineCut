@@ -16,7 +16,7 @@ description: 将独立导入的音频、字幕归属到目标视频，并在需�
 
 也可以把音频或字幕直接拖到视频标题上完成绑定。
 
-<GuideImage src="/images/media/bind.png" alt="截图占位：绑定媒体对话框" />
+<GuideImage src="/images/media/bind.png" alt="绑定媒体对话框" />
 
 ## 绑定后的表现
 

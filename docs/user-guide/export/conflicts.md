@@ -1,8 +1,13 @@
+---
+title: 导出冲突与失败处理
+description: 处理同名文件、权限、离线媒体和编码配置造成的导出失败。
+---
+
 # 导出冲突与失败处理
 
 导出冲突通常发生在同名文件已存在、目标目录没有写入权限、源媒体离线，或选定的格式/设备组合不工作时。先保留错误信息和设置截图，再按下面顺序排查。
 
-<GuideImage src="/images/export/conflicts.png" alt="截图占位：同名文件冲突提示或导出失败状态" />
+<GuideImage src="/images/export/conflicts.png" alt="同名文件冲突提示或导出失败状态" />
 
 ## 同名文件
 

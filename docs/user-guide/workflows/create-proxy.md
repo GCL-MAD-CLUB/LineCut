@@ -19,7 +19,7 @@ description: 为高分辨率或高码率素材创建代理，并在不改变原�
 6. 点击确认，观察任务进度；可以从任务进度中取消。
 7. 完成后，源播放器的预览会使用新代理。媒体箱中原始视频仍是项目的正式媒体。
 
-<GuideImage src="/images/workflows/create-proxy.png" alt="截图占位：创建代理对话框" />
+<GuideImage src="/images/workflows/create-proxy.png" alt="创建代理对话框" />
 
 ## 使用与移除代理
 

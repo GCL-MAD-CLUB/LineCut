@@ -22,7 +22,7 @@ description: 使用撤销、重做和历史面板安全地回到项目操作状�
 2. LineCut 跳转到该条目代表的项目状态。
 3. 当前状态以下的条目会以“未来”状态显示；你可以重做回去，或从当前位置继续编辑。
 
-<GuideImage src="/images/projects/history.png" alt="截图占位：历史记录面板" />
+<GuideImage src="/images/projects/history.png" alt="历史记录面板" />
 
 ## 从历史位置继续编辑
 

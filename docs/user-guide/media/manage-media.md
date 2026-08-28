@@ -36,6 +36,6 @@ description: 重命名、启用、隐藏、删除、预览和导出媒体箱中�
 
 选中在线的视频条目，右键选择 **导出 → 导出…**，或使用**使用上次设置导出**。该方式以选中的视频作为来源；若视频已脱机，导出入口不可用。复杂的片段选择请使用[字幕](/subtitles/selection-export)或[分镜](/storyboard/views-selection)后进入导出工作区。
 
-<GuideImage src="/images/media/manage-media.png" alt="截图占位：媒体箱条目状态" />
+<GuideImage src="/images/media/manage-media.png" alt="媒体箱条目状态" />
 
 需要管理磁盘路径时，参阅[脱机、替换和重新链接](/media/offline-relink)。

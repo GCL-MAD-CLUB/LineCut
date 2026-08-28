@@ -1,8 +1,13 @@
+---
+title: 音频导出设置
+description: 配置导出音频的格式、采样率、声道、音频层和比特率。
+---
+
 # 音频导出设置
 
 “音频”分组只在来源存在音频时可用。切换为 MP3 或 AAC 纯音频容器时，应用会自动启用音频、关闭视频；没有音频的来源不能选择纯音频容器。
 
-<GuideImage src="/images/export/audio.png" alt="截图占位：音频设置展开状态" />
+<GuideImage src="/images/export/audio.png" alt="音频设置展开状态" />
 
 ## 音频格式随容器变化
 

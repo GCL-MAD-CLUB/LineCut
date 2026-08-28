@@ -9,25 +9,6 @@
   --vp-custom-block-tip-border: #315efb;
 }
 
-.screenshot-placeholder {
-  margin: 24px 0;
-  padding: 20px 24px;
-  border: 1px dashed var(--vp-c-divider);
-  border-radius: 12px;
-  color: var(--vp-c-text-2);
-  background: var(--vp-c-bg-soft);
-}
-
-.screenshot-placeholder strong {
-  display: block;
-  margin-bottom: 6px;
-  color: var(--vp-c-text-1);
-}
-
-.screenshot-placeholder p {
-  margin: 0;
-}
-
 .guide-image {
   display: block;
   width: 100%;
@@ -36,4 +17,27 @@
   border: 1px solid var(--vp-c-divider);
   border-radius: 12px;
   background: var(--vp-c-bg-soft);
+}
+
+.guide-image-placeholder {
+  display: grid;
+  min-height: 180px;
+  margin: 24px 0;
+  padding: 32px;
+  place-content: center;
+  gap: 8px;
+  border: 1px dashed var(--vp-c-divider);
+  border-radius: 12px;
+  color: var(--vp-c-text-2);
+  text-align: center;
+  background: var(--vp-c-bg-soft);
+}
+
+.guide-image-placeholder strong {
+  color: var(--vp-c-text-1);
+  font-size: 18px;
+}
+
+.guide-image-placeholder figcaption {
+  margin: 0;
 }

@@ -34,6 +34,6 @@ description: 把连续相关镜头组织为堆叠，在整体与单个镜头之�
 
 删除分镜会同时清理与其关联的分镜标记；在处理堆叠前先保存项目副本，并使用历史记录核对结果。
 
-<GuideImage src="/images/storyboard/stacks.png" alt="截图占位：展开和折叠的分镜堆叠" />
+<GuideImage src="/images/storyboard/stacks.png" alt="展开和折叠的分镜堆叠" />
 
 堆叠中的单个镜头仍可拥有独立[标题、标记和关键字](/storyboard/annotations)。

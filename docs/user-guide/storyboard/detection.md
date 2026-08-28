@@ -15,7 +15,7 @@ description: 用分镜面板为活动视频自动生成镜头，并理解重新�
 4. 在任务进度中等待完成，或在必要时取消。
 5. 检测完成后，列表/图标区域显示按时间排列的分镜。
 
-<GuideImage src="/images/storyboard/detection.png" alt="截图占位：分镜面板的切分按钮与检测进度" />
+<GuideImage src="/images/storyboard/detection.png" alt="分镜面板的切分按钮与检测进度" />
 
 ## 重新切分
 

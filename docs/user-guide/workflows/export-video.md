@@ -28,7 +28,7 @@ description: 从选择来源、设定输出，到处理同名文件和检查队�
 
 点击**导出**后，任务会立即开始，或在已有任务时排入队列。完成后到目标目录检查文件的时长、画面、音频和命名；若勾选“导入到项目”，输出文件会自动成为项目媒体。
 
-<GuideImage src="/images/workflows/export-video.png" alt="截图占位：完成配置的导出工作区" />
+<GuideImage src="/images/workflows/export-video.png" alt="完成配置的导出工作区" />
 
 ## 导出前检查
 

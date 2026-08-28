@@ -40,6 +40,6 @@ description: 理解层级关键字、父级继承、同义词、建议、最近�
 - **最近使用过的关键字**显示近期直接使用的项目关键字。
 - 每个树节点的快捷过滤按钮可将其加入分镜过滤条件；多个快捷条件同时开启时，结果必须满足全部条件。
 
-<GuideImage src="/images/storyboard/keywords.png" alt="截图占位：关键字面板全貌" />
+<GuideImage src="/images/storyboard/keywords.png" alt="关键字面板全貌" />
 
 继续阅读[创建和管理关键字树](/storyboard/keyword-management)，了解输入语法、建树、编辑和删除的细节。

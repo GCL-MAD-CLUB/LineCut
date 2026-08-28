@@ -40,6 +40,6 @@ description: 配置缓存路径、自动备份、FFmpeg 和 ffprobe，并了解�
 
 修改这些值后，建议完成一次手动保存，并在下次打开项目时确认自动备份目录可写。不要把缓存设为会被清理、脱机或无权限的目录。
 
-<GuideImage src="/images/projects/preferences.png" alt="截图占位：首选项完整对话框" />
+<GuideImage src="/images/projects/preferences.png" alt="首选项完整对话框" />
 
 常见错误见[FFmpeg、ffprobe 与工具路径](/troubleshooting/ffmpeg)及[性能、缓存与代理](/troubleshooting/performance)。

@@ -7,7 +7,7 @@ description: 理解导入、媒体分析、代理、重新链接和导出等后�
 
 导入媒体、分析媒体、生成代理、重新链接和导出会作为后台任务运行。运行时，顶部会显示任务名称和进度，底部状态栏也会说明正在执行的任务数量。
 
-<GuideImage src="/images/workspace/tasks.png" alt="截图占位：单个可取消任务的顶部进度条" />
+<GuideImage src="/images/workspace/tasks.png" alt="单个可取消任务的顶部进度条" />
 
 ## 读取进度
 

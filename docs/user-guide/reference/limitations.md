@@ -1,8 +1,13 @@
+---
+title: 当前限制与使用边界
+description: 了解 LineCut 0.3 的平台、媒体处理、项目和导出能力边界。
+---
+
 # 当前限制与使用边界
 
 本页列出当前桌面版的明确边界，帮助你在正式项目中建立可靠工作流。功能会随版本变化；本指南描述的是 LineCut 0.3 系列当前实现。
 
-<GuideImage src="/images/reference/limitations.png" alt="截图占位：功能边界示例" />
+<GuideImage src="/images/reference/limitations.png" alt="功能边界示例" />
 
 ## 平台与运行环境
 

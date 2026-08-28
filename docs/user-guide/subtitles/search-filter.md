@@ -36,6 +36,6 @@ description: 在当前字幕轨中查找文本，并按选择、旗标、编辑�
 
 底部控件可以调整字幕缩略图大小。更多选项菜单还可控制选择、喷涂工具、排序、旗标、星级、色标和缩略图大小这些底部区域是否显示；隐藏控件不会移除相应功能。
 
-<GuideImage src="/images/subtitles/search-filter.png" alt="截图占位：展开的字幕过滤器" />
+<GuideImage src="/images/subtitles/search-filter.png" alt="展开的字幕过滤器" />
 
 若要给结果做长期标注，继续[星级、旗标和色标](/subtitles/annotations)。

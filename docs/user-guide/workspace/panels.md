@@ -26,7 +26,7 @@ description: 打开、关闭、移动、拆分和调整 LineCut 面板，并了�
 
 LineCut 会保持每个区域的标签顺序、活动标签、分割方向和比例。
 
-<GuideImage src="/images/workspace/panels.png" alt="截图占位：面板拖拽停靠指示" />
+<GuideImage src="/images/workspace/panels.png" alt="面板拖拽停靠指示" />
 
 ## 布局保存与恢复
 
