@@ -1,0 +1,6 @@
+目标图片路径：/images/workflows/organize-storyboard.png
+
+截图占位：带关键字树的分镜面板
+
+展示图标视图、已标星/色标的镜头，以及包含父子节点和同义词的关键字面板。
+

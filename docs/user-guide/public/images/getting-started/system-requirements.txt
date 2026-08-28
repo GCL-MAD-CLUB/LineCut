@@ -1,0 +1,6 @@
+目标图片路径：/images/getting-started/system-requirements.png
+
+截图占位：推荐的目录规划示意
+
+展示“原始素材 / LineCut 缓存 / 代理 / 导出”四个目录及其关系，不应包含真实用户路径或敏感文件名。
+

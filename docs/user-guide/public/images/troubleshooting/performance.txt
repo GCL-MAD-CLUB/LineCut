@@ -1,0 +1,6 @@
+目标图片路径：/images/troubleshooting/performance.png
+
+截图占位：缓存与代理相关设置
+
+请展示首选项中的缓存目录，或代理创建对话框中的尺寸和输出位置选择。
+
