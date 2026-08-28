@@ -148,6 +148,8 @@ define_error_codes! {
     ThumbnailExtractionFailed => ("THUMBNAIL_EXTRACTION_FAILED", Media, true),
     StoryboardFrameDecodeFailed => ("STORYBOARD_FRAME_DECODE_FAILED", Media, true),
     FileRevealFailed => ("FILE_REVEAL_FAILED", Platform, true),
+    DocumentationOpenFailed => ("DOCUMENTATION_OPEN_FAILED", Platform, true),
+    LogDirectoryOpenFailed => ("LOG_DIRECTORY_OPEN_FAILED", Platform, true),
     ExecutablePathUnavailable => ("EXECUTABLE_PATH_UNAVAILABLE", Platform, true),
     WorkingDirectoryUnavailable => ("WORKING_DIRECTORY_UNAVAILABLE", Platform, true),
     SystemClockInvalid => ("SYSTEM_CLOCK_INVALID", Platform, true),

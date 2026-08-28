@@ -18,7 +18,7 @@ LineCut 使用和 OpenAI Codex 相同的核心发布思路：源码版本先在�
 
 ```powershell
 npm ci
-npm run release:build -- 0.3.0
+npm run release:build -- 0.3.1
 ```
 
 该命令会统一更新版本并在本地构建完整安装包，因此需要正式项目构建密钥和打包资源。也可以仅修改版本文件后运行 `npm run check:versions` 与常规 CI，再由云端完成正式构建。
@@ -26,11 +26,11 @@ npm run release:build -- 0.3.0
 合并版本 PR 后，在 `main` 对应提交创建并推送带 `v` 前缀的 tag：
 
 ```powershell
-git tag -a v0.3.0 -m "LineCut 0.3.0"
-git push origin v0.3.0
+git tag -a v0.3.1 -m "LineCut 0.3.1"
+git push origin v0.3.1
 ```
 
-预发布版本遵循 SemVer，例如 `v0.3.0-alpha.3`。工作流会自动标记包含 `-` 的版本为 prerelease。
+预发布版本遵循 SemVer，例如 `v0.3.1-alpha.3`。工作流会自动标记包含 `-` 的版本为 prerelease。
 
 ## 自动发布内容
 

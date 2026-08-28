@@ -234,6 +234,8 @@ const operationPolicies = {
   "export.reveal": silent("无法在资源管理器中显示导出文件"),
   "export.run": modal("导出视频失败"),
   "feedback.audio": silent("警告音效播放失败"),
+  "help.openDocumentation": modal("无法打开 LineCut 帮助"),
+  "help.openLogDirectory": modal("无法显示日志文件"),
   "media.bindSubtitles": modal("字幕绑定失败"),
   "media.closeBackend": modal("关闭后台媒体失败"),
   "media.demux": modal("分解媒体失败"),

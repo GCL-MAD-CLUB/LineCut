@@ -1,5 +1,5 @@
 /**
- * User-visible operation inventory for the v0.3 guide.
+ * User-visible operation inventory for the v0.3.1 guide.
  *
  * Keep operations grouped by a stable feature page instead of creating one
  * page per control. `evidence` is text that must remain in the guide page; the
@@ -33,7 +33,11 @@ export const userGuideOperationGroups = [
     area: "应用菜单",
     guide: "workspace/workspace.md",
     heading: "## 应用菜单参考",
-    sources: ["src/components/ApplicationMenu/ApplicationMenu.tsx"],
+    sources: [
+      "src/components/ApplicationMenu/ApplicationMenu.tsx",
+      "src/App.tsx",
+      "src-tauri/src/backend/commands.rs",
+    ],
     operations: [
       ["new-project-menu", "文件：新建项目", "新建"],
       ["open-project-menu", "文件：打开项目", "打开"],
@@ -67,7 +71,8 @@ export const userGuideOperationGroups = [
       ["window-storyboard", "窗口：分镜", "分镜"],
       ["window-history", "窗口：历史记录", "历史记录"],
       ["reserved-clip-menu", "识别尚未实现的剪辑菜单", "剪辑"],
-      ["reserved-help-menu", "识别尚未实现的帮助菜单", "帮助"],
+      ["open-linecut-help", "帮助：在默认浏览器中打开 LineCut 帮助", "LineCut 帮助(P)"],
+      ["open-log-directory", "帮助：打开实际日志文件夹", "显示日志文件(L)"],
     ],
   },
   {

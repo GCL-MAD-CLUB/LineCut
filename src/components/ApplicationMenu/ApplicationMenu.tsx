@@ -73,6 +73,10 @@ export interface ApplicationMenuModel {
     storyboard: ApplicationMenuWindowItem;
     history: ApplicationMenuWindowItem;
   };
+  help: {
+    lineCutHelp: ApplicationMenuCommand;
+    showLogFiles: ApplicationMenuCommand;
+  };
 }
 
 interface ApplicationMenuProps {
@@ -80,17 +84,18 @@ interface ApplicationMenuProps {
 }
 
 export function ApplicationMenu({ model }: ApplicationMenuProps) {
-  const { file, edit, window: windowMenu } = model;
+  const { file, edit, window: windowMenu, help } = model;
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const [editMenuOpen, setEditMenuOpen] = useState(false);
   const [windowMenuOpen, setWindowMenuOpen] = useState(false);
+  const [helpMenuOpen, setHelpMenuOpen] = useState(false);
   const [recentProjectMenuOpen, setRecentProjectMenuOpen] = useState(false);
   const [recentImportMenuOpen, setRecentImportMenuOpen] = useState(false);
   const [projectWindowMenuOpen, setProjectWindowMenuOpen] = useState(false);
   const menuRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    if (!fileMenuOpen && !editMenuOpen && !windowMenuOpen) {
+    if (!fileMenuOpen && !editMenuOpen && !windowMenuOpen && !helpMenuOpen) {
       return;
     }
 
@@ -99,6 +104,7 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
         setFileMenuOpen(false);
         setEditMenuOpen(false);
         setWindowMenuOpen(false);
+        setHelpMenuOpen(false);
       }
     };
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -106,6 +112,7 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
         setFileMenuOpen(false);
         setEditMenuOpen(false);
         setWindowMenuOpen(false);
+        setHelpMenuOpen(false);
       }
     };
     window.addEventListener("pointerdown", closeMenu);
@@ -114,7 +121,7 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
       window.removeEventListener("pointerdown", closeMenu);
       window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [editMenuOpen, fileMenuOpen, windowMenuOpen]);
+  }, [editMenuOpen, fileMenuOpen, helpMenuOpen, windowMenuOpen]);
 
   useEffect(() => {
     if (!fileMenuOpen) {
@@ -133,6 +140,7 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
     setFileMenuOpen(false);
     setEditMenuOpen(false);
     setWindowMenuOpen(false);
+    setHelpMenuOpen(false);
     await handler();
   };
 
@@ -148,6 +156,7 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
             setFileMenuOpen((open) => !open);
             setEditMenuOpen(false);
             setWindowMenuOpen(false);
+            setHelpMenuOpen(false);
           }}
         >
           文件(F)
@@ -335,6 +344,7 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
             setEditMenuOpen((open) => !open);
             setFileMenuOpen(false);
             setWindowMenuOpen(false);
+            setHelpMenuOpen(false);
           }}
         >
           编辑(E)
@@ -434,6 +444,7 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
             setWindowMenuOpen((open) => !open);
             setFileMenuOpen(false);
             setEditMenuOpen(false);
+            setHelpMenuOpen(false);
           }}
         >
           窗口(W)
@@ -494,14 +505,40 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
           </PopupMenu>
         )}
       </div>
-      <button
-        type="button"
-        className="application-menu-trigger application-menu-placeholder"
-        aria-disabled="true"
-        title="帮助菜单将在后续版本实现"
-      >
-        帮助(H)
-      </button>
+      <div className="application-menu-root">
+        <button
+          type="button"
+          className={`application-menu-trigger${helpMenuOpen ? " active" : ""}`}
+          aria-haspopup="menu"
+          aria-expanded={helpMenuOpen}
+          onClick={() => {
+            setHelpMenuOpen((open) => !open);
+            setFileMenuOpen(false);
+            setEditMenuOpen(false);
+            setWindowMenuOpen(false);
+          }}
+        >
+          帮助(H)
+        </button>
+        {helpMenuOpen && (
+          <PopupMenu className="application-menu-popup" enableMnemonics>
+            <PopupMenuItem
+              mnemonic="P"
+              disabled={!help.lineCutHelp.enabled}
+              onSelect={select(help.lineCutHelp.execute)}
+            >
+              LineCut 帮助(P)...
+            </PopupMenuItem>
+            <PopupMenuItem
+              mnemonic="L"
+              disabled={!help.showLogFiles.enabled}
+              onSelect={select(help.showLogFiles.execute)}
+            >
+              显示日志文件(L)...
+            </PopupMenuItem>
+          </PopupMenu>
+        )}
+      </div>
     </nav>
   );
 }

@@ -6,6 +6,8 @@ export type OperationKey =
   | "export.reveal"
   | "export.run"
   | "feedback.audio"
+  | "help.openDocumentation"
+  | "help.openLogDirectory"
   | "media.bindSubtitles"
   | "media.closeBackend"
   | "media.demux"

@@ -620,6 +620,32 @@ function AppContent() {
     await runOperation("project.close", () => getCurrentWindow().close());
   }
 
+  async function openLineCutHelp() {
+    if (!isTauriRuntime()) {
+      messagePublished("请在 LineCut 桌面应用中打开在线帮助。");
+      return;
+    }
+    const outcome = await runOperation("help.openDocumentation", () =>
+      invokeCommand("open_user_guide"),
+    );
+    if (outcome.status === "success") {
+      messagePublished("已在默认浏览器中打开 LineCut 帮助");
+    }
+  }
+
+  async function showLogFiles() {
+    if (!isTauriRuntime()) {
+      messagePublished("日志文件仅在 LineCut 桌面应用中提供。");
+      return;
+    }
+    const outcome = await runOperation("help.openLogDirectory", () =>
+      invokeCommand("open_log_directory"),
+    );
+    if (outcome.status === "success") {
+      messagePublished("已打开 LineCut 日志文件夹");
+    }
+  }
+
   async function newProject() {
     if (!isTauriRuntime()) {
       messagePublished("请在 Tauri 桌面窗口中新建项目。");
@@ -1382,6 +1408,10 @@ function AppContent() {
         enabled: true,
         execute: () => showSingletonPanel("history", historyPanelType, {}, "middle"),
       },
+    },
+    help: {
+      lineCutHelp: { enabled: true, execute: openLineCutHelp },
+      showLogFiles: { enabled: true, execute: showLogFiles },
     },
   };
 

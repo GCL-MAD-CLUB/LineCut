@@ -103,7 +103,7 @@ export default defineConfig({
           { text: "使用限制与数据说明", link: "/reference/limitations" },
           { text: "功能覆盖清单", link: "/coverage" },
           { text: "故障排查", link: "/troubleshooting/troubleshooting" },
-          { text: "v0.3.0 更新说明", link: "/release-notes/v0.3" },
+          { text: "v0.3.1 更新说明", link: "/release-notes/v0.3.1" },
         ],
       },
     ],
