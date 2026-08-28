@@ -34,6 +34,7 @@ import { HistoryPanelServicesProvider, historyPanelType } from "./components/His
 import { exportWorkspaceStore } from "./systems/ExportSystem";
 import { ImportWorkspace } from "./components/ImportWorkspace";
 import { mediaBinPanelType, type MediaBinPanelParams } from "./components/MediaBin";
+import { ProjectSaveDialog } from "./components/ProjectSaveDialog";
 import { ExportConflictDialog } from "./components/ExportConflictDialog";
 import { PreferencesDialog } from "./components/PreferencesDialog";
 import { ProxyCreationDialog } from "./components/ProxyCreationDialog";
@@ -281,6 +282,7 @@ const appWorkspaces = [
 ] as const;
 
 type AppWorkspace = (typeof appWorkspaces)[number]["id"];
+type PendingCloseTarget = "project" | "window";
 
 function AppContent() {
   const identity = useStableIdentity("app-shell");
@@ -296,6 +298,8 @@ function AppContent() {
   );
   const [recentProjects, setRecentProjects] = useState(() => readRecentProjects());
   const [launchResolved, setLaunchResolved] = useState(false);
+  const [pendingCloseTarget, setPendingCloseTarget] = useState<PendingCloseTarget | null>(null);
+  const [closeSavePending, setCloseSavePending] = useState(false);
   const closingWindowRef = useRef(false);
 
   const {
@@ -557,26 +561,13 @@ function AppContent() {
     const currentWindow = getCurrentWindow();
     runBackgroundOperation("window.closeListener", async () => {
       const unlisten = await currentWindow.onCloseRequested((event) => {
-        void runOperation("project.close", async () => {
-          if (!projectDirty || closingWindowRef.current) {
-            await cancelAllTaskProgress();
-            return;
-          }
+        if (!projectDirty || closingWindowRef.current) {
+          void runOperation("project.close", () => cancelAllTaskProgress());
+          return;
+        }
 
-          event.preventDefault();
-          const shouldClose = await confirm("项目有尚未保存的更改，确定要退出吗？", {
-            title: "LineCut",
-            kind: "warning",
-            okLabel: "退出",
-            cancelLabel: "取消",
-          });
-          if (!shouldClose) {
-            return;
-          }
-          closingWindowRef.current = true;
-          await cancelAllTaskProgress();
-          await currentWindow.destroy();
-        });
+        event.preventDefault();
+        setPendingCloseTarget("window");
       });
       if (disposed) {
         unlisten();
@@ -713,10 +704,7 @@ function AppContent() {
     }
   }
 
-  async function closeProject() {
-    if (!(await confirmDiscardChanges("project.close", "当前项目有尚未保存的更改，仍要关闭吗？"))) {
-      return;
-    }
+  async function closeProjectImmediately() {
     const outcome = await runOperation("project.close", async () => {
       await removeBackendProject();
       projectClosed();
@@ -724,6 +712,14 @@ function AppContent() {
     if (outcome.status === "success") {
       messagePublished("项目已关闭");
     }
+  }
+
+  async function closeProject() {
+    if (projectDirty) {
+      setPendingCloseTarget("project");
+      return;
+    }
+    await closeProjectImmediately();
   }
 
   function closeFocusedPanel() {
@@ -782,10 +778,10 @@ function AppContent() {
     return `${projectName.slice(0, -extensionMatch[1].length)}_副本${extensionMatch[1]}`;
   }
 
-  async function saveProjectAs(makeCurrent = true) {
+  async function saveProjectAsWithOutcome(makeCurrent = true) {
     if (!isTauriRuntime()) {
       messagePublished("请在 Tauri 桌面窗口中保存项目。");
-      return;
+      return false;
     }
     const pickOutcome = await runOperation("project.save", () =>
       save({
@@ -795,24 +791,87 @@ function AppContent() {
       }),
     );
     if (pickOutcome.status !== "success" || !pickOutcome.value) {
-      return;
+      return false;
     }
     const picked = pickOutcome.value;
-    await runOperation("project.save", () => writeProject(picked, makeCurrent), {
-      displayName: fileName(picked),
-      resourceKind: "project",
-    });
+    const saveOutcome = await runOperation(
+      "project.save",
+      () => writeProject(picked, makeCurrent),
+      {
+        displayName: fileName(picked),
+        resourceKind: "project",
+      },
+    );
+    return saveOutcome.status === "success";
+  }
+
+  async function saveProjectAs(makeCurrent = true) {
+    await saveProjectAsWithOutcome(makeCurrent);
+  }
+
+  async function saveProjectWithOutcome() {
+    if (!projectFilePath) {
+      return saveProjectAsWithOutcome(true);
+    }
+    const saveOutcome = await runOperation(
+      "project.save",
+      () => writeProject(projectFilePath, true),
+      {
+        displayName: fileName(projectFilePath),
+        resourceKind: "project",
+      },
+    );
+    return saveOutcome.status === "success";
   }
 
   async function saveProject() {
-    if (!projectFilePath) {
-      await saveProjectAs(true);
+    await saveProjectWithOutcome();
+  }
+
+  function cancelPendingClose() {
+    if (!closeSavePending) {
+      setPendingCloseTarget(null);
+    }
+  }
+
+  async function completePendingClose(target: PendingCloseTarget) {
+    setPendingCloseTarget(null);
+    if (target === "project") {
+      await closeProjectImmediately();
       return;
     }
-    await runOperation("project.save", () => writeProject(projectFilePath, true), {
-      displayName: fileName(projectFilePath),
-      resourceKind: "project",
+
+    closingWindowRef.current = true;
+    const outcome = await runOperation("project.close", async () => {
+      await cancelAllTaskProgress();
+      await getCurrentWindow().destroy();
     });
+    if (outcome.status !== "success") {
+      closingWindowRef.current = false;
+      setPendingCloseTarget("window");
+    }
+  }
+
+  async function saveAndCompletePendingClose() {
+    const target = pendingCloseTarget;
+    if (!target || closeSavePending) {
+      return;
+    }
+
+    setCloseSavePending(true);
+    const saved = await saveProjectWithOutcome();
+    if (saved) {
+      await completePendingClose(target);
+    }
+    setCloseSavePending(false);
+  }
+
+  function discardAndCompletePendingClose() {
+    const target = pendingCloseTarget;
+    if (!target || closeSavePending) {
+      return;
+    }
+    void completePendingClose(target);
   }
 
   async function restoreProject() {
@@ -1373,6 +1432,16 @@ function AppContent() {
               </div>
             ))}
           </aside>
+        )}
+
+        {pendingCloseTarget && (
+          <ProjectSaveDialog
+            projectName={fileName(projectFilePath ?? suggestedProjectName())}
+            saving={closeSavePending}
+            onCancel={cancelPendingClose}
+            onDiscard={discardAndCompletePendingClose}
+            onSave={() => void saveAndCompletePendingClose()}
+          />
         )}
 
         <ProxyCreationDialog />

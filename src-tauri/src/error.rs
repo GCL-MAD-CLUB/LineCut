@@ -1,11 +1,23 @@
 use serde::{Serialize, Serializer};
+use std::backtrace::Backtrace;
+use std::panic::Location;
+use std::sync::OnceLock;
 use tauri::Manager;
-use tracing::error;
+use tracing::{error, info, Level};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use uuid::Uuid;
 
 pub(crate) type AppResult<T> = Result<T, AppError>;
 pub(crate) type CommandResult<T> = AppResult<T>;
+
+static LOG_SESSION_ID: OnceLock<String> = OnceLock::new();
+const LOG_RETENTION_FILES: usize = 14;
+
+fn log_session_id() -> &'static str {
+    LOG_SESSION_ID
+        .get_or_init(|| format!("SESSION-{}", Uuid::new_v4().simple()))
+        .as_str()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -172,14 +184,21 @@ pub(crate) struct AppError {
 }
 
 impl AppError {
+    #[track_caller]
     pub(crate) fn new(code: ErrorCode, detail: impl Into<String>) -> Self {
         let detail = detail.into();
         let error_id = format!("ERR-{}", Uuid::new_v4().simple());
         let definition = code.definition();
+        let origin = Location::caller();
         error!(
+            session_id = log_session_id(),
             error_id = %error_id,
             public_code = definition.name,
             error_category = definition.category.as_str(),
+            retryable = definition.retryable,
+            origin_file = origin.file(),
+            origin_line = origin.line(),
+            origin_column = origin.column(),
             detail = %detail,
             "application error created"
         );
@@ -223,6 +242,7 @@ impl std::fmt::Display for AppError {
 
 impl std::error::Error for AppError {}
 
+#[track_caller]
 pub(crate) fn app_error(code: ErrorCode, detail: impl Into<String>) -> AppError {
     AppError::new(code, detail)
 }
@@ -247,8 +267,8 @@ pub(crate) fn init_logging(app: &tauri::AppHandle) -> AppResult<()> {
         .rotation(Rotation::DAILY)
         .filename_prefix("linecut")
         .filename_suffix("log")
-        .max_log_files(5)
-        .build(log_dir)
+        .max_log_files(LOG_RETENTION_FILES)
+        .build(&log_dir)
         .map_err(|error| {
             app_error(
                 ErrorCode::LoggingInitializationFailed,
@@ -257,6 +277,12 @@ pub(crate) fn init_logging(app: &tauri::AppHandle) -> AppResult<()> {
         })?;
     tracing_subscriber::fmt()
         .with_ansi(false)
+        .with_max_level(Level::DEBUG)
+        .with_target(true)
+        .with_thread_ids(true)
+        .with_thread_names(true)
+        .with_file(true)
+        .with_line_number(true)
         .with_writer(file_appender)
         .try_init()
         .map_err(|error| {
@@ -265,7 +291,48 @@ pub(crate) fn init_logging(app: &tauri::AppHandle) -> AppResult<()> {
                 format!("Failed to install the application log subscriber: {error}"),
             )
         })?;
+    install_panic_logging();
+    info!(
+        session_id = log_session_id(),
+        app_version = env!("CARGO_PKG_VERSION"),
+        target_os = std::env::consts::OS,
+        target_arch = std::env::consts::ARCH,
+        process_id = std::process::id(),
+        retained_log_files = LOG_RETENTION_FILES,
+        log_directory = %log_dir.display(),
+        "application logging initialized"
+    );
     Ok(())
+}
+
+fn install_panic_logging() {
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        let current_thread = std::thread::current();
+        let payload = panic_info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| {
+                panic_info
+                    .payload()
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+            })
+            .unwrap_or("non-string panic payload");
+        let location = panic_info.location();
+        error!(
+            session_id = log_session_id(),
+            panic_payload = payload,
+            panic_file = location.map(|value| value.file()).unwrap_or("unknown"),
+            panic_line = location.map(|value| value.line()).unwrap_or(0),
+            panic_column = location.map(|value| value.column()).unwrap_or(0),
+            thread_name = current_thread.name().unwrap_or("unnamed"),
+            backtrace = %Backtrace::force_capture(),
+            "application panic"
+        );
+        previous_hook(panic_info);
+    }));
 }
 
 #[derive(serde::Deserialize)]
@@ -278,19 +345,54 @@ pub(crate) struct FrontendIncident {
     detail: String,
     occurrences: u32,
     last_seen_at_ms: u64,
+    page_path: Option<String>,
+    user_agent: Option<String>,
+    visibility_state: Option<String>,
+    online: Option<bool>,
+    source: Option<String>,
 }
 
 #[tauri::command]
 pub(crate) fn record_frontend_incident(incident: FrontendIncident) {
     let detail = incident.detail.chars().take(4096).collect::<String>();
+    let page_path = incident
+        .page_path
+        .unwrap_or_default()
+        .chars()
+        .take(512)
+        .collect::<String>();
+    let user_agent = incident
+        .user_agent
+        .unwrap_or_default()
+        .chars()
+        .take(512)
+        .collect::<String>();
+    let visibility_state = incident
+        .visibility_state
+        .unwrap_or_default()
+        .chars()
+        .take(32)
+        .collect::<String>();
+    let source = incident
+        .source
+        .unwrap_or_default()
+        .chars()
+        .take(128)
+        .collect::<String>();
     let occurrences = incident.occurrences.clamp(1, 10_000);
     error!(
+        session_id = log_session_id(),
         error_id = %incident.error_id,
         operation = %incident.operation,
         public_code = %incident.code,
         error_category = incident.category.as_str(),
         occurrences,
         last_seen_at_ms = incident.last_seen_at_ms,
+        page_path = %page_path,
+        user_agent = %user_agent,
+        visibility_state = %visibility_state,
+        online = ?incident.online,
+        source = %source,
         detail = %detail,
         "frontend incident"
     );
