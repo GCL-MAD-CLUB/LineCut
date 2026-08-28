@@ -44,7 +44,7 @@ export default defineConfig({
         ],
       },
       {
-        text: "核心工作流",
+        text: "工作流",
         collapsed: true,
         items: [
           { text: "通过字幕找到片段", link: "/workflows/find-dialogue" },
