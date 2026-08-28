@@ -20,6 +20,10 @@
   },
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
+    "docs:check": "node scripts/check-user-guide.mjs",
+    "docs:dev": "vitepress dev docs/user-guide",
+    "docs:build": "npm run docs:check && vitepress build docs/user-guide",
+    "docs:preview": "vitepress preview docs/user-guide",
     "build": "npm run check:errors && npm run check:architecture && tsc && vite build",
     "build:thumbnail-provider": "node scripts/build-thumbnail-provider.mjs",
     "prepare:transnetv2": "node scripts/prepare-transnetv2-assets.mjs",
@@ -27,7 +31,7 @@
     "check:errors": "node scripts/check-error-boundaries.mjs",
     "check:architecture": "node scripts/check-system-architecture.mjs",
     "check:versions": "node scripts/check-version-consistency.mjs",
-    "check": "npm run format:frontend:check && npm run check:versions && npm run build",
+    "check": "npm run format:frontend:check && npm run check:versions && npm run build && npm run docs:build",
     "format": "prettier --write . && npm run format:rust",
     "format:frontend:check": "prettier --check .",
     "format:check": "npm run format:frontend:check && npm run format:rust:check",
@@ -53,6 +57,12 @@
     "@vitejs/plugin-react": "^6.1.0",
     "prettier": "^3.9.6",
     "typescript": "^6.0.3",
-    "vite": "^8.2.2"
+    "vite": "^8.2.2",
+    "vitepress": "^1.6.4"
+  },
+  "overrides": {
+    "vitepress": {
+      "vite": "^6.4.3"
+    }
   }
 }

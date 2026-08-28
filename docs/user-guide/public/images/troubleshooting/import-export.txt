@@ -1,0 +1,6 @@
+目标图片路径：/images/troubleshooting/import-export.png
+
+截图占位：任务进度或错误通知
+
+请截取一次导入、代理或导出任务的进度/失败通知，保留可读的错误文字位置。
+

@@ -1,0 +1,6 @@
+目标图片路径：/images/troubleshooting/ffmpeg.png
+
+截图占位：首选项中的 FFmpeg / ffprobe 设置
+
+请展示两个路径输入框、浏览按钮、保存按钮以及“重置工具路径”按钮。
+

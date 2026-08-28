@@ -1,0 +1,43 @@
+:root {
+  --vp-c-brand-1: #315efb;
+  --vp-c-brand-2: #244bd6;
+  --vp-c-brand-3: #1d3cae;
+  --vp-button-brand-bg: #315efb;
+  --vp-button-brand-hover-bg: #244bd6;
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: linear-gradient(120deg, #315efb 30%, #7b63ff);
+  --vp-custom-block-tip-border: #315efb;
+}
+
+.guide-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: 24px 0;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 12px;
+  background: var(--vp-c-bg-soft);
+}
+
+.guide-image-placeholder {
+  display: grid;
+  min-height: 180px;
+  margin: 24px 0;
+  padding: 32px;
+  place-content: center;
+  gap: 8px;
+  border: 1px dashed var(--vp-c-divider);
+  border-radius: 12px;
+  color: var(--vp-c-text-2);
+  text-align: center;
+  background: var(--vp-c-bg-soft);
+}
+
+.guide-image-placeholder strong {
+  color: var(--vp-c-text-1);
+  font-size: 18px;
+}
+
+.guide-image-placeholder figcaption {
+  margin: 0;
+}

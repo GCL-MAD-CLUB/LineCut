@@ -1,0 +1,6 @@
+目标图片路径：/images/getting-started/install.png
+
+截图占位：安装程序的 FFmpeg 选择页
+
+突出“内置 FFmpeg（推荐）”和使用系统工具两种选择；不要截入用户名、安装目录或其他应用。
+
