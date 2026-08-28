@@ -499,6 +499,7 @@ async fn run_output_bytes_inner(
 ) -> AppResult<Vec<u8>> {
     ensure_not_cancelled(&cancel)?;
     let process_id = Uuid::new_v4().to_string();
+    let started_at = tokio::time::Instant::now();
     let mut child = hidden_command(program)
         .args(args)
         .stdout(Stdio::piped())
@@ -511,6 +512,15 @@ async fn run_output_bytes_inner(
             )
         })?;
     let pid = child.id();
+    tracing::info!(
+        process_id = %process_id,
+        pid,
+        logical_task_id,
+        program,
+        argument_count = args.len(),
+        timeout_ms = max_duration.map(|duration| duration.as_millis() as u64),
+        "external tool process started"
+    );
     if let Err(error) = register_running_ffmpeg(
         state,
         process_id.clone(),
@@ -528,6 +538,15 @@ async fn run_output_bytes_inner(
             Ok(output) => output,
             Err(_) => {
                 clear_running_ffmpeg(state, &process_id);
+                tracing::warn!(
+                    process_id = %process_id,
+                    pid,
+                    logical_task_id,
+                    program,
+                    elapsed_ms = started_at.elapsed().as_millis() as u64,
+                    timeout_ms = max_duration.as_millis() as u64,
+                    "external tool process timed out"
+                );
                 return Err(app_error(
                     ErrorCode::ExternalToolExecutionFailed,
                     format!(
@@ -548,6 +567,18 @@ async fn run_output_bytes_inner(
         )
     })?;
     ensure_not_cancelled(&cancel)?;
+    tracing::info!(
+        process_id = %process_id,
+        pid,
+        logical_task_id,
+        program,
+        elapsed_ms = started_at.elapsed().as_millis() as u64,
+        exit_code = output.status.code(),
+        success = output.status.success(),
+        stdout_bytes = output.stdout.len(),
+        stderr_bytes = output.stderr.len(),
+        "external tool process exited"
+    );
     if output.status.success() {
         Ok(output.stdout)
     } else {
@@ -609,6 +640,7 @@ pub(crate) async fn run_status_with_ffmpeg_progress(
     ensure_not_cancelled(&progress.cancel)?;
     let progress_args = ffmpeg_args_with_progress(args);
     let task_id = Uuid::new_v4().to_string();
+    let started_at = tokio::time::Instant::now();
     let cancel = progress.cancel.clone();
     let mut child = hidden_command(program)
         .args(&progress_args)
@@ -638,6 +670,9 @@ pub(crate) async fn run_status_with_ffmpeg_progress(
         logical_task_id = progress.task_id,
         watchdog_label = %progress.watchdog_label,
         expected_duration_us = progress.duration_us,
+        process_id = %task_id,
+        program,
+        argument_count = progress_args.len(),
         "started monitored FFmpeg process"
     );
 
@@ -778,6 +813,9 @@ pub(crate) async fn run_status_with_ffmpeg_progress(
             logical_task_id = progress.task_id,
             watchdog_label = %progress.watchdog_label,
             greatest_out_time_us,
+            elapsed_ms = started_at.elapsed().as_millis() as u64,
+            exit_code = status.code(),
+            stderr_bytes = stderr.len(),
             "monitored FFmpeg process completed"
         );
         emit_context_progress(&progress, progress.base_progress + progress.progress_span);
@@ -791,6 +829,17 @@ pub(crate) async fn run_status_with_ffmpeg_progress(
                 "Task cancellation was requested",
             ))
         } else {
+            tracing::warn!(
+                pid,
+                process_id = %task_id,
+                logical_task_id = progress.task_id,
+                program,
+                elapsed_ms = started_at.elapsed().as_millis() as u64,
+                exit_code = status.code(),
+                greatest_out_time_us,
+                stderr_bytes = stderr.len(),
+                "monitored FFmpeg process failed"
+            );
             Err(app_error(
                 ErrorCode::ExternalToolExecutionFailed,
                 format!("External tool {program} exited unsuccessfully; stderr={stderr}"),

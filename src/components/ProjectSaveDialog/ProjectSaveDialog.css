@@ -1,0 +1,36 @@
+.project-save-dialog {
+  width: min(440px, calc(30vw));
+}
+.project-save-dialog-body {
+  padding: 30px;
+}
+
+.project-save-dialog-title {
+  margin: 0;
+  color: var(--color-text);
+  font-family: var(--font-song);
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.project-save-dialog-divider {
+  height: 1px;
+  margin: 10px 0;
+  background: var(--color-border-strong);
+}
+
+.project-save-dialog-message {
+  margin: 0;
+  padding: 0;
+  color: var(--color-text);
+  font-family: var(--font-song);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.project-save-dialog-message strong {
+  color: var(--color-text);
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}

@@ -36,6 +36,7 @@ function normalizedError(error: unknown): NormalizedError | null {
     category: errorCategory(value.category),
     retryable: value.retryable === true,
     detail: value.detail!,
+    source: typeof value.source === "string" ? value.source : undefined,
   };
 }
 
@@ -67,17 +68,24 @@ function diagnosticDetail(error: unknown) {
   }
 }
 
-export function normalizeError(error: unknown): NormalizedError {
+function attachErrorSource(error: NormalizedError, source?: string) {
+  if (source) {
+    error.source = source;
+  }
+  return error;
+}
+
+export function normalizeError(error: unknown, source?: string): NormalizedError {
   const normalized = normalizedError(error);
   if (normalized) {
-    return normalized;
+    return attachErrorSource(normalized, source);
   }
   if (error instanceof DOMException && error.name === "AbortError") {
-    return clientError("BROWSER_ABORTED", diagnosticDetail(error));
+    return attachErrorSource(clientError("BROWSER_ABORTED", diagnosticDetail(error)), source);
   }
   const serialized = serializedError(error);
   const fallback = clientError("UNEXPECTED_ERROR", diagnosticDetail(error));
-  return {
+  return attachErrorSource({
     errorId:
       typeof serialized?.errorId === "string" && serialized.errorId
         ? serialized.errorId
@@ -87,7 +95,7 @@ export function normalizeError(error: unknown): NormalizedError {
     retryable:
       typeof serialized?.retryable === "boolean" ? serialized.retryable : fallback.retryable,
     detail: fallback.detail,
-  };
+  }, source);
 }
 
 export async function invokeCommand<T>(
@@ -97,7 +105,7 @@ export async function invokeCommand<T>(
   try {
     return await invoke<T>(command, args);
   } catch (error) {
-    throw normalizeError(error);
+    throw normalizeError(error, `tauri:${command}`);
   }
 }
 
@@ -109,8 +117,17 @@ export function recordFrontendIncident(incident: {
   detail: string;
   occurrences: number;
   lastSeenAtMs: number;
+  source?: string;
 }) {
-  void invoke("record_frontend_incident", { incident }).catch(() => undefined);
+  void invoke("record_frontend_incident", {
+    incident: {
+      ...incident,
+      pagePath: window.location.pathname,
+      userAgent: navigator.userAgent,
+      visibilityState: document.visibilityState,
+      online: navigator.onLine,
+    },
+  }).catch(() => undefined);
 }
 
 const incidentLogWindowMs = 30_000;
@@ -136,6 +153,7 @@ function writeFrontendIncident(
     code: error.code,
     category: error.category,
     detail: error.detail,
+    source: error.source,
     occurrences,
     lastSeenAtMs,
   });

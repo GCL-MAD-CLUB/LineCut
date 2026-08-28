@@ -80,6 +80,7 @@ export interface PublicCommandError {
 
 export interface NormalizedError extends PublicCommandError {
   detail: string;
+  source?: string;
 }
 
 export interface Incident {
