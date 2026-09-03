@@ -1557,16 +1557,15 @@ async fn extract_timeline_thumbnails(
         .map(|jpeg| vec![jpeg]);
     }
     let temp_root = temp_root.to_path_buf();
-    let temp_dir = tokio::task::spawn_blocking(move || {
-        create_timeline_thumbnail_temp_directory(&temp_root)
-    })
-    .await
-    .map_err(|error| {
-        app_error(
-            ErrorCode::BlockingTaskFailed,
-            format!("Timeline thumbnail temp directory task failed: {error}"),
-        )
-    })??;
+    let temp_dir =
+        tokio::task::spawn_blocking(move || create_timeline_thumbnail_temp_directory(&temp_root))
+            .await
+            .map_err(|error| {
+                app_error(
+                    ErrorCode::BlockingTaskFailed,
+                    format!("Timeline thumbnail temp directory task failed: {error}"),
+                )
+            })??;
     let result = extract_timeline_thumbnails_into(
         &temp_dir,
         program,

@@ -1,4 +1,4 @@
-import { runOperation, type OperationKey } from "../errors";
+import { clientError, runOperation, type OperationKey } from "../errors";
 import { timelineThumbnailResolutions, type TimelineThumbnailResolution } from "./resolution";
 
 const maximumCachedThumbnails = 4096;
@@ -330,7 +330,10 @@ export function createTimelineThumbnailManager<Options extends TimelineThumbnail
   function createJob(options: Options, resolutions: TimelineThumbnailResolution[], key?: string) {
     const resolution = resolutions.at(-1);
     if (resolution === undefined) {
-      throw new Error("A timeline thumbnail job requires at least one resolution");
+      throw clientError(
+        "UNEXPECTED_ERROR",
+        "A timeline thumbnail job requires at least one resolution",
+      );
     }
     const cacheKey = key ?? configuration.cacheKey(options, resolution);
     let resolve!: (result: TimelineThumbnailResult) => void;
