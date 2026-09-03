@@ -101,7 +101,7 @@ export interface TimelineThumbnailRequest {
   reprioritize: (priority: number) => void;
 }
 
-export interface TimelineThumbnailWarmRequest {
+export interface TimelineThumbnailBackfillRequest {
   promise: Promise<void>;
   cancel: () => void;
   reprioritize: (priority: number) => void;
@@ -126,6 +126,7 @@ interface ThumbnailJob<Options extends TimelineThumbnailOptions> {
   key: string;
   options: Options;
   resolution: TimelineThumbnailResolution;
+  resolutions: TimelineThumbnailResolution[];
   consumers: Map<number, ThumbnailConsumer>;
   sequence: number;
   settled: boolean;
@@ -326,8 +327,16 @@ export function createTimelineThumbnailManager<Options extends TimelineThumbnail
     evictCachedThumbnails();
   }
 
-  function createJob(options: Options, resolution: TimelineThumbnailResolution) {
-    const key = configuration.cacheKey(options, resolution);
+  function createJob(
+    options: Options,
+    resolutions: TimelineThumbnailResolution[],
+    key?: string,
+  ) {
+    const resolution = resolutions.at(-1);
+    if (resolution === undefined) {
+      throw new Error("A timeline thumbnail job requires at least one resolution");
+    }
+    const cacheKey = key ?? configuration.cacheKey(options, resolution);
     let resolve!: (result: TimelineThumbnailResult) => void;
     let reject!: (error: unknown) => void;
     const promise = new Promise<TimelineThumbnailResult>((resolvePromise, rejectPromise) => {
@@ -335,9 +344,10 @@ export function createTimelineThumbnailManager<Options extends TimelineThumbnail
       reject = rejectPromise;
     });
     const job: ThumbnailJob<Options> = {
-      key,
+      key: cacheKey,
       options,
       resolution,
+      resolutions,
       consumers: new Map(),
       sequence: nextJobSequence++,
       settled: false,
@@ -345,7 +355,7 @@ export function createTimelineThumbnailManager<Options extends TimelineThumbnail
       resolve,
       reject,
     };
-    pendingJobs.set(key, job);
+    pendingJobs.set(cacheKey, job);
     thumbnailQueue.push(job);
     queueOrderDirty = true;
     return job;
@@ -377,7 +387,7 @@ export function createTimelineThumbnailManager<Options extends TimelineThumbnail
 
     let job = pendingThumbnailJob(options, resolution);
     if (!job) {
-      job = createJob(options, resolution);
+      job = createJob(options, [resolution]);
     }
     job.consumers.set(consumerId, { priority, retainInMemory: true });
     queueOrderDirty = true;
@@ -413,22 +423,19 @@ export function createTimelineThumbnailManager<Options extends TimelineThumbnail
     };
   }
 
-  function warm(options: Options): TimelineThumbnailWarmRequest {
-    const resolution = options.resolution ?? timelineThumbnailResolutions[0];
-    const consumerId = nextConsumerId++;
-    const priority = normalizedPriority(options.priority);
-    const cached = cachedThumbnail(options, resolution, true);
-    if (cached) {
-      return {
-        promise: Promise.resolve(),
-        cancel: () => undefined,
-        reprioritize: () => undefined,
-      };
-    }
-    let job = pendingThumbnailJob(options, resolution);
-    if (!job) {
-      job = createJob(options, resolution);
-    }
+  function completedBackfillRequest(): TimelineThumbnailBackfillRequest {
+    return {
+      promise: Promise.resolve(),
+      cancel: () => undefined,
+      reprioritize: () => undefined,
+    };
+  }
+
+  function attachBackfillConsumer(
+    job: ThumbnailJob<Options>,
+    consumerId: number,
+    priority: number,
+  ): TimelineThumbnailBackfillRequest {
     job.consumers.set(consumerId, { priority, retainInMemory: false });
     queueOrderDirty = true;
     scheduleTimelineThumbnailWorkers();
@@ -441,16 +448,16 @@ export function createTimelineThumbnailManager<Options extends TimelineThumbnail
           return;
         }
         cancelled = true;
-        if (!job!.settled) {
-          job!.consumers.delete(consumerId);
+        if (!job.settled) {
+          job.consumers.delete(consumerId);
           queueOrderDirty = true;
         }
       },
       reprioritize: (nextPriority) => {
-        if (cancelled || job!.settled) {
+        if (cancelled || job.settled) {
           return;
         }
-        const consumer = job!.consumers.get(consumerId);
+        const consumer = job.consumers.get(consumerId);
         if (!consumer) {
           return;
         }
@@ -459,6 +466,40 @@ export function createTimelineThumbnailManager<Options extends TimelineThumbnail
         scheduleTimelineThumbnailWorkers();
       },
     };
+  }
+
+  function backfill(
+    options: Options,
+    resolutions: readonly TimelineThumbnailResolution[],
+  ): TimelineThumbnailBackfillRequest {
+    const requestedResolutions = Array.from(
+      new Map(resolutions.map((resolution) => [resolution.width, resolution])).values(),
+    ).sort((left, right) => left.width - right.width);
+    if (requestedResolutions.length === 0) {
+      return completedBackfillRequest();
+    }
+    if (requestedResolutions.length === 1) {
+      const resolution = requestedResolutions[0];
+      const consumerId = nextConsumerId++;
+      const priority = normalizedPriority(options.priority);
+      if (cachedThumbnail(options, resolution, true)) {
+        return completedBackfillRequest();
+      }
+      let job = pendingThumbnailJob(options, resolution);
+      if (!job) {
+        job = createJob(options, [resolution]);
+      }
+      return attachBackfillConsumer(job, consumerId, priority);
+    }
+
+    const batchKey = `${configuration.cacheGroupKey(options, options.timeUs)}\u0000batch\u0000${requestedResolutions
+      .map((resolution) => resolution.width)
+      .join(",")}`;
+    let job = pendingJobs.get(batchKey);
+    if (!job) {
+      job = createJob(options, requestedResolutions, batchKey);
+    }
+    return attachBackfillConsumer(job, nextConsumerId++, normalizedPriority(options.priority));
   }
 
   function nextJob() {
@@ -477,7 +518,8 @@ export function createTimelineThumbnailManager<Options extends TimelineThumbnail
 
   async function runJob(job: ThumbnailJob<Options>) {
     // A cache write can complete while this job is waiting in the queue.
-    const cached = cachedThumbnail(job.options, job.resolution, true);
+    const cached =
+      job.resolutions.length === 1 ? cachedThumbnail(job.options, job.resolution, true) : null;
     if (cached) {
       const retainedConsumerIds = Array.from(job.consumers)
         .filter(([, consumer]) => consumer.retainInMemory)
@@ -491,7 +533,7 @@ export function createTimelineThumbnailManager<Options extends TimelineThumbnail
     }
 
     const outcome = await runOperation(configuration.operation, () =>
-      configuration.extract(job.options, [job.resolution], currentTimelineThumbnailConcurrency),
+      configuration.extract(job.options, job.resolutions, currentTimelineThumbnailConcurrency),
     );
     try {
       if (outcome.status !== "success") {
@@ -569,5 +611,5 @@ export function createTimelineThumbnailManager<Options extends TimelineThumbnail
     },
   });
 
-  return { request, warm, peek };
+  return { request, backfill, peek };
 }

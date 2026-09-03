@@ -1026,8 +1026,8 @@ export function SubtitlePanel() {
         priority,
         resolution,
       }),
-    warmThumbnail: (cue, _index, resolution, priority) =>
-      timelineThumbnails.warm({
+    backfillThumbnail: (cue, _index, resolution, priority) =>
+      timelineThumbnails.backfill({
         kind: "subtitle",
         assetId: thumbnailAssetId,
         fingerprint: thumbnailFingerprint,

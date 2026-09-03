@@ -7,9 +7,13 @@ import {
   type ExtractedTimelineThumbnail,
   type TimelineThumbnailOptions,
   type TimelineThumbnailRequest,
-  type TimelineThumbnailWarmRequest,
+  type TimelineThumbnailBackfillRequest,
 } from "./manager";
-import { baseTimelineThumbnailResolution, type TimelineThumbnailResolution } from "./resolution";
+import {
+  baseTimelineThumbnailResolution,
+  timelineThumbnailResolutions,
+  type TimelineThumbnailResolution,
+} from "./resolution";
 
 const extractionTimeoutMs = 5_000;
 const backendHedgeDelayMs = 250;
@@ -52,7 +56,10 @@ interface TimelineThumbnailProviderConfiguration {
 
 interface TimelineThumbnailProvider {
   request: (options: TimelineThumbnailRequestOptions) => TimelineThumbnailRequest;
-  warm: (options: TimelineThumbnailRequestOptions) => TimelineThumbnailWarmRequest;
+  backfill: (
+    options: TimelineThumbnailRequestOptions,
+    resolutions: readonly TimelineThumbnailResolution[],
+  ) => TimelineThumbnailBackfillRequest;
   peek: (
     options: TimelineThumbnailRequestOptions,
     resolution: TimelineThumbnailResolution,
@@ -172,7 +179,7 @@ function createTimelineThumbnailProvider({
 
   return {
     request: (options) => thumbnailManager.request(options),
-    warm: (options) => thumbnailManager.warm(options),
+    backfill: (options, resolutions) => thumbnailManager.backfill(options, resolutions),
     peek: (options, resolution) => {
       const result = thumbnailManager.peek(options, resolution);
       return result
@@ -682,8 +689,12 @@ export const timelineThumbnails = {
   request(options: TimelineThumbnailRequestOptions): TimelineThumbnailRequest {
     return providerFor(options.kind).request(options);
   },
-  warm(options: TimelineThumbnailRequestOptions): TimelineThumbnailWarmRequest {
-    return providerFor(options.kind).warm(options);
+  backfill(options: TimelineThumbnailRequestOptions): TimelineThumbnailBackfillRequest {
+    const targetResolution = options.resolution ?? baseTimelineThumbnailResolution;
+    const higherResolutions = timelineThumbnailResolutions.filter(
+      (resolution) => resolution.width > targetResolution.width,
+    );
+    return providerFor(options.kind).backfill(options, higherResolutions);
   },
   peek(options: TimelineThumbnailRequestOptions): TimelineThumbnailPlaceholder | null {
     return providerFor(options.kind).peek(

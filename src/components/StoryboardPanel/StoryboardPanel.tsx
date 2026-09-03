@@ -1522,8 +1522,8 @@ export function StoryboardPanel() {
         priority,
         resolution,
       }),
-    warmThumbnail: (shot, _index, resolution, priority) =>
-      timelineThumbnails.warm({
+    backfillThumbnail: (shot, _index, resolution, priority) =>
+      timelineThumbnails.backfill({
         kind: "storyboard",
         assetId: thumbnailAssetId,
         fingerprint: thumbnailFingerprint,
