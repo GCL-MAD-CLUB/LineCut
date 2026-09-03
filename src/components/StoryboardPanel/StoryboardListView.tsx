@@ -12,6 +12,11 @@ import {
 } from "react";
 import { Star } from "lucide-react";
 import { formatMonitorFrame, formatMonitorTime } from "../../time";
+import {
+  timelineThumbnailWindowContains,
+  type TimelineThumbnailResolution,
+  type TimelineThumbnailWindowPlan,
+} from "../../timelineThumbnail";
 import type { StoryboardShot } from "../../types";
 import { storyboardShotColorLabels } from "./StoryboardColorLabelButtons";
 import { StoryboardShotThumbnail } from "./StoryboardShotThumbnail";
@@ -41,7 +46,8 @@ interface StoryboardListViewProps {
   headerContent: ReactNode;
   rowVirtualizer: Virtualizer<HTMLDivElement, Element>;
   virtualRows: VirtualItem[];
-  thumbnailPriorityCenterIndex: number;
+  thumbnailWindow: TimelineThumbnailWindowPlan;
+  thumbnailTargetResolution: TimelineThumbnailResolution;
   assetId: string;
   fingerprint: string;
   videoPath: string;
@@ -106,7 +112,8 @@ export function StoryboardListView({
   headerContent,
   rowVirtualizer,
   virtualRows,
-  thumbnailPriorityCenterIndex,
+  thumbnailWindow,
+  thumbnailTargetResolution,
   assetId,
   fingerprint,
   videoPath,
@@ -432,7 +439,12 @@ export function StoryboardListView({
                       videoPath={videoPath}
                       previewVideoPath={previewVideoPath}
                       frameRate={frameRate}
-                      priority={Math.abs(virtualRow.index - thumbnailPriorityCenterIndex)}
+                      priority={Math.abs(virtualRow.index - thumbnailWindow.centerIndex)}
+                      requestEnabled={timelineThumbnailWindowContains(
+                        thumbnailWindow,
+                        virtualRow.index,
+                      )}
+                      targetResolution={thumbnailTargetResolution}
                       onSelectFrame={(event) => {
                         cancelPendingCellEdit();
                         setActiveCell(null);

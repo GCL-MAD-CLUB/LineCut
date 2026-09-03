@@ -45,9 +45,15 @@ import {
   requestExport,
 } from "../../systems/ExportSystem";
 import { createTaskProgress, useTaskProgressStatus } from "../../systems/TaskSystem";
-import { requestStoryboardThumbnail } from "../../storyboardThumbnail";
 import { isTauriRuntime } from "../../tauriRuntime";
 import { normalizeFrameRate } from "../../timeline";
+import {
+  timelineThumbnails,
+  timelineThumbnailVisibleRange,
+  timelineThumbnailResolutionForDisplay,
+  useTimelineThumbnailListResizeAnchor,
+  useTimelineThumbnailWindow,
+} from "../../timelineThumbnail";
 import type { StoryboardDetectionResult, StoryboardShot } from "../../types";
 import { usePanelManagerState } from "../DockLayout";
 import { annotationShortcutAction, annotationShortcutAutoAdvances } from "../annotationShortcuts";
@@ -105,8 +111,6 @@ import {
 const storyboardEventSource = eventSource("storyboard-panel");
 const MIN_UPCOMING_SCROLL_DURATION_MS = 1000;
 const MAX_UPCOMING_SCROLL_DURATION_MS = 1200;
-const THUMBNAIL_PREFETCH_ROWS_BEFORE = 10;
-const THUMBNAIL_PREFETCH_ROWS_AFTER = 28;
 const STORYBOARD_THUMBNAIL_HEIGHT = 46;
 const STORYBOARD_THUMBNAIL_WIDTH = 82;
 const STORYBOARD_ROW_VERTICAL_PADDING = 36;
@@ -712,22 +716,6 @@ function easeInOutCubic(progress: number) {
   return progress < 0.5
     ? 4 * progress * progress * progress
     : 1 - Math.pow(-2 * progress + 2, 3) / 2;
-}
-
-function closestShotIndexToViewportCenter(
-  rows: readonly { index: number; start: number; end: number }[],
-  scrollOffset: number,
-  viewportHeight: number,
-) {
-  if (rows.length === 0) {
-    return 0;
-  }
-  const centerOffset = scrollOffset + Math.max(0, viewportHeight) / 2;
-  return rows.reduce((best, row) => {
-    const bestDistance = Math.abs((best.start + best.end) / 2 - centerOffset);
-    const rowDistance = Math.abs((row.start + row.end) / 2 - centerOffset);
-    return rowDistance < bestDistance ? row : best;
-  }).index;
 }
 
 function SortArrow({ direction }: { direction: StoryboardSortDirection }) {
@@ -1444,11 +1432,15 @@ export function StoryboardPanel() {
   );
   const thumbnailAssetId = project?.asset.id ?? "";
   const thumbnailFingerprint = project?.asset.fingerprint ?? "";
-  const thumbnailVideoPath = project?.asset.path ?? "";
-  const thumbnailPreviewVideoPath = project?.proxy_path || thumbnailVideoPath;
+  const thumbnailVideoPath = project?.proxy_path || project?.asset.path || "";
+  const thumbnailPreviewVideoPath = thumbnailVideoPath;
   const thumbnailScale = 1 + thumbnailSize / 100;
   const thumbnailWidth = STORYBOARD_THUMBNAIL_WIDTH * thumbnailScale;
   const thumbnailHeight = STORYBOARD_THUMBNAIL_HEIGHT * thumbnailScale;
+  const thumbnailPrefetchResolution = timelineThumbnailResolutionForDisplay(
+    thumbnailWidth,
+    thumbnailHeight,
+  );
   const storyboardRowHeight = thumbnailHeight + STORYBOARD_ROW_VERTICAL_PADDING;
   const gridScale = gridSize < 34 ? 1 : gridSize < 67 ? 1.3 : 1.6;
   const gridCardWidth = 200 * gridScale;
@@ -1498,22 +1490,50 @@ export function StoryboardPanel() {
     measureElement: (element) => element.getBoundingClientRect().height,
     overscan: 4,
   });
+  const captureThumbnailResizeCenter = useTimelineThumbnailListResizeAnchor({
+    enabled: viewMode === "list",
+    itemCount: sortedShots.length,
+    itemHeight: storyboardRowHeight,
+    measure: rowVirtualizer.measure,
+    scrollRef: listRef,
+    scrollToOffset: rowVirtualizer.scrollToOffset,
+  });
   const virtualRows = rowVirtualizer.getVirtualItems();
-  const firstRenderedShotIndex = virtualRows[0]?.index ?? 0;
-  const lastRenderedShotIndex = virtualRows.at(-1)?.index ?? 0;
-  const thumbnailPriorityCenterIndex = closestShotIndexToViewportCenter(
+  const thumbnailVisibleRange = timelineThumbnailVisibleRange(
     virtualRows,
     rowVirtualizer.scrollOffset ?? 0,
     rowVirtualizer.scrollRect?.height ?? 0,
   );
-  const thumbnailPrefetchStart = Math.max(
-    0,
-    firstRenderedShotIndex - THUMBNAIL_PREFETCH_ROWS_BEFORE,
-  );
-  const thumbnailPrefetchEnd = Math.min(
-    sortedShots.length,
-    lastRenderedShotIndex + 1 + THUMBNAIL_PREFETCH_ROWS_AFTER,
-  );
+  const thumbnailWindow = useTimelineThumbnailWindow({
+    enabled: viewMode === "list" && Boolean(thumbnailVideoPath),
+    sourceKey: `${thumbnailAssetId}:${thumbnailFingerprint}:${thumbnailVideoPath}`,
+    items: sortedShots,
+    getItemKey: (shot) => `${shot.id}:${shot.start_us}`,
+    visibleRange: thumbnailVisibleRange,
+    targetResolution: thumbnailPrefetchResolution,
+    requestThumbnail: (shot, _index, resolution, priority) =>
+      timelineThumbnails.request({
+        kind: "storyboard",
+        assetId: thumbnailAssetId,
+        fingerprint: thumbnailFingerprint,
+        videoPath: thumbnailVideoPath,
+        timeUs: shot.start_us,
+        frameRate,
+        priority,
+        resolution,
+      }),
+    backfillThumbnail: (shot, _index, resolution, priority) =>
+      timelineThumbnails.backfill({
+        kind: "storyboard",
+        assetId: thumbnailAssetId,
+        fingerprint: thumbnailFingerprint,
+        videoPath: thumbnailVideoPath,
+        timeUs: shot.start_us,
+        frameRate,
+        priority,
+        resolution,
+      }),
+  });
   const isEditAuthority = panelActive && focusedPanelId === panelInstanceId;
   const selectedAnnotationShotIds = useMemo(
     () => annotationShotIdsForSelection(selectedShotIds, shotStacksByShotId),
@@ -2134,48 +2154,6 @@ export function StoryboardPanel() {
       }
     };
   }, [followShotId, followShotIndex, frameRate, isPlaying, rowVirtualizer, sortedShots, viewMode]);
-
-  useEffect(() => {
-    if (
-      viewMode !== "list" ||
-      !thumbnailVideoPath ||
-      thumbnailPrefetchStart >= thumbnailPrefetchEnd
-    ) {
-      return;
-    }
-    const requests = sortedShots
-      .slice(thumbnailPrefetchStart, thumbnailPrefetchEnd)
-      .map((shot, offset) =>
-        requestStoryboardThumbnail({
-          assetId: thumbnailAssetId,
-          fingerprint: thumbnailFingerprint,
-          videoPath: thumbnailVideoPath,
-          timeUs: shot.start_us,
-          frameRate,
-          priority: Math.abs(thumbnailPrefetchStart + offset - thumbnailPriorityCenterIndex),
-        }),
-      );
-    for (const request of requests) {
-      void request.promise.then(
-        () => undefined,
-        () => undefined,
-      );
-    }
-    return () => {
-      for (const request of requests) {
-        request.cancel();
-      }
-    };
-  }, [
-    sortedShots,
-    thumbnailAssetId,
-    thumbnailFingerprint,
-    thumbnailPrefetchEnd,
-    thumbnailPrefetchStart,
-    thumbnailPriorityCenterIndex,
-    thumbnailVideoPath,
-    viewMode,
-  ]);
 
   function clearShotSelection() {
     const primaryShotId =
@@ -3541,7 +3519,8 @@ export function StoryboardPanel() {
               headerContent={storyboardTableHeaders.map(renderTableHeader)}
               rowVirtualizer={rowVirtualizer}
               virtualRows={virtualRows}
-              thumbnailPriorityCenterIndex={thumbnailPriorityCenterIndex}
+              thumbnailWindow={thumbnailWindow}
+              thumbnailTargetResolution={thumbnailPrefetchResolution}
               assetId={thumbnailAssetId}
               fingerprint={thumbnailFingerprint}
               videoPath={thumbnailVideoPath}
@@ -3992,8 +3971,15 @@ export function StoryboardPanel() {
                     onChange={(event) => {
                       const size = Number(event.currentTarget.value);
                       if (viewMode === "list") {
+                        if (size === thumbnailSize) {
+                          return;
+                        }
+                        captureThumbnailResizeCenter();
                         setThumbnailSize(size);
                       } else {
+                        if (size === gridSize) {
+                          return;
+                        }
                         setGridSize(size);
                       }
                     }}

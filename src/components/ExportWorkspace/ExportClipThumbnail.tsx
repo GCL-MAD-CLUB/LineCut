@@ -1,7 +1,9 @@
 import { Film } from "lucide-react";
 import { useEffect, useState } from "react";
-import { requestStoryboardThumbnail } from "../../storyboardThumbnail";
-import { timelineThumbnailResolutionForDisplay } from "../../timelineThumbnailResolution";
+import {
+  timelineThumbnails,
+  timelineThumbnailResolutionForDisplay,
+} from "../../timelineThumbnail";
 import type { ExportClip } from "../../systems/ExportSystem";
 
 interface ExportClipThumbnailProps {
@@ -18,7 +20,8 @@ export function ExportClipThumbnail({ clip }: ExportClipThumbnailProps) {
     }
     let alive = true;
     const resolution = timelineThumbnailResolutionForDisplay(96, 54, window.devicePixelRatio || 1);
-    const request = requestStoryboardThumbnail({
+    const request = timelineThumbnails.request({
+      kind: "storyboard",
       assetId: thumbnail.assetId,
       videoPath: clip.sourcePath,
       fingerprint: thumbnail.fingerprint ?? "",
@@ -27,9 +30,9 @@ export function ExportClipThumbnail({ clip }: ExportClipThumbnailProps) {
       resolution,
     });
     void request.promise.then(
-      (url) => {
+      (result) => {
         if (alive) {
-          setSrc(url);
+          setSrc(result.url);
         }
       },
       () => undefined,
