@@ -39,8 +39,14 @@ import {
   enqueueQuickExport,
   requestExport,
 } from "../../systems/ExportSystem";
-import { requestSubtitleThumbnail } from "../../subtitleThumbnail";
 import { normalizeFrameRate, timeUsToFrame } from "../../timeline";
+import {
+  timelineThumbnails,
+  timelineThumbnailVisibleRange,
+  timelineThumbnailResolutionForDisplay,
+  useTimelineThumbnailListResizeAnchor,
+  useTimelineThumbnailWindow,
+} from "../../timelineThumbnail";
 import type { SubtitleCue } from "../../types";
 import { annotationShortcutAction, annotationShortcutAutoAdvances } from "../annotationShortcuts";
 import { sprayEraserCursor, useSprayToolModifiers } from "../sprayToolModifiers";
@@ -75,8 +81,6 @@ import {
 const subtitleEventSource = eventSource("subtitle-panel");
 const MIN_UPCOMING_SCROLL_DURATION_MS = 1000;
 const MAX_UPCOMING_SCROLL_DURATION_MS = 1200;
-const THUMBNAIL_PREFETCH_ROWS_BEFORE = 10;
-const THUMBNAIL_PREFETCH_ROWS_AFTER = 28;
 const SUBTITLE_THUMBNAIL_HEIGHT = 46;
 const SUBTITLE_THUMBNAIL_WIDTH = 82;
 const SUBTITLE_ROW_VERTICAL_PADDING = 36;
@@ -462,22 +466,6 @@ function easeInOutCubic(progress: number) {
   return progress < 0.5
     ? 4 * progress * progress * progress
     : 1 - Math.pow(-2 * progress + 2, 3) / 2;
-}
-
-function closestCueIndexToViewportCenter(
-  rows: readonly { index: number; start: number; end: number }[],
-  scrollOffset: number,
-  viewportHeight: number,
-) {
-  if (rows.length === 0) {
-    return 0;
-  }
-  const centerOffset = scrollOffset + Math.max(0, viewportHeight) / 2;
-  return rows.reduce((best, row) => {
-    const bestDistance = Math.abs((best.start + best.end) / 2 - centerOffset);
-    const rowDistance = Math.abs((row.start + row.end) / 2 - centerOffset);
-    return rowDistance < bestDistance ? row : best;
-  }).index;
 }
 
 function subtitleCueSortValue(
@@ -902,11 +890,15 @@ export function SubtitlePanel() {
   } as CSSProperties;
   const thumbnailAssetId = project?.asset.id ?? "";
   const thumbnailFingerprint = project?.asset.fingerprint ?? "";
-  const thumbnailVideoPath = project?.asset.path ?? "";
-  const thumbnailPreviewVideoPath = project?.proxy_path || thumbnailVideoPath;
+  const thumbnailVideoPath = project?.proxy_path || project?.asset.path || "";
+  const thumbnailPreviewVideoPath = thumbnailVideoPath;
   const thumbnailScale = 1 + thumbnailSize / 100;
   const thumbnailWidth = SUBTITLE_THUMBNAIL_WIDTH * thumbnailScale;
   const thumbnailHeight = SUBTITLE_THUMBNAIL_HEIGHT * thumbnailScale;
+  const thumbnailPrefetchResolution = timelineThumbnailResolutionForDisplay(
+    thumbnailWidth,
+    thumbnailHeight,
+  );
   const subtitleRowHeight = thumbnailHeight + SUBTITLE_ROW_VERTICAL_PADDING;
   const thumbnailColumnWidth =
     Math.max(subtitleColumnWidths.thumbnail, thumbnailWidth + SUBTITLE_THUMBNAIL_COLUMN_PADDING) +
@@ -1004,22 +996,47 @@ export function SubtitlePanel() {
     measureElement: (element) => element.getBoundingClientRect().height,
     overscan: 6,
   });
+  const captureThumbnailResizeCenter = useTimelineThumbnailListResizeAnchor({
+    itemCount: sortedCues.length,
+    itemHeight: subtitleRowHeight,
+    measure: rowVirtualizer.measure,
+    scrollRef: listRef,
+    scrollToOffset: rowVirtualizer.scrollToOffset,
+  });
   const virtualRows = rowVirtualizer.getVirtualItems();
-  const firstRenderedCueIndex = virtualRows[0]?.index ?? 0;
-  const lastRenderedCueIndex = virtualRows.at(-1)?.index ?? 0;
-  const thumbnailPriorityCenterIndex = closestCueIndexToViewportCenter(
+  const thumbnailVisibleRange = timelineThumbnailVisibleRange(
     virtualRows,
     rowVirtualizer.scrollOffset ?? 0,
     rowVirtualizer.scrollRect?.height ?? 0,
   );
-  const thumbnailPrefetchStart = Math.max(
-    0,
-    firstRenderedCueIndex - THUMBNAIL_PREFETCH_ROWS_BEFORE,
-  );
-  const thumbnailPrefetchEnd = Math.min(
-    sortedCues.length,
-    lastRenderedCueIndex + 1 + THUMBNAIL_PREFETCH_ROWS_AFTER,
-  );
+  const thumbnailWindow = useTimelineThumbnailWindow({
+    enabled: Boolean(thumbnailVideoPath),
+    sourceKey: `${thumbnailAssetId}:${thumbnailFingerprint}:${thumbnailVideoPath}`,
+    items: sortedCues,
+    getItemKey: (cue) => `${cue.id}:${cue.start_us}`,
+    visibleRange: thumbnailVisibleRange,
+    targetResolution: thumbnailPrefetchResolution,
+    requestThumbnail: (cue, _index, resolution, priority) =>
+      timelineThumbnails.request({
+        kind: "subtitle",
+        assetId: thumbnailAssetId,
+        fingerprint: thumbnailFingerprint,
+        videoPath: thumbnailVideoPath,
+        timeUs: cue.start_us,
+        priority,
+        resolution,
+      }),
+    warmThumbnail: (cue, _index, resolution, priority) =>
+      timelineThumbnails.warm({
+        kind: "subtitle",
+        assetId: thumbnailAssetId,
+        fingerprint: thumbnailFingerprint,
+        videoPath: thumbnailVideoPath,
+        timeUs: cue.start_us,
+        priority,
+        resolution,
+      }),
+  });
 
   const contextMenuCueIds = Array.from(selectedCueIds);
   const contextMenuRatings = contextMenuCueIds.map((cueId) => cueAnnotations[cueId]?.rating ?? 0);
@@ -1397,42 +1414,6 @@ export function SubtitlePanel() {
     isPlaying,
     rowVirtualizer,
     sortedCues,
-  ]);
-
-  useEffect(() => {
-    if (!thumbnailVideoPath || thumbnailPrefetchStart >= thumbnailPrefetchEnd) {
-      return;
-    }
-    const requests = sortedCues
-      .slice(thumbnailPrefetchStart, thumbnailPrefetchEnd)
-      .map((cue, offset) =>
-        requestSubtitleThumbnail({
-          assetId: thumbnailAssetId,
-          fingerprint: thumbnailFingerprint,
-          videoPath: thumbnailVideoPath,
-          timeUs: cue.start_us,
-          priority: Math.abs(thumbnailPrefetchStart + offset - thumbnailPriorityCenterIndex),
-        }),
-      );
-    for (const request of requests) {
-      void request.promise.then(
-        () => undefined,
-        () => undefined,
-      );
-    }
-    return () => {
-      for (const request of requests) {
-        request.cancel();
-      }
-    };
-  }, [
-    sortedCues,
-    thumbnailAssetId,
-    thumbnailFingerprint,
-    thumbnailPrefetchEnd,
-    thumbnailPrefetchStart,
-    thumbnailPriorityCenterIndex,
-    thumbnailVideoPath,
   ]);
 
   function selectVisibleCues() {
@@ -2279,7 +2260,8 @@ export function SubtitlePanel() {
           headerContent={subtitleTableHeaders.map(renderTableHeader)}
           rowVirtualizer={rowVirtualizer}
           virtualRows={virtualRows}
-          thumbnailPriorityCenterIndex={thumbnailPriorityCenterIndex}
+          thumbnailWindow={thumbnailWindow}
+          thumbnailTargetResolution={thumbnailPrefetchResolution}
           assetId={thumbnailAssetId}
           fingerprint={thumbnailFingerprint}
           videoPath={thumbnailVideoPath}
@@ -2639,7 +2621,14 @@ export function SubtitlePanel() {
                     max="100"
                     value={thumbnailSize}
                     aria-label="字幕缩略图大小"
-                    onChange={(event) => setThumbnailSize(Number(event.currentTarget.value))}
+                    onChange={(event) => {
+                      const size = Number(event.currentTarget.value);
+                      if (size === thumbnailSize) {
+                        return;
+                      }
+                      captureThumbnailResizeCenter();
+                      setThumbnailSize(size);
+                    }}
                   />
                 </>
               )}

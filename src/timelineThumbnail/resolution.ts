@@ -10,6 +10,8 @@ export type TimelineThumbnailResolution = (typeof timelineThumbnailResolutions)[
 
 export const baseTimelineThumbnailResolution = timelineThumbnailResolutions[0];
 
+const resolutionChangeDelayMs = 150;
+
 export function timelineThumbnailResolutionForDisplay(
   width: number,
   height: number,
@@ -24,24 +26,60 @@ export function timelineThumbnailResolutionForDisplay(
 
 export function useTimelineThumbnailResolution<Element extends HTMLElement>() {
   const [element, setElement] = useState<Element | null>(null);
-  const [resolution, setResolution] = useState<TimelineThumbnailResolution>(
-    baseTimelineThumbnailResolution,
-  );
+  const [resolution, setResolution] = useState<TimelineThumbnailResolution | null>(null);
 
   useLayoutEffect(() => {
     if (!element) {
       return;
     }
+    const committed = { width: resolution?.width ?? 0 };
+    let firstMeasurement = true;
+    let timer: number | null = null;
+
+    const applyResolution = (next: TimelineThumbnailResolution) => {
+      if (committed.width === next.width) {
+        return;
+      }
+      committed.width = next.width;
+      setResolution(next);
+    };
+
+    const scheduleResolution = (next: TimelineThumbnailResolution) => {
+      if (timer !== null) {
+        window.clearTimeout(timer);
+        timer = null;
+      }
+      if (next.width === committed.width) {
+        return;
+      }
+      timer = window.setTimeout(() => {
+        timer = null;
+        applyResolution(next);
+      }, resolutionChangeDelayMs);
+    };
+
     const updateResolution = () => {
       const bounds = element.getBoundingClientRect();
       const next = timelineThumbnailResolutionForDisplay(bounds.width, bounds.height);
-      setResolution((current) => (current.width === next.width ? current : next));
+      if (firstMeasurement) {
+        firstMeasurement = false;
+        applyResolution(next);
+        return;
+      }
+      if (next.width === committed.width && timer === null) {
+        return;
+      }
+      scheduleResolution(next);
     };
+
     updateResolution();
     const observer = new ResizeObserver(updateResolution);
     observer.observe(element);
     window.addEventListener("resize", updateResolution);
     return () => {
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
       observer.disconnect();
       window.removeEventListener("resize", updateResolution);
     };

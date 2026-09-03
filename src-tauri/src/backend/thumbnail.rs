@@ -6,6 +6,8 @@ const ANALYSIS_FRAME_BYTES: usize = ANALYSIS_WIDTH * ANALYSIS_HEIGHT * 3;
 const MAX_ANALYSIS_SAMPLES: usize = 240;
 const MAX_PARALLEL_SEEKS: usize = 4;
 const IMPORT_COVER_WORKERS: usize = 3;
+const DEFAULT_TIMELINE_THUMBNAIL_WORKERS: usize = 4;
+const MAX_TIMELINE_THUMBNAIL_WORKERS: usize = 8;
 const SHORT_VIDEO_SAMPLES_PER_SECOND: f64 = 2.0;
 const PREFIX_PERCENT: usize = 37;
 const DETAIL_WEIGHT: f64 = 0.6;
@@ -107,6 +109,24 @@ fn append_thumbnail_processing_thread_args(args: &mut Vec<String>) {
     append_ffmpeg_processing_thread_args(args, thumbnail_processing_thread_budget());
 }
 
+fn timeline_thumbnail_processing_thread_budget(worker_count: Option<usize>) -> usize {
+    ffmpeg_worker_thread_budget(
+        worker_count
+            .unwrap_or(DEFAULT_TIMELINE_THUMBNAIL_WORKERS)
+            .clamp(1, MAX_TIMELINE_THUMBNAIL_WORKERS),
+    )
+}
+
+fn append_timeline_thumbnail_processing_thread_args(
+    args: &mut Vec<String>,
+    worker_count: Option<usize>,
+) {
+    append_ffmpeg_processing_thread_args(
+        args,
+        timeline_thumbnail_processing_thread_budget(worker_count),
+    );
+}
+
 #[derive(Clone, Copy, Debug)]
 struct CoverCandidate {
     time_us: i64,
@@ -138,6 +158,18 @@ fn timeline_thumbnail_resolution(width: Option<usize>) -> AppResult<TimelineThum
             format!("Unsupported timeline thumbnail width: {width}"),
         )),
     }
+}
+
+fn timeline_thumbnail_scale_filter(resolution: TimelineThumbnailResolution) -> String {
+    let scale_flags = if resolution.width == SUBTITLE_THUMBNAIL_WIDTH {
+        ":flags=fast_bilinear"
+    } else {
+        ""
+    };
+    format!(
+        "scale={}:{}:force_original_aspect_ratio=increase{scale_flags},crop={}:{}",
+        resolution.width, resolution.height, resolution.width, resolution.height
+    )
 }
 
 #[tauri::command]
@@ -177,6 +209,7 @@ pub(crate) async fn generate_subtitle_thumbnail(
     asset_id: String,
     time_us: i64,
     width: Option<usize>,
+    worker_count: Option<usize>,
     state: tauri::State<'_, AppState>,
 ) -> CommandResult<Vec<u8>> {
     let resolution = timeline_thumbnail_resolution(width)?;
@@ -232,27 +265,24 @@ pub(crate) async fn generate_subtitle_thumbnail(
         stream_index,
         lookup.cache_time_us,
         resolution,
+        worker_count,
     )
     .await?;
     let fingerprint = project.asset.fingerprint;
-    tokio::task::spawn_blocking(move || {
-        write_subtitle_thumbnail_cache(
+    let cache_jpeg = jpeg.clone();
+    let _cache_write = tokio::task::spawn_blocking(move || {
+        if let Err(error) = write_subtitle_thumbnail_cache(
             &preferences,
             &fingerprint,
             lookup.cache_time_us,
             duration_us,
             resolution.width,
-            &jpeg,
-        )?;
-        Ok::<Vec<u8>, AppError>(jpeg)
-    })
-    .await
-    .map_err(|error| {
-        app_error(
-            ErrorCode::BlockingTaskFailed,
-            format!("Subtitle thumbnail cache write task failed: {error}"),
-        )
-    })?
+            &cache_jpeg,
+        ) {
+            tracing::warn!(detail = %error, "subtitle thumbnail cache write failed");
+        }
+    });
+    Ok(jpeg)
 }
 
 #[tauri::command]
@@ -297,6 +327,139 @@ pub(crate) async fn get_cached_subtitle_thumbnail(
             format!("Subtitle thumbnail cache read task failed: {error}"),
         )
     })?
+}
+
+#[tauri::command]
+pub(crate) async fn get_cached_subtitle_thumbnails(
+    asset_id: String,
+    time_us: i64,
+    widths: Vec<usize>,
+    state: tauri::State<'_, AppState>,
+) -> CommandResult<tauri::ipc::Response> {
+    let project = state
+        .projects
+        .lock()
+        .map_err(|_| {
+            app_error(
+                ErrorCode::ProjectStateUnavailable,
+                "Project state lock is poisoned",
+            )
+        })?
+        .get(&asset_id)
+        .cloned()
+        .ok_or_else(|| {
+            app_error(
+                ErrorCode::MediaNotFound,
+                format!("Media asset was not found: {asset_id}"),
+            )
+        })?;
+    let preferences = preferences_clone(&state)?;
+    let fingerprint = project.asset.fingerprint.clone();
+    let duration_us = project.asset.duration_us;
+    let lookups = tokio::task::spawn_blocking(move || {
+        let mut lookups = Vec::with_capacity(widths.len());
+        let mut cache_time_us = None;
+        for width in widths {
+            let resolution = timeline_thumbnail_resolution(Some(width))?;
+            let lookup = if let Some(canonical_time_us) = cache_time_us {
+                read_subtitle_thumbnail_cache_exact(
+                    &preferences,
+                    &fingerprint,
+                    canonical_time_us,
+                    duration_us,
+                    resolution.width,
+                )
+            } else {
+                read_subtitle_thumbnail_cache(
+                    &preferences,
+                    &fingerprint,
+                    time_us,
+                    duration_us,
+                    resolution.width,
+                )
+            };
+            cache_time_us.get_or_insert(lookup.cache_time_us);
+            lookups.push(lookup);
+        }
+        Ok::<Vec<_>, AppError>(lookups)
+    })
+    .await
+    .map_err(|error| {
+        app_error(
+            ErrorCode::BlockingTaskFailed,
+            format!("Subtitle thumbnail cache read task failed: {error}"),
+        )
+    })??;
+    Ok(tauri::ipc::Response::new(subtitle_thumbnail_batch_payload(
+        &lookups,
+    )))
+}
+
+#[tauri::command]
+pub(crate) async fn generate_subtitle_thumbnails(
+    asset_id: String,
+    time_us: i64,
+    widths: Vec<usize>,
+    worker_count: Option<usize>,
+    state: tauri::State<'_, AppState>,
+) -> CommandResult<tauri::ipc::Response> {
+    let resolutions = widths
+        .iter()
+        .map(|width| timeline_thumbnail_resolution(Some(*width)))
+        .collect::<AppResult<Vec<_>>>()?;
+    let project = state
+        .projects
+        .lock()
+        .map_err(|_| {
+            app_error(
+                ErrorCode::ProjectStateUnavailable,
+                "Project state lock is poisoned",
+            )
+        })?
+        .get(&asset_id)
+        .cloned()
+        .ok_or_else(|| {
+            app_error(
+                ErrorCode::MediaNotFound,
+                format!("Media asset was not found: {asset_id}"),
+            )
+        })?;
+    let stream_index = project.asset.video_stream_index.ok_or_else(|| {
+        app_error(
+            ErrorCode::VideoStreamMissing,
+            format!("Media asset has no video stream: {asset_id}"),
+        )
+    })?;
+    let preferences = preferences_clone(&state)?;
+    let cache_preferences = preferences.clone();
+    let fingerprint = project.asset.fingerprint.clone();
+    let duration_us = project.asset.duration_us;
+    let jpegs = extract_timeline_thumbnails(
+        &ffmpeg_program(&preferences),
+        &project.asset.path,
+        stream_index,
+        time_us,
+        &resolutions,
+        worker_count,
+    )
+    .await?;
+    let payload = generated_thumbnails_payload(&jpegs);
+    let _cache_write = tokio::task::spawn_blocking(move || {
+        for (resolution, jpeg) in resolutions.iter().zip(&jpegs) {
+            if let Err(error) = write_subtitle_thumbnail_cache(
+                &cache_preferences,
+                &fingerprint,
+                time_us,
+                duration_us,
+                resolution.width,
+                jpeg,
+            ) {
+                tracing::warn!(detail = %error, "subtitle thumbnail cache write failed");
+                break;
+            }
+        }
+    });
+    Ok(tauri::ipc::Response::new(payload))
 }
 
 #[tauri::command]
@@ -351,6 +514,7 @@ pub(crate) async fn generate_storyboard_thumbnail(
     asset_id: String,
     time_us: i64,
     width: Option<usize>,
+    worker_count: Option<usize>,
     state: tauri::State<'_, AppState>,
 ) -> CommandResult<Vec<u8>> {
     let resolution = timeline_thumbnail_resolution(width)?;
@@ -406,27 +570,24 @@ pub(crate) async fn generate_storyboard_thumbnail(
         stream_index,
         lookup.cache_time_us,
         resolution,
+        worker_count,
     )
     .await?;
     let fingerprint = project.asset.fingerprint;
-    tokio::task::spawn_blocking(move || {
-        write_storyboard_thumbnail_cache(
+    let cache_jpeg = jpeg.clone();
+    let _cache_write = tokio::task::spawn_blocking(move || {
+        if let Err(error) = write_storyboard_thumbnail_cache(
             &preferences,
             &fingerprint,
             lookup.cache_time_us,
             duration_us,
             resolution.width,
-            &jpeg,
-        )?;
-        Ok::<Vec<u8>, AppError>(jpeg)
-    })
-    .await
-    .map_err(|error| {
-        app_error(
-            ErrorCode::BlockingTaskFailed,
-            format!("Storyboard thumbnail cache write task failed: {error}"),
-        )
-    })?
+            &cache_jpeg,
+        ) {
+            tracing::warn!(detail = %error, "storyboard thumbnail cache write failed");
+        }
+    });
+    Ok(jpeg)
 }
 
 #[tauri::command]
@@ -471,6 +632,127 @@ pub(crate) async fn get_cached_storyboard_thumbnail(
             format!("Storyboard thumbnail cache read task failed: {error}"),
         )
     })?
+}
+
+#[tauri::command]
+pub(crate) async fn get_cached_storyboard_thumbnails(
+    asset_id: String,
+    time_us: i64,
+    widths: Vec<usize>,
+    state: tauri::State<'_, AppState>,
+) -> CommandResult<tauri::ipc::Response> {
+    let project = state
+        .projects
+        .lock()
+        .map_err(|_| {
+            app_error(
+                ErrorCode::ProjectStateUnavailable,
+                "Project state lock is poisoned",
+            )
+        })?
+        .get(&asset_id)
+        .cloned()
+        .ok_or_else(|| {
+            app_error(
+                ErrorCode::MediaNotFound,
+                format!("Media asset was not found: {asset_id}"),
+            )
+        })?;
+    let preferences = preferences_clone(&state)?;
+    let fingerprint = project.asset.fingerprint.clone();
+    let duration_us = project.asset.duration_us;
+    let lookups = tokio::task::spawn_blocking(move || {
+        widths
+            .iter()
+            .map(|width| {
+                let resolution = timeline_thumbnail_resolution(Some(*width))?;
+                Ok::<StoryboardThumbnailCacheLookup, AppError>(read_storyboard_thumbnail_cache(
+                    &preferences,
+                    &fingerprint,
+                    time_us,
+                    duration_us,
+                    resolution.width,
+                ))
+            })
+            .collect::<AppResult<Vec<_>>>()
+    })
+    .await
+    .map_err(|error| {
+        app_error(
+            ErrorCode::BlockingTaskFailed,
+            format!("Storyboard thumbnail cache read task failed: {error}"),
+        )
+    })??;
+    Ok(tauri::ipc::Response::new(
+        storyboard_thumbnail_batch_payload(&lookups),
+    ))
+}
+
+#[tauri::command]
+pub(crate) async fn generate_storyboard_thumbnails(
+    asset_id: String,
+    time_us: i64,
+    widths: Vec<usize>,
+    worker_count: Option<usize>,
+    state: tauri::State<'_, AppState>,
+) -> CommandResult<tauri::ipc::Response> {
+    let resolutions = widths
+        .iter()
+        .map(|width| timeline_thumbnail_resolution(Some(*width)))
+        .collect::<AppResult<Vec<_>>>()?;
+    let project = state
+        .projects
+        .lock()
+        .map_err(|_| {
+            app_error(
+                ErrorCode::ProjectStateUnavailable,
+                "Project state lock is poisoned",
+            )
+        })?
+        .get(&asset_id)
+        .cloned()
+        .ok_or_else(|| {
+            app_error(
+                ErrorCode::MediaNotFound,
+                format!("Media asset was not found: {asset_id}"),
+            )
+        })?;
+    let stream_index = project.asset.video_stream_index.ok_or_else(|| {
+        app_error(
+            ErrorCode::VideoStreamMissing,
+            format!("Media asset has no video stream: {asset_id}"),
+        )
+    })?;
+    let preferences = preferences_clone(&state)?;
+    let cache_preferences = preferences.clone();
+    let fingerprint = project.asset.fingerprint.clone();
+    let duration_us = project.asset.duration_us;
+    let jpegs = extract_timeline_thumbnails(
+        &ffmpeg_program(&preferences),
+        &project.asset.path,
+        stream_index,
+        time_us,
+        &resolutions,
+        worker_count,
+    )
+    .await?;
+    let payload = generated_thumbnails_payload(&jpegs);
+    let _cache_write = tokio::task::spawn_blocking(move || {
+        for (resolution, jpeg) in resolutions.iter().zip(&jpegs) {
+            if let Err(error) = write_storyboard_thumbnail_cache(
+                &cache_preferences,
+                &fingerprint,
+                time_us,
+                duration_us,
+                resolution.width,
+                jpeg,
+            ) {
+                tracing::warn!(detail = %error, "storyboard thumbnail cache write failed");
+                break;
+            }
+        }
+    });
+    Ok(tauri::ipc::Response::new(payload))
 }
 
 #[tauri::command]
@@ -723,27 +1005,64 @@ fn read_subtitle_thumbnail_cache_unlocked(
         {
             continue;
         }
-        let (path, cache_key) =
-            subtitle_thumbnail_cache_layout(preferences, fingerprint, bucket, width);
-        let Some(cached) = read_private_cache::<CachedSubtitleThumbnail>(
-            &path,
-            &cache_key,
-            SUBTITLE_THUMBNAIL_CACHE_KEY_CONTEXT,
-        ) else {
-            continue;
-        };
-        if cached.version != SUBTITLE_THUMBNAIL_CACHE_VERSION
-            || cached.time_us != cache_time_us
-            || validate_timeline_thumbnail_jpeg(&cached.jpeg).is_err()
-        {
-            continue;
+        if let Some(lookup) = read_subtitle_thumbnail_bucket_unlocked(
+            preferences,
+            fingerprint,
+            bucket,
+            duration_us,
+            width,
+        ) {
+            return lookup;
         }
-        return SubtitleThumbnailCacheLookup {
-            cache_time_us,
-            bytes: Some(cached.jpeg),
-        };
     }
     subtitle_thumbnail_cache_miss(requested_time_us, duration_us)
+}
+
+fn read_subtitle_thumbnail_cache_exact(
+    preferences: &Preferences,
+    fingerprint: &str,
+    time_us: i64,
+    duration_us: i64,
+    width: usize,
+) -> SubtitleThumbnailCacheLookup {
+    let cache_time_us = clamped_subtitle_thumbnail_time(time_us, duration_us);
+    let bucket = subtitle_thumbnail_bucket(cache_time_us, duration_us);
+    let _guard = match SUBTITLE_THUMBNAIL_CACHE_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(_) => return subtitle_thumbnail_cache_miss(cache_time_us, duration_us),
+    };
+    read_subtitle_thumbnail_bucket_unlocked(preferences, fingerprint, bucket, duration_us, width)
+        .unwrap_or(SubtitleThumbnailCacheLookup {
+            cache_time_us,
+            bytes: None,
+        })
+}
+
+fn read_subtitle_thumbnail_bucket_unlocked(
+    preferences: &Preferences,
+    fingerprint: &str,
+    bucket: i64,
+    duration_us: i64,
+    width: usize,
+) -> Option<SubtitleThumbnailCacheLookup> {
+    let cache_time_us = subtitle_thumbnail_bucket_time(bucket, duration_us);
+    let (path, cache_key) =
+        subtitle_thumbnail_cache_layout(preferences, fingerprint, bucket, width);
+    let cached = read_private_cache::<CachedSubtitleThumbnail>(
+        &path,
+        &cache_key,
+        SUBTITLE_THUMBNAIL_CACHE_KEY_CONTEXT,
+    )?;
+    if cached.version != SUBTITLE_THUMBNAIL_CACHE_VERSION
+        || cached.time_us != cache_time_us
+        || validate_timeline_thumbnail_jpeg(&cached.jpeg).is_err()
+    {
+        return None;
+    }
+    Some(SubtitleThumbnailCacheLookup {
+        cache_time_us,
+        bytes: Some(cached.jpeg),
+    })
 }
 
 fn write_subtitle_thumbnail_cache(
@@ -1284,6 +1603,7 @@ async fn extract_timeline_thumbnail(
     stream_index: i32,
     time_us: i64,
     resolution: TimelineThumbnailResolution,
+    worker_count: Option<usize>,
 ) -> AppResult<Vec<u8>> {
     let mut args = vec![
         "-hide_banner".to_string(),
@@ -1294,7 +1614,7 @@ async fn extract_timeline_thumbnail(
         // (a boundary-exact timestamp could round up into the next frame).
         format!("{:.6}", time_us.saturating_sub(1) as f64 / 1_000_000.0),
     ];
-    append_thumbnail_processing_thread_args(&mut args);
+    append_timeline_thumbnail_processing_thread_args(&mut args, worker_count);
     args.extend([
         "-i".to_string(),
         input_path.to_string(),
@@ -1303,10 +1623,7 @@ async fn extract_timeline_thumbnail(
         "-frames:v".to_string(),
         "1".to_string(),
         "-vf".to_string(),
-        format!(
-            "scale={}:{}:force_original_aspect_ratio=increase,crop={}:{}",
-            resolution.width, resolution.height, resolution.width, resolution.height
-        ),
+        timeline_thumbnail_scale_filter(resolution),
         "-q:v".to_string(),
         "8".to_string(),
         "-f".to_string(),
@@ -1314,7 +1631,10 @@ async fn extract_timeline_thumbnail(
         "-vcodec".to_string(),
         "mjpeg".to_string(),
     ]);
-    append_ffmpeg_video_output_thread_args(&mut args, thumbnail_processing_thread_budget());
+    append_ffmpeg_video_output_thread_args(
+        &mut args,
+        timeline_thumbnail_processing_thread_budget(worker_count),
+    );
     args.push("pipe:1".to_string());
     let output = hidden_command(program)
         .args(args)
@@ -1344,6 +1664,145 @@ async fn extract_timeline_thumbnail(
         ));
     }
     Ok(output.stdout)
+}
+
+async fn extract_timeline_thumbnails(
+    program: &str,
+    input_path: &str,
+    stream_index: i32,
+    time_us: i64,
+    resolutions: &[TimelineThumbnailResolution],
+    worker_count: Option<usize>,
+) -> AppResult<Vec<Vec<u8>>> {
+    if resolutions.is_empty() {
+        return Ok(Vec::new());
+    }
+    if let [resolution] = resolutions {
+        return extract_timeline_thumbnail(
+            program,
+            input_path,
+            stream_index,
+            time_us,
+            *resolution,
+            worker_count,
+        )
+        .await
+        .map(|jpeg| vec![jpeg]);
+    }
+    let temp_dir = env::temp_dir().join(format!("linecut-thumb-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp_dir).map_err(|error| {
+        app_error(
+            ErrorCode::ThumbnailCacheWriteFailed,
+            format!("Failed to create the temporary thumbnail directory: {error}"),
+        )
+    })?;
+    let result = extract_timeline_thumbnails_into(
+        &temp_dir,
+        program,
+        input_path,
+        stream_index,
+        time_us,
+        resolutions,
+        worker_count,
+    )
+    .await;
+    let _ = fs::remove_dir_all(&temp_dir);
+    result
+}
+
+async fn extract_timeline_thumbnails_into(
+    temp_dir: &Path,
+    program: &str,
+    input_path: &str,
+    stream_index: i32,
+    time_us: i64,
+    resolutions: &[TimelineThumbnailResolution],
+    worker_count: Option<usize>,
+) -> AppResult<Vec<Vec<u8>>> {
+    let mut filter = format!("[0:{stream_index}]split={}[s0]", resolutions.len());
+    for index in 1..resolutions.len() {
+        filter.push_str(&format!("[s{index}]"));
+    }
+    let mut output_paths = Vec::with_capacity(resolutions.len());
+    for (index, resolution) in resolutions.iter().enumerate() {
+        filter.push_str(&format!(
+            ";[s{index}]{}[t{index}]",
+            timeline_thumbnail_scale_filter(*resolution)
+        ));
+        output_paths.push(temp_dir.join(format!("{index}.jpg")));
+    }
+
+    let mut args = vec![
+        "-hide_banner".to_string(),
+        "-loglevel".to_string(),
+        "error".to_string(),
+        "-ss".to_string(),
+        // Subtract 1µs so the at-or-after seek lands exactly on the target frame
+        // (a boundary-exact timestamp could round up into the next frame).
+        format!("{:.6}", time_us.saturating_sub(1) as f64 / 1_000_000.0),
+    ];
+    append_timeline_thumbnail_processing_thread_args(&mut args, worker_count);
+    args.extend([
+        "-i".to_string(),
+        input_path.to_string(),
+        "-filter_complex".to_string(),
+        filter,
+    ]);
+    for (index, path) in output_paths.iter().enumerate() {
+        args.extend([
+            "-map".to_string(),
+            format!("[t{index}]"),
+            "-frames:v".to_string(),
+            "1".to_string(),
+            "-q:v".to_string(),
+            "8".to_string(),
+            "-vcodec".to_string(),
+            "mjpeg".to_string(),
+        ]);
+        append_ffmpeg_video_output_thread_args(
+            &mut args,
+            timeline_thumbnail_processing_thread_budget(worker_count),
+        );
+        args.push(path.to_string_lossy().into_owned());
+    }
+
+    let output = hidden_command(program)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(|error| {
+            app_error(
+                ErrorCode::ExternalToolStartFailed,
+                format!("Failed to start {program} for timeline thumbnail extraction: {error}"),
+            )
+        })?;
+    if !output.status.success() {
+        return Err(app_error(
+            ErrorCode::ThumbnailExtractionFailed,
+            format!(
+                "Timeline thumbnail extraction failed; stderr={}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        ));
+    }
+
+    let mut jpegs = Vec::with_capacity(resolutions.len());
+    for path in &output_paths {
+        let bytes = fs::read(path).map_err(|error| {
+            app_error(
+                ErrorCode::ThumbnailExtractionFailed,
+                format!(
+                    "Failed to read the extracted thumbnail {}: {error}",
+                    path.display()
+                ),
+            )
+        })?;
+        validate_timeline_thumbnail_jpeg(&bytes)?;
+        jpegs.push(bytes);
+    }
+    Ok(jpegs)
 }
 
 fn ensure_thumbnail_not_cancelled(cancel: Option<&Arc<AtomicBool>>) -> AppResult<()> {
@@ -1537,4 +1996,93 @@ fn hash_name(context: &[u8], value: &[u8]) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+fn storyboard_thumbnail_batch_payload(lookups: &[StoryboardThumbnailCacheLookup]) -> Vec<u8> {
+    let cache_time_us = lookups.first().map_or(0, |lookup| lookup.cache_time_us);
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&cache_time_us.to_le_bytes());
+    for lookup in lookups {
+        match &lookup.bytes {
+            Some(jpeg) => {
+                payload.push(1);
+                payload.extend_from_slice(&(jpeg.len() as u32).to_le_bytes());
+                payload.extend_from_slice(jpeg);
+            }
+            None => payload.push(0),
+        }
+    }
+    payload
+}
+
+fn subtitle_thumbnail_batch_payload(lookups: &[SubtitleThumbnailCacheLookup]) -> Vec<u8> {
+    let cache_time_us = lookups.first().map_or(0, |lookup| lookup.cache_time_us);
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&cache_time_us.to_le_bytes());
+    for lookup in lookups {
+        match &lookup.bytes {
+            Some(jpeg) => {
+                payload.push(1);
+                payload.extend_from_slice(&(jpeg.len() as u32).to_le_bytes());
+                payload.extend_from_slice(jpeg);
+            }
+            None => payload.push(0),
+        }
+    }
+    payload
+}
+
+fn generated_thumbnails_payload(jpegs: &[Vec<u8>]) -> Vec<u8> {
+    let mut payload = Vec::new();
+    for jpeg in jpegs {
+        payload.extend_from_slice(&(jpeg.len() as u32).to_le_bytes());
+        payload.extend_from_slice(jpeg);
+    }
+    payload
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base_timeline_thumbnail_uses_fast_scaling() {
+        let filter = timeline_thumbnail_scale_filter(
+            timeline_thumbnail_resolution(Some(SUBTITLE_THUMBNAIL_WIDTH)).unwrap(),
+        );
+        assert_eq!(
+            filter,
+            "scale=160:90:force_original_aspect_ratio=increase:flags=fast_bilinear,crop=160:90"
+        );
+    }
+
+    #[test]
+    fn larger_timeline_thumbnail_preserves_quality_scaling() {
+        let filter =
+            timeline_thumbnail_scale_filter(timeline_thumbnail_resolution(Some(640)).unwrap());
+        assert_eq!(
+            filter,
+            "scale=640:360:force_original_aspect_ratio=increase,crop=640:360"
+        );
+    }
+
+    #[test]
+    fn timeline_thumbnail_workers_receive_at_least_the_cover_worker_budget() {
+        assert!(
+            timeline_thumbnail_processing_thread_budget(Some(2))
+                >= thumbnail_processing_thread_budget()
+        );
+    }
+
+    #[test]
+    fn timeline_thumbnail_worker_count_adapts_ffmpeg_thread_budget() {
+        assert!(
+            timeline_thumbnail_processing_thread_budget(Some(2))
+                >= timeline_thumbnail_processing_thread_budget(Some(8))
+        );
+        assert_eq!(
+            timeline_thumbnail_processing_thread_budget(Some(usize::MAX)),
+            timeline_thumbnail_processing_thread_budget(Some(MAX_TIMELINE_THUMBNAIL_WORKERS))
+        );
+    }
 }

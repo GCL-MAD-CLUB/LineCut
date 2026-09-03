@@ -9,14 +9,10 @@ import {
   type PointerEvent as ReactPointerEvent,
   type SyntheticEvent,
 } from "react";
-import { requestStoryboardThumbnail } from "../../storyboardThumbnail";
+import { timelineThumbnails, type TimelineThumbnailResolution } from "../../timelineThumbnail";
 import { isTauriRuntime } from "../../tauriRuntime";
 import { formatDuration } from "../../time";
 import { frameToTimeUs } from "../../timeline";
-import {
-  timelineThumbnailResolutions,
-  useTimelineThumbnailResolution,
-} from "../../timelineThumbnailResolution";
 import type { StoryboardShot } from "../../types";
 import type {
   StoryboardShotFlag,
@@ -97,6 +93,8 @@ interface ShotFrameButtonProps {
   previewVideoPath: string;
   frameRate: number;
   priority: number;
+  requestEnabled: boolean;
+  resolution: TimelineThumbnailResolution;
   onSelect: (event: ReactMouseEvent<HTMLButtonElement>) => void;
   onStartKeywordDrag: (event: ReactPointerEvent<HTMLButtonElement>) => void;
 }
@@ -109,10 +107,11 @@ function ShotFrameButton({
   previewVideoPath,
   frameRate,
   priority,
+  requestEnabled,
+  resolution,
   onSelect,
   onStartKeywordDrag,
 }: ShotFrameButtonProps) {
-  const { resolution, thumbnailContainerRef } = useTimelineThumbnailResolution<HTMLButtonElement>();
   const thumbnailIdentity = `${fingerprint}:${videoPath}:${shot.start_us}`;
   const [thumbnail, setThumbnail] = useState<{
     identity: string;
@@ -120,6 +119,7 @@ function ShotFrameButton({
     width: number;
     height: number;
   } | null>(null);
+  const thumbnailRequestRef = useRef<ReturnType<typeof timelineThumbnails.request> | null>(null);
   const [hoverProgress, setHoverProgress] = useState<number | null>(null);
   const [hoverFrameReady, setHoverFrameReady] = useState(false);
   const hoverVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -134,59 +134,82 @@ function ShotFrameButton({
 
   useEffect(() => {
     let active = true;
-    const requestedResolutions = timelineThumbnailResolutions.filter(
-      (candidate) => candidate.width <= resolution.width,
-    );
-    const requests = requestedResolutions.map((candidate) => {
-      const request = requestStoryboardThumbnail({
-        assetId,
-        fingerprint,
-        videoPath,
-        timeUs: shot.start_us,
-        frameRate,
-        priority,
-        resolution: candidate,
+    const commonOptions = {
+      kind: "storyboard" as const,
+      assetId,
+      fingerprint,
+      videoPath,
+      timeUs: shot.start_us,
+      frameRate,
+      priority,
+    };
+    const placeholder = timelineThumbnails.peek({ ...commonOptions, resolution });
+    if (placeholder) {
+      setThumbnail((current) => {
+        if (current?.identity === thumbnailIdentity && current.width > placeholder.width) {
+          return current;
+        }
+        return {
+          identity: thumbnailIdentity,
+          src: placeholder.url,
+          width: placeholder.width,
+          height: placeholder.height,
+        };
       });
-      void request.promise.then(
-        (src) => {
-          if (!active) {
-            return;
-          }
-          setThumbnail((current) => {
-            if (
-              current?.identity === thumbnailIdentity &&
-              current.width > candidate.width &&
-              current.width <= resolution.width
-            ) {
-              return current;
-            }
-            return {
-              identity: thumbnailIdentity,
-              src,
-              width: candidate.width,
-              height: candidate.height,
-            };
-          });
-        },
-        () => undefined,
-      );
-      return request;
+    } else {
+      setThumbnail((current) => (current?.identity !== thumbnailIdentity ? null : current));
+    }
+
+    if (!requestEnabled) {
+      return;
+    }
+
+    const showThumbnail = (src: string, completedResolution: TimelineThumbnailResolution) => {
+      if (!active) {
+        return;
+      }
+      setThumbnail((current) => {
+        if (current?.identity === thumbnailIdentity && current.width > completedResolution.width) {
+          return current;
+        }
+        return {
+          identity: thumbnailIdentity,
+          src,
+          width: completedResolution.width,
+          height: completedResolution.height,
+        };
+      });
+    };
+
+    const request = timelineThumbnails.request({
+      ...commonOptions,
+      resolution,
     });
+    thumbnailRequestRef.current = request;
+    void request.promise.then(
+      (result) => showThumbnail(result.url, result.resolution),
+      () => undefined,
+    );
     return () => {
       active = false;
-      for (const request of requests) {
-        request.cancel();
+      if (thumbnailRequestRef.current === request) {
+        thumbnailRequestRef.current = null;
       }
+      request.cancel();
     };
   }, [
     assetId,
     fingerprint,
-    priority,
+    requestEnabled,
     resolution.width,
     shot.start_us,
     thumbnailIdentity,
     videoPath,
   ]);
+
+  useEffect(() => {
+    thumbnailRequestRef.current?.reprioritize(priority);
+  }, [priority]);
 
   useEffect(() => {
     if (hoverTargetTimeUs === null) {
@@ -232,7 +255,6 @@ function ShotFrameButton({
 
   return (
     <button
-      ref={thumbnailContainerRef}
       type="button"
       className="shot-frame-button"
       onClick={onSelect}
@@ -293,6 +315,8 @@ export interface StoryboardShotThumbnailProps {
   previewVideoPath: string;
   frameRate: number;
   priority: number;
+  requestEnabled: boolean;
+  targetResolution: TimelineThumbnailResolution;
   onSelectFrame: (event: ReactMouseEvent<HTMLButtonElement>) => void;
   onStartKeywordDrag: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   onToggleStack: () => void;
@@ -317,6 +341,8 @@ export function StoryboardShotThumbnail({
   previewVideoPath,
   frameRate,
   priority,
+  requestEnabled,
+  targetResolution,
   onSelectFrame,
   onStartKeywordDrag,
   onToggleStack,
@@ -367,6 +393,8 @@ export function StoryboardShotThumbnail({
           previewVideoPath={previewVideoPath}
           frameRate={frameRate}
           priority={priority}
+          requestEnabled={requestEnabled}
+          resolution={targetResolution}
           onStartKeywordDrag={onStartKeywordDrag}
           onSelect={(event) => {
             event.stopPropagation();

@@ -9,13 +9,9 @@ import {
   type PointerEvent as ReactPointerEvent,
   type SyntheticEvent,
 } from "react";
-import { requestSubtitleThumbnail } from "../../subtitleThumbnail";
+import { timelineThumbnails, type TimelineThumbnailResolution } from "../../timelineThumbnail";
 import { isTauriRuntime } from "../../tauriRuntime";
 import { formatDuration } from "../../time";
-import {
-  timelineThumbnailResolutions,
-  useTimelineThumbnailResolution,
-} from "../../timelineThumbnailResolution";
 import type { SubtitleCue } from "../../types";
 import type { SubtitleCueFlag, SubtitleCueVisualLabel } from "./subtitlePanelState";
 
@@ -36,6 +32,8 @@ interface SubtitleCueFrameButtonProps {
   videoPath: string;
   previewVideoPath: string;
   priority: number;
+  requestEnabled: boolean;
+  resolution: TimelineThumbnailResolution;
   onSelect: (event: ReactMouseEvent<HTMLButtonElement>) => void;
 }
 
@@ -46,9 +44,10 @@ function SubtitleCueFrameButton({
   videoPath,
   previewVideoPath,
   priority,
+  requestEnabled,
+  resolution,
   onSelect,
 }: SubtitleCueFrameButtonProps) {
-  const { resolution, thumbnailContainerRef } = useTimelineThumbnailResolution<HTMLButtonElement>();
   const thumbnailIdentity = `${fingerprint}:${videoPath}:${cue.start_us}`;
   const [thumbnail, setThumbnail] = useState<{
     identity: string;
@@ -56,6 +55,7 @@ function SubtitleCueFrameButton({
     width: number;
     height: number;
   } | null>(null);
+  const thumbnailRequestRef = useRef<ReturnType<typeof timelineThumbnails.request> | null>(null);
   const [hoverProgress, setHoverProgress] = useState<number | null>(null);
   const [hoverFrameReady, setHoverFrameReady] = useState(false);
   const hoverVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -72,58 +72,81 @@ function SubtitleCueFrameButton({
 
   useEffect(() => {
     let active = true;
-    const requestedResolutions = timelineThumbnailResolutions.filter(
-      (candidate) => candidate.width <= resolution.width,
-    );
-    const requests = requestedResolutions.map((candidate) => {
-      const request = requestSubtitleThumbnail({
-        assetId,
-        fingerprint,
-        videoPath,
-        timeUs: cue.start_us,
-        priority,
-        resolution: candidate,
+    const commonOptions = {
+      kind: "subtitle" as const,
+      assetId,
+      fingerprint,
+      videoPath,
+      timeUs: cue.start_us,
+      priority,
+    };
+    const placeholder = timelineThumbnails.peek({ ...commonOptions, resolution });
+    if (placeholder) {
+      setThumbnail((current) => {
+        if (current?.identity === thumbnailIdentity && current.width > placeholder.width) {
+          return current;
+        }
+        return {
+          identity: thumbnailIdentity,
+          src: placeholder.url,
+          width: placeholder.width,
+          height: placeholder.height,
+        };
       });
-      void request.promise.then(
-        (src) => {
-          if (!active) {
-            return;
-          }
-          setThumbnail((current) => {
-            if (
-              current?.identity === thumbnailIdentity &&
-              current.width > candidate.width &&
-              current.width <= resolution.width
-            ) {
-              return current;
-            }
-            return {
-              identity: thumbnailIdentity,
-              src,
-              width: candidate.width,
-              height: candidate.height,
-            };
-          });
-        },
-        () => undefined,
-      );
-      return request;
+    } else {
+      setThumbnail((current) => (current?.identity !== thumbnailIdentity ? null : current));
+    }
+
+    if (!requestEnabled) {
+      return;
+    }
+
+    const showThumbnail = (src: string, completedResolution: TimelineThumbnailResolution) => {
+      if (!active) {
+        return;
+      }
+      setThumbnail((current) => {
+        if (current?.identity === thumbnailIdentity && current.width > completedResolution.width) {
+          return current;
+        }
+        return {
+          identity: thumbnailIdentity,
+          src,
+          width: completedResolution.width,
+          height: completedResolution.height,
+        };
+      });
+    };
+
+    const request = timelineThumbnails.request({
+      ...commonOptions,
+      resolution,
     });
+    thumbnailRequestRef.current = request;
+    void request.promise.then(
+      (result) => showThumbnail(result.url, result.resolution),
+      () => undefined,
+    );
     return () => {
       active = false;
-      for (const request of requests) {
-        request.cancel();
+      if (thumbnailRequestRef.current === request) {
+        thumbnailRequestRef.current = null;
       }
+      request.cancel();
     };
   }, [
     assetId,
     cue.start_us,
     fingerprint,
-    priority,
+    requestEnabled,
     resolution.width,
     thumbnailIdentity,
     videoPath,
   ]);
+
+  useEffect(() => {
+    thumbnailRequestRef.current?.reprioritize(priority);
+  }, [priority]);
 
   useEffect(() => {
     if (hoverTargetTimeUs === null) {
@@ -169,7 +192,6 @@ function SubtitleCueFrameButton({
 
   return (
     <button
-      ref={thumbnailContainerRef}
       type="button"
       className="cue-frame-button"
       onClick={onSelect}
@@ -225,6 +247,8 @@ export interface SubtitleCueThumbnailProps {
   videoPath: string;
   previewVideoPath: string;
   priority: number;
+  requestEnabled: boolean;
+  targetResolution: TimelineThumbnailResolution;
   onSelectFrame: (event: ReactMouseEvent<HTMLButtonElement>) => void;
   onSetRating: (rating: number) => void;
   onSetFlag: (flag: SubtitleCueFlag) => void;
@@ -243,6 +267,8 @@ export function SubtitleCueThumbnail({
   videoPath,
   previewVideoPath,
   priority,
+  requestEnabled,
+  targetResolution,
   onSelectFrame,
   onSetRating,
   onSetFlag,
@@ -277,6 +303,8 @@ export function SubtitleCueThumbnail({
           videoPath={videoPath}
           previewVideoPath={previewVideoPath}
           priority={priority}
+          requestEnabled={requestEnabled}
+          resolution={targetResolution}
           onSelect={(event) => {
             event.stopPropagation();
             onSelectFrame(event);

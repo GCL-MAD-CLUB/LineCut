@@ -12,6 +12,11 @@ import {
   type UIEvent as ReactUIEvent,
 } from "react";
 import { formatMonitorTime } from "../../time";
+import {
+  timelineThumbnailWindowContains,
+  type TimelineThumbnailResolution,
+  type TimelineThumbnailWindowPlan,
+} from "../../timelineThumbnail";
 import type { SubtitleCue } from "../../types";
 import { subtitleCueColorLabels } from "./SubtitleColorLabelButtons";
 import { SubtitleCueThumbnail } from "./SubtitleCueThumbnail";
@@ -38,7 +43,8 @@ interface SubtitleListViewProps {
   headerContent: ReactNode;
   rowVirtualizer: Virtualizer<HTMLDivElement, Element>;
   virtualRows: VirtualItem[];
-  thumbnailPriorityCenterIndex: number;
+  thumbnailWindow: TimelineThumbnailWindowPlan;
+  thumbnailTargetResolution: TimelineThumbnailResolution;
   assetId: string;
   fingerprint: string;
   videoPath: string;
@@ -71,7 +77,8 @@ export function SubtitleListView({
   headerContent,
   rowVirtualizer,
   virtualRows,
-  thumbnailPriorityCenterIndex,
+  thumbnailWindow,
+  thumbnailTargetResolution,
   assetId,
   fingerprint,
   videoPath,
@@ -265,7 +272,12 @@ export function SubtitleListView({
                       fingerprint={fingerprint}
                       videoPath={videoPath}
                       previewVideoPath={previewVideoPath}
-                      priority={Math.abs(virtualRow.index - thumbnailPriorityCenterIndex)}
+                      priority={Math.abs(virtualRow.index - thumbnailWindow.centerIndex)}
+                      requestEnabled={timelineThumbnailWindowContains(
+                        thumbnailWindow,
+                        virtualRow.index,
+                      )}
+                      targetResolution={thumbnailTargetResolution}
                       onSelectFrame={(event) => {
                         cancelPendingCellEdit();
                         setActiveCell(null);
