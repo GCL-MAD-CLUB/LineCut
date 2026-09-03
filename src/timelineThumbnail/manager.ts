@@ -327,11 +327,7 @@ export function createTimelineThumbnailManager<Options extends TimelineThumbnail
     evictCachedThumbnails();
   }
 
-  function createJob(
-    options: Options,
-    resolutions: TimelineThumbnailResolution[],
-    key?: string,
-  ) {
+  function createJob(options: Options, resolutions: TimelineThumbnailResolution[], key?: string) {
     const resolution = resolutions.at(-1);
     if (resolution === undefined) {
       throw new Error("A timeline thumbnail job requires at least one resolution");
