@@ -142,6 +142,15 @@
 .import-path nav button[aria-current] {
   color: #eee;
 }
+.import-toolbar-dropdown.import-path-dropdown .select-dropdown-trigger svg {
+  width: 32px;
+  height: 32px;
+}
+.import-toolbar-dropdown.import-path-dropdown:hover:not(.disabled),
+.import-toolbar-dropdown.import-path-dropdown.open {
+  background: none;
+  color: inherit;
+}
 .import-toolbar-controls {
   display: flex;
   align-items: center;
@@ -165,11 +174,56 @@
   background: #383838;
   color: #eee;
 }
+.import-toolbar-dropdown {
+  flex: 0 0 var(--import-control-height);
+  width: var(--import-control-height);
+  height: var(--import-control-height);
+  color: inherit;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+}
+.import-toolbar-dropdown:hover:not(.disabled),
+.import-toolbar-dropdown.open,
+.import-toolbar-dropdown.active {
+  color: #eee;
+  background: #383838;
+  border-color: transparent;
+}
+.import-toolbar-dropdown .select-dropdown-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+.import-toolbar-dropdown .select-dropdown-trigger svg {
+  width: 18px;
+  height: 18px;
+  color: currentColor;
+}
+.import-select-dropdown-menu {
+  gap: 0;
+  padding: 4px 0;
+  scrollbar-gutter: auto;
+  background: #0b0b0b;
+  border-color: #484848;
+  border-radius: 4px;
+}
+.import-select-dropdown-menu .select-dropdown-option {
+  min-height: 28px;
+  font-size: 13px;
+  line-height: 28px;
+}
+.import-select-dropdown-menu .select-dropdown-option:hover {
+  background: #262626;
+}
 .import-toolbar-divider {
   width: 1px;
   height: 24px;
   background: #090909;
-  margin: 0 5px;
+  margin: 0 6px;
 }
 .import-search {
   display: flex;
@@ -177,7 +231,7 @@
   gap: 7px;
   width: clamp(104px, 11vw, 190px);
   height: var(--import-control-height);
-  margin-left: 5px;
+  margin-left: 8px;
   border: 1px solid #414141;
   border-radius: 4px;
   background: #0b0b0b;
@@ -246,9 +300,6 @@
   height: 44%;
   color: #b0b0b0;
   max-width: 88px;
-}
-.import-media-visual .import-folder-icon {
-  fill: #535353;
 }
 .import-media-visual img {
   width: 100%;
@@ -464,13 +515,13 @@
   font-size: 13px;
 }
 .import-field > input:disabled {
-  background: #2b2b2b;
+  background: #1a1a1a;
   color: #656565;
   border-color: transparent;
 }
 .import-settings .select-dropdown {
   width: 100%;
-  background: #2b2b2b;
+  background: #1a1a1a;
 }
 .import-settings .select-dropdown-trigger {
   min-height: calc(var(--import-control-height) - 2px);

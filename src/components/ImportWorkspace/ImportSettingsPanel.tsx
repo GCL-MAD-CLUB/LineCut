@@ -88,6 +88,9 @@ export function ImportSettingsPanel({
             <div className="import-field">
               预设
               <SelectDropdown
+                menuClassName="import-select-dropdown-menu"
+                menuMinWidth={105}
+                menuWidth="content"
                 ariaLabel="复制预设"
                 disabled={disabled || !settings.copy}
                 value={settings.verify ? "verify" : "copy"}
@@ -101,6 +104,9 @@ export function ImportSettingsPanel({
             <div className="import-field">
               复制文件的目标
               <SelectDropdown
+                menuClassName="import-select-dropdown-menu"
+                menuMinWidth={105}
+                menuWidth="content"
                 ariaLabel="复制文件的目标"
                 disabled={disabled || !settings.copy}
                 value={settings.destination}

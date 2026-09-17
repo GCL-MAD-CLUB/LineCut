@@ -1,5 +1,6 @@
-import { Captions, FileAudio2, FileVideo2, Folder, Image } from "lucide-react";
+import { Captions, FileAudio2, FileVideo2, Image } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { ImportFolderIcon } from "./ImportFolderIcon";
 import { mediaKind, type ImportEntry, type ImportMetadata } from "./importBrowserModel";
 import { importCover, importFrame, importMetadata, queuePreview } from "./importPreview";
 
@@ -23,9 +24,8 @@ export function ImportMediaVisual({
   const reportMetadata = useRef(onMetadata);
   reportMetadata.current = onMetadata;
   const kind = entry.is_directory ? null : mediaKind(entry.path);
-  const Icon = entry.is_directory
-    ? Folder
-    : kind === "audio"
+  const Icon =
+    kind === "audio"
       ? FileAudio2
       : kind === "image"
         ? Image
@@ -97,8 +97,10 @@ export function ImportMediaVisual({
     >
       {cover ? (
         <img src={hovering && frame ? frame : cover} alt="" draggable={false} />
+      ) : entry.is_directory ? (
+        <ImportFolderIcon />
       ) : (
-        <Icon className={entry.is_directory ? "import-folder-icon" : ""} strokeWidth={1.2} />
+        <Icon strokeWidth={1.2} />
       )}
       {scrub && hovering && cover && (
         <span className="import-scrub-line" style={{ left: `${progress! * 100}%` }} />
