@@ -1,8 +1,10 @@
 import { open as openDialog, type DialogFilter } from "@tauri-apps/plugin-dialog";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invokeCommand, runOperation } from "../../errors";
+import { createFfmpegTaskId } from "../../ffmpegProgress";
 import { formatMonitorTime } from "../../time";
 import type { MediaBinItemKind } from "../../types";
+import { MediaBrowserDialog } from "../MediaBrowserDialog";
 import { ModalDialog } from "../ModalDialog";
 import "./MediaLinkDialog.css";
 
@@ -24,9 +26,33 @@ interface MediaLinkDialogProps {
   onCancel: () => void;
 }
 
+interface MediaLinkFile {
+  path: string;
+  file_name: string;
+}
+
+interface MediaLinkFileMetadata {
+  path: string;
+  start_time_us: number;
+  tape_name: string | null;
+  has_video: boolean;
+  has_audio: boolean;
+}
+
+interface MatchOptions {
+  fileName: boolean;
+  extension: boolean;
+  mediaStart: boolean;
+  tapeName: boolean;
+}
+
 const videoExtensions = ["mp4", "mov", "mkv", "avi", "webm", "m4v", "mts", "m2ts"];
 const audioExtensions = ["wav", "mp3", "aac", "flac", "m4a", "ogg", "opus"];
 const subtitleExtensions = ["srt", "ass", "ssa", "vtt"];
+const allMediaExtensions = Array.from(
+  new Set([...videoExtensions, ...audioExtensions, ...subtitleExtensions]),
+);
+const MEDIA_START_TOLERANCE_US = 1_000;
 
 function fileName(path: string) {
   return path.split(/[\\/]/).pop() ?? path;
@@ -38,17 +64,23 @@ function fileExtension(path: string) {
   return separator < 0 ? "" : name.slice(separator + 1).toLocaleLowerCase();
 }
 
+function fileStem(path: string) {
+  const name = fileName(path);
+  const separator = name.lastIndexOf(".");
+  return separator < 0 ? name : name.slice(0, separator);
+}
+
+function normalizedText(value: string | null | undefined) {
+  return value?.trim().toLocaleLowerCase() ?? "";
+}
+
+function pathKey(path: string) {
+  return path.replaceAll("\\", "/").toLocaleLowerCase();
+}
+
 function directoryName(path: string) {
   const separator = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
   return separator < 0 ? "" : path.slice(0, separator);
-}
-
-function joinPath(directory: string, name: string) {
-  if (!directory) {
-    return name;
-  }
-  const separator = directory.includes("\\") ? "\\" : "/";
-  return `${directory.replace(/[\\/]$/, "")}${separator}${name}`;
 }
 
 function titleForMode(mode: MediaLinkMode) {
@@ -63,6 +95,12 @@ function introForMode(mode: MediaLinkMode) {
   return "为以下剪辑链接媒体：";
 }
 
+function browserTitleForMode(mode: MediaLinkMode, candidate: MediaLinkCandidate) {
+  if (mode === "proxy") return `将代理连接到 ${candidate.clipName}`;
+  if (mode === "full-resolution") return `将完整分辨率媒体连接到 ${candidate.clipName}`;
+  return `将媒体链接到 ${candidate.clipName}`;
+}
+
 function dialogFilters(candidate: MediaLinkCandidate, mode: MediaLinkMode): DialogFilter[] {
   if (mode === "proxy" || candidate.kind === "video") {
     return [{ name: mode === "proxy" ? "代理媒体" : "视频", extensions: videoExtensions }];
@@ -71,6 +109,65 @@ function dialogFilters(candidate: MediaLinkCandidate, mode: MediaLinkMode): Dial
     return [{ name: "音频", extensions: audioExtensions }];
   }
   return [{ name: "字幕", extensions: subtitleExtensions }];
+}
+
+function extensionsForCandidate(candidate: MediaLinkCandidate, mode: MediaLinkMode) {
+  if (mode === "proxy" || candidate.kind === "video") {
+    return videoExtensions;
+  }
+  if (candidate.kind === "audio") {
+    return audioExtensions;
+  }
+  return subtitleExtensions;
+}
+
+function fileMatchesCandidate(
+  file: MediaLinkFile,
+  metadata: MediaLinkFileMetadata | undefined,
+  candidate: MediaLinkCandidate,
+  mode: MediaLinkMode,
+  options: MatchOptions,
+) {
+  if (!extensionsForCandidate(candidate, mode).includes(fileExtension(file.path))) {
+    return false;
+  }
+  if (
+    options.fileName &&
+    normalizedText(fileStem(file.path)) !== normalizedText(fileStem(candidate.filePath))
+  ) {
+    return false;
+  }
+  if (
+    options.extension &&
+    normalizedText(fileExtension(file.path)) !== normalizedText(fileExtension(candidate.filePath))
+  ) {
+    return false;
+  }
+
+  if (candidate.kind === "subtitle" && mode !== "proxy") {
+    return (
+      (!options.mediaStart || Math.abs(candidate.mediaStartUs) <= MEDIA_START_TOLERANCE_US) &&
+      (!options.tapeName || normalizedText(candidate.tapeName) === "")
+    );
+  }
+  if ((options.mediaStart || options.tapeName) && !metadata) {
+    return false;
+  }
+  if (
+    metadata &&
+    (mode === "proxy" || candidate.kind === "video" ? !metadata.has_video : !metadata.has_audio)
+  ) {
+    return false;
+  }
+  if (
+    options.mediaStart &&
+    Math.abs((metadata?.start_time_us ?? 0) - candidate.mediaStartUs) > MEDIA_START_TOLERANCE_US
+  ) {
+    return false;
+  }
+  return (
+    !options.tapeName || normalizedText(metadata?.tape_name) === normalizedText(candidate.tapeName)
+  );
 }
 
 export function MediaLinkDialog({ candidates, mode, onAttach, onCancel }: MediaLinkDialogProps) {
@@ -88,12 +185,22 @@ export function MediaLinkDialog({ candidates, mode, onAttach, onCancel }: MediaL
   const [autoRelink, setAutoRelink] = useState(true);
   const [useMediaBrowser, setUseMediaBrowser] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [mediaBrowserOpen, setMediaBrowserOpen] = useState(false);
+  const [mediaBrowserDirectory, setMediaBrowserDirectory] = useState("");
+  const [suggestedBrowserDirectory, setSuggestedBrowserDirectory] = useState("");
+  const [suggestedBrowserPaths, setSuggestedBrowserPaths] = useState<string[]>([]);
+  const suggestionRequestRef = useRef(0);
 
   useEffect(() => {
     setCurrentId(candidates[0]?.id ?? "");
     setProcessedIds(new Set());
     setSkippedIds(new Set());
     setBusy(false);
+    setMediaBrowserOpen(false);
+    setMediaBrowserDirectory("");
+    setSuggestedBrowserDirectory("");
+    setSuggestedBrowserPaths([]);
+    suggestionRequestRef.current += 1;
   }, [candidateKey]);
 
   const current =
@@ -122,74 +229,244 @@ export function MediaLinkDialog({ candidates, mode, onAttach, onCancel }: MediaL
     }
   }
 
+  async function filesInDirectory(directory: string, extensions = allMediaExtensions) {
+    return invokeCommand<MediaLinkFile[]>("list_media_link_files", { directory, extensions });
+  }
+
+  function matchOptions(): MatchOptions {
+    return {
+      fileName: matchFileName,
+      extension: matchExtension,
+      mediaStart: matchMediaStart,
+      tapeName: matchTapeName,
+    };
+  }
+
+  async function matchingPathInDirectory(candidate: MediaLinkCandidate, directory: string) {
+    const options = matchOptions();
+    const files = await filesInDirectory(directory, extensionsForCandidate(candidate, mode));
+    const structurallyMatchingFiles = files.filter((file) =>
+      fileMatchesCandidate(file, undefined, candidate, mode, {
+        ...options,
+        mediaStart: false,
+        tapeName: false,
+      }),
+    );
+    if (!matchMediaStart && !matchTapeName) {
+      return structurallyMatchingFiles.find((file) =>
+        fileMatchesCandidate(file, undefined, candidate, mode, options),
+      )?.path;
+    }
+
+    let metadataByPath = new Map<string, MediaLinkFileMetadata>();
+    if (mode === "proxy" || candidate.kind !== "subtitle") {
+      const metadata = await invokeCommand<MediaLinkFileMetadata[]>("probe_media_link_files", {
+        paths: structurallyMatchingFiles.map((file) => file.path),
+        taskId: createFfmpegTaskId("media-link-suggestion"),
+      });
+      metadataByPath = new Map(metadata.map((entry) => [pathKey(entry.path), entry]));
+    }
+    return structurallyMatchingFiles.find((file) =>
+      fileMatchesCandidate(file, metadataByPath.get(pathKey(file.path)), candidate, mode, options),
+    )?.path;
+  }
+
+  async function updateBrowserSuggestion(candidate: MediaLinkCandidate, directory: string) {
+    const requestId = suggestionRequestRef.current + 1;
+    suggestionRequestRef.current = requestId;
+    setSuggestedBrowserDirectory(directory);
+    setSuggestedBrowserPaths([]);
+    if (
+      !directory ||
+      !(await invokeCommand<boolean>("path_is_directory", {
+        path: directory,
+      }))
+    ) {
+      return;
+    }
+    const outcome = await runOperation(
+      "media.link",
+      () => matchingPathInDirectory(candidate, directory),
+      { displayName: directory, resourceKind: "media" },
+    );
+    if (suggestionRequestRef.current !== requestId) {
+      return;
+    }
+    setSuggestedBrowserPaths(outcome.status === "success" && outcome.value ? [outcome.value] : []);
+  }
+
+  async function openMediaBrowser(candidate: MediaLinkCandidate) {
+    const directory = mediaBrowserDirectory || directoryName(candidate.filePath);
+    setBusy(true);
+    await updateBrowserSuggestion(candidate, directory);
+    setBusy(false);
+    setMediaBrowserOpen(true);
+  }
+
+  async function automaticallyAttachOtherCandidates(
+    selectedCandidate: MediaLinkCandidate,
+    selectedPath: string,
+    processed: Set<string>,
+    skipped: Set<string>,
+  ) {
+    const directory = directoryName(selectedPath);
+    const files = await filesInDirectory(directory);
+    const remainingCandidates = candidates.filter(
+      (candidate) =>
+        candidate.id !== selectedCandidate.id &&
+        !processed.has(candidate.id) &&
+        !skipped.has(candidate.id),
+    );
+    const options = matchOptions();
+    const structurallyMatchingFiles = files.filter((file) =>
+      remainingCandidates.some((candidate) =>
+        fileMatchesCandidate(file, undefined, candidate, mode, {
+          ...options,
+          mediaStart: false,
+          tapeName: false,
+        }),
+      ),
+    );
+    let metadataByPath = new Map<string, MediaLinkFileMetadata>();
+    if (matchMediaStart || matchTapeName) {
+      const pathsToProbe = structurallyMatchingFiles
+        .filter((file) =>
+          remainingCandidates.some(
+            (candidate) =>
+              (mode === "proxy" || candidate.kind !== "subtitle") &&
+              fileMatchesCandidate(file, undefined, candidate, mode, {
+                ...options,
+                mediaStart: false,
+                tapeName: false,
+              }),
+          ),
+        )
+        .map((file) => file.path);
+      const metadata = await invokeCommand<MediaLinkFileMetadata[]>("probe_media_link_files", {
+        paths: pathsToProbe,
+        taskId: createFfmpegTaskId("media-link-match"),
+      });
+      metadataByPath = new Map(metadata.map((entry) => [pathKey(entry.path), entry]));
+    }
+
+    const usedPaths = new Set([pathKey(selectedPath)]);
+    for (const candidate of remainingCandidates) {
+      const match = structurallyMatchingFiles.find(
+        (file) =>
+          !usedPaths.has(pathKey(file.path)) &&
+          fileMatchesCandidate(
+            file,
+            metadataByPath.get(pathKey(file.path)),
+            candidate,
+            mode,
+            options,
+          ),
+      );
+      if (!match) {
+        continue;
+      }
+      usedPaths.add(pathKey(match.path));
+      if (await onAttach(candidate, match.path)) {
+        processed.add(candidate.id);
+      }
+    }
+  }
+
+  async function attachPath(selectedCandidate: MediaLinkCandidate, path: string) {
+    setMediaBrowserOpen(false);
+    setBusy(true);
+    const processed = new Set(processedIds);
+    const skipped = new Set(skippedIds);
+    const attachOutcome = await runOperation(
+      "media.link",
+      () => onAttach(selectedCandidate, path),
+      { displayName: fileName(selectedCandidate.filePath), resourceKind: "media" },
+    );
+    if (attachOutcome.status !== "success" || !attachOutcome.value) {
+      setBusy(false);
+      return;
+    }
+    processed.add(selectedCandidate.id);
+
+    if (autoRelink) {
+      await runOperation(
+        "media.link",
+        () => automaticallyAttachOtherCandidates(selectedCandidate, path, processed, skipped),
+        { displayName: directoryName(path), resourceKind: "media" },
+      );
+    }
+
+    setProcessedIds(processed);
+    const handled = new Set([...processed, ...skipped]);
+    const next = nextCandidate(handled);
+    if (next) {
+      setCurrentId(next.id);
+    } else {
+      onCancel();
+    }
+    setBusy(false);
+  }
+
   async function attachCurrent() {
     if (!current || busy) {
       return;
     }
     const selectedCandidate = current;
-    await runOperation(
+    if (useMediaBrowser) {
+      await openMediaBrowser(selectedCandidate);
+      return;
+    }
+    const outcome = await runOperation(
       "media.link",
-      async () => {
-        const picked = await openDialog({
+      () =>
+        openDialog({
           multiple: false,
-          title: `${useMediaBrowser ? "附加" : "选择"}${fileName(selectedCandidate.filePath)}`,
+          title: `选择 ${fileName(selectedCandidate.filePath)}`,
           filters: dialogFilters(selectedCandidate, mode),
-        });
-        const path = Array.isArray(picked) ? picked[0] : picked;
-        if (!path) {
-          return false;
-        }
-        setBusy(true);
-        const processed = new Set(processedIds);
-        const skipped = new Set(skippedIds);
-        if (await onAttach(selectedCandidate, path)) {
-          processed.add(selectedCandidate.id);
-        }
-
-        if (autoRelink) {
-          const directory = directoryName(path);
-          for (const candidate of candidates) {
-            if (
-              candidate.id === selectedCandidate.id ||
-              processed.has(candidate.id) ||
-              skipped.has(candidate.id)
-            ) {
-              continue;
-            }
-            const automaticPath = joinPath(directory, fileName(candidate.filePath));
-            const nameMatches =
-              !matchFileName || fileName(automaticPath) === fileName(candidate.filePath);
-            const extensionMatches =
-              !matchExtension || fileExtension(automaticPath) === fileExtension(candidate.filePath);
-            if (!nameMatches || !extensionMatches) {
-              continue;
-            }
-            const exists = await invokeCommand<boolean>("path_is_file", { path: automaticPath });
-            if (exists && (await onAttach(candidate, automaticPath))) {
-              processed.add(candidate.id);
-            }
-          }
-        }
-
-        setProcessedIds(processed);
-        const handled = new Set([...processed, ...skipped]);
-        const next = nextCandidate(handled);
-        if (next) {
-          setCurrentId(next.id);
-        } else {
-          onCancel();
-        }
-        return true;
-      },
+        }),
       { displayName: fileName(selectedCandidate.filePath), resourceKind: "media" },
     );
-    setBusy(false);
+    if (outcome.status !== "success") {
+      return;
+    }
+    const path = Array.isArray(outcome.value) ? outcome.value[0] : outcome.value;
+    if (path) {
+      await attachPath(selectedCandidate, path);
+    }
+  }
+
+  if (mediaBrowserOpen && current) {
+    return (
+      <MediaBrowserDialog
+        title={browserTitleForMode(mode, current)}
+        filters={dialogFilters(current, mode)}
+        initialDirectory={mediaBrowserDirectory || directoryName(current.filePath)}
+        selectionMode="single"
+        suggestedPaths={suggestedBrowserPaths}
+        onCancel={() => {
+          suggestionRequestRef.current += 1;
+          setMediaBrowserOpen(false);
+        }}
+        onDirectoryChange={(directory) => {
+          setMediaBrowserDirectory(directory);
+          if (pathKey(directory) !== pathKey(suggestedBrowserDirectory)) {
+            void updateBrowserSuggestion(current, directory);
+          }
+        }}
+        onConfirm={(paths) => {
+          const path = paths[0];
+          if (path) {
+            void attachPath(current, path);
+          }
+        }}
+      />
+    );
   }
 
   return (
     <ModalDialog
       title={titleForMode(mode)}
-      className="media-link-dialog"
+      className="modal-dialog-large media-link-dialog"
       bodyClassName="media-link-dialog-body"
       onCancel={onCancel}
       onConfirm={() => void attachCurrent()}

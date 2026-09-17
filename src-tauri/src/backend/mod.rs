@@ -1,5 +1,6 @@
 use crate::*;
 
+mod browser_visual;
 mod commands;
 mod export;
 mod media;
@@ -14,6 +15,7 @@ mod tasks;
 mod thumbnail;
 mod workspace;
 
+pub(crate) use browser_visual::*;
 pub(crate) use commands::*;
 pub(crate) use export::*;
 pub(crate) use media::*;

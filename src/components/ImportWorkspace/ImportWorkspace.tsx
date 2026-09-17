@@ -1,4 +1,3 @@
-import { open } from "@tauri-apps/plugin-dialog";
 import {
   Captions,
   CheckCircle2,
@@ -12,12 +11,13 @@ import {
   Upload,
 } from "lucide-react";
 import { useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { runMediaImportBatchTask } from "../../mediaImportTask";
-import { runOperation } from "../../errors";
 import { useProjectPort } from "../../systems/ProjectSystem";
 import { useTaskProgressStatus } from "../../systems/TaskSystem";
 import { isTauriRuntime } from "../../tauriRuntime";
 import type { MediaBinItem } from "../../types";
+import { MediaBrowserDialog, type MediaBrowserFilter } from "../MediaBrowserDialog";
 import "./ImportWorkspace.css";
 
 interface ImportWorkspaceProps {
@@ -31,23 +31,29 @@ interface PendingMediaItem {
   path: string;
 }
 
+interface ImportBrowserRequest {
+  kind: PendingMediaKind;
+  filters: MediaBrowserFilter[];
+  title: string;
+}
+
 const videoFilters = [
   {
-    name: "Video",
+    name: "视频",
     extensions: ["mkv", "mp4", "mov", "webm", "avi", "ts", "m2ts", "mpeg", "mpg"],
   },
 ];
 
 const audioFilters = [
   {
-    name: "Audio",
+    name: "音频",
     extensions: ["wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "wma"],
   },
 ];
 
 const subtitleFilters = [
   {
-    name: "Subtitle",
+    name: "字幕",
     extensions: ["srt", "ass", "ssa", "vtt", "webvtt"],
   },
 ];
@@ -134,6 +140,8 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
   const [videoPaths, setVideoPaths] = useState<string[]>([]);
   const [audioPaths, setAudioPaths] = useState<string[]>([]);
   const [subtitlePaths, setSubtitlePaths] = useState<string[]>([]);
+  const [browserRequest, setBrowserRequest] = useState<ImportBrowserRequest | null>(null);
+  const [mediaBrowserDirectory, setMediaBrowserDirectory] = useState("");
   const {
     mediaItems,
     mediaBinReadOnly: isMediaBinReadOnly,
@@ -174,7 +182,7 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
   const hasSelection = pendingItems.length > 0;
   const hasItems = importedItems.length > 0 || hasSelection;
 
-  async function choosePaths(kind: PendingMediaKind, filters: typeof videoFilters, title: string) {
+  function choosePaths(kind: PendingMediaKind, filters: MediaBrowserFilter[], title: string) {
     if (isMediaBinReadOnly) {
       messagePublished("项目处于只读状态。");
       return;
@@ -183,14 +191,10 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
       messagePublished("请在 Tauri 桌面窗口中选择本地媒体。");
       return;
     }
-    const outcome = await runOperation("media.import", () =>
-      open({ multiple: true, title, filters }),
-    );
-    if (outcome.status !== "success") {
-      return;
-    }
-    const picked = outcome.value;
-    const selectedPaths = Array.isArray(picked) ? picked : picked ? [picked] : [];
+    setBrowserRequest({ kind, filters, title });
+  }
+
+  function addBrowserPaths(kind: PendingMediaKind, selectedPaths: string[]) {
     const paths = selectedPaths.filter((path) => !importedPathKeys.has(pathKey(path)));
     if (paths.length === 0) {
       if (selectedPaths.length > 0) {
@@ -435,6 +439,25 @@ export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
           </button>
         </div>
       </footer>
+      {browserRequest &&
+        createPortal(
+          <MediaBrowserDialog
+            title={browserRequest.title}
+            filters={browserRequest.filters}
+            initialDirectory={
+              mediaBrowserDirectory || (importedItems[0] ? parentPath(importedItems[0].path) : "")
+            }
+            selectionMode="multiple"
+            operation="media.import"
+            onCancel={() => setBrowserRequest(null)}
+            onDirectoryChange={setMediaBrowserDirectory}
+            onConfirm={(paths) => {
+              addBrowserPaths(browserRequest.kind, paths);
+              setBrowserRequest(null);
+            }}
+          />,
+          document.querySelector(".app-shell") ?? document.body,
+        )}
     </section>
   );
 }

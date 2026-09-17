@@ -57,6 +57,8 @@ struct MediaAsset {
     fingerprint: String,
     duration_us: i64,
     start_time_us: i64,
+    #[serde(default)]
+    tape_name: Option<String>,
     video_stream_index: Option<i32>,
     audio_stream_index: Option<i32>,
 }

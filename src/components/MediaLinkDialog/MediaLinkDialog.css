@@ -1,12 +1,8 @@
-.media-link-dialog {
-  width: min(960px, calc(100vw - 32px));
-}
-
 .media-link-dialog-body {
   display: grid;
   grid-template-rows: auto minmax(220px, 1fr) auto;
   row-gap: 12px;
-  min-height: min(440px, calc(100vh - 110px));
+  min-height: 0;
   padding: 28px 24px 14px;
 }
 

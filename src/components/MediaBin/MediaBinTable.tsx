@@ -1,4 +1,5 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { mediaGridLayout } from "../../mediaGridLayout";
 import {
   Captions,
   ChevronRight,
@@ -1099,26 +1100,12 @@ export function MediaBinTable({
         Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.paddingRight);
       const columnGap = Number.parseFloat(style.columnGap) || 0;
       const availableWidth = Math.max(0, grid.clientWidth - horizontalPadding);
-      let columns = 1;
-      let minimumCardWidth = 0;
-      let fittedCardWidth = availableWidth;
-
-      for (let candidateColumns = itemCount; candidateColumns >= 1; candidateColumns -= 1) {
-        const candidateMinimumCardWidth =
-          (gridCardWidth * Math.max(0, candidateColumns - 1) +
-            columnGap * Math.max(0, candidateColumns - 2) -
-            Math.max(0, candidateColumns - 1)) /
-          candidateColumns;
-        const candidateFittedCardWidth =
-          (availableWidth - Math.max(0, candidateColumns - 1) * columnGap) / candidateColumns;
-        if (candidateFittedCardWidth >= candidateMinimumCardWidth) {
-          columns = candidateColumns;
-          minimumCardWidth = candidateMinimumCardWidth;
-          fittedCardWidth = candidateFittedCardWidth;
-          break;
-        }
-      }
-      const cardWidth = clamp(fittedCardWidth, minimumCardWidth, gridCardWidth);
+      const { columns, cardWidth } = mediaGridLayout(
+        availableWidth,
+        itemCount,
+        gridCardWidth,
+        columnGap,
+      );
       setGridLayout((current) =>
         current.columns === columns && current.cardWidth === cardWidth
           ? current
