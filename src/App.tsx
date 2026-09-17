@@ -1229,7 +1229,12 @@ function AppContent() {
   });
 
   const workspaceContent: Record<AppWorkspace, ReactNode> = {
-    import: <ImportWorkspace onImportCompleted={() => setActiveWorkspace("edit")} />,
+    import: (
+      <ImportWorkspace
+        onImportCompleted={() => setActiveWorkspace("edit")}
+        onCancel={() => setActiveWorkspace("edit")}
+      />
+    ),
     edit: <DockLayout />,
     export: <ExportWorkspace />,
   };

@@ -24,6 +24,7 @@ encoding_rs = "0.8"
 futures = "0.3"
 getrandom = "=0.2.16"
 hkdf = "=0.12.4"
+md-5 = "0.10"
 quick-xml = { version = "0.41", features = ["serialize"] }
 regex = "1"
 ort = { version = "=2.0.0-rc.9", default-features = false, features = [

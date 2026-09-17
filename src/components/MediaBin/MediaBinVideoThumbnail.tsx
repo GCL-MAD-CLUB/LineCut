@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react
 import { runOperation } from "../../errors";
 import { isTauriRuntime } from "../../tauriRuntime";
 import { extractVideoCover } from "../../thumbnail";
+import { useMediaCoverDeferred } from "../../mediaAnalysisTask";
 import { frameDurationUs, normalizeFrameRate } from "../../timeline";
 import type { MediaBinItem, Project } from "../../types";
 
@@ -36,6 +37,7 @@ export function MediaBinVideoThumbnail({
   project,
   hoverProgress,
 }: MediaBinVideoThumbnailProps) {
+  const analysisPending = useMediaCoverDeferred(project.asset.id);
   const hoverTargetTimeUs = useMemo(
     () => (hoverProgress === null ? null : hoverThumbnailTimeUs(project, hoverProgress)),
     [hoverProgress, project],
@@ -48,6 +50,10 @@ export function MediaBinVideoThumbnail({
   const fallbackSrc = isTauriRuntime() ? convertFileSrc(fallbackPath) : fallbackPath;
 
   useEffect(() => {
+    if (analysisPending) {
+      setUseVideoFallback(true);
+      return;
+    }
     let cancelled = false;
     let objectUrl = "";
 
@@ -85,7 +91,7 @@ export function MediaBinVideoThumbnail({
         URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [item.id, project.asset.fingerprint]);
+  }, [item.id, project.asset.fingerprint, analysisPending]);
 
   useEffect(() => {
     if (hoverTargetTimeUs === null) {
