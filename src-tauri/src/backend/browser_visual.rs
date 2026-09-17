@@ -64,14 +64,16 @@ fn shell_icon(path: &str) -> Option<BrowserIcon> {
                 if width <= 0 || width > 512 || height == 0 || height > 512 {
                     return None;
                 }
-                let mut info = BITMAPINFO::default();
-                info.bmiHeader = BITMAPINFOHEADER {
-                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                    biWidth: width,
-                    biHeight: -height,
-                    biPlanes: 1,
-                    biBitCount: 32,
-                    biCompression: BI_RGB.0,
+                let mut info = BITMAPINFO {
+                    bmiHeader: BITMAPINFOHEADER {
+                        biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                        biWidth: width,
+                        biHeight: -height,
+                        biPlanes: 1,
+                        biBitCount: 32,
+                        biCompression: BI_RGB.0,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 let mut pixels = vec![0u8; (width * height * 4) as usize];

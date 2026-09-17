@@ -590,7 +590,7 @@ fn media_browser_entry_is_hidden(name: &str, metadata: &fs::Metadata) -> bool {
     {
         use std::os::windows::fs::MetadataExt;
         const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
-        return metadata.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0;
+        metadata.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -618,7 +618,7 @@ pub(crate) async fn list_media_browser_directory(
 pub(crate) fn list_media_browser_roots() -> CommandResult<Vec<MediaBrowserRoot>> {
     #[cfg(target_os = "windows")]
     {
-        return Ok((b'A'..=b'Z')
+        Ok((b'A'..=b'Z')
             .filter_map(|letter| {
                 let path = format!("{}:\\", letter as char);
                 Path::new(&path).is_dir().then_some(MediaBrowserRoot {
@@ -626,7 +626,7 @@ pub(crate) fn list_media_browser_roots() -> CommandResult<Vec<MediaBrowserRoot>>
                     path,
                 })
             })
-            .collect());
+            .collect())
     }
 
     #[cfg(not(target_os = "windows"))]
