@@ -279,13 +279,38 @@ pub(crate) fn modified_secs(meta: &fs::Metadata) -> i64 {
 
 pub(crate) fn tag_value(tags: &HashMap<String, String>, keys: &[&str]) -> Option<String> {
     for key in keys {
-        if let Some(value) = tags.get(*key) {
+        if let Some(value) = tags
+            .iter()
+            .find_map(|(name, value)| name.eq_ignore_ascii_case(key).then_some(value))
+        {
             if !value.trim().is_empty() {
                 return Some(value.clone());
             }
         }
     }
     None
+}
+
+pub(crate) fn probe_tape_name(probe: &ProbeOutput) -> Option<String> {
+    const TAPE_NAME_KEYS: &[&str] = &[
+        "tape_name",
+        "tapename",
+        "reel_name",
+        "reelname",
+        "reel",
+        "com.apple.quicktime.reel",
+    ];
+
+    probe
+        .format
+        .as_ref()
+        .and_then(|format| tag_value(&format.tags, TAPE_NAME_KEYS))
+        .or_else(|| {
+            probe
+                .streams
+                .iter()
+                .find_map(|stream| tag_value(&stream.tags, TAPE_NAME_KEYS))
+        })
 }
 
 #[cfg(test)]
@@ -312,5 +337,26 @@ mod tests {
     fn media_tool_paths_are_absolute_before_being_passed_to_ffprobe() {
         let path = absolute_media_tool_path(Path::new("-media.mp4")).unwrap();
         assert!(path.is_absolute());
+    }
+
+    #[test]
+    fn tape_name_is_read_case_insensitively_from_format_or_stream_tags() {
+        let format_probe = ProbeOutput {
+            format: Some(ProbeFormat {
+                tags: HashMap::from([("REEL_NAME".to_string(), "A001".to_string())]),
+                ..ProbeFormat::default()
+            }),
+            ..ProbeOutput::default()
+        };
+        assert_eq!(probe_tape_name(&format_probe).as_deref(), Some("A001"));
+
+        let stream_probe = ProbeOutput {
+            streams: vec![ProbeStream {
+                tags: HashMap::from([("tape_name".to_string(), "B002".to_string())]),
+                ..ProbeStream::default()
+            }],
+            ..ProbeOutput::default()
+        };
+        assert_eq!(probe_tape_name(&stream_probe).as_deref(), Some("B002"));
     }
 }

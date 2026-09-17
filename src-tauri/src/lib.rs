@@ -186,6 +186,8 @@ struct MediaAsset {
     fingerprint: String,
     duration_us: i64,
     start_time_us: i64,
+    #[serde(default)]
+    tape_name: Option<String>,
     video_stream_index: Option<i32>,
     audio_stream_index: Option<i32>,
 }
@@ -885,6 +887,8 @@ struct ProbeOutput {
 struct ProbeFormat {
     duration: Option<String>,
     start_time: Option<String>,
+    #[serde(default)]
+    tags: HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -957,6 +961,13 @@ pub fn run() {
             sync_project_workspace,
             close_project,
             path_is_file,
+            path_is_directory,
+            list_media_link_files,
+            probe_media_link_files,
+            list_media_browser_directory,
+            media_browser_icon,
+            media_browser_frame,
+            list_media_browser_roots,
             resolve_known_folder,
             load_workspace_config,
             save_workspace_config,

@@ -458,6 +458,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
           filePath,
           kind: item.kind,
           mediaStartUs: item.start_time_us,
+          tapeName: project?.asset.tape_name ?? undefined,
         };
       });
   }, [linkDialog, mediaItems, projects]);

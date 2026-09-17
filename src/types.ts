@@ -10,6 +10,7 @@ export interface MediaAsset {
   fingerprint: string;
   duration_us: number;
   start_time_us: number;
+  tape_name: string | null;
   video_stream_index: number | null;
   audio_stream_index: number | null;
 }

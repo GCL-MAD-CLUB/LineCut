@@ -152,7 +152,10 @@ export const userGuideOperationGroups = [
     area: "导入",
     guide: "media/import-organize.md",
     heading: "## 导入媒体",
-    sources: ["src/components/ImportWorkspace/ImportWorkspace.tsx"],
+    sources: [
+      "src/components/ImportWorkspace/ImportWorkspace.tsx",
+      "src/components/MediaBrowserDialog/MediaBrowserDialog.tsx",
+    ],
     operations: [
       ["add-videos", "添加多个视频", "添加视频"],
       ["add-audio", "添加多个音频", "添加音频"],
@@ -246,7 +249,10 @@ export const userGuideOperationGroups = [
     area: "离线媒体",
     guide: "media/offline-proxies.md",
     heading: "## 脱机、替换和重新链接",
-    sources: ["src/components/MediaLinkDialog/MediaLinkDialog.tsx"],
+    sources: [
+      "src/components/MediaLinkDialog/MediaLinkDialog.tsx",
+      "src/components/MediaBrowserDialog/MediaBrowserDialog.tsx",
+    ],
     operations: [
       ["make-offline", "手动设为脱机", "### 手动设为脱机"],
       ["link-offline-media", "附加文件重新链接", "点击**附加**"],
@@ -257,9 +263,9 @@ export const userGuideOperationGroups = [
       ["auto-relink", "自动重新链接同目录媒体", "自动重新链接其他媒体"],
       ["match-file-name", "按文件名匹配", "文件名"],
       ["match-extension", "按扩展名匹配", "文件扩展名"],
-      ["reserved-match-media-start", "识别媒体开始匹配限制", "媒体开始"],
-      ["reserved-match-tape", "识别磁带名称匹配限制", "磁带名称"],
-      ["media-browser-toggle", "理解使用媒体浏览器开关的当前效果", "使用媒体浏览器附加文件"],
+      ["match-media-start", "按媒体开始时间匹配", "媒体开始"],
+      ["match-tape", "按磁带名称匹配", "磁带名称"],
+      ["media-browser-toggle", "切换媒体浏览器或系统选择器", "使用媒体浏览器附加文件"],
       ["replace-online-media", "替换单个在线素材", "### 替换素材"],
     ],
   },
