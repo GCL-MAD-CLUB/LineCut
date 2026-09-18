@@ -210,9 +210,6 @@ export function ImportSettingsPanel({
                 onChange={(value) => update({ autoBindPreference: value })}
               />
             </div>
-            <p className="import-setting-note">
-              智能推断会优先比较名称，并使用媒体开始时间和持续时间辅助匹配。
-            </p>
           </fieldset>
         )}
       </section>

@@ -95,6 +95,8 @@
   color: #eee;
 }
 .import-location.is-favorite svg {
+  width: 16px;
+  height: 16px;
   fill: currentColor;
   stroke: currentColor;
 }
@@ -150,9 +152,13 @@
   margin-left: 4px;
   color: #969696 !important;
 }
+.import-favorite-button:hover {
+  color: #eee !important;
+  background: none !important;
+}
 .import-favorite-button svg {
-  width: 22px;
-  height: 22px;
+  width: 18px;
+  height: 18px;
 }
 .import-favorite-button.is-favorite {
   color: #d2d2d2 !important;
