@@ -17,6 +17,17 @@ pub(crate) struct WorkspaceConfig {
     /// room for additional state kinds later.
     #[serde(default)]
     pub(crate) project_states: HashMap<String, ProjectStateConfig>,
+    #[serde(rename = "importBrowser", default)]
+    pub(crate) import_browser: ImportBrowserConfig,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ImportBrowserConfig {
+    #[serde(default)]
+    pub(crate) favorites: Vec<String>,
+    #[serde(default)]
+    pub(crate) last_directory: Option<String>,
 }
 
 /// Fixed template for the state associated with one project id. Only
@@ -79,6 +90,26 @@ struct WorkspaceConfigXml {
     layout: LayoutNodeXml,
     #[serde(rename = "ProjectStates", default)]
     project_states: WorkspaceProjectStatesXml,
+    #[serde(rename = "ImportBrowser", default)]
+    import_browser: WorkspaceImportBrowserXml,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct WorkspaceImportBrowserXml {
+    #[serde(
+        rename = "@lastDirectory",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    last_directory: Option<String>,
+    #[serde(rename = "Favorite", default)]
+    favorites: Vec<WorkspaceImportFavoriteXml>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorkspaceImportFavoriteXml {
+    #[serde(rename = "@path")]
+    path: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -176,6 +207,16 @@ impl WorkspaceConfig {
             layout,
             project_states: WorkspaceProjectStatesXml {
                 project_state: project_states,
+            },
+            import_browser: WorkspaceImportBrowserXml {
+                last_directory: non_empty_string(self.import_browser.last_directory),
+                favorites: self
+                    .import_browser
+                    .favorites
+                    .into_iter()
+                    .filter(|path| !path.trim().is_empty())
+                    .map(|path| WorkspaceImportFavoriteXml { path })
+                    .collect(),
             },
         })
     }
@@ -306,6 +347,16 @@ impl WorkspaceConfigXml {
             instances,
             layout: DockLayoutState { root, areas },
             project_states,
+            import_browser: ImportBrowserConfig {
+                favorites: self
+                    .import_browser
+                    .favorites
+                    .into_iter()
+                    .map(|favorite| favorite.path)
+                    .filter(|path| !path.trim().is_empty())
+                    .collect(),
+                last_directory: non_empty_string(self.import_browser.last_directory),
+            },
         };
         config.validate()?;
         Ok(config)
@@ -500,6 +551,7 @@ fn default_workspace_config() -> WorkspaceConfig {
             )]),
         },
         project_states: HashMap::new(),
+        import_browser: ImportBrowserConfig::default(),
     }
 }
 
@@ -599,8 +651,50 @@ pub(crate) fn save_workspace_config(
         instances: config.instances,
         layout: config.layout,
         project_states: existing.project_states,
+        import_browser: existing.import_browser,
     };
     write_workspace_config(&merged)
+}
+
+#[tauri::command]
+pub(crate) fn load_import_browser_config(
+    state: tauri::State<'_, AppState>,
+) -> CommandResult<ImportBrowserConfig> {
+    let _guard = workspace_config_guard(&state)?;
+    Ok(read_workspace_config()?.import_browser)
+}
+
+#[tauri::command]
+pub(crate) fn save_import_browser_favorites(
+    favorites: Vec<String>,
+    state: tauri::State<'_, AppState>,
+) -> CommandResult<()> {
+    let _guard = workspace_config_guard(&state)?;
+    let mut config = read_workspace_config()?;
+    let mut seen = HashSet::new();
+    config.import_browser.favorites = favorites
+        .into_iter()
+        .filter(|path| !path.trim().is_empty())
+        .filter(|path| {
+            #[cfg(windows)]
+            let key = path.to_lowercase();
+            #[cfg(not(windows))]
+            let key = path.clone();
+            seen.insert(key)
+        })
+        .collect();
+    write_workspace_config(&config)
+}
+
+#[tauri::command]
+pub(crate) fn save_import_browser_last_directory(
+    directory: String,
+    state: tauri::State<'_, AppState>,
+) -> CommandResult<()> {
+    let _guard = workspace_config_guard(&state)?;
+    let mut config = read_workspace_config()?;
+    config.import_browser.last_directory = non_empty_string(Some(directory));
+    write_workspace_config(&config)
 }
 
 /// Loads every persisted per-project state, keyed by project document id.
@@ -658,6 +752,10 @@ mod tests {
     fn sample_config() -> WorkspaceConfig {
         WorkspaceConfig {
             project_states: HashMap::new(),
+            import_browser: ImportBrowserConfig {
+                favorites: vec![r"D:\Media".to_string(), r"D:\Projects\Shots".to_string()],
+                last_directory: Some(r"D:\Projects\Shots".to_string()),
+            },
             focused_panel_id: Some("history".to_string()),
             instances: vec![
                 WorkspaceInstance {
@@ -719,6 +817,7 @@ mod tests {
     fn empty_workspace_config_xml_round_trips() {
         let config = WorkspaceConfig {
             project_states: HashMap::new(),
+            import_browser: ImportBrowserConfig::default(),
             focused_panel_id: None,
             instances: Vec::new(),
             layout: DockLayoutState {
@@ -862,6 +961,21 @@ mod tests {
             .into_json()
             .unwrap();
         assert!(restored.project_states.is_empty());
+        assert_eq!(restored, config);
+    }
+
+    #[test]
+    fn legacy_config_without_import_browser_state_loads_empty() {
+        let mut config = sample_config();
+        let xml = quick_xml::se::to_string(&config.clone().into_xml().unwrap()).unwrap();
+        let start = xml.find("<ImportBrowser").unwrap();
+        let end = xml[start..].find("</ImportBrowser>").unwrap() + start + "</ImportBrowser>".len();
+        let xml = format!("{}{}", &xml[..start], &xml[end..]);
+        config.import_browser = ImportBrowserConfig::default();
+        let restored = quick_xml::de::from_str::<WorkspaceConfigXml>(&xml)
+            .unwrap()
+            .into_json()
+            .unwrap();
         assert_eq!(restored, config);
     }
 }

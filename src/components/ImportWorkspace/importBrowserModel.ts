@@ -33,6 +33,10 @@ export interface ImportSettings {
   verify: boolean;
   destination: "project" | "custom";
   customDirectory: string;
+  autoBind: boolean;
+  autoBindType: "all" | "audio" | "subtitle";
+  autoBindPreset: "direct" | "virtual-copy";
+  autoBindPreference: "smart" | "name";
 }
 const extensions: Record<ImportMediaKind, string[]> = {
   video: ["mkv", "mp4", "mov", "webm", "avi", "ts", "m2ts", "mts", "mpeg", "mpg", "m4v"],

@@ -19,6 +19,7 @@ export function ImportSettingsPanel({
 }) {
   const [organizeOpen, setOrganizeOpen] = useState(true);
   const [copyOpen, setCopyOpen] = useState(true);
+  const [autoBindOpen, setAutoBindOpen] = useState(true);
   function update(patch: Partial<ImportSettings>) {
     onChange({ ...settings, ...patch });
   }
@@ -94,7 +95,7 @@ export function ImportSettingsPanel({
                 ariaLabel="复制预设"
                 disabled={disabled || !settings.copy}
                 value={settings.verify ? "verify" : "copy"}
-                items={selectDropdownItems([
+                items={selectDropdownItems<"verify" | "copy">([
                   ["verify", "复制并进行 MD5 校验"],
                   ["copy", "复制且不校验"],
                 ])}
@@ -110,7 +111,7 @@ export function ImportSettingsPanel({
                 ariaLabel="复制文件的目标"
                 disabled={disabled || !settings.copy}
                 value={settings.destination}
-                items={selectDropdownItems([
+                items={selectDropdownItems<ImportSettings["destination"]>([
                   ["project", "与项目相同"],
                   ["custom", "选择文件夹…"],
                 ])}
@@ -135,6 +136,83 @@ export function ImportSettingsPanel({
                 </p>
               )
             )}
+          </fieldset>
+        )}
+      </section>
+      <section>
+        <div className="import-settings-heading-row">
+          <button
+            className="import-settings-heading"
+            aria-expanded={autoBindOpen}
+            onClick={() => setAutoBindOpen(!autoBindOpen)}
+          >
+            {autoBindOpen ? <ChevronDown /> : <ChevronRight />}自动绑定
+          </button>
+          <button
+            className="import-switch"
+            role="switch"
+            aria-label="自动绑定"
+            aria-checked={settings.autoBind}
+            disabled={disabled}
+            onClick={() => update({ autoBind: !settings.autoBind })}
+          >
+            <span />
+          </button>
+        </div>
+        {autoBindOpen && (
+          <fieldset className="import-settings-body" disabled={disabled || !settings.autoBind}>
+            <div className="import-field">
+              类型
+              <SelectDropdown
+                menuClassName="import-select-dropdown-menu"
+                menuMinWidth={105}
+                menuWidth="content"
+                ariaLabel="自动绑定类型"
+                disabled={disabled || !settings.autoBind}
+                value={settings.autoBindType}
+                items={selectDropdownItems<ImportSettings["autoBindType"]>([
+                  ["all", "所有支持的文件"],
+                  ["audio", "仅音频"],
+                  ["subtitle", "仅字幕"],
+                ])}
+                onChange={(value) => update({ autoBindType: value })}
+              />
+            </div>
+            <div className="import-field">
+              预设
+              <SelectDropdown
+                menuClassName="import-select-dropdown-menu"
+                menuMinWidth={105}
+                menuWidth="content"
+                ariaLabel="自动绑定预设"
+                disabled={disabled || !settings.autoBind}
+                value={settings.autoBindPreset}
+                items={selectDropdownItems<ImportSettings["autoBindPreset"]>([
+                  ["direct", "直接作为绑定项"],
+                  ["virtual-copy", "虚拟复制后作为绑定项"],
+                ])}
+                onChange={(value) => update({ autoBindPreset: value })}
+              />
+            </div>
+            <div className="import-field">
+              绑定首选项
+              <SelectDropdown
+                menuClassName="import-select-dropdown-menu"
+                menuMinWidth={105}
+                menuWidth="content"
+                ariaLabel="自动绑定首选项"
+                disabled={disabled || !settings.autoBind}
+                value={settings.autoBindPreference}
+                items={selectDropdownItems<ImportSettings["autoBindPreference"]>([
+                  ["smart", "智能推断绑定"],
+                  ["name", "按名称匹配绑定"],
+                ])}
+                onChange={(value) => update({ autoBindPreference: value })}
+              />
+            </div>
+            <p className="import-setting-note">
+              智能推断会优先比较名称，并使用媒体开始时间和持续时间辅助匹配。
+            </p>
           </fieldset>
         )}
       </section>

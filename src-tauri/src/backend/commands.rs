@@ -1051,7 +1051,7 @@ pub(crate) async fn add_external_subtitles(
     state: tauri::State<'_, AppState>,
 ) -> CommandResult<AddExternalSubtitlesResult> {
     let task = register_task(&task_id, state.inner())?;
-    let mut project = project_clone(&asset_id, &state)?;
+    project_clone(&asset_id, &state)?;
     let mut new_tracks = Vec::new();
     let mut new_cues: HashMap<String, Vec<SubtitleCue>> = HashMap::new();
     let mut warnings = Vec::new();
@@ -1068,23 +1068,35 @@ pub(crate) async fn add_external_subtitles(
         if !cues.is_empty() {
             new_cues.insert(track.id.clone(), cues);
         }
-        project.tracks.push(track.clone());
         new_tracks.push(track);
         emit_ffmpeg_progress(&app, &task_id, (index + 1) as f64 * 0.9 / path_total as f64);
     }
 
-    project.cues.extend(new_cues.clone());
     task.check_cancelled()?;
-    state
-        .projects
-        .lock()
-        .map_err(|_| {
+    {
+        let mut projects = state.projects.lock().map_err(|_| {
             app_error(
                 ErrorCode::ProjectStateUnavailable,
                 "Project state lock is poisoned",
             )
-        })?
-        .insert(asset_id, project);
+        })?;
+        let current = projects.get_mut(&asset_id).ok_or_else(|| {
+            app_error(
+                ErrorCode::ProjectNotLoaded,
+                format!("Project is not loaded for media asset: {asset_id}"),
+            )
+        })?;
+        for track in &new_tracks {
+            if !current
+                .tracks
+                .iter()
+                .any(|existing| existing.id == track.id)
+            {
+                current.tracks.push(track.clone());
+            }
+        }
+        current.cues.extend(new_cues.clone());
+    }
 
     emit_ffmpeg_progress(&app, &task_id, 1.0);
     Ok(AddExternalSubtitlesResult {

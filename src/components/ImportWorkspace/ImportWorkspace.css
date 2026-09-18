@@ -94,6 +94,10 @@
   background: #303030;
   color: #eee;
 }
+.import-location.is-favorite svg {
+  fill: currentColor;
+  stroke: currentColor;
+}
 .import-browser-main {
   display: flex;
   flex-direction: column;
@@ -141,6 +145,17 @@
 }
 .import-path nav button[aria-current] {
   color: #eee;
+}
+.import-favorite-button {
+  margin-left: 4px;
+  color: #969696 !important;
+}
+.import-favorite-button svg {
+  width: 22px;
+  height: 22px;
+}
+.import-favorite-button.is-favorite {
+  color: #d2d2d2 !important;
 }
 .import-toolbar-dropdown.import-path-dropdown .select-dropdown-trigger svg {
   width: 32px;

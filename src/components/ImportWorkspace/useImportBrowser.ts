@@ -3,13 +3,20 @@ import { invokeCommand, runOperation } from "../../errors";
 import { isTauriRuntime } from "../../tauriRuntime";
 import {
   mediaKind,
+  pathKey,
   type ImportDirectory,
   type ImportFilter,
   type ImportLocation,
 } from "./importBrowserModel";
+import {
+  loadImportBrowserConfig,
+  saveImportBrowserFavorites,
+  saveImportBrowserLastDirectory,
+} from "./importBrowserConfig";
 
 export function useImportBrowser() {
   const [locations, setLocations] = useState<ImportLocation[]>([]);
+  const [favorites, setFavorites] = useState<string[]>([]);
   const [listing, setListing] = useState<ImportDirectory | null>(null);
   const [loading, setLoading] = useState(isTauriRuntime());
   const [error, setError] = useState("");
@@ -19,34 +26,64 @@ export function useImportBrowser() {
   const [sort, setSort] = useState<"name" | "created">("name");
   const [descending, setDescending] = useState(false);
   const request = useRef(0);
+  const favoritesRef = useRef<string[]>([]);
   const navigate = useCallback(async (directory: string) => {
-    if (!directory || !isTauriRuntime()) return;
+    if (!directory || !isTauriRuntime()) return false;
     const id = ++request.current;
     setLoading(true);
     setError("");
     const outcome = await runOperation("media.import", () =>
       invokeCommand<ImportDirectory>("list_import_directory", { directory }),
     );
-    if (id !== request.current) return;
+    if (id !== request.current) return false;
     setLoading(false);
     if (outcome.status === "success") {
       setListing(outcome.value);
       setQuery("");
-    } else setError("无法读取此文件夹，请检查路径和访问权限后重试。");
+      void saveImportBrowserLastDirectory(outcome.value.directory);
+      return true;
+    }
+    setError("无法读取此文件夹，请检查路径和访问权限后重试。");
+    return false;
+  }, []);
+  const toggleFavorite = useCallback((directory: string) => {
+    if (!directory) return;
+    const key = pathKey(directory);
+    const exists = favoritesRef.current.some((path) => pathKey(path) === key);
+    const next = exists
+      ? favoritesRef.current.filter((path) => pathKey(path) !== key)
+      : [...favoritesRef.current, directory];
+    favoritesRef.current = next;
+    setFavorites(next);
+    void saveImportBrowserFavorites(next);
   }, []);
   useEffect(() => {
     let live = true;
     if (isTauriRuntime())
       void (async () => {
-        const result = await runOperation("media.import", () =>
-          invokeCommand<ImportLocation[]>("list_import_locations"),
-        );
+        const [result, config] = await Promise.all([
+          runOperation("media.import", () =>
+            invokeCommand<ImportLocation[]>("list_import_locations"),
+          ),
+          loadImportBrowserConfig(),
+        ]);
         if (!live) return;
+        const seen = new Set<string>();
+        const restoredFavorites = config.favorites.filter((path) => {
+          const key = pathKey(path);
+          if (!key || seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+        favoritesRef.current = restoredFavorites;
+        setFavorites(restoredFavorites);
         if (result.status === "success") {
           setLocations(result.value);
           const first = result.value[0];
-          if (first) await navigate(first.path);
-          else setLoading(false);
+          const restored = config.lastDirectory ? await navigate(config.lastDirectory) : false;
+          if (!live) return;
+          if (!restored && first) await navigate(first.path);
+          else if (!restored) setLoading(false);
         } else {
           setError("无法读取本地位置。");
           setLoading(false);
@@ -78,11 +115,13 @@ export function useImportBrowser() {
   }, [listing, query, filter, showHidden, sort, descending]);
   return {
     locations,
+    favorites,
     listing,
     entries,
     loading,
     error,
     navigate,
+    toggleFavorite,
     query,
     setQuery,
     filter,

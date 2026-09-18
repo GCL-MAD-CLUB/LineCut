@@ -10,6 +10,12 @@ import {
   pathKey,
 } from "../src/components/ImportWorkspace/importBrowserModel.ts";
 import { mergeMediaAnalysis } from "../src/systems/ProjectSystem/mediaAnalysisMerge.ts";
+import {
+  createVirtualBindingCopy,
+  inferMediaAutoBindings,
+  mediaNameMatchScore,
+  prepareMediaAutoBindings,
+} from "../src/mediaAutoBinding.ts";
 
 // Resolve the dependency for Node's type-stripping runner without changing Vite imports.
 const scannerSource = readFileSync(
@@ -198,4 +204,84 @@ test("analysis cannot apply to relinked or replaced media", () => {
 test("repeated analysis results do not duplicate tracks or reset user cues", () => {
   const first = mergeMediaAnalysis(current, analyzed);
   assert.equal(mergeMediaAnalysis(first, analyzed), first);
+});
+
+const bindingItem = (id, kind, fileName, startTimeUs, durationUs) => ({
+  id,
+  bin_id: null,
+  kind,
+  enabled: true,
+  hidden: false,
+  offline: false,
+  path: `D:/media/${fileName}`,
+  file_name: fileName,
+  duration_us: durationUs,
+  start_time_us: startTimeUs,
+  bound_to_video_id: null,
+  source_video_id: null,
+  stream_index: 0,
+  subtitle_track_id: null,
+  codec: null,
+  language: null,
+  extracted: false,
+  origin: "imported",
+  color: "#000",
+});
+
+test("auto binding treats common audio and subtitle suffixes as the same media name", () => {
+  assert.ok(mediaNameMatchScore("Episode 01.mp4", "Episode 01_audio.wav") >= 0.98);
+  assert.ok(mediaNameMatchScore("旅行-03.mkv", "旅行-03 字幕.ass") >= 0.98);
+});
+
+test("smart binding uses time to disambiguate equally named videos", () => {
+  const early = bindingItem("video-a", "video", "camera.mp4", 0, 60_000_000);
+  const late = bindingItem("video-b", "video", "camera.mov", 80_000_000, 40_000_000);
+  const audio = bindingItem("audio", "audio", "camera_audio.wav", 79_000_000, 40_500_000);
+  assert.deepEqual(
+    inferMediaAutoBindings([early, late, audio], "all", "smart")[0].videoId,
+    "video-b",
+  );
+  assert.deepEqual(
+    inferMediaAutoBindings([early, late, audio], "all", "name")[0].videoId,
+    "video-a",
+  );
+});
+
+test("auto binding respects type filters and rejects unrelated names", () => {
+  const video = bindingItem("video", "video", "scene-20.mp4", 0, 10_000_000);
+  const audio = bindingItem("audio", "audio", "totally-different.wav", 0, 10_000_000);
+  const subtitle = bindingItem("subtitle", "subtitle", "scene-20.ass", 0, 0);
+  assert.deepEqual(inferMediaAutoBindings([video, audio, subtitle], "audio", "smart"), []);
+  assert.deepEqual(
+    inferMediaAutoBindings([video, audio, subtitle], "subtitle", "name").map((pair) => pair.itemId),
+    ["subtitle"],
+  );
+});
+
+test("auto binding does not cross episode numbers or use imported images as targets", () => {
+  assert.ok(mediaNameMatchScore("episode-01.wav", "episode-02.mp4") < 0.72);
+  const image = bindingItem("image", "video", "episode-01.png", 0, 10_000_000);
+  const audio = bindingItem("audio", "audio", "episode-01.wav", 0, 10_000_000);
+  assert.deepEqual(inferMediaAutoBindings([image, audio], "all", "smart"), []);
+});
+
+test("virtual binding copies preserve the source and start unbound", () => {
+  const source = bindingItem("audio", "audio", "scene.wav", 0, 10_000_000);
+  const copy = createVirtualBindingCopy(source);
+  assert.match(copy.id, /^media-copy:/);
+  assert.equal(copy.source_video_id, source.id);
+  assert.equal(copy.bound_to_video_id, null);
+  assert.equal(source.source_video_id, null);
+  assert.equal(source.bound_to_video_id, null);
+});
+
+test("virtual-copy binding plans keep originals and bind only generated references", () => {
+  const video = bindingItem("video", "video", "scene.mp4", 0, 10_000_000);
+  const audio = bindingItem("audio", "audio", "scene_audio.wav", 0, 10_000_000);
+  const prepared = prepareMediaAutoBindings([video, audio], "all", "virtual-copy", "smart");
+  assert.equal(prepared.copies.length, 1);
+  assert.equal(prepared.bindings[0].videoId, video.id);
+  assert.equal(prepared.bindings[0].itemId, prepared.copies[0].id);
+  assert.notEqual(prepared.bindings[0].itemId, audio.id);
+  assert.equal(audio.bound_to_video_id, null);
 });

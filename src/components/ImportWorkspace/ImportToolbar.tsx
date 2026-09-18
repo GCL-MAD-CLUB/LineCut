@@ -1,8 +1,18 @@
-import { ArrowUpDown, ChevronRight, Eye, Filter, Grid3X3, List, Search, X } from "lucide-react";
+import {
+  ArrowUpDown,
+  ChevronRight,
+  Eye,
+  Filter,
+  Grid3X3,
+  List,
+  Search,
+  Star,
+  X,
+} from "lucide-react";
 import { SelectDropdown, selectDropdownItems, type SelectDropdownItem } from "../SelectDropdown";
 import { ImportFolderChevronIcon } from "./ImportFolderIcon";
 import { ImportZoomControl } from "./ImportZoomControl";
-import { breadcrumbs, type ImportFilter } from "./importBrowserModel";
+import { breadcrumbs, pathKey, type ImportFilter } from "./importBrowserModel";
 import type { useImportBrowser } from "./useImportBrowser";
 
 type ImportSortMenuValue =
@@ -39,6 +49,7 @@ export function ImportToolbar({
 }) {
   const parts = breadcrumbs(browser.listing?.directory ?? "");
   const currentPath = browser.listing?.directory ?? "";
+  const currentFavorite = browser.favorites.some((path) => pathKey(path) === pathKey(currentPath));
   const sortValue: ImportSortMenuValue = `sort:${browser.sort}`;
   const directionValue: ImportSortMenuValue = browser.descending
     ? "direction:descending"
@@ -80,6 +91,16 @@ export function ImportToolbar({
             </span>
           ))}
         </nav>
+        <button
+          className={`import-icon-button import-favorite-button ${currentFavorite ? "is-favorite" : ""}`}
+          title={currentFavorite ? "从收藏夹移除" : "收藏位置"}
+          aria-label={currentFavorite ? "从收藏夹移除" : "收藏位置"}
+          aria-pressed={currentFavorite}
+          disabled={!currentPath}
+          onClick={() => browser.toggleFavorite(currentPath)}
+        >
+          <Star fill={currentFavorite ? "currentColor" : "none"} />
+        </button>
       </div>
       <div className="import-toolbar-controls">
         <ImportZoomControl value={zoom} onChange={onZoom} />

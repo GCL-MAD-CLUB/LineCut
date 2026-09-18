@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { scheduleMediaAnalysis } from "../../mediaAnalysisTask";
+import { scheduleMediaAutoBinding } from "../../mediaAutoBindTask";
 import { defaultMediaBinFolderColor, useProjectPort } from "../../systems/ProjectSystem";
 import { isTauriRuntime } from "../../tauriRuntime";
 import { ImportSidebar } from "./ImportSidebar";
@@ -39,6 +40,10 @@ export function ImportWorkspace({ onImportCompleted, onCancel }: ImportWorkspace
     verify: true,
     destination: "project",
     customDirectory: "",
+    autoBind: false,
+    autoBindType: "all",
+    autoBindPreset: "direct",
+    autoBindPreference: "smart",
   });
   const {
     mediaItems,
@@ -49,6 +54,9 @@ export function ImportWorkspace({ onImportCompleted, onCancel }: ImportWorkspace
     mediaItemsAdded,
     mediaFolderAdded,
     mediaItemsMovedToFolder,
+    mediaItemsBound,
+    subtitleTracksAddedToVideo,
+    warningsAppended,
     messagePublished,
   } = useProjectPort(
     ["mediaItems", "mediaFolders", "mediaBinReadOnly", "projectFilePath"],
@@ -57,6 +65,9 @@ export function ImportWorkspace({ onImportCompleted, onCancel }: ImportWorkspace
       "mediaItemsAdded",
       "mediaFolderAdded",
       "mediaItemsMovedToFolder",
+      "mediaItemsBound",
+      "subtitleTracksAddedToVideo",
+      "warningsAppended",
       "messagePublished",
     ],
   );
@@ -134,6 +145,24 @@ export function ImportWorkspace({ onImportCompleted, onCancel }: ImportWorkspace
             ],
             folderId,
           );
+        if (settings.autoBind) {
+          scheduleMediaAutoBinding({
+            importedItemIds: [
+              ...results.map((result) => result.project.asset.id),
+              ...subtitles.map((item) => item.id),
+            ],
+            type: settings.autoBindType,
+            preset: settings.autoBindPreset,
+            preference: settings.autoBindPreference,
+            actions: {
+              mediaItemsAdded,
+              mediaItemsBound,
+              subtitleTracksAddedToVideo,
+              warningsAppended,
+              messagePublished,
+            },
+          });
+        }
         scheduleMediaAnalysis(results);
       }
       const remaining = selection.files.filter((entry) => !completed.has(entry.path));
@@ -152,6 +181,7 @@ export function ImportWorkspace({ onImportCompleted, onCancel }: ImportWorkspace
       <div className="import-workspace-content" inert={busy}>
         <ImportSidebar
           locations={browser.locations}
+          favorites={browser.favorites}
           directory={browser.listing?.directory ?? ""}
           onNavigate={(path) => void browser.navigate(path)}
         />
