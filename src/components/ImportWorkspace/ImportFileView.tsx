@@ -1,5 +1,6 @@
 import { useState, type CSSProperties } from "react";
 import { ImportMediaVisual } from "./ImportMediaVisual";
+import { importZoomRange } from "./ImportZoomControl";
 import {
   fileExtension,
   formatDuration,
@@ -114,6 +115,20 @@ function ImportFile({
     </div>
   );
 }
+/** List rows interpolate between these heights across the zoom range. */
+const listRowHeightMin = 31;
+const listRowHeightMax = 104;
+/** The list thumbnail is a square standing at 95% of the row height. */
+const listThumbHeightRatio = 0.95;
+/** The list row's 1px bottom border, from the list CSS. */
+const listRowBorder = 1;
+/** Name line (20px) + caption gap (12px) + type line (18px), from the list CSS. */
+const listCaptionTwoLineHeight = 50;
+/** The square takes 95% of the row, so a two-line caption needs a row this tall
+    to sit beside it without stretching the row. Below it the caption folds into
+    a single line — every zoom step up to 170. */
+const listCompactRowHeight = Math.ceil(listCaptionTwoLineHeight / listThumbHeightRatio);
+
 export function ImportFileView({
   entries,
   selected,
@@ -141,13 +156,24 @@ export function ImportFileView({
   onNavigate: (path: string) => void;
   onSelectAll: () => void;
 }) {
+  const zoomRatio = (zoom - importZoomRange.min) / (importZoomRange.max - importZoomRange.min);
+  const rowHeight = Math.round(
+    listRowHeightMin + zoomRatio * (listRowHeightMax - listRowHeightMin),
+  );
+  const thumbSize = Math.round(rowHeight * listThumbHeightRatio);
+  /** What the square leaves of the row, split evenly as the row's vertical padding. */
+  const rowPadding = Math.max(0, (rowHeight - thumbSize - listRowBorder) / 2);
+  const compactCaption = view === "list" && rowHeight < listCompactRowHeight;
   return (
     <div
-      className={`import-file-view is-${view}`}
+      className={`import-file-view is-${view} ${compactCaption ? "is-compact" : ""}`}
       style={
         {
           "--import-card-size": `${zoom}px`,
-          "--import-row-height": `${Math.round(zoom * 0.52)}px`,
+          "--import-row-height": `${rowHeight}px`,
+          "--import-row-padding": `${rowPadding}px`,
+          "--import-thumb-width": `${thumbSize}px`,
+          "--import-thumb-height": `${thumbSize}px`,
         } as CSSProperties
       }
       tabIndex={0}

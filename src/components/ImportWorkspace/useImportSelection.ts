@@ -89,12 +89,17 @@ export function useImportSelection(imported: Set<string>) {
       if (item.entry.is_directory) scan(item.entry);
     });
   }
+  function removeMany(paths: string[]) {
+    const keys = new Set(paths.map(pathKey));
+    keys.forEach((key) => {
+      jobs.current.get(key)?.abort();
+      jobs.current.delete(key);
+      entries.current.delete(key);
+    });
+    setItems((current) => current.filter((item) => !keys.has(pathKey(item.entry.path))));
+  }
   function remove(path: string) {
-    const key = pathKey(path);
-    jobs.current.get(key)?.abort();
-    jobs.current.delete(key);
-    entries.current.delete(key);
-    setItems((current) => current.filter((item) => pathKey(item.entry.path) !== key));
+    removeMany([path]);
   }
   function clear() {
     jobs.current.forEach((job) => job.abort());
@@ -128,6 +133,7 @@ export function useImportSelection(imported: Set<string>) {
     hasErrors: items.some((item) => item.unreadable.length > 0),
     add,
     remove,
+    removeMany,
     clear,
     toggle,
     retry,

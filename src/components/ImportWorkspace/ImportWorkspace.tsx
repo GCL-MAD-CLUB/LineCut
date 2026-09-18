@@ -192,10 +192,9 @@ export function ImportWorkspace({ onImportCompleted, onCancel }: ImportWorkspace
         busy={busy}
         canImport={canImport}
         status={status}
-        onRemove={selection.remove}
+        onRemoveMany={selection.removeMany}
         onClear={selection.clear}
         onRetry={selection.retry}
-        onSelectAll={() => addEntries(browser.entries)}
         onNavigate={(path) => void browser.navigate(path)}
         onCancel={() => {
           selection.clear();

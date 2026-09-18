@@ -1,12 +1,13 @@
 ﻿import { Info } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { PopupMenuItem } from "../PopupMenu";
 import { ImportMenu } from "./ImportMenu";
 import { ImportMediaVisual } from "./ImportMediaVisual";
-import { parentDirectory } from "./importBrowserModel";
+import { parentDirectory, pathKey } from "./importBrowserModel";
 import type { ImportSelectionItem } from "./importFolderScan";
 import { ImportFolderBadge } from "./ImportFolderBadge";
+import { useImportTraySelection } from "./useImportTraySelection";
 
 export function ImportSelectionBar({
   items,
@@ -15,10 +16,9 @@ export function ImportSelectionBar({
   busy,
   canImport,
   status,
-  onRemove,
+  onRemoveMany,
   onClear,
   onRetry,
-  onSelectAll,
   onNavigate,
   onCancel,
   onImport,
@@ -29,16 +29,44 @@ export function ImportSelectionBar({
   busy: boolean;
   canImport: boolean;
   status: string;
-  onRemove: (path: string) => void;
+  onRemoveMany: (paths: string[]) => void;
   onClear: () => void;
   onRetry: (path: string) => void;
-  onSelectAll: () => void;
   onNavigate: (path: string) => void;
   onCancel: () => void;
   onImport: () => void;
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number; path: string } | null>(null);
   const [tooltip, setTooltip] = useState<{ path: string; x: number; y: number } | null>(null);
+  const [itemsScrolling, setItemsScrolling] = useState(false);
+  const itemsRef = useRef<HTMLDivElement | null>(null);
+  const traySelection = useImportTraySelection(items);
+  useEffect(() => {
+    const host = itemsRef.current;
+    if (!host) return;
+    let frame: number | null = null;
+    const measure = () => {
+      frame = null;
+      const styles = getComputedStyle(host);
+      // Both tokens are fixed, unlike the live column-gap the shrunk state
+      // raises, so the answer cannot depend on the state it controls.
+      const size = Number.parseFloat(styles.getPropertyValue("--import-selection-size"));
+      const gap = Number.parseFloat(styles.getPropertyValue("--import-selection-gap"));
+      const needed = items.length * size + Math.max(items.length - 1, 0) * gap;
+      const scrolling = needed > host.clientWidth || host.scrollWidth > host.clientWidth;
+      setItemsScrolling((current) => (current === scrolling ? current : scrolling));
+    };
+    const schedule = () => {
+      if (frame === null) frame = window.requestAnimationFrame(measure);
+    };
+    const observer = new ResizeObserver(schedule);
+    observer.observe(host);
+    schedule();
+    return () => {
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [items.length]);
   function select(action: () => void) {
     action();
     setMenu(null);
@@ -47,12 +75,24 @@ export function ImportSelectionBar({
     <footer className="import-selection-bar">
       {items.length ? (
         <>
-          <div className="import-selection-items" aria-label="待导入媒体">
+          <div
+            ref={itemsRef}
+            className={`import-selection-items ${itemsScrolling ? "is-scrolling" : ""}`}
+            aria-label="待导入媒体"
+          >
             {items.map(({ entry, files, scanning: folderScanning, unreadable }) => (
               <button
-                className={`import-selection-item ${entry.is_directory ? "is-folder" : ""}`}
+                className={`import-selection-item ${entry.is_directory ? "is-folder" : ""} ${traySelection.selected.has(pathKey(entry.path)) ? "selected" : ""}`}
                 key={entry.path}
                 aria-label={entry.name}
+                aria-pressed={traySelection.selected.has(pathKey(entry.path))}
+                onClick={(event) => {
+                  if (busy) return;
+                  traySelection.select(entry.path, {
+                    range: event.shiftKey,
+                    toggle: event.ctrlKey || event.metaKey,
+                  });
+                }}
                 onPointerEnter={(event) => {
                   const rect = event.currentTarget.getBoundingClientRect();
                   setTooltip({
@@ -70,10 +110,19 @@ export function ImportSelectionBar({
                 onContextMenu={(event) => {
                   event.preventDefault();
                   setTooltip(null);
-                  if (!busy) setMenu({ path: entry.path, x: event.clientX, y: event.clientY });
+                  if (!busy) {
+                    traySelection.selectForContextMenu(entry.path);
+                    setMenu({ path: entry.path, x: event.clientX, y: event.clientY });
+                  }
                 }}
                 onKeyDown={(event) => {
-                  if (event.key === "Delete" && !busy) onRemove(entry.path);
+                  if (event.key === "Delete" && !busy) {
+                    event.preventDefault();
+                    const paths = traySelection.selected.has(pathKey(entry.path))
+                      ? traySelection.selectedPaths
+                      : [entry.path];
+                    onRemoveMany(paths);
+                  }
                 }}
               >
                 {entry.is_directory ? (
@@ -132,9 +181,25 @@ export function ImportSelectionBar({
               重新扫描文件夹
             </PopupMenuItem>
           )}
-          <PopupMenuItem onSelect={() => select(() => onRemove(menu.path))}>清除</PopupMenuItem>
-          <PopupMenuItem onSelect={() => select(onClear)}>清除全部</PopupMenuItem>
-          <PopupMenuItem onSelect={() => select(onSelectAll)}>全选</PopupMenuItem>
+          <PopupMenuItem onSelect={() => select(() => onRemoveMany(traySelection.selectedPaths))}>
+            清除
+          </PopupMenuItem>
+          <PopupMenuItem
+            onSelect={() =>
+              select(() => {
+                traySelection.clearSelection();
+                onClear();
+              })
+            }
+          >
+            清除全部
+          </PopupMenuItem>
+          <PopupMenuItem
+            disabled={traySelection.selected.size === items.length}
+            onSelect={() => select(traySelection.selectAll)}
+          >
+            全选
+          </PopupMenuItem>
           <PopupMenuItem onSelect={() => select(() => onNavigate(parentDirectory(menu.path)))}>
             查看所在文件夹
           </PopupMenuItem>

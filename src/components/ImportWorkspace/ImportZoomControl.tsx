@@ -1,5 +1,8 @@
 import "./ImportZoomControl.css";
 
+/** The zoom slider's range, shared with the list view's row-height sizing. */
+export const importZoomRange = { min: 120, max: 300, step: 10 };
+
 export function ImportZoomControl({
   value,
   onChange,
@@ -14,9 +17,9 @@ export function ImportZoomControl({
       </svg>
       <input
         type="range"
-        min="120"
-        max="300"
-        step="10"
+        min={importZoomRange.min}
+        max={importZoomRange.max}
+        step={importZoomRange.step}
         value={value}
         aria-label="缩略图大小"
         aria-valuetext={`${value} 像素`}
