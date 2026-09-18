@@ -28,6 +28,48 @@ pub(crate) struct ImportBrowserConfig {
     pub(crate) favorites: Vec<String>,
     #[serde(default)]
     pub(crate) last_directory: Option<String>,
+    #[serde(default)]
+    pub(crate) settings: ImportSettingsConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ImportSettingsConfig {
+    pub(crate) new_bin: bool,
+    pub(crate) bin_name: String,
+    pub(crate) copy: bool,
+    pub(crate) verify: bool,
+    pub(crate) destination: String,
+    pub(crate) custom_directory: String,
+    pub(crate) auto_bind: bool,
+    pub(crate) auto_bind_type: String,
+    pub(crate) auto_bind_preset: String,
+    pub(crate) auto_bind_preference: String,
+}
+
+impl Default for ImportSettingsConfig {
+    fn default() -> Self {
+        Self {
+            new_bin: false,
+            bin_name: "媒体箱".to_string(),
+            copy: false,
+            verify: true,
+            destination: "project".to_string(),
+            custom_directory: String::new(),
+            auto_bind: false,
+            auto_bind_type: "all".to_string(),
+            auto_bind_preset: "direct".to_string(),
+            auto_bind_preference: "smart".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ImportBrowserConfigPatch {
+    pub(crate) favorites: Option<Vec<String>>,
+    pub(crate) last_directory: Option<String>,
+    pub(crate) settings: Option<ImportSettingsConfig>,
 }
 
 /// Fixed template for the state associated with one project id. Only
@@ -104,6 +146,73 @@ struct WorkspaceImportBrowserXml {
     last_directory: Option<String>,
     #[serde(rename = "Favorite", default)]
     favorites: Vec<WorkspaceImportFavoriteXml>,
+    #[serde(rename = "Settings", default)]
+    settings: WorkspaceImportSettingsXml,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+struct WorkspaceImportSettingsXml {
+    #[serde(rename = "@newBin")]
+    new_bin: bool,
+    #[serde(rename = "@binName")]
+    bin_name: String,
+    #[serde(rename = "@copy")]
+    copy: bool,
+    #[serde(rename = "@verify")]
+    verify: bool,
+    #[serde(rename = "@destination")]
+    destination: String,
+    #[serde(rename = "@customDirectory")]
+    custom_directory: String,
+    #[serde(rename = "@autoBind")]
+    auto_bind: bool,
+    #[serde(rename = "@autoBindType")]
+    auto_bind_type: String,
+    #[serde(rename = "@autoBindPreset")]
+    auto_bind_preset: String,
+    #[serde(rename = "@autoBindPreference")]
+    auto_bind_preference: String,
+}
+
+impl Default for WorkspaceImportSettingsXml {
+    fn default() -> Self {
+        ImportSettingsConfig::default().into()
+    }
+}
+
+impl From<ImportSettingsConfig> for WorkspaceImportSettingsXml {
+    fn from(settings: ImportSettingsConfig) -> Self {
+        Self {
+            new_bin: settings.new_bin,
+            bin_name: settings.bin_name,
+            copy: settings.copy,
+            verify: settings.verify,
+            destination: settings.destination,
+            custom_directory: settings.custom_directory,
+            auto_bind: settings.auto_bind,
+            auto_bind_type: settings.auto_bind_type,
+            auto_bind_preset: settings.auto_bind_preset,
+            auto_bind_preference: settings.auto_bind_preference,
+        }
+    }
+}
+
+impl From<WorkspaceImportSettingsXml> for ImportSettingsConfig {
+    fn from(settings: WorkspaceImportSettingsXml) -> Self {
+        Self {
+            new_bin: settings.new_bin,
+            bin_name: settings.bin_name,
+            copy: settings.copy,
+            verify: settings.verify,
+            destination: settings.destination,
+            custom_directory: settings.custom_directory,
+            auto_bind: settings.auto_bind,
+            auto_bind_type: settings.auto_bind_type,
+            auto_bind_preset: settings.auto_bind_preset,
+            auto_bind_preference: settings.auto_bind_preference,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -217,6 +326,7 @@ impl WorkspaceConfig {
                     .filter(|path| !path.trim().is_empty())
                     .map(|path| WorkspaceImportFavoriteXml { path })
                     .collect(),
+                settings: self.import_browser.settings.into(),
             },
         })
     }
@@ -356,6 +466,7 @@ impl WorkspaceConfigXml {
                     .filter(|path| !path.trim().is_empty())
                     .collect(),
                 last_directory: non_empty_string(self.import_browser.last_directory),
+                settings: self.import_browser.settings.into(),
             },
         };
         config.validate()?;
@@ -627,6 +738,19 @@ fn workspace_config_guard<'a>(
     })
 }
 
+/// Applies a scoped mutation under the shared config lock. Callers only touch
+/// their own section, so unrelated workspace state survives every write.
+fn update_workspace_config<T>(
+    state: &tauri::State<'_, AppState>,
+    update: impl FnOnce(&mut WorkspaceConfig) -> AppResult<T>,
+) -> CommandResult<T> {
+    let _guard = workspace_config_guard(state)?;
+    let mut config = read_workspace_config()?;
+    let result = update(&mut config)?;
+    write_workspace_config(&config)?;
+    Ok(result)
+}
+
 #[tauri::command]
 pub(crate) fn load_workspace_config() -> CommandResult<Option<WorkspaceConfig>> {
     let path = workspace_config_path();
@@ -665,36 +789,33 @@ pub(crate) fn load_import_browser_config(
 }
 
 #[tauri::command]
-pub(crate) fn save_import_browser_favorites(
-    favorites: Vec<String>,
+pub(crate) fn update_import_browser_config(
+    patch: ImportBrowserConfigPatch,
     state: tauri::State<'_, AppState>,
 ) -> CommandResult<()> {
-    let _guard = workspace_config_guard(&state)?;
-    let mut config = read_workspace_config()?;
-    let mut seen = HashSet::new();
-    config.import_browser.favorites = favorites
-        .into_iter()
-        .filter(|path| !path.trim().is_empty())
-        .filter(|path| {
-            #[cfg(windows)]
-            let key = path.to_lowercase();
-            #[cfg(not(windows))]
-            let key = path.clone();
-            seen.insert(key)
-        })
-        .collect();
-    write_workspace_config(&config)
-}
-
-#[tauri::command]
-pub(crate) fn save_import_browser_last_directory(
-    directory: String,
-    state: tauri::State<'_, AppState>,
-) -> CommandResult<()> {
-    let _guard = workspace_config_guard(&state)?;
-    let mut config = read_workspace_config()?;
-    config.import_browser.last_directory = non_empty_string(Some(directory));
-    write_workspace_config(&config)
+    update_workspace_config(&state, move |config| {
+        if let Some(favorites) = patch.favorites {
+            let mut seen = HashSet::new();
+            config.import_browser.favorites = favorites
+                .into_iter()
+                .filter(|path| !path.trim().is_empty())
+                .filter(|path| {
+                    #[cfg(windows)]
+                    let key = path.to_lowercase();
+                    #[cfg(not(windows))]
+                    let key = path.clone();
+                    seen.insert(key)
+                })
+                .collect();
+        }
+        if let Some(directory) = patch.last_directory {
+            config.import_browser.last_directory = non_empty_string(Some(directory));
+        }
+        if let Some(settings) = patch.settings {
+            config.import_browser.settings = settings;
+        }
+        Ok(())
+    })
 }
 
 /// Loads every persisted per-project state, keyed by project document id.
@@ -755,6 +876,18 @@ mod tests {
             import_browser: ImportBrowserConfig {
                 favorites: vec![r"D:\Media".to_string(), r"D:\Projects\Shots".to_string()],
                 last_directory: Some(r"D:\Projects\Shots".to_string()),
+                settings: ImportSettingsConfig {
+                    new_bin: true,
+                    bin_name: "采访素材".to_string(),
+                    copy: true,
+                    verify: false,
+                    destination: "custom".to_string(),
+                    custom_directory: r"D:\Project\Media".to_string(),
+                    auto_bind: true,
+                    auto_bind_type: "audio".to_string(),
+                    auto_bind_preset: "virtual-copy".to_string(),
+                    auto_bind_preference: "name".to_string(),
+                },
             },
             focused_panel_id: Some("history".to_string()),
             instances: vec![
@@ -977,5 +1110,31 @@ mod tests {
             .into_json()
             .unwrap();
         assert_eq!(restored, config);
+    }
+
+    #[test]
+    fn legacy_import_browser_without_settings_uses_defaults() {
+        let config = sample_config();
+        let xml = quick_xml::se::to_string(&config.clone().into_xml().unwrap()).unwrap();
+        let start = xml.find("<Settings").unwrap();
+        let end = xml[start..].find("/>").unwrap() + start + 2;
+        let xml = format!("{}{}", &xml[..start], &xml[end..]);
+        let restored = quick_xml::de::from_str::<WorkspaceConfigXml>(&xml)
+            .unwrap()
+            .into_json()
+            .unwrap();
+
+        assert_eq!(
+            restored.import_browser.favorites,
+            config.import_browser.favorites
+        );
+        assert_eq!(
+            restored.import_browser.last_directory,
+            config.import_browser.last_directory
+        );
+        assert_eq!(
+            restored.import_browser.settings,
+            ImportSettingsConfig::default()
+        );
     }
 }

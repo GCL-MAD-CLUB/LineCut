@@ -10,12 +10,7 @@ import { ImportFileView } from "./ImportFileView";
 import { ImportSettingsPanel } from "./ImportSettingsPanel";
 import { ImportSelectionBar } from "./ImportSelectionBar";
 import { registerImportSelection } from "./importSelection";
-import {
-  parentDirectory,
-  pathKey,
-  type ImportEntry,
-  type ImportSettings,
-} from "./importBrowserModel";
+import { parentDirectory, pathKey, type ImportEntry } from "./importBrowserModel";
 import { useImportBrowser } from "./useImportBrowser";
 import { useImportSelection } from "./useImportSelection";
 import "./ImportWorkspace.css";
@@ -33,18 +28,7 @@ export function ImportWorkspace({ onImportCompleted, onCancel }: ImportWorkspace
   const importing = useRef(false);
   const anchor = useRef("");
   const [status, setStatus] = useState("");
-  const [settings, setSettings] = useState<ImportSettings>({
-    newBin: false,
-    binName: "媒体箱",
-    copy: false,
-    verify: true,
-    destination: "project",
-    customDirectory: "",
-    autoBind: false,
-    autoBindType: "all",
-    autoBindPreset: "direct",
-    autoBindPreference: "smart",
-  });
+  const settings = browser.settings;
   const {
     mediaItems,
     mediaFolders,
@@ -82,7 +66,7 @@ export function ImportWorkspace({ onImportCompleted, onCancel }: ImportWorkspace
   const projectDirectory = projectFilePath ? parentDirectory(projectFilePath) : "";
   const destination =
     settings.destination === "project" ? projectDirectory : settings.customDirectory;
-  const disabled = busy || mediaBinReadOnly;
+  const disabled = busy || mediaBinReadOnly || !browser.configLoaded;
   const canImport =
     !disabled &&
     selection.files.length > 0 &&
@@ -210,7 +194,7 @@ export function ImportWorkspace({ onImportCompleted, onCancel }: ImportWorkspace
         </main>
         <ImportSettingsPanel
           settings={settings}
-          onChange={setSettings}
+          onChange={browser.updateSettings}
           disabled={disabled}
           projectDirectory={projectDirectory}
         />

@@ -7,16 +7,21 @@ import {
   type ImportDirectory,
   type ImportFilter,
   type ImportLocation,
+  type ImportSettings,
 } from "./importBrowserModel";
 import {
+  defaultImportSettings,
   loadImportBrowserConfig,
   saveImportBrowserFavorites,
   saveImportBrowserLastDirectory,
+  saveImportSettings,
 } from "./importBrowserConfig";
 
 export function useImportBrowser() {
   const [locations, setLocations] = useState<ImportLocation[]>([]);
   const [favorites, setFavorites] = useState<string[]>([]);
+  const [settings, setSettings] = useState<ImportSettings>(defaultImportSettings);
+  const [configLoaded, setConfigLoaded] = useState(!isTauriRuntime());
   const [listing, setListing] = useState<ImportDirectory | null>(null);
   const [loading, setLoading] = useState(isTauriRuntime());
   const [error, setError] = useState("");
@@ -57,6 +62,10 @@ export function useImportBrowser() {
     setFavorites(next);
     void saveImportBrowserFavorites(next);
   }, []);
+  const updateSettings = useCallback((next: ImportSettings) => {
+    setSettings(next);
+    void saveImportSettings(next);
+  }, []);
   useEffect(() => {
     let live = true;
     if (isTauriRuntime())
@@ -77,6 +86,8 @@ export function useImportBrowser() {
         });
         favoritesRef.current = restoredFavorites;
         setFavorites(restoredFavorites);
+        setSettings(config.settings);
+        setConfigLoaded(true);
         if (result.status === "success") {
           setLocations(result.value);
           const first = result.value[0];
@@ -116,6 +127,9 @@ export function useImportBrowser() {
   return {
     locations,
     favorites,
+    settings,
+    updateSettings,
+    configLoaded,
     listing,
     entries,
     loading,
