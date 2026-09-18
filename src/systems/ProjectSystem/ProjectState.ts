@@ -30,6 +30,7 @@ import type {
   UserNotice,
 } from "../../types";
 import { readExportState } from "./ProjectStatesCache";
+import { mergeMediaAnalysis } from "./mediaAnalysisMerge";
 
 interface ProjectCommands {
   projectImported: (project: Project) => void;
@@ -38,6 +39,7 @@ interface ProjectCommands {
   projectSaved: (path: string, projectId: string) => void;
   projectClosed: () => void;
   mediaProjectsAdded: (projects: Project[]) => void;
+  mediaAnalysisCompleted: (result: ImportResult, projectId: string | null) => void;
   mediaItemsAdded: (items: MediaBinItem[], historyLabel?: string) => void;
   mediaBinEntriesAdded: (
     folders: MediaBinFolder[],
@@ -1060,6 +1062,30 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
         projectHistory: createProjectHistory(),
         savedProjectFileState: emptyProjectFileState(),
       }),
+    mediaAnalysisCompleted: (result, projectId) =>
+      commitProjectEvent(set, `分析媒体：${result.project.asset.file_name}`, "import", (state) => {
+        const id = result.project.asset.id;
+        const current = state.projects[id];
+        if (
+          state.projectId !== projectId ||
+          !current ||
+          !state.mediaItems.some((item) => item.id === id) ||
+          current.asset.path !== result.project.asset.path ||
+          current.asset.fingerprint !== result.project.asset.fingerprint
+        )
+          return state;
+        const merged = mergeMediaAnalysis(current, result.project);
+        const projects = { ...state.projects, [id]: merged };
+        return {
+          projects,
+          ...(state.project?.asset.id === id ? { project: merged } : {}),
+          ...(state.activeVideoId === id && !state.activeTrackId
+            ? { activeTrackId: preferredTrackId(merged, projects, state.mediaItems, id) }
+            : {}),
+          warnings: [...state.warnings, ...result.warnings],
+          projectDirty: merged !== current || state.projectDirty,
+        };
+      }),
     mediaProjectsAdded: (loadedProjects) =>
       commitProjectEvent(
         set,
@@ -2028,6 +2054,10 @@ export function applyImportedMediaResults(results: readonly ImportResult[]) {
 /** Applies a completed media import through the same project commands used by the UI. */
 export function applyImportedMediaResult(result: ImportResult) {
   applyImportedMediaResults([result]);
+}
+
+export function applyAnalyzedMediaResult(result: ImportResult, projectId: string | null) {
+  projectState.getState().commands.mediaAnalysisCompleted(result, projectId);
 }
 
 function useProjectState<Selection>(selector: (state: ProjectSystemState) => Selection) {

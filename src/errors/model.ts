@@ -12,6 +12,8 @@ export type OperationKey =
   | "media.closeBackend"
   | "media.demux"
   | "media.import"
+  | "media.analyze"
+  | "media.scan"
   | "media.link"
   | "media.playback"
   | "media.relink"

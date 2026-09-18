@@ -240,6 +240,8 @@ const operationPolicies = {
   "media.closeBackend": modal("关闭后台媒体失败"),
   "media.demux": modal("分解媒体失败"),
   "media.import": modal("导入媒体失败"),
+  "media.analyze": silent("分析媒体失败"),
+  "media.scan": silent("扫描文件夹失败"),
   "media.link": modal("连接媒体失败"),
   "media.playback": silent("媒体播放失败"),
   "media.relink": modal("重新链接媒体失败"),

@@ -1,5 +1,12 @@
 import { ChevronDown } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import { createPortal } from "react-dom";
 import "./SelectDropdown.css";
 
@@ -19,9 +26,13 @@ interface SelectDropdownProps<T extends string> {
   disabled?: boolean;
   items: Array<SelectDropdownItem<T>>;
   menuClassName?: string;
+  menuMinWidth?: number;
+  menuWidth?: "content" | "trigger";
   placement?: "auto" | "bottom" | "top";
   selectedLabel?: string;
+  selectedValues?: readonly T[];
   title?: string;
+  trigger?: ReactNode;
   value: T;
   onChange: (value: T) => void;
 }
@@ -48,9 +59,13 @@ export function SelectDropdown<T extends string>({
   disabled = false,
   items,
   menuClassName,
+  menuMinWidth = 0,
+  menuWidth = "trigger",
   placement = "auto",
   selectedLabel,
+  selectedValues,
   title,
+  trigger,
   value,
   onChange,
 }: SelectDropdownProps<T>) {
@@ -60,6 +75,7 @@ export function SelectDropdown<T extends string>({
   const menuRef = useRef<HTMLDivElement | null>(null);
   const selectedItem = items.filter(isOptionItem).find((item) => item.value === value);
   const resolvedSelectedLabel = selectedLabel ?? selectedItem?.label ?? value;
+  const resolvedSelectedValues = new Set(selectedValues ?? [value]);
 
   function updateMenuPosition() {
     const root = rootRef.current;
@@ -69,6 +85,7 @@ export function SelectDropdown<T extends string>({
     const rect = root.getBoundingClientRect();
     const gap = 4;
     const menuHeight = menuRef.current?.offsetHeight ?? 0;
+    const measuredMenuWidth = menuRef.current?.getBoundingClientRect().width ?? rect.width;
     const shouldOpenUp =
       placement === "top" ||
       (placement === "auto" &&
@@ -80,10 +97,17 @@ export function SelectDropdown<T extends string>({
     // even when neither direction has enough room for the whole list.
     const viewportLimit = Math.max(4, window.innerHeight - menuHeight - gap);
     const top = Math.min(Math.max(4, preferredTop), viewportLimit);
+    const left =
+      menuWidth === "content"
+        ? Math.max(4, Math.min(rect.left, window.innerWidth - measuredMenuWidth - 4))
+        : rect.left;
     setMenuStyle({
-      left: `${rect.left}px`,
+      left: `${left}px`,
       top: `${top}px`,
-      width: `${rect.width}px`,
+      width: menuWidth === "content" ? "max-content" : `${rect.width}px`,
+      minWidth:
+        menuWidth === "content" ? `${Math.max(rect.width, menuMinWidth)}px` : undefined,
+      maxWidth: menuWidth === "content" ? "calc(100vw - 8px)" : undefined,
     });
   }
 
@@ -94,7 +118,7 @@ export function SelectDropdown<T extends string>({
     updateMenuPosition();
     const frame = window.requestAnimationFrame(updateMenuPosition);
     return () => window.cancelAnimationFrame(frame);
-  }, [open, items, placement]);
+  }, [open, items, menuMinWidth, menuWidth, placement]);
 
   useEffect(() => {
     if (!open) {
@@ -137,6 +161,7 @@ export function SelectDropdown<T extends string>({
       ref={menuRef}
       className={`select-dropdown-menu ${menuClassName ?? ""}`}
       role="listbox"
+      aria-multiselectable={selectedValues ? true : undefined}
       style={menuStyle}
     >
       {items.map((item, index) =>
@@ -146,13 +171,15 @@ export function SelectDropdown<T extends string>({
           <button
             key={item.value}
             type="button"
-            className={`select-dropdown-option ${item.value === value ? "selected" : ""}`}
+            className={`select-dropdown-option ${resolvedSelectedValues.has(item.value) ? "selected" : ""}`}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => selectValue(item.value)}
             role="option"
-            aria-selected={item.value === value}
+            aria-selected={resolvedSelectedValues.has(item.value)}
           >
-            <span className="select-dropdown-check">{item.value === value ? "✓" : ""}</span>
+            <span className="select-dropdown-check">
+              {resolvedSelectedValues.has(item.value) ? "✓" : ""}
+            </span>
             <span className="select-dropdown-option-label">{item.label}</span>
           </button>
         ),
@@ -174,8 +201,12 @@ export function SelectDropdown<T extends string>({
         title={title}
         onClick={() => setOpen((current) => !current)}
       >
-        <span>{resolvedSelectedLabel}</span>
-        <ChevronDown size={18} />
+        {trigger ?? (
+          <>
+            <span>{resolvedSelectedLabel}</span>
+            <ChevronDown size={18} />
+          </>
+        )}
       </button>
       {open && !disabled && createPortal(menu, document.body)}
     </div>

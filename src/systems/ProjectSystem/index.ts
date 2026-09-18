@@ -3,6 +3,7 @@ export {
   defaultMediaBinFolderColor,
   defaultPreferences,
   applyImportedMediaResult,
+  applyAnalyzedMediaResult,
   applyImportedMediaResults,
   getProjectExportContext,
   getProjectWorkspaceSnapshot,

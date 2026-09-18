@@ -1,462 +1,236 @@
-import {
-  Captions,
-  CheckCircle2,
-  ChevronRight,
-  FileAudio2,
-  FileVideo2,
-  FolderOpen,
-  HardDrive,
-  Plus,
-  Trash2,
-  Upload,
-} from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { runMediaImportBatchTask } from "../../mediaImportTask";
-import { useProjectPort } from "../../systems/ProjectSystem";
-import { useTaskProgressStatus } from "../../systems/TaskSystem";
+import { scheduleMediaAnalysis } from "../../mediaAnalysisTask";
+import { scheduleMediaAutoBinding } from "../../mediaAutoBindTask";
+import { defaultMediaBinFolderColor, useProjectPort } from "../../systems/ProjectSystem";
 import { isTauriRuntime } from "../../tauriRuntime";
-import type { MediaBinItem } from "../../types";
-import { MediaBrowserDialog, type MediaBrowserFilter } from "../MediaBrowserDialog";
+import { ImportSidebar } from "./ImportSidebar";
+import { ImportToolbar } from "./ImportToolbar";
+import { ImportFileView } from "./ImportFileView";
+import { ImportSettingsPanel } from "./ImportSettingsPanel";
+import { ImportSelectionBar } from "./ImportSelectionBar";
+import { registerImportSelection } from "./importSelection";
+import { parentDirectory, pathKey, type ImportEntry } from "./importBrowserModel";
+import { useImportBrowser } from "./useImportBrowser";
+import { useImportSelection } from "./useImportSelection";
 import "./ImportWorkspace.css";
 
 interface ImportWorkspaceProps {
   onImportCompleted?: () => void;
+  onCancel?: () => void;
 }
 
-type PendingMediaKind = "video" | "audio" | "subtitle";
-
-interface PendingMediaItem {
-  kind: PendingMediaKind;
-  path: string;
-}
-
-interface ImportBrowserRequest {
-  kind: PendingMediaKind;
-  filters: MediaBrowserFilter[];
-  title: string;
-}
-
-const videoFilters = [
-  {
-    name: "视频",
-    extensions: ["mkv", "mp4", "mov", "webm", "avi", "ts", "m2ts", "mpeg", "mpg"],
-  },
-];
-
-const audioFilters = [
-  {
-    name: "音频",
-    extensions: ["wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "wma"],
-  },
-];
-
-const subtitleFilters = [
-  {
-    name: "字幕",
-    extensions: ["srt", "ass", "ssa", "vtt", "webvtt"],
-  },
-];
-
-function fileName(path: string) {
-  return path.split(/[\\/]/).pop() ?? path;
-}
-
-function parentPath(path: string) {
-  const segments = path.split(/[\\/]/);
-  const separator = path.includes("\\") ? "\\" : "/";
-  return segments.slice(0, -1).join(separator) || path;
-}
-
-function extension(path: string) {
-  return fileName(path).split(".").pop()?.toUpperCase() ?? "";
-}
-
-function uniquePaths(current: string[], additions: string[]) {
-  const knownPaths = new Set(current.map(pathKey));
-  return [
-    ...current,
-    ...additions.filter((path) => {
-      const key = pathKey(path);
-      if (knownPaths.has(key)) {
-        return false;
-      }
-      knownPaths.add(key);
-      return true;
-    }),
-  ];
-}
-
-function pathKey(path: string) {
-  return path.replaceAll("\\", "/").toLocaleLowerCase();
-}
-
-function pendingMediaIcon(kind: PendingMediaKind) {
-  if (kind === "video") {
-    return <FileVideo2 aria-hidden="true" />;
-  }
-  if (kind === "audio") {
-    return <FileAudio2 aria-hidden="true" />;
-  }
-  return <Captions aria-hidden="true" />;
-}
-
-function pendingMediaLabel(kind: PendingMediaKind) {
-  if (kind === "video") {
-    return "视频";
-  }
-  if (kind === "audio") {
-    return "音频";
-  }
-  return "字幕";
-}
-
-function standaloneSubtitleItem(path: string, index: number): MediaBinItem {
-  const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${index}`;
-  return {
-    id: `external-subtitle:${random}:${path.length}`,
-    bin_id: null,
-    kind: "subtitle",
-    enabled: true,
-    hidden: false,
-    offline: false,
-    path,
-    file_name: fileName(path),
-    duration_us: 0,
-    start_time_us: 0,
-    bound_to_video_id: null,
-    source_video_id: null,
-    stream_index: null,
-    subtitle_track_id: null,
-    codec: path.split(".").pop()?.toLowerCase() ?? "subtitle",
-    language: null,
-    extracted: false,
-    origin: "imported",
-    color: "#893a04",
-  };
-}
-
-export function ImportWorkspace({ onImportCompleted }: ImportWorkspaceProps) {
-  const [videoPaths, setVideoPaths] = useState<string[]>([]);
-  const [audioPaths, setAudioPaths] = useState<string[]>([]);
-  const [subtitlePaths, setSubtitlePaths] = useState<string[]>([]);
-  const [browserRequest, setBrowserRequest] = useState<ImportBrowserRequest | null>(null);
-  const [mediaBrowserDirectory, setMediaBrowserDirectory] = useState("");
+export function ImportWorkspace({ onImportCompleted, onCancel }: ImportWorkspaceProps) {
+  const browser = useImportBrowser();
+  const [view, setView] = useState<"grid" | "list">("grid");
+  const [zoom, setZoom] = useState(180);
+  const [busy, setBusy] = useState(false);
+  const importing = useRef(false);
+  const anchor = useRef("");
+  const [status, setStatus] = useState("");
+  const settings = browser.settings;
   const {
     mediaItems,
-    mediaBinReadOnly: isMediaBinReadOnly,
+    mediaFolders,
+    mediaBinReadOnly,
+    projectFilePath,
     mediaProjectsAdded,
     mediaItemsAdded,
-    messagePublished,
+    mediaFolderAdded,
+    mediaItemsMovedToFolder,
+    mediaItemsBound,
+    subtitleTracksAddedToVideo,
     warningsAppended,
+    messagePublished,
   } = useProjectPort(
-    ["mediaItems", "mediaBinReadOnly"],
-    ["mediaProjectsAdded", "mediaItemsAdded", "messagePublished", "warningsAppended"],
-  );
-  const { isRunning: isImporting } = useTaskProgressStatus("media.import");
-  const pendingItems = useMemo<PendingMediaItem[]>(
-    () => [
-      ...videoPaths.map((path) => ({ kind: "video" as const, path })),
-      ...audioPaths.map((path) => ({ kind: "audio" as const, path })),
-      ...subtitlePaths.map((path) => ({ kind: "subtitle" as const, path })),
+    ["mediaItems", "mediaFolders", "mediaBinReadOnly", "projectFilePath"],
+    [
+      "mediaProjectsAdded",
+      "mediaItemsAdded",
+      "mediaFolderAdded",
+      "mediaItemsMovedToFolder",
+      "mediaItemsBound",
+      "subtitleTracksAddedToVideo",
+      "warningsAppended",
+      "messagePublished",
     ],
-    [audioPaths, subtitlePaths, videoPaths],
   );
-  const importedItems = useMemo(
-    () => mediaItems.filter((item) => item.origin === "imported"),
+  const imported = useMemo(
+    () =>
+      new Set(
+        mediaItems.filter((item) => item.origin === "imported").map((item) => pathKey(item.path)),
+      ),
     [mediaItems],
   );
-  const importedPathKeys = useMemo(
-    () => new Set(importedItems.map((item) => pathKey(item.path))),
-    [importedItems],
-  );
-  const itemCounts = useMemo(
-    () => ({
-      video: importedItems.filter((item) => item.kind === "video").length + videoPaths.length,
-      audio: importedItems.filter((item) => item.kind === "audio").length + audioPaths.length,
-      subtitle:
-        importedItems.filter((item) => item.kind === "subtitle").length + subtitlePaths.length,
-    }),
-    [audioPaths.length, importedItems, subtitlePaths.length, videoPaths.length],
-  );
-  const hasSelection = pendingItems.length > 0;
-  const hasItems = importedItems.length > 0 || hasSelection;
-
-  function choosePaths(kind: PendingMediaKind, filters: MediaBrowserFilter[], title: string) {
-    if (isMediaBinReadOnly) {
-      messagePublished("项目处于只读状态。");
-      return;
-    }
-    if (!isTauriRuntime()) {
-      messagePublished("请在 Tauri 桌面窗口中选择本地媒体。");
-      return;
-    }
-    setBrowserRequest({ kind, filters, title });
+  const selection = useImportSelection(imported);
+  const projectDirectory = projectFilePath ? parentDirectory(projectFilePath) : "";
+  const destination =
+    settings.destination === "project" ? projectDirectory : settings.customDirectory;
+  const disabled = busy || mediaBinReadOnly || !browser.configLoaded;
+  const canImport =
+    !disabled &&
+    selection.files.length > 0 &&
+    !selection.scanning &&
+    !selection.hasErrors &&
+    (!settings.newBin || Boolean(settings.binName.trim())) &&
+    (!settings.copy || Boolean(destination)) &&
+    isTauriRuntime();
+  function addEntries(entries: ImportEntry[]) {
+    if (disabled) return;
+    selection.add(entries);
   }
-
-  function addBrowserPaths(kind: PendingMediaKind, selectedPaths: string[]) {
-    const paths = selectedPaths.filter((path) => !importedPathKeys.has(pathKey(path)));
-    if (paths.length === 0) {
-      if (selectedPaths.length > 0) {
-        messagePublished("所选媒体已在当前项目中。");
-      }
-      return;
-    }
-    if (kind === "video") {
-      setVideoPaths((current) => uniquePaths(current, paths));
-    } else if (kind === "audio") {
-      setAudioPaths((current) => uniquePaths(current, paths));
-    } else {
-      setSubtitlePaths((current) => uniquePaths(current, paths));
-    }
-    const ignoredCount = selectedPaths.length - paths.length;
-    messagePublished(
-      `已添加 ${paths.length} 个${pendingMediaLabel(kind)}文件${ignoredCount > 0 ? `，忽略 ${ignoredCount} 个已有媒体` : ""}`,
-    );
+  function toggle(entry: ImportEntry, range: boolean) {
+    if (disabled) return;
+    const previous = browser.entries.findIndex((item) => item.path === anchor.current);
+    const next = browser.entries.findIndex((item) => item.path === entry.path);
+    if (range && previous >= 0 && next >= 0)
+      addEntries(browser.entries.slice(Math.min(previous, next), Math.max(previous, next) + 1));
+    else selection.toggle(entry);
+    anchor.current = entry.path;
   }
-
-  function removePendingItem(item: PendingMediaItem) {
-    if (item.kind === "video") {
-      setVideoPaths((current) => current.filter((path) => path !== item.path));
-    } else if (item.kind === "audio") {
-      setAudioPaths((current) => current.filter((path) => path !== item.path));
-    } else {
-      setSubtitlePaths((current) => current.filter((path) => path !== item.path));
-    }
-  }
-
-  function clearPendingItems() {
-    setVideoPaths([]);
-    setAudioPaths([]);
-    setSubtitlePaths([]);
-  }
-
-  async function importSelectedMedia() {
-    if (isMediaBinReadOnly) {
-      messagePublished("项目处于只读状态，请先解除只读。");
-      return;
-    }
-    if (!isTauriRuntime()) {
-      messagePublished("浏览器预览不能导入本地媒体，请运行 Tauri 桌面应用。");
-      return;
-    }
-    if (!hasSelection) {
-      messagePublished("请先选择需要导入的媒体。");
-      return;
-    }
-
-    const probeItems = pendingItems.filter((item) => item.kind !== "subtitle");
-    if (subtitlePaths.length > 0) {
-      mediaItemsAdded(subtitlePaths.map(standaloneSubtitleItem));
-      setSubtitlePaths([]);
-    }
-
-    const outcome = await runMediaImportBatchTask({
-      paths: probeItems.map((item) => item.path),
-      operation: "media.import",
-      taskIdPrefix: "media-import",
-      onSuccess: (results) => {
-        if (results.length === 0) {
-          return;
+  async function importSelected() {
+    if (!canImport || importing.current) return;
+    importing.current = true;
+    setBusy(true);
+    setStatus("");
+    try {
+      const { results, subtitles, completed } = await registerImportSelection(
+        selection.files,
+        settings.copy ? { directory: destination, verify: settings.verify } : null,
+      );
+      if (completed.size) {
+        let folderId: string | null = null;
+        if (settings.newBin) {
+          const requestedName = settings.binName.trim();
+          const names = new Set(
+            mediaFolders
+              .filter((folder) => !folder.parent_id)
+              .map((folder) => folder.name.toLocaleLowerCase()),
+          );
+          let name = requestedName;
+          for (let suffix = 2; names.has(name.toLocaleLowerCase()); suffix += 1)
+            name = `${requestedName} ${suffix}`;
+          folderId = `media-bin:${crypto.randomUUID()}`;
+          mediaFolderAdded({
+            id: folderId,
+            name,
+            parent_id: null,
+            color: defaultMediaBinFolderColor,
+            hidden: false,
+          });
         }
-        mediaProjectsAdded(results.map((result) => result.project));
-        warningsAppended(results.flatMap((result) => result.warnings));
-      },
-    });
-    const loadedResults = outcome.results;
-    const cancelledCount =
-      outcome.status === "cancelled" ? probeItems.length - loadedResults.length : 0;
-
-    const importedCount = loadedResults.length + subtitlePaths.length;
-    clearPendingItems();
-    const resultParts = [
-      importedCount > 0 ? `已导入 ${importedCount} 个媒体` : "未导入任何媒体",
-      ...(cancelledCount > 0 ? [`${cancelledCount} 个已取消`] : []),
-    ];
-    messagePublished(resultParts.join("，"));
-    if (importedCount > 0) {
-      onImportCompleted?.();
+        if (results.length) mediaProjectsAdded(results.map((result) => result.project));
+        if (subtitles.length) mediaItemsAdded(subtitles);
+        if (folderId)
+          mediaItemsMovedToFolder(
+            [
+              ...results.map((result) => result.project.asset.id),
+              ...subtitles.map((item) => item.id),
+            ],
+            folderId,
+          );
+        if (settings.autoBind) {
+          scheduleMediaAutoBinding({
+            importedItemIds: [
+              ...results.map((result) => result.project.asset.id),
+              ...subtitles.map((item) => item.id),
+            ],
+            type: settings.autoBindType,
+            preset: settings.autoBindPreset,
+            preference: settings.autoBindPreference,
+            actions: {
+              mediaItemsAdded,
+              mediaItemsBound,
+              subtitleTracksAddedToVideo,
+              warningsAppended,
+              messagePublished,
+            },
+          });
+        }
+        scheduleMediaAnalysis(results);
+      }
+      const remaining = selection.files.filter((entry) => !completed.has(entry.path));
+      selection.retainFiles(remaining);
+      const message = `已导入 ${completed.size} 个媒体${remaining.length ? `，${remaining.length} 个未完成，可重试` : ""}`;
+      setStatus(message);
+      messagePublished(message);
+      if (completed.size && !remaining.length) onImportCompleted?.();
+    } finally {
+      importing.current = false;
+      setBusy(false);
     }
   }
-
   return (
-    <section className="import-workspace" aria-label="导入工作区">
-      <header className="import-workspace-heading">
-        <div>
-          <span className="import-workspace-eyebrow">媒体浏览器</span>
-          <h1>导入媒体</h1>
-          <p>当前媒体与待导入文件统一显示；新选择的文件始终追加到项目。</p>
-        </div>
-        <span className="import-workspace-limit">多个视频 · 多个音频 · 多个字幕</span>
-      </header>
-
-      <div className="import-browser">
-        <aside className="import-browser-sidebar">
-          <h2>导入位置</h2>
-          <button type="button" className="import-location active">
-            <HardDrive aria-hidden="true" />
-            <span>本地媒体</span>
-          </button>
-          <div className="import-browser-summary">
-            <span>导入媒体</span>
-            <strong>{importedItems.length + pendingItems.length}</strong>
-          </div>
-          <dl>
-            <div>
-              <dt>视频</dt>
-              <dd>{itemCounts.video}</dd>
-            </div>
-            <div>
-              <dt>音频</dt>
-              <dd>{itemCounts.audio}</dd>
-            </div>
-            <div>
-              <dt>字幕</dt>
-              <dd>{itemCounts.subtitle}</dd>
-            </div>
-          </dl>
-        </aside>
-
-        <div className="import-browser-main">
-          <div className="import-browser-toolbar">
-            <div className="import-breadcrumb" title="本地媒体 / 导入媒体">
-              <FolderOpen aria-hidden="true" />
-              <span>本地媒体</span>
-              <ChevronRight aria-hidden="true" />
-              <strong>导入媒体</strong>
-            </div>
-            <div className="import-picker-actions">
-              <button
-                type="button"
-                onClick={() => void choosePaths("video", videoFilters, "添加多个视频")}
-                disabled={isMediaBinReadOnly || isImporting}
-              >
-                <FileVideo2 aria-hidden="true" /> 添加视频
-              </button>
-              <button
-                type="button"
-                onClick={() => void choosePaths("audio", audioFilters, "添加多个音频")}
-                disabled={isMediaBinReadOnly || isImporting}
-              >
-                <FileAudio2 aria-hidden="true" /> 添加音频
-              </button>
-              <button
-                type="button"
-                onClick={() => void choosePaths("subtitle", subtitleFilters, "添加多个字幕")}
-                disabled={isMediaBinReadOnly || isImporting}
-              >
-                <Plus aria-hidden="true" /> 添加字幕
-              </button>
-            </div>
-          </div>
-
-          <div className="import-file-list" role="table" aria-label="导入媒体">
-            <div className="import-file-list-header" role="row">
-              <span role="columnheader">名称</span>
-              <span role="columnheader">类型</span>
-              <span role="columnheader">所在位置</span>
-              <span role="columnheader" aria-label="状态或操作" />
-            </div>
-
-            {importedItems.map((item) => (
-              <div className="import-file-row is-imported" role="row" key={`imported:${item.id}`}>
-                <span className="import-file-name" role="cell" title={item.path}>
-                  <span className={`import-file-icon ${item.kind}`}>
-                    {pendingMediaIcon(item.kind)}
-                  </span>
-                  <strong>{item.file_name}</strong>
-                </span>
-                <span role="cell">
-                  {extension(item.path)} {pendingMediaLabel(item.kind)}
-                </span>
-                <span className="import-file-path" role="cell" title={parentPath(item.path)}>
-                  {parentPath(item.path)}
-                </span>
-                <span className="import-existing-status" role="cell" title="已在当前项目中">
-                  <CheckCircle2 aria-hidden="true" />
-                </span>
-              </div>
-            ))}
-
-            {pendingItems.map((item) => (
-              <div className="import-file-row" role="row" key={`${item.kind}:${item.path}`}>
-                <span className="import-file-name" role="cell" title={item.path}>
-                  <span className={`import-file-icon ${item.kind}`}>
-                    {pendingMediaIcon(item.kind)}
-                  </span>
-                  <strong>{fileName(item.path)}</strong>
-                </span>
-                <span role="cell">
-                  {extension(item.path)} {pendingMediaLabel(item.kind)}
-                </span>
-                <span className="import-file-path" role="cell" title={parentPath(item.path)}>
-                  {parentPath(item.path)}
-                </span>
-                <button
-                  type="button"
-                  className="import-remove-button"
-                  onClick={() => removePendingItem(item)}
-                  disabled={isMediaBinReadOnly || isImporting}
-                  title={`移除${pendingMediaLabel(item.kind)}`}
-                  aria-label={`移除 ${fileName(item.path)}`}
-                >
-                  <Trash2 aria-hidden="true" />
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
+    <section className="import-workspace" aria-label="导入工作区" aria-busy={busy}>
+      <div className="import-workspace-content" inert={busy}>
+        <ImportSidebar
+          locations={browser.locations}
+          favorites={browser.favorites}
+          directory={browser.listing?.directory ?? ""}
+          onNavigate={(path) => void browser.navigate(path)}
+        />
+        <main className="import-browser-main">
+          <ImportToolbar
+            browser={browser}
+            view={view}
+            onView={setView}
+            zoom={zoom}
+            onZoom={setZoom}
+          />
+          <ImportFileView
+            entries={browser.entries}
+            selected={selection.selected}
+            imported={imported}
+            view={view}
+            zoom={zoom}
+            disabled={disabled}
+            loading={browser.loading}
+            error={browser.error}
+            desktop={isTauriRuntime()}
+            onToggle={toggle}
+            onNavigate={(path) => void browser.navigate(path)}
+            onSelectAll={() => addEntries(browser.entries)}
+          />
+        </main>
+        <ImportSettingsPanel
+          settings={settings}
+          onChange={browser.updateSettings}
+          disabled={disabled}
+          projectDirectory={projectDirectory}
+        />
       </div>
-
-      <footer className="import-workspace-footer">
-        <div>
-          <strong>
-            {pendingItems.length > 0
-              ? `${importedItems.length} 个已导入 · ${pendingItems.length} 个待导入`
-              : `${importedItems.length} 个媒体已在项目中`}
-          </strong>
-          <span>
-            {itemCounts.video} 个视频 · {itemCounts.audio} 个音频 · {itemCounts.subtitle} 个字幕
-          </span>
-        </div>
-        <div className="import-footer-actions">
-          <button
-            type="button"
-            className="import-clear-button"
-            onClick={clearPendingItems}
-            disabled={isMediaBinReadOnly || !hasSelection || isImporting}
-          >
-            清除
-          </button>
-          <button
-            type="button"
-            className="import-confirm-button"
-            onClick={() => void importSelectedMedia()}
-            disabled={isMediaBinReadOnly || !hasSelection || isImporting}
-          >
-            <Upload aria-hidden="true" />
-            {isImporting ? "正在导入" : "导入全部"}
-          </button>
-        </div>
-      </footer>
-      {browserRequest &&
+      <ImportSelectionBar
+        items={selection.items}
+        mediaCount={selection.files.length}
+        scanning={selection.scanning}
+        busy={busy}
+        canImport={canImport}
+        status={status}
+        onRemoveMany={selection.removeMany}
+        onClear={selection.clear}
+        onRetry={selection.retry}
+        onNavigate={(path) => void browser.navigate(path)}
+        onCancel={() => {
+          selection.clear();
+          onCancel?.();
+        }}
+        onImport={() => void importSelected()}
+      />
+      {busy &&
         createPortal(
-          <MediaBrowserDialog
-            title={browserRequest.title}
-            filters={browserRequest.filters}
-            initialDirectory={
-              mediaBrowserDirectory || (importedItems[0] ? parentPath(importedItems[0].path) : "")
-            }
-            selectionMode="multiple"
-            operation="media.import"
-            onCancel={() => setBrowserRequest(null)}
-            onDirectoryChange={setMediaBrowserDirectory}
-            onConfirm={(paths) => {
-              addBrowserPaths(browserRequest.kind, paths);
-              setBrowserRequest(null);
+          <div
+            className="import-freeze"
+            role="dialog"
+            aria-modal="true"
+            aria-label="正在登记媒体"
+            tabIndex={-1}
+            ref={(element) => element?.focus()}
+            onKeyDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
             }}
           />,
-          document.querySelector(".app-shell") ?? document.body,
+          document.body,
         )}
     </section>
   );
