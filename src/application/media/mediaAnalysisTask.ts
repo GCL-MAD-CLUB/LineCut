@@ -1,17 +1,17 @@
-import { useSyncExternalStore } from "react";
-import { clientError, invokeCommand, runOperation } from "./errors";
+﻿import { useSyncExternalStore } from "react";
+import { clientError, invokeCommand, runOperation } from "../../errors";
 import {
   cancelFfmpegTask,
   createFfmpegTaskId,
   listenToFfmpegTasksProgress,
-} from "./ffmpegProgress";
+} from "../../platform/tauri/ffmpegProgress";
 import {
   applyAnalyzedMediaResult,
   getProjectExportContext,
   getProjectWorkspaceSnapshot,
-} from "./systems/ProjectSystem";
-import { createTaskProgress } from "./systems/TaskSystem";
-import type { ImportResult } from "./types";
+} from "../../systems/ProjectSystem";
+import { createTaskProgress } from "../../systems/TaskSystem";
+import type { ImportResult } from "../../types";
 
 const pending = new Set<string>();
 const deferredCovers = new Set<string>();
@@ -30,7 +30,7 @@ export function useMediaCoverDeferred(assetId: string) {
 }
 
 /** This queue lives outside the import workspace and survives its unmount. */
-export function scheduleMediaAnalysis(results: ImportResult[]) {
+export function scheduleMediaAnalysis(results: ImportResult[], startAfter = Promise.resolve()) {
   const jobs = results.filter((result) => !pending.has(result.project.asset.id));
   if (!jobs.length) return;
   const projectId = getProjectExportContext().projectId;
@@ -39,9 +39,11 @@ export function scheduleMediaAnalysis(results: ImportResult[]) {
     deferredCovers.add(job.project.asset.id);
   });
   notify();
-  // Let the workspace switch paint before registering the background task.
+  // Let the workspace switch paint, then wait for higher-priority automatic binding.
   window.setTimeout(() => {
     void runOperation("media.analyze", async () => {
+      await startAfter;
+      if (getProjectExportContext().projectId !== projectId) return;
       const taskIds = jobs.map(() => createFfmpegTaskId("media-analysis"));
       const running = new Set<string>();
       let cancelled = false;
@@ -123,7 +125,7 @@ export function scheduleMediaAnalysis(results: ImportResult[]) {
         jobs.forEach((job) => pending.delete(job.project.asset.id));
         notify();
       }
-    }).then(() => {
+    }).finally(() => {
       jobs.forEach((job) => pending.delete(job.project.asset.id));
       notify();
     });

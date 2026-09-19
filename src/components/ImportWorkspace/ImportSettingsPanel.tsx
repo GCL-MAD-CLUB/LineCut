@@ -1,8 +1,8 @@
-import { ChevronDown, ChevronRight } from "lucide-react";
+﻿import { ChevronDown, ChevronRight } from "lucide-react";
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { runOperation } from "../../errors";
-import { isTauriRuntime } from "../../tauriRuntime";
+import { isTauriRuntime } from "../../platform/tauri/runtime";
 import { SelectDropdown, selectDropdownItems } from "../SelectDropdown";
 import type { ImportSettings } from "./importBrowserModel";
 

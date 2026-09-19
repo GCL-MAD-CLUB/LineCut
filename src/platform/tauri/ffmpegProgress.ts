@@ -1,6 +1,6 @@
-import { listen } from "@tauri-apps/api/event";
-import type { TaskProgressListener } from "./systems/TaskSystem";
-import { clientError, invokeCommand } from "./errors";
+﻿import { listen } from "@tauri-apps/api/event";
+import type { TaskProgressListener } from "../../systems/TaskSystem";
+import { clientError, invokeCommand } from "../../errors";
 
 interface FfmpegProgressPayload {
   task_id: string;

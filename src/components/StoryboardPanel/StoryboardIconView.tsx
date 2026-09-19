@@ -1,4 +1,4 @@
-import { Star } from "lucide-react";
+﻿import { Star } from "lucide-react";
 import {
   useEffect,
   useLayoutEffect,
@@ -10,7 +10,7 @@ import {
   type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
-import { formatMonitorFrame, formatMonitorTime } from "../../time";
+import { formatMonitorFrame, formatMonitorTime } from "../../core/editor/time";
 import {
   timelineThumbnails,
   timelineThumbnailResolutionForDisplay,

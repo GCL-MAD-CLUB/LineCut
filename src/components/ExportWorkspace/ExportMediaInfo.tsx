@@ -1,5 +1,5 @@
-import { Film } from "lucide-react";
-import { formatDuration } from "../../time";
+﻿import { Film } from "lucide-react";
+import { formatDuration } from "../../core/editor/time";
 import { exportAudioChannelLabel } from "../../systems/ExportSystem";
 import type { ExportClip, ExportSettings, ExportSourceMedia } from "../../systems/ExportSystem";
 import type { MediaBinItem } from "../../types";

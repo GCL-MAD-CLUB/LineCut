@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEventHandler } from "react";
 import {
   buildTimelineRuler,
   clampTimelineStartFrame,
   minTimelineSpanFrames as getMinTimelineSpanFrames,
-} from "../../timeline";
+} from "../../core/editor/timeline";
 import type { MonitorCueRange } from "./sourceMonitorState";
 
 const CURSOR_EDGE_INSET_PX = 6;

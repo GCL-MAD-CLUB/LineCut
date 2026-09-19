@@ -1,5 +1,5 @@
-import { createPanelState } from "../../runtime/systems/PanelState";
-import { DEFAULT_FRAME_RATE } from "../../timeline";
+﻿import { createPanelState } from "../../runtime/systems/PanelState";
+import { DEFAULT_FRAME_RATE } from "../../core/editor/timeline";
 
 export type MonitorZoomLevel = "fit" | number;
 

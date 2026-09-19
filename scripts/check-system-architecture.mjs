@@ -7,6 +7,14 @@ const sourceRoot = join(root, "src");
 const componentsRoot = join(sourceRoot, "components");
 const failures = [];
 
+const allowedRootSourceFiles = new Set([
+  "App.tsx",
+  "disable-browser-behaviors.ts",
+  "main.tsx",
+  "types.ts",
+  "vite-env.d.ts",
+]);
+
 function sourceFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const path = join(directory, entry.name);
@@ -64,6 +72,19 @@ for (const legacyFile of legacyFiles) {
   const path = join(root, legacyFile);
   if (existsSync(path)) {
     fail(path, "legacy communication module must not be restored");
+  }
+}
+
+for (const entry of readdirSync(sourceRoot, { withFileTypes: true })) {
+  if (
+    entry.isFile() &&
+    [".ts", ".tsx"].includes(extname(entry.name)) &&
+    !allowedRootSourceFiles.has(entry.name)
+  ) {
+    fail(
+      join(sourceRoot, entry.name),
+      "src root is reserved for application entry points and global contracts",
+    );
   }
 }
 

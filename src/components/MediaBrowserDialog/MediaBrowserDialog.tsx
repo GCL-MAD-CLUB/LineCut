@@ -1,4 +1,4 @@
-import {
+﻿import {
   ArrowLeft,
   ArrowRight,
   ChevronDown,
@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { mediaGridLayout } from "../../mediaGridLayout";
+import { mediaGridLayout } from "../../application/media/mediaGridLayout";
 import {
   PopupMenu,
   PopupMenuItem,

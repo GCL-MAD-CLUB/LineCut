@@ -1,4 +1,4 @@
-import { useVirtualizer } from "@tanstack/react-virtual";
+﻿import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ArrowDownAZ,
   ArrowDownZA,
@@ -37,7 +37,7 @@ import {
   cancelFfmpegTask,
   createFfmpegTaskId,
   listenToFfmpegTaskProgress,
-} from "../../ffmpegProgress";
+} from "../../platform/tauri/ffmpegProgress";
 import { mediaDisplayName, useProjectPort } from "../../systems/ProjectSystem";
 import {
   buildStoryboardExportSource,
@@ -45,8 +45,8 @@ import {
   requestExport,
 } from "../../systems/ExportSystem";
 import { createTaskProgress, useTaskProgressStatus } from "../../systems/TaskSystem";
-import { isTauriRuntime } from "../../tauriRuntime";
-import { normalizeFrameRate } from "../../timeline";
+import { isTauriRuntime } from "../../platform/tauri/runtime";
+import { normalizeFrameRate } from "../../core/editor/timeline";
 import {
   timelineThumbnails,
   timelineThumbnailVisibleRange,

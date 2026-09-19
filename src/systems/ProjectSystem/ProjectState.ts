@@ -16,6 +16,7 @@ import {
 import type {
   DemuxMediaResult,
   ImportResult,
+  MediaAutoBindingBatch,
   MediaBinFolder,
   MediaBinItem,
   MediaStream,
@@ -71,6 +72,7 @@ interface ProjectCommands {
   ) => void;
   mediaProxyPathChanged: (itemId: string, path: string | null) => void;
   mediaItemsBound: (itemIds: string[], videoId: string) => void;
+  mediaAutoBindingsApplied: (batch: MediaAutoBindingBatch) => void;
   mediaItemsUnbound: (itemIds: string[]) => void;
   mediaItemsRemoved: (itemIds: string[]) => void;
   mediaDemuxed: (videoId: string, result: DemuxMediaResult) => void;
@@ -1565,6 +1567,106 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
           activeTrackId,
         };
       }),
+    mediaAutoBindingsApplied: ({
+      copies,
+      audioBindings,
+      subtitleBindings,
+      historyGroupId,
+      historyLabel,
+    }) =>
+      commitProjectEvent(
+        set,
+        historyLabel ??
+          `自动绑定 ${audioBindings.length + subtitleBindings.reduce((count, binding) => count + binding.itemIds.length, 0)} 个媒体`,
+        "bind",
+        (state) => {
+          if (copies.length === 0 && audioBindings.length === 0 && subtitleBindings.length === 0) {
+            return state;
+          }
+
+          const knownIds = new Set(state.mediaItems.map((item) => item.id));
+          const additions = copies.filter((item) => !knownIds.has(item.id));
+          const sourceItems = [...state.mediaItems, ...additions];
+          const sourceById = new Map(sourceItems.map((item) => [item.id, item]));
+          const audioTargetByItemId = new Map(
+            audioBindings.map((binding) => [binding.itemId, binding.videoId] as const),
+          );
+          const subtitleTargetByItemId = new Map<
+            string,
+            { videoId: string; track: SubtitleTrack }
+          >();
+          let projects = state.projects;
+
+          for (const binding of subtitleBindings) {
+            const video = sourceById.get(binding.videoId);
+            const currentProject = video
+              ? mediaItemProject(video, projects, sourceItems)
+              : undefined;
+            if (!video || !currentProject) continue;
+            const knownTrackIds = new Set(currentProject.tracks.map((track) => track.id));
+            const tracks = binding.tracks.filter((track) => !knownTrackIds.has(track.id));
+            const nextProject = {
+              ...currentProject,
+              tracks: [...currentProject.tracks, ...tracks],
+              cues: { ...currentProject.cues, ...binding.cues },
+            };
+            projects = { ...projects, [currentProject.asset.id]: nextProject };
+            binding.itemIds.forEach((itemId, index) => {
+              const track = binding.tracks[index];
+              if (track) subtitleTargetByItemId.set(itemId, { videoId: binding.videoId, track });
+            });
+          }
+
+          const mediaItems = sourceItems.map((item) => {
+            const subtitleBinding = subtitleTargetByItemId.get(item.id);
+            if (subtitleBinding) {
+              const video = sourceById.get(subtitleBinding.videoId);
+              return {
+                ...item,
+                bin_id: video?.bin_id ?? null,
+                bound_to_video_id: subtitleBinding.videoId,
+                subtitle_track_id: subtitleBinding.track.id,
+                codec: subtitleBinding.track.codec,
+                language: subtitleBinding.track.language,
+              };
+            }
+            const videoId = audioTargetByItemId.get(item.id);
+            if (!videoId || item.kind === "video") return item;
+            return {
+              ...item,
+              bin_id: sourceById.get(videoId)?.bin_id ?? null,
+              bound_to_video_id: videoId,
+            };
+          });
+
+          const project = state.project
+            ? (projects[state.project.asset.id] ?? state.project)
+            : state.project;
+          const currentTrackVisible = visibleSubtitleTracks(
+            project,
+            mediaItems,
+            state.activeVideoId,
+            projects,
+          ).some((track) => track.id === state.activeTrackId);
+          const preferredNewTrack = subtitleBindings
+            .filter((binding) => binding.videoId === state.activeVideoId)
+            .flatMap((binding) => binding.tracks)
+            .find((track) => track.cue_count > 0)?.id;
+          const activeTrackId = currentTrackVisible
+            ? state.activeTrackId
+            : (preferredNewTrack ??
+              preferredTrackId(project, projects, mediaItems, state.activeVideoId));
+
+          return {
+            projects,
+            mediaItems,
+            project,
+            activeTrackId,
+            projectDirty: true,
+          };
+        },
+        historyGroupId,
+      ),
     mediaItemsUnbound: (itemIds) =>
       commitProjectEvent(set, `解除 ${itemIds.length} 个媒体的绑定`, "unbind", (state) => {
         const selected = new Set(itemIds);

@@ -1,4 +1,4 @@
-import { getCurrentWindow } from "@tauri-apps/api/window";
+﻿import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 import { Loader2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -7,7 +7,7 @@ import {
   initialAppPanelState,
   withoutUnavailableAppPanels,
   withAppPanelDefaults,
-} from "./appPanelRegistry";
+} from "./application/appPanelRegistry";
 import { publishEvent, useBroadcastEvent } from "./runtime/events/react";
 import { useProjections } from "./runtime/state/StateHub";
 import {
@@ -43,7 +43,7 @@ import { sourcePanelType } from "./components/SourceMonitor";
 import { storyboardPanelType } from "./components/StoryboardPanel";
 import { subtitlePanelType } from "./components/SubtitlePanel";
 import { cancelAllTaskProgress, useTaskProgressStatus } from "./systems/TaskSystem";
-import { runMediaImportBatchTask } from "./mediaImportTask";
+import { runMediaImportBatchTask } from "./application/media/mediaImportTask";
 import {
   captureOperationError,
   invokeCommand,
@@ -60,7 +60,7 @@ import {
   pruneProjectStates,
   useProjectPort,
 } from "./systems/ProjectSystem";
-import { isTauriRuntime } from "./tauriRuntime";
+import { isTauriRuntime } from "./platform/tauri/runtime";
 import type {
   MediaBinFolder,
   MediaBinItem,

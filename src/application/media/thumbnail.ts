@@ -1,4 +1,4 @@
-import { invokeCommand } from "./errors";
+﻿import { invokeCommand } from "../../errors";
 
 const maximumCachedVideoCovers = 200;
 const videoCoverCache = new Map<string, Uint8Array>();

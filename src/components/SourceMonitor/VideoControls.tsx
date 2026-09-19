@@ -1,4 +1,4 @@
-import {
+﻿import {
   useEffect,
   useRef,
   useState,
@@ -7,8 +7,8 @@ import {
   type MouseEvent,
   type PointerEvent,
 } from "react";
-import { formatMonitorFrame, parseMonitorFrame } from "../../time";
-import { clampTimelineStartFrame } from "../../timeline";
+import { formatMonitorFrame, parseMonitorFrame } from "../../core/editor/time";
+import { clampTimelineStartFrame } from "../../core/editor/timeline";
 import { SelectDropdown, type SelectDropdownItem } from "../SelectDropdown";
 import { useSourceMonitorState, type MonitorZoomLevel } from "./sourceMonitorState";
 

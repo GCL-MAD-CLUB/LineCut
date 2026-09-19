@@ -1,4 +1,4 @@
-import { formatMonitorTime } from "../../time";
+﻿import { formatMonitorTime } from "../../core/editor/time";
 import {
   containerExtension,
   type ExportClip,

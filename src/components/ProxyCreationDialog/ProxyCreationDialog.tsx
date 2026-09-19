@@ -1,13 +1,13 @@
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+﻿import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useState } from "react";
 import { invokeCommand, runOperation } from "../../errors";
 import {
   cancelFfmpegTask,
   createFfmpegTaskId,
   listenToFfmpegTaskProgress,
-} from "../../ffmpegProgress";
+} from "../../platform/tauri/ffmpegProgress";
 import { mediaDisplayName, useProjectPort } from "../../systems/ProjectSystem";
-import { isTauriRuntime } from "../../tauriRuntime";
+import { isTauriRuntime } from "../../platform/tauri/runtime";
 import type { ProxyResult } from "../../types";
 import { ModalDialog } from "../ModalDialog";
 import { SelectDropdown, selectDropdownItems, type SelectDropdownItem } from "../SelectDropdown";

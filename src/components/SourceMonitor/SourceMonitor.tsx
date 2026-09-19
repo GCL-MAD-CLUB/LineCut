@@ -1,4 +1,4 @@
-import { convertFileSrc } from "@tauri-apps/api/core";
+﻿import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   useCallback,
   useEffect,
@@ -28,7 +28,7 @@ import {
   frameToTimeUs,
   normalizeFrameRate,
   timeUsToFrame,
-} from "../../timeline";
+} from "../../core/editor/timeline";
 import { MonitorRange } from "./MonitorRange";
 import { activeMediaDragVideoId, markMediaDragHandled } from "../MediaBin/mediaDrag";
 import { usePanelManagerState } from "../DockLayout";
