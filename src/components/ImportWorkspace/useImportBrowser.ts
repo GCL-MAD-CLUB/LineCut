@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invokeCommand, runOperation } from "../../errors";
-import { isTauriRuntime } from "../../tauriRuntime";
+import { isTauriRuntime } from "../../platform/tauri/runtime";
 import {
   mediaKind,
   pathKey,

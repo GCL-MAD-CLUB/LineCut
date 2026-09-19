@@ -1,5 +1,5 @@
-import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { mediaGridLayout } from "../../mediaGridLayout";
+﻿import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { mediaGridLayout } from "../../application/media/mediaGridLayout";
 import {
   Captions,
   ChevronRight,
@@ -32,9 +32,9 @@ import {
   mediaItemProject,
   visibleSubtitleTracks,
 } from "../../systems/ProjectSystem";
-import { isTauriRuntime } from "../../tauriRuntime";
-import { formatMonitorTime } from "../../time";
-import { normalizeFrameRate } from "../../timeline";
+import { isTauriRuntime } from "../../platform/tauri/runtime";
+import { formatMonitorTime } from "../../core/editor/time";
+import { normalizeFrameRate } from "../../core/editor/timeline";
 import type { MediaBinFolder, MediaBinItem, Project } from "../../types";
 import type { MediaBinViewMode } from "./mediaBinState";
 import { MediaBinVideoThumbnail } from "./MediaBinVideoThumbnail";

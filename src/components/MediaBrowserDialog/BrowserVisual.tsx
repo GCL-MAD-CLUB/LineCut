@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+﻿import { useEffect, useRef, useState } from "react";
 import { File, Folder } from "lucide-react";
 import { invokeCommand, runOperation } from "../../errors";
-import { createFfmpegTaskId } from "../../ffmpegProgress";
+import { createFfmpegTaskId } from "../../platform/tauri/ffmpegProgress";
 
 let active = 0;
 const waiting: Array<() => void> = [];

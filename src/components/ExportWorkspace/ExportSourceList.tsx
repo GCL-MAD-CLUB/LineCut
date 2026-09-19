@@ -1,4 +1,4 @@
-import { formatDuration } from "../../time";
+﻿import { formatDuration } from "../../core/editor/time";
 import type { ExportClip, ExportSource } from "../../systems/ExportSystem";
 import { ExportClipThumbnail } from "./ExportClipThumbnail";
 

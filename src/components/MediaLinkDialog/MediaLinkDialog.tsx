@@ -1,8 +1,8 @@
-import { open as openDialog, type DialogFilter } from "@tauri-apps/plugin-dialog";
+﻿import { open as openDialog, type DialogFilter } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invokeCommand, runOperation } from "../../errors";
-import { createFfmpegTaskId } from "../../ffmpegProgress";
-import { formatMonitorTime } from "../../time";
+import { createFfmpegTaskId } from "../../platform/tauri/ffmpegProgress";
+import { formatMonitorTime } from "../../core/editor/time";
 import type { MediaBinItemKind } from "../../types";
 import { MediaBrowserDialog } from "../MediaBrowserDialog";
 import { ModalDialog } from "../ModalDialog";

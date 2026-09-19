@@ -454,6 +454,82 @@ export function createProjectHistory(
   };
 }
 
+function projectFileOperationKey(operation: ProjectFileOperation) {
+  switch (operation.type) {
+    case "project.set":
+      return `${operation.type}:${operation.projectId}`;
+    case "media-item.set":
+      return `${operation.type}:${operation.itemId}`;
+    case "media-folder.set":
+      return `${operation.type}:${operation.folderId}`;
+    case "subtitle.set":
+      return `${operation.type}:${operation.trackContext}`;
+    case "storyboard.set":
+      return `${operation.type}:${operation.videoContext}`;
+    default:
+      return operation.type;
+  }
+}
+
+function mergeLatestOperations(
+  previous: readonly ProjectFileOperation[],
+  next: readonly ProjectFileOperation[],
+) {
+  const merged = [...previous];
+  const indexByKey = new Map(
+    merged.map((operation, index) => [projectFileOperationKey(operation), index] as const),
+  );
+  for (const operation of next) {
+    const key = projectFileOperationKey(operation);
+    const index = indexByKey.get(key);
+    if (index === undefined) {
+      indexByKey.set(key, merged.length);
+      merged.push(operation);
+    } else {
+      merged[index] = operation;
+    }
+  }
+  return merged;
+}
+
+function mergeOriginalOperations(
+  previous: readonly ProjectFileOperation[],
+  next: readonly ProjectFileOperation[],
+) {
+  const merged = [...previous];
+  const known = new Set(merged.map(projectFileOperationKey));
+  for (const operation of next) {
+    const key = projectFileOperationKey(operation);
+    if (known.has(key)) continue;
+    known.add(key);
+    merged.push(operation);
+  }
+  return merged;
+}
+
+function mergeGroupedHistoryEntry(
+  previous: ProjectHistoryEntry,
+  next: ProjectHistoryEntry,
+): ProjectHistoryEntry {
+  return {
+    ...next,
+    id: previous.id,
+    event: {
+      ...next.event,
+      id: previous.event.id,
+      operations: mergeLatestOperations(previous.event.operations, next.event.operations),
+    },
+    inverseEvent: {
+      ...next.inverseEvent,
+      id: previous.inverseEvent.id,
+      operations: mergeOriginalOperations(
+        previous.inverseEvent.operations,
+        next.inverseEvent.operations,
+      ),
+    },
+  };
+}
+
 export function appendProjectHistoryEntry(
   current: ProjectHistoryState,
   entry: ProjectHistoryEntry,
@@ -465,13 +541,10 @@ export function appendProjectHistoryEntry(
     Boolean(entry.groupId) &&
     entry.groupId === previousEntry?.groupId &&
     source.cursor === source.entries.length;
-  const nextEntry = shouldMerge
-    ? {
-        ...entry,
-        id: previousEntry.id,
-        inverseEvent: previousEntry.inverseEvent,
-      }
-    : entry;
+  const nextEntry = shouldMerge ? mergeGroupedHistoryEntry(previousEntry, entry) : entry;
+  if (shouldMerge && savedCursor === source.cursor) {
+    savedCursor = -1;
+  }
   const entries = [
     ...source.entries.slice(0, shouldMerge ? source.cursor - 1 : source.cursor),
     nextEntry,

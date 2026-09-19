@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+﻿import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, PointerEventHandler } from "react";
-import { clampTimelineStartFrame } from "../../timeline";
+import { clampTimelineStartFrame } from "../../core/editor/timeline";
 
 type ActiveRangeHandle = "start" | "end" | "both" | null;
 type RangeDragUpdate = (deltaRatio: number) => void;

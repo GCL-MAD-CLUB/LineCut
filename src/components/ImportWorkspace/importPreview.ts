@@ -1,5 +1,5 @@
-import { invokeCommand, runOperation } from "../../errors";
-import { isTauriRuntime } from "../../tauriRuntime";
+﻿import { invokeCommand, runOperation } from "../../errors";
+import { isTauriRuntime } from "../../platform/tauri/runtime";
 import type { ImportMetadata } from "./importBrowserModel";
 
 let active = 0;

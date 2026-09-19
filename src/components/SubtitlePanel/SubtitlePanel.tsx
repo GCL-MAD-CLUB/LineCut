@@ -1,4 +1,4 @@
-import { useVirtualizer } from "@tanstack/react-virtual";
+﻿import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ArrowDownAZ,
   ArrowDownZA,
@@ -39,7 +39,7 @@ import {
   enqueueQuickExport,
   requestExport,
 } from "../../systems/ExportSystem";
-import { normalizeFrameRate, timeUsToFrame } from "../../timeline";
+import { normalizeFrameRate, timeUsToFrame } from "../../core/editor/timeline";
 import {
   timelineThumbnails,
   timelineThumbnailVisibleRange,

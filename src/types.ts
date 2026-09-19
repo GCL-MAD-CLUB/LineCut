@@ -313,6 +313,26 @@ export interface AddExternalSubtitlesResult {
   warnings: UserNotice[];
 }
 
+export interface MediaAutoBindingAssignment {
+  itemId: string;
+  videoId: string;
+}
+
+export interface MediaAutoSubtitleBinding {
+  videoId: string;
+  itemIds: string[];
+  tracks: SubtitleTrack[];
+  cues: Record<string, SubtitleCue[]>;
+}
+
+export interface MediaAutoBindingBatch {
+  copies: MediaBinItem[];
+  audioBindings: MediaAutoBindingAssignment[];
+  subtitleBindings: MediaAutoSubtitleBinding[];
+  historyGroupId?: string;
+  historyLabel?: string;
+}
+
 export interface Preferences {
   cache_dir: string;
   ffmpeg_path: string;

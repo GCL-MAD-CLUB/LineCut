@@ -1,7 +1,7 @@
-import { convertFileSrc } from "@tauri-apps/api/core";
+﻿import { convertFileSrc } from "@tauri-apps/api/core";
 import { captureOperationError, clientError, invokeCommand } from "../errors";
-import { isTauriRuntime } from "../tauriRuntime";
-import { frameDurationUs } from "../timeline";
+import { isTauriRuntime } from "../platform/tauri/runtime";
+import { frameDurationUs } from "../core/editor/timeline";
 import {
   createTimelineThumbnailManager,
   type ExtractedTimelineThumbnail,

@@ -1,4 +1,4 @@
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+﻿import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   Grid2X2,
   FolderPlus,
@@ -35,7 +35,7 @@ import {
   cancelFfmpegTask,
   createFfmpegTaskId,
   listenToFfmpegTaskProgress,
-} from "../../ffmpegProgress";
+} from "../../platform/tauri/ffmpegProgress";
 import {
   defaultMediaBinFolderColor,
   isMediaItemEnabled,
@@ -52,14 +52,14 @@ import {
   enqueueQuickExport,
   requestExport,
 } from "../../systems/ExportSystem";
-import { isTauriRuntime } from "../../tauriRuntime";
+import { isTauriRuntime } from "../../platform/tauri/runtime";
 import type {
   AddExternalSubtitlesResult,
   DemuxMediaResult,
   MediaBinFolder,
   MediaBinItem,
 } from "../../types";
-import { runMediaImportTask } from "../../mediaImportTask";
+import { runMediaImportTask } from "../../application/media/mediaImportTask";
 import { MediaLinkDialog, type MediaLinkCandidate, type MediaLinkMode } from "../MediaLinkDialog";
 import { ModalDialog } from "../ModalDialog";
 import {

@@ -1,10 +1,10 @@
-import { convertFileSrc } from "@tauri-apps/api/core";
+﻿import { convertFileSrc } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
 import { runOperation } from "../../errors";
-import { isTauriRuntime } from "../../tauriRuntime";
-import { extractVideoCover } from "../../thumbnail";
-import { useMediaCoverDeferred } from "../../mediaAnalysisTask";
-import { frameDurationUs, normalizeFrameRate } from "../../timeline";
+import { isTauriRuntime } from "../../platform/tauri/runtime";
+import { extractVideoCover } from "../../application/media/thumbnail";
+import { useMediaCoverDeferred } from "../../application/media/mediaAnalysisTask";
+import { frameDurationUs, normalizeFrameRate } from "../../core/editor/timeline";
 import type { MediaBinItem, Project } from "../../types";
 
 interface MediaBinVideoThumbnailProps {

@@ -1,4 +1,4 @@
-// Run with: node --experimental-strip-types scripts/test-import-workspace.mjs
+﻿// Run with: node --experimental-strip-types scripts/test-import-workspace.mjs
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
@@ -15,7 +15,7 @@ import {
   inferMediaAutoBindings,
   mediaNameMatchScore,
   prepareMediaAutoBindings,
-} from "../src/mediaAutoBinding.ts";
+} from "../src/application/media/mediaAutoBinding.ts";
 
 // Resolve the dependency for Node's type-stripping runner without changing Vite imports.
 const scannerSource = readFileSync(

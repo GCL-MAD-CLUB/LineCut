@@ -1,5 +1,5 @@
-import { invokeCommand, runOperation } from "../../errors";
-import { createFfmpegTaskId } from "../../ffmpegProgress";
+﻿import { invokeCommand, runOperation } from "../../errors";
+import { createFfmpegTaskId } from "../../platform/tauri/ffmpegProgress";
 import type { ImportResult, MediaBinItem } from "../../types";
 import { fileExtension, mediaKind, type ImportEntry } from "./importBrowserModel";
 

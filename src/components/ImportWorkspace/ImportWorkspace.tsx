@@ -1,9 +1,9 @@
-import { useMemo, useRef, useState } from "react";
+﻿import { useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { scheduleMediaAnalysis } from "../../mediaAnalysisTask";
-import { scheduleMediaAutoBinding } from "../../mediaAutoBindTask";
+import { scheduleMediaAnalysis } from "../../application/media/mediaAnalysisTask";
+import { scheduleMediaAutoBinding } from "../../application/media/mediaAutoBindTask";
 import { defaultMediaBinFolderColor, useProjectPort } from "../../systems/ProjectSystem";
-import { isTauriRuntime } from "../../tauriRuntime";
+import { isTauriRuntime } from "../../platform/tauri/runtime";
 import { ImportSidebar } from "./ImportSidebar";
 import { ImportToolbar } from "./ImportToolbar";
 import { ImportFileView } from "./ImportFileView";
@@ -38,8 +38,7 @@ export function ImportWorkspace({ onImportCompleted, onCancel }: ImportWorkspace
     mediaItemsAdded,
     mediaFolderAdded,
     mediaItemsMovedToFolder,
-    mediaItemsBound,
-    subtitleTracksAddedToVideo,
+    mediaAutoBindingsApplied,
     warningsAppended,
     messagePublished,
   } = useProjectPort(
@@ -49,8 +48,7 @@ export function ImportWorkspace({ onImportCompleted, onCancel }: ImportWorkspace
       "mediaItemsAdded",
       "mediaFolderAdded",
       "mediaItemsMovedToFolder",
-      "mediaItemsBound",
-      "subtitleTracksAddedToVideo",
+      "mediaAutoBindingsApplied",
       "warningsAppended",
       "messagePublished",
     ],
@@ -129,25 +127,23 @@ export function ImportWorkspace({ onImportCompleted, onCancel }: ImportWorkspace
             ],
             folderId,
           );
-        if (settings.autoBind) {
-          scheduleMediaAutoBinding({
-            importedItemIds: [
-              ...results.map((result) => result.project.asset.id),
-              ...subtitles.map((item) => item.id),
-            ],
-            type: settings.autoBindType,
-            preset: settings.autoBindPreset,
-            preference: settings.autoBindPreference,
-            actions: {
-              mediaItemsAdded,
-              mediaItemsBound,
-              subtitleTracksAddedToVideo,
-              warningsAppended,
-              messagePublished,
-            },
-          });
-        }
-        scheduleMediaAnalysis(results);
+        const autoBinding = settings.autoBind
+          ? scheduleMediaAutoBinding({
+              importedItemIds: [
+                ...results.map((result) => result.project.asset.id),
+                ...subtitles.map((item) => item.id),
+              ],
+              type: settings.autoBindType,
+              preset: settings.autoBindPreset,
+              preference: settings.autoBindPreference,
+              actions: {
+                mediaAutoBindingsApplied,
+                warningsAppended,
+                messagePublished,
+              },
+            })
+          : Promise.resolve();
+        scheduleMediaAnalysis(results, autoBinding);
       }
       const remaining = selection.files.filter((entry) => !completed.has(entry.path));
       selection.retainFiles(remaining);

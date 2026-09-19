@@ -1,4 +1,4 @@
-import { convertFileSrc } from "@tauri-apps/api/core";
+﻿import { convertFileSrc } from "@tauri-apps/api/core";
 import { Film, Star } from "lucide-react";
 import {
   useEffect,
@@ -10,8 +10,8 @@ import {
   type SyntheticEvent,
 } from "react";
 import { timelineThumbnails, type TimelineThumbnailResolution } from "../../timelineThumbnail";
-import { isTauriRuntime } from "../../tauriRuntime";
-import { formatDuration } from "../../time";
+import { isTauriRuntime } from "../../platform/tauri/runtime";
+import { formatDuration } from "../../core/editor/time";
 import type { SubtitleCue } from "../../types";
 import type { SubtitleCueFlag, SubtitleCueVisualLabel } from "./subtitlePanelState";
 

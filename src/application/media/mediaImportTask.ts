@@ -1,13 +1,13 @@
-import { createTaskProgress } from "./systems/TaskSystem";
-import { clientError, invokeCommand } from "./errors";
-import type { OperationKey } from "./errors";
+﻿import { createTaskProgress } from "../../systems/TaskSystem";
+import { clientError, invokeCommand } from "../../errors";
+import type { OperationKey } from "../../errors";
 import {
   cancelFfmpegTask,
   createFfmpegTaskId,
   listenToFfmpegTaskProgress,
   listenToFfmpegTasksProgress,
-} from "./ffmpegProgress";
-import type { ImportResult } from "./types";
+} from "../../platform/tauri/ffmpegProgress";
+import type { ImportResult } from "../../types";
 
 export type MediaImportTaskOutcome =
   | { status: "success"; path: string; result: ImportResult }

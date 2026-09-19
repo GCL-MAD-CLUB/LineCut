@@ -1,4 +1,4 @@
-import { open } from "@tauri-apps/plugin-dialog";
+﻿import { open } from "@tauri-apps/plugin-dialog";
 import {
   Clock3,
   FileClock,
@@ -11,9 +11,9 @@ import {
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { invokeCommand, runOperation } from "../../errors";
-import { createFfmpegTaskId } from "../../ffmpegProgress";
+import { createFfmpegTaskId } from "../../platform/tauri/ffmpegProgress";
 import { defaultPreferences, useProjectPort } from "../../systems/ProjectSystem";
-import { isTauriRuntime } from "../../tauriRuntime";
+import { isTauriRuntime } from "../../platform/tauri/runtime";
 import type { Preferences } from "../../types";
 
 const executableFilters = [

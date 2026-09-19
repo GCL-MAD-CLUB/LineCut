@@ -1,4 +1,4 @@
-import { parseFrameRate } from "../../timeline";
+﻿import { parseFrameRate } from "../../core/editor/timeline";
 import { expandedStoryboardKeywordText } from "../../components/StoryboardPanel/storyboardKeywords";
 import type { MediaBinItem, MediaStream, Project, StoryboardState } from "../../types";
 import {

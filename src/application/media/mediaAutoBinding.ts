@@ -1,4 +1,4 @@
-import type { MediaBinItem } from "./types";
+﻿import type { MediaBinItem } from "../../types";
 
 export type MediaAutoBindType = "all" | "audio" | "subtitle";
 export type MediaAutoBindPreset = "direct" | "virtual-copy";
@@ -9,6 +9,8 @@ export interface MediaAutoBindingPair {
   videoId: string;
   score: number;
 }
+
+export type MediaAutoBindingProgress = (completed: number, total: number) => void;
 
 const auxiliaryTokens = new Set([
   "audio",
@@ -37,7 +39,14 @@ function stem(name: string) {
   return (dot > 0 ? fileName.slice(0, dot) : fileName).normalize("NFKC").toLocaleLowerCase();
 }
 
-function nameParts(name: string) {
+interface MediaNameParts {
+  raw: string;
+  compact: string;
+  tokens: Set<string>;
+  numbers: string;
+}
+
+function nameParts(name: string): MediaNameParts {
   const raw = stem(name);
   const withoutAuxiliarySuffix = raw.replace(
     /(?:[\s._-]*(?:audio|sound|subtitle|subtitles|sub|dub|voice|chs|cht|sc|tc|eng|jpn|字幕|音频|音轨|配音))+$/giu,
@@ -45,7 +54,13 @@ function nameParts(name: string) {
   );
   const tokens = withoutAuxiliarySuffix.match(/[\p{L}\p{N}]+/gu) ?? [];
   const meaningful = tokens.filter((token) => !auxiliaryTokens.has(token));
-  return { raw, compact: meaningful.join(""), tokens: meaningful };
+  const compact = meaningful.join("");
+  return {
+    raw,
+    compact,
+    tokens: new Set(meaningful),
+    numbers: (compact.match(/\d+/g) ?? []).join(":"),
+  };
 }
 
 function editSimilarity(left: string, right: string) {
@@ -68,17 +83,15 @@ function editSimilarity(left: string, right: string) {
   return 1 - previous[right.length] / Math.max(left.length, right.length);
 }
 
-export function mediaNameMatchScore(leftName: string, rightName: string) {
-  const left = nameParts(leftName);
-  const right = nameParts(rightName);
+function preparedMediaNameMatchScore(left: MediaNameParts, right: MediaNameParts) {
   if (left.raw === right.raw) return 1;
   if (left.compact && left.compact === right.compact) return 0.98;
-  const leftTokens = new Set(left.tokens);
-  const rightTokens = new Set(right.tokens);
-  const shared = [...leftTokens].filter((token) => rightTokens.has(token)).length;
-  const union = new Set([...leftTokens, ...rightTokens]).size;
+  let shared = 0;
+  for (const token of left.tokens) {
+    if (right.tokens.has(token)) shared += 1;
+  }
+  const union = left.tokens.size + right.tokens.size - shared;
   const tokenScore = union ? shared / union : 0;
-  const compactScore = editSimilarity(left.compact, right.compact);
   const containsScore =
     left.compact.length >= 3 &&
     right.compact.length >= 3 &&
@@ -86,20 +99,22 @@ export function mediaNameMatchScore(leftName: string, rightName: string) {
       ? Math.min(left.compact.length, right.compact.length) /
         Math.max(left.compact.length, right.compact.length)
       : 0;
-  const baseScore = Math.max(compactScore, tokenScore * 0.92, containsScore * 0.96);
-  const leftNumbers = left.compact.match(/\d+/g) ?? [];
-  const rightNumbers = right.compact.match(/\d+/g) ?? [];
-  if (
-    leftNumbers.length > 0 &&
-    rightNumbers.length > 0 &&
-    leftNumbers.join(":") !== rightNumbers.join(":")
-  ) {
-    return Math.min(baseScore, 0.55);
+  const cheapScore = Math.max(tokenScore * 0.92, containsScore * 0.96);
+  const numberCap =
+    left.numbers && right.numbers && left.numbers !== right.numbers
+      ? 0.55
+      : Boolean(left.numbers) !== Boolean(right.numbers)
+        ? 0.65
+        : null;
+  if (numberCap !== null && cheapScore >= numberCap) {
+    return numberCap;
   }
-  if ((leftNumbers.length === 0) !== (rightNumbers.length === 0)) {
-    return Math.min(baseScore, 0.65);
-  }
-  return baseScore;
+  const baseScore = Math.max(editSimilarity(left.compact, right.compact), cheapScore);
+  return numberCap === null ? baseScore : Math.min(baseScore, numberCap);
+}
+
+export function mediaNameMatchScore(leftName: string, rightName: string) {
+  return preparedMediaNameMatchScore(nameParts(leftName), nameParts(rightName));
 }
 
 function timeMatchScore(item: MediaBinItem, video: MediaBinItem) {
@@ -129,38 +144,55 @@ export function inferMediaAutoBindings(
   items: readonly MediaBinItem[],
   type: MediaAutoBindType,
   preference: MediaAutoBindPreference,
+  onProgress?: MediaAutoBindingProgress,
 ): MediaAutoBindingPair[] {
-  const videos = items.filter((item) => {
+  const videos = items.flatMap((item) => {
     const extension = item.path.split(/[\\/]/).pop()?.split(".").pop()?.toLocaleLowerCase() ?? "";
-    return item.kind === "video" && !imageExtensions.has(extension);
+    return item.kind === "video" && !imageExtensions.has(extension)
+      ? [{ item, name: nameParts(item.file_name) }]
+      : [];
   });
-  if (videos.length === 0) return [];
-  return items.flatMap((item) => {
-    if (!supportsType(item, type)) return [];
-    const ranked = videos
-      .map((video) => {
-        const nameScore = mediaNameMatchScore(item.file_name, video.file_name);
-        const timeScore = timeMatchScore(item, video);
-        return {
-          itemId: item.id,
-          videoId: video.id,
-          nameScore,
-          timeScore,
-          score: preference === "name" ? nameScore : nameScore * 0.8 + timeScore * 0.2,
-        };
-      })
-      .sort(
-        (left, right) =>
-          right.score - left.score ||
-          right.nameScore - left.nameScore ||
-          left.videoId.localeCompare(right.videoId),
-      );
-    const best = ranked[0];
-    if (!best) return [];
+  const candidates = items.filter((item) => supportsType(item, type));
+  if (videos.length === 0 || candidates.length === 0) {
+    onProgress?.(candidates.length, candidates.length);
+    return [];
+  }
+
+  const bindings: MediaAutoBindingPair[] = [];
+  for (let candidateIndex = 0; candidateIndex < candidates.length; candidateIndex += 1) {
+    const item = candidates[candidateIndex];
+    const itemName = nameParts(item.file_name);
+    let best:
+      | (MediaAutoBindingPair & {
+          nameScore: number;
+        })
+      | undefined;
+    for (const video of videos) {
+      const nameScore = preparedMediaNameMatchScore(itemName, video.name);
+      const score =
+        preference === "name"
+          ? nameScore
+          : nameScore * 0.8 + timeMatchScore(item, video.item) * 0.2;
+      if (
+        !best ||
+        score > best.score ||
+        (score === best.score && nameScore > best.nameScore) ||
+        (score === best.score &&
+          nameScore === best.nameScore &&
+          video.item.id.localeCompare(best.videoId) < 0)
+      ) {
+        best = { itemId: item.id, videoId: video.item.id, nameScore, score };
+      }
+    }
+    if (!best) continue;
     const accepted =
       preference === "name" ? best.nameScore >= 0.72 : best.nameScore >= 0.42 && best.score >= 0.5;
-    return accepted ? [{ itemId: best.itemId, videoId: best.videoId, score: best.score }] : [];
-  });
+    if (accepted) {
+      bindings.push({ itemId: best.itemId, videoId: best.videoId, score: best.score });
+    }
+    onProgress?.(candidateIndex + 1, candidates.length);
+  }
+  return bindings;
 }
 
 export function createVirtualBindingCopy(item: MediaBinItem) {
@@ -178,16 +210,19 @@ export function prepareMediaAutoBindings(
   type: MediaAutoBindType,
   preset: MediaAutoBindPreset,
   preference: MediaAutoBindPreference,
+  onProgress?: MediaAutoBindingProgress,
 ) {
   const itemsById = new Map(items.map((item) => [item.id, item]));
   const copies: MediaBinItem[] = [];
-  const bindings = inferMediaAutoBindings(items, type, preference).flatMap((binding) => {
-    const source = itemsById.get(binding.itemId);
-    if (!source) return [];
-    if (preset === "direct") return [binding];
-    const copy = createVirtualBindingCopy(source);
-    copies.push(copy);
-    return [{ ...binding, itemId: copy.id }];
-  });
+  const bindings = inferMediaAutoBindings(items, type, preference, onProgress).flatMap(
+    (binding) => {
+      const source = itemsById.get(binding.itemId);
+      if (!source) return [];
+      if (preset === "direct") return [binding];
+      const copy = createVirtualBindingCopy(source);
+      copies.push(copy);
+      return [{ ...binding, itemId: copy.id }];
+    },
+  );
   return { bindings, copies };
 }

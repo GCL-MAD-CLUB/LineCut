@@ -1,14 +1,14 @@
-import {
+﻿import {
   PanelRegistry,
   type DockAreaId,
   type DockLayoutNode,
   type PanelManagerInitialState,
-} from "./components/DockLayout";
-import { historyPanelDefinition } from "./components/HistoryPanel";
-import { mediaBinPanelDefinition, mediaBinPanelType } from "./components/MediaBin";
-import { sourcePanelDefinition, sourcePanelType } from "./components/SourceMonitor";
-import { storyboardPanelDefinition, storyboardPanelType } from "./components/StoryboardPanel";
-import { subtitlePanelDefinition, subtitlePanelType } from "./components/SubtitlePanel";
+} from "../components/DockLayout";
+import { historyPanelDefinition } from "../components/HistoryPanel";
+import { mediaBinPanelDefinition, mediaBinPanelType } from "../components/MediaBin";
+import { sourcePanelDefinition, sourcePanelType } from "../components/SourceMonitor";
+import { storyboardPanelDefinition, storyboardPanelType } from "../components/StoryboardPanel";
+import { subtitlePanelDefinition, subtitlePanelType } from "../components/SubtitlePanel";
 
 export const appPanelRegistry = new PanelRegistry([
   sourcePanelDefinition,

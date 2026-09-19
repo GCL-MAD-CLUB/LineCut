@@ -1,17 +1,17 @@
-import { captureOperationError, invokeCommand } from "../../errors";
+﻿import { captureOperationError, invokeCommand } from "../../errors";
 import { normalizeError } from "../../errors/runtime";
 import {
   cancelFfmpegTask,
   createFfmpegTaskId,
   listenToFfmpegTaskProgress,
-} from "../../ffmpegProgress";
+} from "../../platform/tauri/ffmpegProgress";
 import { createTaskProgress } from "../TaskSystem";
 import {
   applyImportedMediaResults,
   getProjectExportContext,
   getProjectWorkspaceSnapshot,
 } from "../ProjectSystem";
-import { runMediaImportBatchTask } from "../../mediaImportTask";
+import { runMediaImportBatchTask } from "../../application/media/mediaImportTask";
 import type {
   ExportClip,
   ExportOutput,

@@ -1,4 +1,4 @@
-import type { VirtualItem, Virtualizer } from "@tanstack/react-virtual";
+﻿import type { VirtualItem, Virtualizer } from "@tanstack/react-virtual";
 import { Star } from "lucide-react";
 import {
   useEffect,
@@ -11,7 +11,7 @@ import {
   type RefObject,
   type UIEvent as ReactUIEvent,
 } from "react";
-import { formatMonitorTime } from "../../time";
+import { formatMonitorTime } from "../../core/editor/time";
 import {
   timelineThumbnailWindowContains,
   type TimelineThumbnailResolution,
