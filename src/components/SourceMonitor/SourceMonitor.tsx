@@ -31,6 +31,7 @@ import {
   timeUsToFrame,
 } from "../../core/editor/timeline";
 import { MonitorRange } from "./MonitorRange";
+import { crossedStoryboardGap, storyboardGaps } from "../../core/editor/storyboard";
 import { activeMediaDragVideoId, markMediaDragHandled } from "../MediaBin/mediaDrag";
 import { usePanelManagerState } from "../DockLayout";
 import "./SourceMonitor.css";
@@ -195,6 +196,7 @@ export function SourceMonitor() {
   const {
     project,
     projects,
+    storyboards,
     mediaItems,
     activeVideoId,
     detachedVideoIds,
@@ -209,6 +211,7 @@ export function SourceMonitor() {
     [
       "project",
       "projects",
+      "storyboards",
       "mediaItems",
       "activeVideoId",
       "detachedVideoIds",
@@ -399,6 +402,13 @@ export function SourceMonitor() {
     ? `${activeVideoId}:${project.asset.id}:${durationUs}:${frameRate}`
     : `empty:${frameRate}`;
   const storyboardVideoContext = `${activeVideoId}:${project?.asset.id ?? ""}:${project?.asset.fingerprint ?? ""}`;
+  const storyboard = storyboards[storyboardVideoContext];
+  const skippedRanges = useMemo(
+    () => (storyboard ? storyboardGaps(storyboard.shots, durationFrames) : []),
+    [storyboard, durationFrames],
+  );
+  const skippedRangesRef = useRef(skippedRanges);
+  skippedRangesRef.current = skippedRanges;
 
   const defaultTimelineSpanFrames = Math.max(1, Math.round(frameRate * 60));
 
@@ -762,13 +772,22 @@ export function SourceMonitor() {
     return durationUs > 0 ? clamp(targetUs, 0, durationUs) : targetUs;
   }
 
-  function seekToFrame(nextFrame: number, preserveCuePlaybackEnd = false, centerIfHidden = true) {
+  function seekToFrame(
+    nextFrame: number,
+    preserveCuePlaybackEnd = false,
+    centerIfHidden = true,
+    fromPlaybackTick = false,
+  ) {
     if (!preserveCuePlaybackEnd) {
       stopCuePlaybackFrameMonitor();
       cuePlaybackPauseFrameRef.current = null;
       cuePlaybackEndFrameRef.current = null;
     }
     const targetFrame = clampMonitorFrame(nextFrame);
+    if (!fromPlaybackTick && usesManualPlaybackClock(playbackModeRef.current)) {
+      manualPlaybackFrameRef.current = targetFrame;
+      manualPlaybackTickAtRef.current = performance.now();
+    }
     const centeredTimelineStartFrame =
       centerIfHidden && isFrameHiddenInTimeline(targetFrame)
         ? timelineStartForCenteredFrame(targetFrame)
@@ -876,6 +895,8 @@ export function SourceMonitor() {
       finishVideoSeek(element);
       return;
     }
+
+    if (!element.paused && skipCrossedStoryboardGap(element, nextFrame)) return;
 
     const cuePlaybackEndFrame = cuePlaybackEndFrameRef.current;
     if (cuePlaybackEndFrame !== null && !cuePlaybackUsesVideoFrameCallbackRef.current) {
@@ -1015,6 +1036,27 @@ export function SourceMonitor() {
     }
   }
 
+  function skipCrossedStoryboardGap(video: HTMLVideoElement, nextFrame: number) {
+    const gap = crossedStoryboardGap(skippedRangesRef.current, currentFrameRef.current, nextFrame);
+    if (!gap) return false;
+    const cueEnd = cuePlaybackEndFrameRef.current;
+    if (cueEnd !== null && cueEnd < gap.endFrame) {
+      finishCuePlaybackAtFrame(video, cueEnd);
+    } else if (gap.endFrame >= durationFrames) {
+      // No remaining shot: stop on the last retained frame instead of showing
+      // a frame from the deleted tail.
+      finishCuePlaybackAtFrame(video, Math.max(0, gap.startFrame - 1));
+    } else {
+      manualPlaybackFrameRef.current = gap.endFrame;
+      seekToFrame(gap.endFrame, true);
+      syncBoundAudio(video, true);
+      if (pcmPlaybackConfig(playbackModeRef.current, frameRate)) {
+        playRollingPcmAudio(playbackModeRef.current);
+      }
+    }
+    return true;
+  }
+
   function stopCuePlaybackFrameMonitor() {
     const activeCallback = cuePlaybackVideoFrameCallbackRef.current;
     cuePlaybackVideoFrameCallbackRef.current = null;
@@ -1067,6 +1109,7 @@ export function SourceMonitor() {
     pauseBoundAudio();
     stopRollingPcmAudio();
     video.pause();
+    requestVideoSeek(endFrame);
   }
 
   function stopCuePlaybackTickerAndFrameMonitor() {
@@ -1116,12 +1159,18 @@ export function SourceMonitor() {
         0,
         durationFrames,
       );
+      if (effectiveRate > 0 && skipCrossedStoryboardGap(video, Math.floor(nextFrame))) {
+        if (playbackModeRef.current !== 0) {
+          playbackTickRef.current = requestAnimationFrame(tick);
+        }
+        return;
+      }
       manualPlaybackFrameRef.current = nextFrame;
       const targetFrame = clampMonitorFrame(
         effectiveRate < 0 ? Math.ceil(nextFrame) : Math.floor(nextFrame),
       );
       if (targetFrame !== seekTargetFrameRef.current) {
-        seekToFrame(targetFrame);
+        seekToFrame(targetFrame, false, true, true);
       }
       const reachedPlaybackEdge =
         (effectiveRate < 0 && nextFrame <= 0) || (effectiveRate > 0 && nextFrame >= durationFrames);
@@ -1433,6 +1482,7 @@ export function SourceMonitor() {
         <TimelineComponent
           key={`${mediaKey}:${project?.asset.fingerprint ?? ""}:${storyboardVisible && panelActive}`}
           videoContext={storyboardVideoContext}
+          skippedRanges={skippedRanges}
           frameRate={frameRate}
           durationUs={durationUs}
           onCueRangeChange={setCueRange}

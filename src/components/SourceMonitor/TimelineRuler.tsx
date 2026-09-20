@@ -6,6 +6,7 @@ import {
   minTimelineSpanFrames as getMinTimelineSpanFrames,
 } from "../../core/editor/timeline";
 import type { MonitorCueRange } from "./sourceMonitorState";
+import type { StoryboardGap } from "../../core/editor/storyboard";
 
 const CURSOR_EDGE_INSET_PX = 6;
 const TIMELINE_EDGE_SCROLL_BASE_SPANS_PER_SECOND = 0.2;
@@ -23,6 +24,7 @@ export interface TimelineRulerProps {
   timelineStartFrame: number;
   timelineSpanFrames: number;
   cueRange: MonitorCueRange | null;
+  skippedRanges?: readonly StoryboardGap[];
   onMinTimelineSpanFramesChange: (minSpanFrames: number) => void;
   onTimelineStartFrameChange: (startFrame: number) => void;
   onSeekFrame: (frame: number) => number;
@@ -53,6 +55,7 @@ export function TimelineRuler({
   timelineStartFrame,
   timelineSpanFrames,
   cueRange,
+  skippedRanges = [],
   onMinTimelineSpanFramesChange,
   onTimelineStartFrameChange,
   onSeekFrame,
@@ -75,7 +78,7 @@ export function TimelineRuler({
   const cueRangePercent = cueRange
     ? {
         start: ((cueRange.startFrame - timelineStartFrame) / timelineVisibleSpanFrames) * 100,
-        end: ((cueRange.endFrame - timelineStartFrame) / timelineVisibleSpanFrames) * 100,
+        end: ((cueRange.endFrame + 1 - timelineStartFrame) / timelineVisibleSpanFrames) * 100,
       }
     : null;
   const visibleCueRange =
@@ -299,6 +302,23 @@ export function TimelineRuler({
           </div>
         )}
         {hasMedia &&
+          skippedRanges.map((gap) => {
+            const start = Math.max(timelineStartFrame, gap.startFrame);
+            const end = Math.min(timelineEndFrame, gap.endFrame);
+            if (end <= start) return null;
+            return (
+              <span
+                key={gap.startFrame}
+                className="timeline-skipped-range"
+                title="无分镜区域：连续播放时自动跳过，可手动定位播放"
+                style={{
+                  left: `${((start - timelineStartFrame) / timelineVisibleSpanFrames) * 100}%`,
+                  width: `${((end - start) / timelineVisibleSpanFrames) * 100}%`,
+                }}
+              />
+            );
+          })}
+        {hasMedia &&
           ruler.ticks.map((tick) => (
             <span
               key={tick.frame}
@@ -317,7 +337,14 @@ export function TimelineRuler({
             style={{
               left: `${cursorPercent}%`,
             }}
-          />
+          >
+            {ruler.tickStepFrames === 1 && currentFrameClamped < durationFrames && (
+              <span
+                className="timeline-cursor-frame"
+                style={{ width: `${ruler.tickSpacingPx - 2}px` }}
+              />
+            )}
+          </span>
         )}
       </div>
       {children}

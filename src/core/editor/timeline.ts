@@ -1,6 +1,6 @@
 export const MIN_TICK_FRAMES = 1;
-export const MIN_TICK_WIDTH_PX = 4;
-export const MAX_TICK_WIDTH_PX = 12;
+export const MIN_TICK_WIDTH_PX = 6;
+export const MAX_TICK_WIDTH_PX = 16;
 export const DEFAULT_FRAME_RATE = 24;
 const MAJOR_TICK_INTERVALS = 15;
 

@@ -350,7 +350,7 @@
 
 .timeline-cue-fill {
   position: absolute;
-  top: 2px;
+  top: 5px;
   bottom: 1px;
   background: #4b4b4b;
 }
@@ -395,6 +395,50 @@
   height: 13px;
   background: var(--color-accent-monitor);
   clip-path: polygon(0 0, 100% 0, 100% 8px, 50% 13px, 0 8px);
+}
+
+.timeline-cursor::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  bottom: 1px;
+  width: 1.5px;
+  height: 5px;
+  background: #1d1d1d;
+  z-index: 1;
+}
+
+.timeline-cursor-frame {
+  position: absolute;
+  left: calc(50% + 2px);
+  bottom: 0;
+  height: 4px;
+  background: var(--color-accent-monitor);
+}
+
+.timeline-cursor-frame::after {
+  content: "";
+  position: absolute;
+  left: 100%;
+  bottom: 0;
+  width: 4px;
+  height: 4px;
+  background: var(--color-accent-monitor);
+  clip-path: polygon(0 0, 100% 0, 0 100%);
+}
+
+.timeline-skipped-range {
+  position: absolute;
+  top: 5px;
+  bottom: 1px;
+  z-index: 1;
+  background: repeating-linear-gradient(
+    135deg,
+    rgb(150 150 150 / 22%) 0 2px,
+    rgb(20 20 20 / 32%) 2px 6px
+  );
+  border-inline: 1px solid rgb(170 170 170 / 35%);
+  box-sizing: border-box;
 }
 
 .monitor-timeline.empty-state {
