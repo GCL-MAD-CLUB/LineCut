@@ -48,6 +48,7 @@ import {
 import { createTaskProgress, useTaskProgressStatus } from "../../systems/TaskSystem";
 import { isTauriRuntime } from "../../platform/tauri/runtime";
 import { normalizeFrameRate } from "../../core/editor/timeline";
+import { storyboardShotDefaultTitle } from "../../core/editor/storyboard";
 import {
   timelineThumbnails,
   timelineThumbnailVisibleRange,
@@ -57,6 +58,7 @@ import {
 } from "../../timelineThumbnail";
 import type { StoryboardDetectionResult, StoryboardShot } from "../../types";
 import { usePanelManagerState } from "../DockLayout";
+import { ModalDialog } from "../ModalDialog";
 import { annotationShortcutAction, annotationShortcutAutoAdvances } from "../annotationShortcuts";
 import {
   sprayEraserCursor,
@@ -389,9 +391,8 @@ function isEditableKeyboardTarget(target: EventTarget | null) {
   );
 }
 
-function defaultShotTitle(shot: StoryboardShot, shotCount: number) {
-  const digits = Math.max(1, String(Math.max(1, shotCount)).length);
-  return `分镜 ${String(shot.sequence).padStart(digits, "0")}`;
+function defaultShotTitle(shot: StoryboardShot, _shotCount: number) {
+  return storyboardShotDefaultTitle(shot);
 }
 
 function storyboardShotTitle(
@@ -1248,6 +1249,7 @@ export function StoryboardPanel() {
     useState<StoryboardShotKeywordDragPreview | null>(null);
   const [contextMenu, setContextMenu] = useState<StoryboardContextMenuState | null>(null);
   const [annotationMenu, setAnnotationMenu] = useState<StoryboardAnnotationMenuState | null>(null);
+  const [detectionConflictOpen, setDetectionConflictOpen] = useState(false);
   const [storyboardColumnWidths, setStoryboardColumnWidths] = useState(
     initialStoryboardColumnWidths,
   );
@@ -1691,6 +1693,7 @@ export function StoryboardPanel() {
     setSprayActive(false);
     setContextMenu(null);
     setAnnotationMenu(null);
+    setDetectionConflictOpen(false);
     setRatingComparatorMenu(null);
     setSearchScopeMenu(null);
     setSearchRuleMenu(null);
@@ -3196,7 +3199,7 @@ export function StoryboardPanel() {
     },
   });
 
-  async function detectStoryboard() {
+  async function detectStoryboard(mode: "merge" | "overwrite") {
     if (!project || !canDetect) {
       return;
     }
@@ -3225,7 +3228,7 @@ export function StoryboardPanel() {
         detectionFinished(context);
         return;
       }
-      detectionCompleted(context, result.shots);
+      detectionCompleted(context, result.shots, frameRate, mode);
       task.remove();
     } catch (error) {
       if (cancelled) {
@@ -3235,6 +3238,17 @@ export function StoryboardPanel() {
       }
       detectionFinished(context);
     }
+  }
+
+  function requestStoryboardDetection() {
+    if (!canDetect) {
+      return;
+    }
+    if (shots.length > 1) {
+      setDetectionConflictOpen(true);
+      return;
+    }
+    void detectStoryboard("overwrite");
   }
 
   function renderTableHeader(header: (typeof storyboardTableHeaders)[number]) {
@@ -3293,7 +3307,7 @@ export function StoryboardPanel() {
         <button
           type="button"
           className={`storyboard-detect-button ${isDetecting ? "is-detecting" : ""}`}
-          onClick={() => void detectStoryboard()}
+          onClick={requestStoryboardDetection}
           disabled={!canDetect}
           title={
             isDetecting
@@ -4696,6 +4710,58 @@ export function StoryboardPanel() {
               />
             )}
           </PopupMenu>,
+          document.body,
+        )}
+      {detectionConflictOpen &&
+        createPortal(
+          <ModalDialog
+            title=""
+            className="storyboard-detection-conflict-dialog"
+            bodyClassName="storyboard-detection-conflict-dialog-body"
+            onCancel={() => setDetectionConflictOpen(false)}
+            onConfirm={() => {
+              setDetectionConflictOpen(false);
+              void detectStoryboard("merge");
+            }}
+            actions={
+              <>
+                <button
+                  type="button"
+                  className="modal-dialog-confirm"
+                  autoFocus
+                  onClick={() => {
+                    setDetectionConflictOpen(false);
+                    void detectStoryboard("merge");
+                  }}
+                >
+                  合并
+                </button>
+                <button
+                  type="button"
+                  className="modal-dialog-cancel"
+                  onClick={() => {
+                    setDetectionConflictOpen(false);
+                    void detectStoryboard("overwrite");
+                  }}
+                >
+                  覆盖
+                </button>
+                <button
+                  type="button"
+                  className="modal-dialog-cancel"
+                  onClick={() => setDetectionConflictOpen(false)}
+                >
+                  取消
+                </button>
+              </>
+            }
+          >
+            <h3 className="storyboard-detection-conflict-title">当前已有切分</h3>
+            <div className="storyboard-detection-conflict-divider" />
+            <p className="storyboard-detection-conflict-message">
+              请选择合并自动识别到的切点，或覆盖当前切分。
+            </p>
+          </ModalDialog>,
           document.body,
         )}
     </section>

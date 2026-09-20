@@ -1,12 +1,22 @@
 import type { StoryboardShot, StoryboardShotAnnotation, StoryboardState } from "../../types";
+import { storyboardDefaultTitle, storyboardShotDefaultTitle } from "./storyboard";
 import { frameToTimeUs } from "./timeline";
 
 function shotTitle(shot: StoryboardShot, storyboard: StoryboardState) {
-  const digits = String(Math.max(1, storyboard.shots.length)).length;
-  return (
-    storyboard.shotAnnotations[shot.id]?.title ||
-    `分镜 ${String(shot.sequence).padStart(digits, "0")}`
+  return storyboard.shotAnnotations[shot.id]?.title || storyboardShotDefaultTitle(shot);
+}
+
+function uniqueDefaultTitle(storyboard: StoryboardState, initialSequence: number) {
+  const existingTitles = new Set(
+    storyboard.shots.map((shot) => shotTitle(shot, storyboard).trim()),
   );
+  let sequence = Math.max(1, Math.round(initialSequence));
+  let title = storyboardDefaultTitle(sequence);
+  while (existingTitles.has(title)) {
+    sequence += 1;
+    title = storyboardDefaultTitle(sequence);
+  }
+  return title;
 }
 
 function annotation(storyboard: StoryboardState, shot: StoryboardShot): StoryboardShotAnnotation {
@@ -19,17 +29,43 @@ export function splitStoryboardShot(
   frame: number,
   frameRate: number,
   newShotId: string,
+  durationFrames?: number,
+  durationUs?: number,
 ): StoryboardState {
   if (!Number.isInteger(frame) || storyboard.shots.some((shot) => shot.id === newShotId)) {
     return storyboard;
   }
-  const index = storyboard.shots.findIndex(
+  const normalizedDurationFrames = Math.max(0, Math.round(durationFrames ?? 0));
+  const sourceStoryboard =
+    storyboard.shots.length === 0 && frame > 0 && frame < normalizedDurationFrames
+      ? {
+          ...storyboard,
+          shots: [
+            {
+              id: `${newShotId}:initial`,
+              sequence: 1,
+              start_frame: 0,
+              end_frame: normalizedDurationFrames - 1,
+              start_us: 0,
+              end_us:
+                durationUs !== undefined && Number.isFinite(durationUs)
+                  ? Math.max(0, Math.round(durationUs))
+                  : frameToTimeUs(normalizedDurationFrames, frameRate),
+            },
+          ],
+        }
+      : storyboard;
+  const index = sourceStoryboard.shots.findIndex(
     (shot) => frame > shot.start_frame && frame <= shot.end_frame,
   );
   if (index < 0) return storyboard;
-  const original = storyboard.shots[index];
-  const title = shotTitle(original, storyboard);
-  const shots = storyboard.shots.flatMap((shot, shotIndex) =>
+  const original = sourceStoryboard.shots[index];
+  const title = shotTitle(original, sourceStoryboard);
+  const newTitle =
+    index === sourceStoryboard.shots.length - 1
+      ? uniqueDefaultTitle(sourceStoryboard, index + 2)
+      : `${title}-1`;
+  const shots = sourceStoryboard.shots.flatMap((shot, shotIndex) =>
     shotIndex === index
       ? [
           { ...shot, end_frame: frame - 1, end_us: frameToTimeUs(frame - 1, frameRate) },
@@ -38,18 +74,39 @@ export function splitStoryboardShot(
       : [shot],
   );
   return {
-    ...storyboard,
+    ...sourceStoryboard,
     shots: shots.map((shot, shotIndex) => ({ ...shot, sequence: shotIndex + 1 })),
     shotAnnotations: {
-      ...storyboard.shotAnnotations,
-      [original.id]: { ...annotation(storyboard, original), title },
-      [newShotId]: { ...annotation(storyboard, original), title: `${title}-1` },
+      ...sourceStoryboard.shotAnnotations,
+      [original.id]: { ...annotation(sourceStoryboard, original), title },
+      [newShotId]: { ...annotation(sourceStoryboard, original), title: newTitle },
     },
-    shotStacks: storyboard.shotStacks.map((stack) => ({
+    shotStacks: sourceStoryboard.shotStacks.map((stack) => ({
       ...stack,
       shotIds: stack.shotIds.flatMap((id) => (id === original.id ? [id, newShotId] : [id])),
     })),
   };
+}
+
+export function mergeDetectedStoryboardShots(
+  storyboard: StoryboardState,
+  detectedShots: readonly StoryboardShot[],
+  frameRate: number,
+) {
+  let merged = storyboard;
+  for (const detectedShot of detectedShots.slice(1)) {
+    if (merged.shots.some((shot) => shot.start_frame === detectedShot.start_frame)) {
+      continue;
+    }
+    let shotId = detectedShot.id;
+    let duplicateIndex = 1;
+    while (merged.shots.some((shot) => shot.id === shotId)) {
+      shotId = `${detectedShot.id}:merged:${duplicateIndex}`;
+      duplicateIndex += 1;
+    }
+    merged = splitStoryboardShot(merged, detectedShot.start_frame, frameRate, shotId);
+  }
+  return merged;
 }
 
 // A cut is identified by the shot on its right. All frame ranges are inclusive.

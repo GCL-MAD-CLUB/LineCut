@@ -1434,6 +1434,7 @@ export function SourceMonitor() {
           key={`${mediaKey}:${project?.asset.fingerprint ?? ""}:${storyboardVisible && panelActive}`}
           videoContext={storyboardVideoContext}
           frameRate={frameRate}
+          durationUs={durationUs}
           onCueRangeChange={setCueRange}
           onPause={pausePlaybackForPreciseSeek}
           onPauseForInteraction={pausePlaybackForCutInteraction}

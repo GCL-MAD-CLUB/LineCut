@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import { createPanelState } from "../../runtime/systems/PanelState";
+import { mergeDetectedStoryboardShots } from "../../core/editor/storyboardCuts";
 import { useProjectPort } from "../../systems/ProjectSystem";
 import type {
   StoryboardKeywordNode,
@@ -177,7 +178,12 @@ interface StoryboardPanelState
   splitShotStack: (shotId: string) => void;
   setShotStackExpanded: (shotId: string, expanded: boolean) => void;
   setAllShotStacksExpanded: (expanded: boolean) => void;
-  detectionCompleted: (videoContext: string, shots: StoryboardShot[]) => void;
+  detectionCompleted: (
+    videoContext: string,
+    shots: StoryboardShot[],
+    frameRate: number,
+    mode: "merge" | "overwrite",
+  ) => void;
 }
 
 function defaultVideoSessionState(): StoryboardVideoSessionState {
@@ -1278,18 +1284,28 @@ export function useStoryboardPanelState<Selection>(
           : null,
       );
     },
-    detectionCompleted: (videoContext, shots) => {
+    detectionCompleted: (videoContext, shots, frameRate, mode) => {
+      let completedShots = shots;
       commitStoryboard(
-        "生成分镜",
-        (current) => ({
-          ...current,
-          shots,
-          shotStacks: [],
-        }),
+        mode === "merge" ? "合并分镜切点" : "生成分镜",
+        (current) => {
+          if (mode === "merge") {
+            const merged = mergeDetectedStoryboardShots(current, shots, frameRate);
+            completedShots = merged.shots;
+            return merged;
+          }
+          completedShots = shots;
+          return {
+            ...current,
+            shots,
+            shotStacks: [],
+            shotAnnotations: {},
+          };
+        },
         videoContext,
       );
       if (uiState.videoContext === videoContext) {
-        const firstShotId = shots[0]?.id;
+        const firstShotId = completedShots[0]?.id;
         if (firstShotId) {
           uiState.shotSelectionReplaced([firstShotId], firstShotId);
         } else {

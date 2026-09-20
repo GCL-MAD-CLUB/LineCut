@@ -31,6 +31,7 @@ import { TimelineRuler, type TimelineRulerProps } from "./TimelineRuler";
 interface StoryboardTimelineProps extends TimelineRulerProps {
   videoContext: string;
   frameRate: number;
+  durationUs: number;
   onCueRangeChange: (range: MonitorCueRange | null) => void;
   onPause: () => void;
   onPauseForInteraction: () => void;
@@ -73,6 +74,7 @@ function storyboardCutColor(annotation: StoryboardShotAnnotation | undefined) {
 export function StoryboardTimeline({
   videoContext,
   frameRate,
+  durationUs,
   onCueRangeChange,
   onPause,
   onPauseForInteraction,
@@ -130,9 +132,12 @@ export function StoryboardTimeline({
     : [];
   const contextCut = cuts.find((shot) => shot.id === menu?.cutId);
   const menuEditCut = contextCut && selectedIds.has(contextCut.id) ? contextCut : selectedCuts[0];
+  const cutFrame = Math.round(currentFrame);
   const canAdd =
     hasMedia &&
-    shots.some((shot) => currentFrame > shot.start_frame && currentFrame <= shot.end_frame);
+    (shots.length === 0
+      ? cutFrame > 0 && cutFrame < durationFrames
+      : shots.some((shot) => cutFrame > shot.start_frame && cutFrame <= shot.end_frame));
 
   useCloseOnOutsidePointer(Boolean(menu), () => setMenu(null), { ignorePopupMenuTargets: true });
 
@@ -200,7 +205,7 @@ export function StoryboardTimeline({
     onPause();
     const id = `shot:${crypto.randomUUID()}`;
     storyboardUpdated(videoContext, "添加切点", (current) =>
-      splitStoryboardShot(current, currentFrame, frameRate, id),
+      splitStoryboardShot(current, cutFrame, frameRate, id, durationFrames, durationUs),
     );
     setSelectedIds(new Set([id]));
     setMenu(null);
