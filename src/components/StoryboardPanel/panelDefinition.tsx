@@ -16,6 +16,6 @@ export const storyboardPanelDefinition = definePanel({
       return "分镜：（无剪辑）";
     }
     const videoContext = `${activeVideoId}:${project.asset.id}:${project.asset.fingerprint ?? ""}`;
-    return `分镜：${storyboards[videoContext]?.shots.length ? mediaDisplayName(project, mediaItems, activeVideoId) : "（未识别）"}`;
+    return `分镜：${storyboards[videoContext]?.shots.length ? mediaDisplayName(project, mediaItems, activeVideoId) : "（无）"}`;
   },
 });

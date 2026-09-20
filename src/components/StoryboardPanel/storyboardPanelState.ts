@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { createPanelState } from "../../runtime/systems/PanelState";
 import { useProjectPort } from "../../systems/ProjectSystem";
 import type {
@@ -441,10 +441,14 @@ export function useStoryboardPanelState<Selection>(
     uiState.activeShotId,
     uiState.shotSelectionReplaced,
   ]);
-  const shotStacks = storyboard.shotStacks.map((stack) => ({
-    ...stack,
-    expanded: uiState.expandedStackIds.has(stack.id),
-  }));
+  const shotStacks = useMemo(
+    () =>
+      storyboard.shotStacks.map((stack) => ({
+        ...stack,
+        expanded: uiState.expandedStackIds.has(stack.id),
+      })),
+    [storyboard.shotStacks, uiState.expandedStackIds],
+  );
   const commitStoryboard = (
     historyLabel: string,
     recipe: (current: StoryboardState) => StoryboardState,

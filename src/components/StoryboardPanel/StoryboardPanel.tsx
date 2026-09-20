@@ -1,4 +1,5 @@
-﻿import { useVirtualizer } from "@tanstack/react-virtual";
+﻿import { playbackFollowScrollDuration } from "../playbackFollowScroll";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ArrowDownAZ,
   ArrowDownZA,
@@ -30,7 +31,7 @@ import { useEditCapability } from "../../runtime/capabilities/EditCapability";
 import { useExportCapability } from "../../runtime/capabilities/ExportCapability";
 import { usePlaybackStatus } from "../../runtime/capabilities/PlaybackCapability";
 import { eventSource } from "../../runtime/events/EventHub";
-import { publishEvent } from "../../runtime/events/react";
+import { publishEvent, useBroadcastEvent } from "../../runtime/events/react";
 import { useStableIdentity } from "../../runtime/state/react";
 import { usePanelActive, usePanelInstanceId } from "../../runtime/systems/PanelState";
 import {
@@ -109,8 +110,6 @@ import {
 } from "./storyboardPanelState";
 
 const storyboardEventSource = eventSource("storyboard-panel");
-const MIN_UPCOMING_SCROLL_DURATION_MS = 1000;
-const MAX_UPCOMING_SCROLL_DURATION_MS = 1200;
 const STORYBOARD_THUMBNAIL_HEIGHT = 46;
 const STORYBOARD_THUMBNAIL_WIDTH = 82;
 const STORYBOARD_ROW_VERTICAL_PADDING = 36;
@@ -1490,6 +1489,29 @@ export function StoryboardPanel() {
     measureElement: (element) => element.getBoundingClientRect().height,
     overscan: 4,
   });
+  useBroadcastEvent(identity, "storyboard.reveal-shot.requested", ({ payload }) => {
+    if (!panelActive || payload.videoContext !== videoContext) {
+      return "ignored";
+    }
+    const stack = shotStacksByShotId.get(payload.shotId);
+    const visibleShotId = stack && !stack.expanded ? stack.shotIds[0] : payload.shotId;
+    const targetIndex = sortedShots.findIndex((shot) => shot.id === visibleShotId);
+    if (targetIndex < 0) {
+      return "ignored";
+    }
+    if (scrollAnimationRef.current !== null) {
+      cancelAnimationFrame(scrollAnimationRef.current);
+      scrollAnimationRef.current = null;
+    }
+    if (viewMode === "list") {
+      rowVirtualizer.scrollToIndex(targetIndex, { align: "center" });
+    } else {
+      Array.from(listRef.current?.querySelectorAll<HTMLElement>("[data-storyboard-shot-id]") ?? [])
+        .find((element) => element.dataset.storyboardShotId === visibleShotId)
+        ?.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+    }
+    return "handled";
+  });
   const captureThumbnailResizeCenter = useTimelineThumbnailListResizeAnchor({
     enabled: viewMode === "list",
     itemCount: sortedShots.length,
@@ -2084,7 +2106,8 @@ export function StoryboardPanel() {
     }
     const list = listRef.current;
     const shot = sortedShots[followShotIndex];
-    if (!list || !shot || followShotIndex < 0) {
+    const chronologicalShot = filteredShots[chronologicalFollowShotIndex];
+    if (!list || !shot || !chronologicalShot || followShotIndex < 0) {
       return;
     }
     if (viewMode === "grid") {
@@ -2105,35 +2128,22 @@ export function StoryboardPanel() {
     const initialTargetOffset = offsetInfo[0];
     const distance = Math.abs(initialTargetOffset - startOffset);
     const animationStartFrame = currentFrameRef.current;
-    const isUpcomingShot =
-      animationStartFrame < shot.start_frame || followShotIndex !== currentShotIndex;
-    const viewportDistance = distance / Math.max(1, list.clientHeight);
-    const distanceDuration = clamp(180 + Math.sqrt(viewportDistance) * 300, 160, 900);
-    const preferredArrivalFrame = shot.start_frame - 1;
-    const latestArrivalFrame = shot.end_frame - 1;
-    const preferredDuration =
-      (Math.max(0, preferredArrivalFrame - animationStartFrame) / frameRate) * 1000;
-    const latestDuration =
-      (Math.max(0, latestArrivalFrame - animationStartFrame) / frameRate) * 1000;
-    const duration = isUpcomingShot
-      ? Math.min(
-          clamp(
-            preferredDuration,
-            MIN_UPCOMING_SCROLL_DURATION_MS,
-            MAX_UPCOMING_SCROLL_DURATION_MS,
-          ),
-          latestDuration,
-        )
-      : distanceDuration;
+    const duration = playbackFollowScrollDuration(
+      distance,
+      list.clientHeight,
+      animationStartFrame,
+      chronologicalShot.start_frame,
+      chronologicalShot.end_frame,
+      frameRate,
+    );
     if (distance < 1 || duration <= 0) {
       list.scrollTop = initialTargetOffset;
       scrollAnimationRef.current = null;
       return;
     }
-    let startedAt: number | null = null;
+    const startedAt = performance.now();
 
     const animate = (timestamp: number) => {
-      startedAt ??= timestamp;
       const progress = clamp((timestamp - startedAt) / duration, 0, 1);
       const currentOffsetInfo = rowVirtualizer.getOffsetForIndex(followShotIndex, "center");
       const targetOffset = currentOffsetInfo?.[0] ?? initialTargetOffset;
@@ -2153,7 +2163,17 @@ export function StoryboardPanel() {
         scrollAnimationRef.current = null;
       }
     };
-  }, [followShotId, followShotIndex, frameRate, isPlaying, rowVirtualizer, sortedShots, viewMode]);
+  }, [
+    chronologicalFollowShotIndex,
+    filteredShots,
+    followShotId,
+    followShotIndex,
+    frameRate,
+    isPlaying,
+    rowVirtualizer,
+    sortedShots,
+    viewMode,
+  ]);
 
   function clearShotSelection() {
     const primaryShotId =

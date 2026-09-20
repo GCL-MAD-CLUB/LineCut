@@ -38,6 +38,7 @@ interface StoryboardTimelineProps extends TimelineRulerProps {
   onShowStoryboardCutsChange: (show: boolean) => void;
   showTimelineTimecodes: boolean;
   onShowTimelineTimecodesChange: (show: boolean) => void;
+  onRevealStoryboardShot: (shotId: string) => void;
 }
 
 interface CutDrag {
@@ -50,6 +51,7 @@ interface CutDrag {
   appliedDelta: number;
   moved: boolean;
   additive: boolean;
+  revealOnClick: boolean;
   groupId: string;
 }
 
@@ -78,6 +80,7 @@ export function StoryboardTimeline({
   onShowStoryboardCutsChange,
   showTimelineTimecodes,
   onShowTimelineTimecodesChange,
+  onRevealStoryboardShot,
   ...rulerProps
 }: StoryboardTimelineProps) {
   const { storyboards, storyboardUpdated } = useProjectPort(["storyboards"], ["storyboardUpdated"]);
@@ -262,6 +265,7 @@ export function StoryboardTimeline({
       appliedDelta: 0,
       moved: false,
       additive,
+      revealOnClick: !additive || selectedIds.size === 0,
       groupId: `cut-drag:${crypto.randomUUID()}`,
     };
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -394,6 +398,7 @@ export function StoryboardTimeline({
                   if (!drag.moved) {
                     if (!drag.additive) setSelectedIds(new Set([shot.id]));
                     onSeekFrame(shot.start_frame);
+                    if (drag.revealOnClick) onRevealStoryboardShot(shot.id);
                   }
                   dragRef.current = null;
                   event.currentTarget.releasePointerCapture(event.pointerId);

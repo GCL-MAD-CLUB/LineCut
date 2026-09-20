@@ -15,6 +15,7 @@ export interface ApplicationEventMap {
   "edit.select-all.requested": Record<string, never>;
   "edit.clear-selection.requested": Record<string, never>;
   "playback.seek.requested": { timeUs: number; focusEndUs?: number; play?: boolean };
+  "storyboard.reveal-shot.requested": { videoContext: string; shotId: string };
 }
 
 export type ApplicationEventType = keyof ApplicationEventMap;

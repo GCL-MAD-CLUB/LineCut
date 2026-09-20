@@ -11,6 +11,7 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import { usePlaybackCapability } from "../../runtime/capabilities/PlaybackCapability";
+import { publishEvent } from "../../runtime/events/react";
 import { runBackgroundOperation, runOperation } from "../../errors";
 import { useStableIdentity } from "../../runtime/state/react";
 import { usePanelActive, usePanelInstanceId } from "../../runtime/systems/PanelState";
@@ -397,6 +398,7 @@ export function SourceMonitor() {
   const mediaKey = project
     ? `${activeVideoId}:${project.asset.id}:${durationUs}:${frameRate}`
     : `empty:${frameRate}`;
+  const storyboardVideoContext = `${activeVideoId}:${project?.asset.id ?? ""}:${project?.asset.fingerprint ?? ""}`;
 
   const defaultTimelineSpanFrames = Math.max(1, Math.round(frameRate * 60));
 
@@ -1430,7 +1432,7 @@ export function SourceMonitor() {
         />
         <TimelineComponent
           key={`${mediaKey}:${project?.asset.fingerprint ?? ""}:${storyboardVisible && panelActive}`}
-          videoContext={`${activeVideoId}:${project?.asset.id ?? ""}:${project?.asset.fingerprint ?? ""}`}
+          videoContext={storyboardVideoContext}
           frameRate={frameRate}
           onCueRangeChange={setCueRange}
           onPause={pausePlaybackForPreciseSeek}
@@ -1439,6 +1441,13 @@ export function SourceMonitor() {
           onShowStoryboardCutsChange={setShowStoryboardCuts}
           showTimelineTimecodes={showTimelineTimecodes}
           onShowTimelineTimecodesChange={setShowTimelineTimecodes}
+          onRevealStoryboardShot={(shotId) => {
+            void publishEvent(
+              "storyboard.reveal-shot.requested",
+              { videoContext: storyboardVideoContext, shotId },
+              identity,
+            );
+          }}
           hasMedia={hasMedia}
           currentFrame={currentFrame}
           durationFrames={durationFrames}
