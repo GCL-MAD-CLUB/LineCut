@@ -1,5 +1,5 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
-import type { PointerEventHandler } from "react";
+import type { MouseEventHandler, PointerEventHandler, ReactNode } from "react";
 import {
   buildTimelineRuler,
   clampTimelineStartFrame,
@@ -11,7 +11,12 @@ const CURSOR_EDGE_INSET_PX = 6;
 const TIMELINE_EDGE_SCROLL_BASE_SPANS_PER_SECOND = 0.2;
 const TIMELINE_EDGE_SCROLL_MAX_SPANS_PER_SECOND = 1.2;
 
-interface TimelineRulerProps {
+export interface TimelineRulerProps {
+  children?: ReactNode;
+  storyboardMode?: boolean;
+  showTimecodeLabels?: boolean;
+  formatTimecodeLabel?: (frame: number) => string;
+  onContextMenu?: MouseEventHandler<HTMLDivElement>;
   hasMedia: boolean;
   currentFrame: number;
   durationFrames: number;
@@ -37,6 +42,11 @@ function wheelFrameDirection(event: WheelEvent) {
 }
 
 export function TimelineRuler({
+  children,
+  storyboardMode = false,
+  showTimecodeLabels = false,
+  formatTimecodeLabel,
+  onContextMenu,
   hasMedia,
   currentFrame,
   durationFrames,
@@ -52,6 +62,7 @@ export function TimelineRuler({
   const timelineStartFrameRef = useRef(timelineStartFrame);
   const timelineSpanFramesRef = useRef(timelineSpanFrames);
   const timelineDragScrollAtRef = useRef(0);
+  const timelineDragCleanupRef = useRef<(() => void) | null>(null);
   const [timelineWidthPx, setTimelineWidthPx] = useState(0);
 
   const timelineEndFrame = Math.min(durationFrames, timelineStartFrame + timelineSpanFrames);
@@ -86,6 +97,7 @@ export function TimelineRuler({
         spanFrames: timelineVisibleSpanFrames,
         durationFrames,
         widthPx: timelineWidthPx,
+        minMajorTickWidthPx: 72,
       }),
     [durationFrames, timelineStartFrame, timelineVisibleSpanFrames, timelineWidthPx],
   );
@@ -100,6 +112,8 @@ export function TimelineRuler({
   useEffect(() => {
     timelineStartFrameRef.current = timelineStartFrame;
   }, [timelineStartFrame]);
+
+  useEffect(() => () => timelineDragCleanupRef.current?.(), [hasMedia]);
 
   useEffect(() => {
     timelineSpanFramesRef.current = timelineSpanFrames;
@@ -201,10 +215,11 @@ export function TimelineRuler({
   }
 
   const handlePointerDown: PointerEventHandler<HTMLDivElement> = (event) => {
-    if (!hasMedia) {
+    if (!hasMedia || event.button !== 0) {
       return;
     }
     event.preventDefault();
+    timelineDragCleanupRef.current?.();
     const element = event.currentTarget;
     let latestClientX = event.clientX;
     let animationFrame: number | null = null;
@@ -222,6 +237,8 @@ export function TimelineRuler({
       window.removeEventListener("pointermove", handleMove);
       window.removeEventListener("pointerup", handleUp);
       window.removeEventListener("pointercancel", handleUp);
+      window.removeEventListener("blur", handleUp);
+      timelineDragCleanupRef.current = null;
     };
     const scrollAtEdge = () => {
       const rect = element.getBoundingClientRect();
@@ -237,14 +254,17 @@ export function TimelineRuler({
     window.addEventListener("pointermove", handleMove);
     window.addEventListener("pointerup", handleUp, { once: true });
     window.addEventListener("pointercancel", handleUp, { once: true });
+    window.addEventListener("blur", handleUp, { once: true });
+    timelineDragCleanupRef.current = handleUp;
     animationFrame = requestAnimationFrame(scrollAtEdge);
   };
 
   return (
     <div
       ref={timelineRef}
-      className={`monitor-timeline ${hasMedia ? "" : "empty-state"}`}
+      className={`monitor-timeline ${storyboardMode ? "storyboard-mode" : ""} ${hasMedia ? "" : "empty-state"}`}
       onPointerDown={hasMedia ? handlePointerDown : undefined}
+      onContextMenu={onContextMenu}
     >
       <div className="timeline-ruler">
         {hasMedia && visibleCueRange && (
@@ -285,7 +305,11 @@ export function TimelineRuler({
               className={`timeline-tick ${tick.major ? "major" : ""}`}
               data-frame={tick.frame}
               style={{ left: `${tick.leftPx}px` }}
-            />
+            >
+              {showTimecodeLabels && tick.major && formatTimecodeLabel && (
+                <span className="timeline-tick-label">{formatTimecodeLabel(tick.frame)}</span>
+              )}
+            </span>
           ))}
         {hasMedia && cursorPercent !== null && (
           <span
@@ -296,6 +320,7 @@ export function TimelineRuler({
           />
         )}
       </div>
+      {children}
     </div>
   );
 }

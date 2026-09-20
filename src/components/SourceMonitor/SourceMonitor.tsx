@@ -34,6 +34,7 @@ import { activeMediaDragVideoId, markMediaDragHandled } from "../MediaBin/mediaD
 import { usePanelManagerState } from "../DockLayout";
 import "./SourceMonitor.css";
 import { TimelineRuler } from "./TimelineRuler";
+import { StoryboardTimeline } from "./StoryboardTimeline";
 import { VideoControls } from "./VideoControls";
 import { VideoDisplay } from "./VideoDisplay";
 import { RollingPcmAudioController, type RollingPcmAudioSource } from "./rollingPcmAudio";
@@ -166,6 +167,9 @@ function isEditableKeyboardTarget(target: EventTarget | null) {
     element?.tagName === "INPUT" ||
     element?.tagName === "TEXTAREA" ||
     element?.tagName === "SELECT" ||
+    Boolean(
+      element?.closest(".storyboard-cut-marker, .storyboard-cut-dialog, .storyboard-cut-menu"),
+    ) ||
     Boolean(element?.isContentEditable)
   );
 }
@@ -174,6 +178,12 @@ export function SourceMonitor() {
   const panelInstanceId = usePanelInstanceId();
   const panelActive = usePanelActive();
   const focusedPanelId = usePanelManagerState((state) => state.focusedPanelId);
+  const storyboardVisible = usePanelManagerState((state) =>
+    Object.values(state.layout.areas).some(
+      (area) => area.activePanelId && state.instances[area.activePanelId]?.type === "storyboard",
+    ),
+  );
+  const TimelineComponent = storyboardVisible && panelActive ? StoryboardTimeline : TimelineRuler;
   const identity = useStableIdentity("source-monitor", panelInstanceId);
   const [lastFocusedAt, setLastFocusedAt] = useState(panelInstanceId === "source" ? 1 : 0);
   useEffect(() => {
@@ -226,6 +236,10 @@ export function SourceMonitor() {
     setTimelineSpanFrames,
     cueRange,
     setCueRange,
+    showStoryboardCuts,
+    setShowStoryboardCuts,
+    showTimelineTimecodes,
+    setShowTimelineTimecodes,
     mediaKey: panelMediaKey,
     playedVideoRecorded,
     syncMedia,
@@ -1129,7 +1143,11 @@ export function SourceMonitor() {
     setPlaybackMode(nextMode);
   }
 
-  function applyPlaybackMode(nextMode: PlaybackMode, preserveCuePlaybackEnd = false) {
+  function applyPlaybackMode(
+    nextMode: PlaybackMode,
+    preserveCuePlaybackEnd = false,
+    centerPausedFrame = true,
+  ) {
     const video = videoRef.current;
     if (!hasMedia || !video) {
       commitPlaybackMode(0);
@@ -1154,7 +1172,9 @@ export function SourceMonitor() {
       }
       pauseBoundAudio();
       stopRollingPcmAudio();
-      centerTimelineIfFrameHidden(pausedAtFrame);
+      if (centerPausedFrame) {
+        centerTimelineIfFrameHidden(pausedAtFrame);
+      }
       return;
     }
 
@@ -1251,6 +1271,10 @@ export function SourceMonitor() {
 
   function pausePlaybackForPreciseSeek() {
     applyPlaybackMode(0);
+  }
+
+  function pausePlaybackForCutInteraction() {
+    applyPlaybackMode(0, false, false);
   }
 
   function moveCursorByFrames(frameDelta: number) {
@@ -1404,7 +1428,17 @@ export function SourceMonitor() {
           onTogglePlayback={togglePlayback}
           onPreviewModeChange={changePreviewMode}
         />
-        <TimelineRuler
+        <TimelineComponent
+          key={`${mediaKey}:${project?.asset.fingerprint ?? ""}:${storyboardVisible && panelActive}`}
+          videoContext={`${activeVideoId}:${project?.asset.id ?? ""}:${project?.asset.fingerprint ?? ""}`}
+          frameRate={frameRate}
+          onCueRangeChange={setCueRange}
+          onPause={pausePlaybackForPreciseSeek}
+          onPauseForInteraction={pausePlaybackForCutInteraction}
+          showStoryboardCuts={showStoryboardCuts}
+          onShowStoryboardCutsChange={setShowStoryboardCuts}
+          showTimelineTimecodes={showTimelineTimecodes}
+          onShowTimelineTimecodesChange={setShowTimelineTimecodes}
           hasMedia={hasMedia}
           currentFrame={currentFrame}
           durationFrames={durationFrames}

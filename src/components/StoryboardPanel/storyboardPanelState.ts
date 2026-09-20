@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { createPanelState } from "../../runtime/systems/PanelState";
 import { useProjectPort } from "../../systems/ProjectSystem";
 import type {
@@ -412,6 +413,34 @@ export function useStoryboardPanelState<Selection>(
     keywordUsageCounters: { counts: {}, total: 0 },
     shotAnnotations: {},
   };
+  const previousStoryboardRef = useRef({ videoContext: uiState.videoContext, storyboard });
+  useEffect(() => {
+    const previous = previousStoryboardRef.current;
+    previousStoryboardRef.current = { videoContext: uiState.videoContext, storyboard };
+    if (previous.videoContext !== uiState.videoContext) return;
+    const remainingIds = new Set(storyboard.shots.map((shot) => shot.id));
+    const resolveId = (id: string) => {
+      if (remainingIds.has(id)) return id;
+      const old = previous.storyboard.shots.find((shot) => shot.id === id);
+      return old
+        ? storyboard.shots.find(
+            (shot) => shot.start_frame <= old.start_frame && shot.end_frame >= old.end_frame,
+          )?.id
+        : undefined;
+    };
+    if ([...uiState.selectedShotIds].every((id) => remainingIds.has(id))) return;
+    const ids = [...new Set([...uiState.selectedShotIds].flatMap((id) => resolveId(id) ?? []))];
+    uiState.shotSelectionReplaced(
+      ids,
+      uiState.activeShotId ? resolveId(uiState.activeShotId) : null,
+    );
+  }, [
+    storyboard,
+    uiState.videoContext,
+    uiState.selectedShotIds,
+    uiState.activeShotId,
+    uiState.shotSelectionReplaced,
+  ]);
   const shotStacks = storyboard.shotStacks.map((stack) => ({
     ...stack,
     expanded: uiState.expandedStackIds.has(stack.id),
