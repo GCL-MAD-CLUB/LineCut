@@ -26,15 +26,23 @@ export default defineConfig({
   themeConfig: {
     siteTitle: "LineCut 帮助中心",
     nav: [
-      { text: "快速开始", link: "/getting-started/first-project" },
-      { text: "工作流", link: "/workflows/find-dialogue" },
-      { text: "功能参考", link: "/reference/supported-formats" },
+      { text: "新增功能", link: "/release-notes/v0.3.2" },
+      { text: "开始使用", link: "/getting-started/first-project" },
+      { text: "学习与支持", link: "/workflows/find-dialogue" },
       { text: "项目主页", link: `https://github.com/${repository}` },
     ],
     sidebar: [
       { text: "LineCut 帮助中心", items: [{ text: "概览", link: "/" }] },
       {
-        text: "快速开始",
+        text: "新增功能",
+        collapsed: false,
+        items: [
+          { text: "0.3.2 新增功能", link: "/release-notes/v0.3.2" },
+          { text: "0.3.1 更新说明", link: "/release-notes/v0.3.1" },
+        ],
+      },
+      {
+        text: "开始使用",
         collapsed: false,
         items: [
           { text: "系统要求", link: "/getting-started/system-requirements" },
@@ -44,17 +52,7 @@ export default defineConfig({
         ],
       },
       {
-        text: "工作流",
-        collapsed: true,
-        items: [
-          { text: "通过字幕找到片段", link: "/workflows/find-dialogue" },
-          { text: "整理分镜并建立关键字", link: "/workflows/organize-storyboard" },
-          { text: "生成代理以流畅预览", link: "/workflows/create-proxy" },
-          { text: "导出所选片段或成片", link: "/workflows/export-video" },
-        ],
-      },
-      {
-        text: "项目与工作区",
+        text: "设置项目和工作区",
         collapsed: true,
         items: [
           { text: "创建和管理项目", link: "/projects/projects" },
@@ -64,7 +62,7 @@ export default defineConfig({
         ],
       },
       {
-        text: "媒体箱",
+        text: "导入和整理媒体",
         collapsed: true,
         items: [
           { text: "导入和整理媒体", link: "/media/import-organize" },
@@ -73,7 +71,7 @@ export default defineConfig({
         ],
       },
       {
-        text: "源播放器",
+        text: "预览和定位",
         collapsed: true,
         items: [{ text: "使用源监视器", link: "/source/source-monitor" }],
       },
@@ -83,7 +81,7 @@ export default defineConfig({
         items: [{ text: "使用字幕", link: "/subtitles/subtitles" }],
       },
       {
-        text: "分镜与关键字",
+        text: "整理分镜和关键字",
         collapsed: true,
         items: [
           { text: "使用分镜", link: "/storyboard/storyboards" },
@@ -96,15 +94,28 @@ export default defineConfig({
         items: [{ text: "导出媒体", link: "/export/exporting" }],
       },
       {
-        text: "参考与排错",
+        text: "按任务学习",
+        collapsed: true,
+        items: [
+          { text: "通过字幕找到片段", link: "/workflows/find-dialogue" },
+          { text: "整理分镜并建立关键字", link: "/workflows/organize-storyboard" },
+          { text: "生成代理以流畅预览", link: "/workflows/create-proxy" },
+          { text: "导出所选片段或成片", link: "/workflows/export-video" },
+        ],
+      },
+      {
+        text: "参考",
         collapsed: true,
         items: [
           { text: "支持的媒体与输出格式", link: "/reference/supported-formats" },
           { text: "使用限制与数据说明", link: "/reference/limitations" },
           { text: "功能覆盖清单", link: "/coverage" },
-          { text: "故障排查", link: "/troubleshooting/troubleshooting" },
-          { text: "v0.3.1 更新说明", link: "/release-notes/v0.3.1" },
         ],
+      },
+      {
+        text: "故障排查",
+        collapsed: true,
+        items: [{ text: "故障排查", link: "/troubleshooting/troubleshooting" }],
       },
     ],
     search: {
