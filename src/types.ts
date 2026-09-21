@@ -114,6 +114,7 @@ export interface StoryboardShotStackState {
 
 export interface StoryboardState {
   shots: StoryboardShot[];
+  deletedShots?: StoryboardShot[];
   shotStacks: StoryboardShotStackState[];
   keywordNodes: StoryboardKeywordNode[];
   recentKeywordIds: string[];

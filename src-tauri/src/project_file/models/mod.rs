@@ -185,6 +185,14 @@ mod tests {
         workspace.storyboards.insert(
             "video:asset:fingerprint".to_string(),
             ProjectStoryboardState {
+                deleted_shots: vec![ProjectStoryboardShot {
+                    id: "shot:25:48".to_string(),
+                    sequence: 2,
+                    start_frame: 25,
+                    end_frame: 48,
+                    start_us: 1_041_667,
+                    end_us: 2_000_000,
+                }],
                 shots: vec![ProjectStoryboardShot {
                     id: "shot:0:24".to_string(),
                     sequence: 1,
@@ -307,6 +315,10 @@ mod tests {
         let storyboard = restored.storyboards.get("video:asset:fingerprint").unwrap();
 
         assert_eq!(storyboard.shots.len(), 1);
+        assert_eq!(storyboard.deleted_shots.len(), 1);
+        assert_eq!(storyboard.deleted_shots[0].id, "shot:25:48");
+        assert_eq!(storyboard.deleted_shots[0].start_frame, 25);
+        assert_eq!(storyboard.deleted_shots[0].end_frame, 48);
         assert_eq!(storyboard.shot_stacks.len(), 1);
         let annotation = storyboard.shot_annotations.get("shot:0:24").unwrap();
         assert_eq!(annotation.rating, 4);

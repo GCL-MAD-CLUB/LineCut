@@ -1,7 +1,8 @@
 export const MIN_TICK_FRAMES = 1;
-export const MIN_TICK_WIDTH_PX = 4;
+export const MIN_TICK_WIDTH_PX = 6;
 export const MAX_TICK_WIDTH_PX = 16;
 export const DEFAULT_FRAME_RATE = 24;
+const MAJOR_TICK_INTERVALS = 15;
 
 const US_PER_SECOND = 1_000_000;
 
@@ -107,11 +108,13 @@ export function buildTimelineRuler({
   spanFrames,
   durationFrames,
   widthPx,
+  minMajorTickWidthPx = 0,
 }: {
   startFrame: number;
   spanFrames: number;
   durationFrames: number;
   widthPx: number;
+  minMajorTickWidthPx?: number;
 }): TimelineRuler {
   if (durationFrames <= 0 || widthPx <= 0 || spanFrames <= 0) {
     return { ticks: [], tickStepFrames: MIN_TICK_FRAMES, tickSpacingPx: MAX_TICK_WIDTH_PX };
@@ -121,7 +124,11 @@ export function buildTimelineRuler({
   let tickStepFrames = MIN_TICK_FRAMES;
   let tickSpacingPx = tickStepFrames * pxPerFrame;
 
-  while (tickSpacingPx < MIN_TICK_WIDTH_PX) {
+  const minimumTickSpacingPx = Math.max(
+    MIN_TICK_WIDTH_PX,
+    minMajorTickWidthPx / MAJOR_TICK_INTERVALS,
+  );
+  while (tickSpacingPx < minimumTickSpacingPx) {
     tickStepFrames *= 4;
     tickSpacingPx = tickStepFrames * pxPerFrame;
   }
@@ -131,7 +138,7 @@ export function buildTimelineRuler({
   const firstTickFrame = Math.floor(firstVisibleFrame / tickStepFrames) * tickStepFrames;
   const lastTickFrame = Math.ceil(lastVisibleFrame / tickStepFrames) * tickStepFrames;
   const ticks: TimelineTick[] = [];
-  const majorStepFrames = tickStepFrames * 10;
+  const majorStepFrames = tickStepFrames * MAJOR_TICK_INTERVALS;
 
   for (let frame = firstTickFrame; frame <= lastTickFrame; frame += tickStepFrames) {
     if (frame < 0 || frame > durationFrames) {

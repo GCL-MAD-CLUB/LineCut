@@ -1,4 +1,5 @@
-﻿import { useVirtualizer } from "@tanstack/react-virtual";
+﻿import { playbackFollowScrollDuration } from "../playbackFollowScroll";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ArrowDownAZ,
   ArrowDownZA,
@@ -30,7 +31,7 @@ import { useEditCapability } from "../../runtime/capabilities/EditCapability";
 import { useExportCapability } from "../../runtime/capabilities/ExportCapability";
 import { usePlaybackStatus } from "../../runtime/capabilities/PlaybackCapability";
 import { eventSource } from "../../runtime/events/EventHub";
-import { publishEvent } from "../../runtime/events/react";
+import { publishEvent, useBroadcastEvent } from "../../runtime/events/react";
 import { useStableIdentity } from "../../runtime/state/react";
 import { usePanelActive, usePanelInstanceId } from "../../runtime/systems/PanelState";
 import {
@@ -47,6 +48,7 @@ import {
 import { createTaskProgress, useTaskProgressStatus } from "../../systems/TaskSystem";
 import { isTauriRuntime } from "../../platform/tauri/runtime";
 import { normalizeFrameRate } from "../../core/editor/timeline";
+import { storyboardShotDefaultTitle } from "../../core/editor/storyboard";
 import {
   timelineThumbnails,
   timelineThumbnailVisibleRange,
@@ -56,6 +58,7 @@ import {
 } from "../../timelineThumbnail";
 import type { StoryboardDetectionResult, StoryboardShot } from "../../types";
 import { usePanelManagerState } from "../DockLayout";
+import { ModalDialog } from "../ModalDialog";
 import { annotationShortcutAction, annotationShortcutAutoAdvances } from "../annotationShortcuts";
 import {
   sprayEraserCursor,
@@ -109,8 +112,6 @@ import {
 } from "./storyboardPanelState";
 
 const storyboardEventSource = eventSource("storyboard-panel");
-const MIN_UPCOMING_SCROLL_DURATION_MS = 1000;
-const MAX_UPCOMING_SCROLL_DURATION_MS = 1200;
 const STORYBOARD_THUMBNAIL_HEIGHT = 46;
 const STORYBOARD_THUMBNAIL_WIDTH = 82;
 const STORYBOARD_ROW_VERTICAL_PADDING = 36;
@@ -390,9 +391,8 @@ function isEditableKeyboardTarget(target: EventTarget | null) {
   );
 }
 
-function defaultShotTitle(shot: StoryboardShot, shotCount: number) {
-  const digits = Math.max(1, String(Math.max(1, shotCount)).length);
-  return `分镜 ${String(shot.sequence).padStart(digits, "0")}`;
+function defaultShotTitle(shot: StoryboardShot, _shotCount: number) {
+  return storyboardShotDefaultTitle(shot);
 }
 
 function storyboardShotTitle(
@@ -656,13 +656,14 @@ function annotationShotIdsForSelection(
   return targetShotIds;
 }
 
-function seekToShot(shot: StoryboardShot, focusRange = false) {
+function seekToShot(shot: StoryboardShot, videoContext: string, focusRange = false) {
   void publishEvent(
     "playback.seek.requested",
     {
       timeUs: shot.start_us,
       focusEndUs: focusRange ? shot.end_us : undefined,
       play: focusRange,
+      focusTarget: focusRange ? { kind: "storyboard", videoContext, shotId: shot.id } : undefined,
     },
     storyboardEventSource,
   );
@@ -1192,6 +1193,7 @@ export function StoryboardPanel() {
     appendShotKeywords,
     removeShotKeywords,
     deleteShots,
+    mergeShots,
     createShotStack,
     cancelShotStack,
     removeShotFromStack,
@@ -1249,6 +1251,7 @@ export function StoryboardPanel() {
     useState<StoryboardShotKeywordDragPreview | null>(null);
   const [contextMenu, setContextMenu] = useState<StoryboardContextMenuState | null>(null);
   const [annotationMenu, setAnnotationMenu] = useState<StoryboardAnnotationMenuState | null>(null);
+  const [detectionConflictOpen, setDetectionConflictOpen] = useState(false);
   const [storyboardColumnWidths, setStoryboardColumnWidths] = useState(
     initialStoryboardColumnWidths,
   );
@@ -1490,6 +1493,29 @@ export function StoryboardPanel() {
     measureElement: (element) => element.getBoundingClientRect().height,
     overscan: 4,
   });
+  useBroadcastEvent(identity, "storyboard.reveal-shot.requested", ({ payload }) => {
+    if (!panelActive || payload.videoContext !== videoContext) {
+      return "ignored";
+    }
+    const stack = shotStacksByShotId.get(payload.shotId);
+    const visibleShotId = stack && !stack.expanded ? stack.shotIds[0] : payload.shotId;
+    const targetIndex = sortedShots.findIndex((shot) => shot.id === visibleShotId);
+    if (targetIndex < 0) {
+      return "ignored";
+    }
+    if (scrollAnimationRef.current !== null) {
+      cancelAnimationFrame(scrollAnimationRef.current);
+      scrollAnimationRef.current = null;
+    }
+    if (viewMode === "list") {
+      rowVirtualizer.scrollToIndex(targetIndex, { align: "center" });
+    } else {
+      Array.from(listRef.current?.querySelectorAll<HTMLElement>("[data-storyboard-shot-id]") ?? [])
+        .find((element) => element.dataset.storyboardShotId === visibleShotId)
+        ?.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+    }
+    return "handled";
+  });
   const captureThumbnailResizeCenter = useTimelineThumbnailListResizeAnchor({
     enabled: viewMode === "list",
     itemCount: sortedShots.length,
@@ -1669,6 +1695,7 @@ export function StoryboardPanel() {
     setSprayActive(false);
     setContextMenu(null);
     setAnnotationMenu(null);
+    setDetectionConflictOpen(false);
     setRatingComparatorMenu(null);
     setSearchScopeMenu(null);
     setSearchRuleMenu(null);
@@ -1950,7 +1977,7 @@ export function StoryboardPanel() {
       if (!event.shiftKey) {
         selectionAnchorRef.current = targetId;
         shotSelectionReplaced([targetId], targetId);
-        seekToShot(sortedShots[targetIndex]);
+        seekToShot(sortedShots[targetIndex], videoContext);
         scrollToTarget();
         return;
       }
@@ -2084,7 +2111,8 @@ export function StoryboardPanel() {
     }
     const list = listRef.current;
     const shot = sortedShots[followShotIndex];
-    if (!list || !shot || followShotIndex < 0) {
+    const chronologicalShot = filteredShots[chronologicalFollowShotIndex];
+    if (!list || !shot || !chronologicalShot || followShotIndex < 0) {
       return;
     }
     if (viewMode === "grid") {
@@ -2105,35 +2133,22 @@ export function StoryboardPanel() {
     const initialTargetOffset = offsetInfo[0];
     const distance = Math.abs(initialTargetOffset - startOffset);
     const animationStartFrame = currentFrameRef.current;
-    const isUpcomingShot =
-      animationStartFrame < shot.start_frame || followShotIndex !== currentShotIndex;
-    const viewportDistance = distance / Math.max(1, list.clientHeight);
-    const distanceDuration = clamp(180 + Math.sqrt(viewportDistance) * 300, 160, 900);
-    const preferredArrivalFrame = shot.start_frame - 1;
-    const latestArrivalFrame = shot.end_frame - 1;
-    const preferredDuration =
-      (Math.max(0, preferredArrivalFrame - animationStartFrame) / frameRate) * 1000;
-    const latestDuration =
-      (Math.max(0, latestArrivalFrame - animationStartFrame) / frameRate) * 1000;
-    const duration = isUpcomingShot
-      ? Math.min(
-          clamp(
-            preferredDuration,
-            MIN_UPCOMING_SCROLL_DURATION_MS,
-            MAX_UPCOMING_SCROLL_DURATION_MS,
-          ),
-          latestDuration,
-        )
-      : distanceDuration;
+    const duration = playbackFollowScrollDuration(
+      distance,
+      list.clientHeight,
+      animationStartFrame,
+      chronologicalShot.start_frame,
+      chronologicalShot.end_frame,
+      frameRate,
+    );
     if (distance < 1 || duration <= 0) {
       list.scrollTop = initialTargetOffset;
       scrollAnimationRef.current = null;
       return;
     }
-    let startedAt: number | null = null;
+    const startedAt = performance.now();
 
     const animate = (timestamp: number) => {
-      startedAt ??= timestamp;
       const progress = clamp((timestamp - startedAt) / duration, 0, 1);
       const currentOffsetInfo = rowVirtualizer.getOffsetForIndex(followShotIndex, "center");
       const targetOffset = currentOffsetInfo?.[0] ?? initialTargetOffset;
@@ -2153,7 +2168,17 @@ export function StoryboardPanel() {
         scrollAnimationRef.current = null;
       }
     };
-  }, [followShotId, followShotIndex, frameRate, isPlaying, rowVirtualizer, sortedShots, viewMode]);
+  }, [
+    chronologicalFollowShotIndex,
+    filteredShots,
+    followShotId,
+    followShotIndex,
+    frameRate,
+    isPlaying,
+    rowVirtualizer,
+    sortedShots,
+    viewMode,
+  ]);
 
   function clearShotSelection() {
     const primaryShotId =
@@ -2184,7 +2209,7 @@ export function StoryboardPanel() {
     selectionAnchorRef.current = targetShot.id;
     selectionFocusRef.current = targetShot.id;
     shotSelectionReplaced([targetShot.id], targetShot.id);
-    seekToShot(targetShot);
+    seekToShot(targetShot, videoContext);
     if (viewMode === "list") {
       rowVirtualizer.scrollToIndex(targetIndex, { align: "auto" });
       return;
@@ -3044,7 +3069,7 @@ export function StoryboardPanel() {
 
     shotSelectionReplaced(Array.from(nextSelection), primaryShotId);
     if (shouldSeek && primaryShotId === shot.id) {
-      seekToShot(shot, focusRange);
+      seekToShot(shot, videoContext, focusRange);
     }
   }
 
@@ -3053,7 +3078,7 @@ export function StoryboardPanel() {
     if (target.closest(".shot-frame-button, .shot-rating-button, .shot-flag-button")) {
       return;
     }
-    seekToShot(shot, true);
+    seekToShot(shot, videoContext, true);
   }
 
   function syncTableHeaderScroll(event: ReactUIEvent<HTMLDivElement>) {
@@ -3176,7 +3201,7 @@ export function StoryboardPanel() {
     },
   });
 
-  async function detectStoryboard() {
+  async function detectStoryboard(mode: "merge" | "overwrite") {
     if (!project || !canDetect) {
       return;
     }
@@ -3205,7 +3230,7 @@ export function StoryboardPanel() {
         detectionFinished(context);
         return;
       }
-      detectionCompleted(context, result.shots);
+      detectionCompleted(context, result.shots, frameRate, mode);
       task.remove();
     } catch (error) {
       if (cancelled) {
@@ -3215,6 +3240,17 @@ export function StoryboardPanel() {
       }
       detectionFinished(context);
     }
+  }
+
+  function requestStoryboardDetection() {
+    if (!canDetect) {
+      return;
+    }
+    if (shots.length > 1) {
+      setDetectionConflictOpen(true);
+      return;
+    }
+    void detectStoryboard("overwrite");
   }
 
   function renderTableHeader(header: (typeof storyboardTableHeaders)[number]) {
@@ -3249,7 +3285,7 @@ export function StoryboardPanel() {
           <button
             type="button"
             className="storyboard-column-resizer"
-            title={`调整${storyboardResizableColumnLabels[header.resizeColumn]}列宽，双击恢复默认`}
+            title=""
             aria-label={`调整${storyboardResizableColumnLabels[header.resizeColumn]}列宽`}
             onPointerDown={(event) => startColumnResize(event, header.resizeColumn!)}
             onPointerMove={updateColumnResize}
@@ -3273,7 +3309,7 @@ export function StoryboardPanel() {
         <button
           type="button"
           className={`storyboard-detect-button ${isDetecting ? "is-detecting" : ""}`}
-          onClick={() => void detectStoryboard()}
+          onClick={requestStoryboardDetection}
           disabled={!canDetect}
           title={
             isDetecting
@@ -4501,6 +4537,16 @@ export function StoryboardPanel() {
 
             <PopupMenuSeparator />
 
+            <PopupMenuItem
+              mnemonic="M"
+              disabled={selectedAnnotationShotIds.size < 2}
+              onSelect={() => {
+                mergeShots(selectedAnnotationShotIds);
+                setContextMenu(null);
+              }}
+            >
+              合并(M)
+            </PopupMenuItem>
             <PopupMenuSubmenu
               label="堆叠(X)"
               mnemonic="X"
@@ -4676,6 +4722,58 @@ export function StoryboardPanel() {
               />
             )}
           </PopupMenu>,
+          document.body,
+        )}
+      {detectionConflictOpen &&
+        createPortal(
+          <ModalDialog
+            title=""
+            className="storyboard-detection-conflict-dialog"
+            bodyClassName="storyboard-detection-conflict-dialog-body"
+            onCancel={() => setDetectionConflictOpen(false)}
+            onConfirm={() => {
+              setDetectionConflictOpen(false);
+              void detectStoryboard("merge");
+            }}
+            actions={
+              <>
+                <button
+                  type="button"
+                  className="modal-dialog-confirm"
+                  autoFocus
+                  onClick={() => {
+                    setDetectionConflictOpen(false);
+                    void detectStoryboard("merge");
+                  }}
+                >
+                  合并
+                </button>
+                <button
+                  type="button"
+                  className="modal-dialog-cancel"
+                  onClick={() => {
+                    setDetectionConflictOpen(false);
+                    void detectStoryboard("overwrite");
+                  }}
+                >
+                  覆盖
+                </button>
+                <button
+                  type="button"
+                  className="modal-dialog-cancel"
+                  onClick={() => setDetectionConflictOpen(false)}
+                >
+                  取消
+                </button>
+              </>
+            }
+          >
+            <h3 className="storyboard-detection-conflict-title">当前已有切分</h3>
+            <div className="storyboard-detection-conflict-divider" />
+            <p className="storyboard-detection-conflict-message">
+              请选择合并自动识别到的切点，或覆盖当前切分。
+            </p>
+          </ModalDialog>,
           document.body,
         )}
     </section>

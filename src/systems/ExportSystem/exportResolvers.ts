@@ -1,5 +1,6 @@
 ﻿import { parseFrameRate } from "../../core/editor/timeline";
 import { expandedStoryboardKeywordText } from "../../components/StoryboardPanel/storyboardKeywords";
+import { storyboardShotDefaultTitle } from "../../core/editor/storyboard";
 import type { MediaBinItem, MediaStream, Project, StoryboardState } from "../../types";
 import {
   isMediaItemEnabled,
@@ -141,14 +142,13 @@ function activeVideoProject(
 /** Matches the storyboard panel: the shot's annotation title, or a padded 分镜 N fallback. */
 function storyboardShotTitle(
   shot: { sequence: number },
-  shotCount: number,
+  _shotCount: number,
   annotationTitle: string | null | undefined,
 ) {
   if (annotationTitle?.trim()) {
     return annotationTitle.trim();
   }
-  const digits = Math.max(1, String(Math.max(1, shotCount)).length);
-  return `分镜 ${String(shot.sequence).padStart(digits, "0")}`;
+  return storyboardShotDefaultTitle(shot);
 }
 
 export interface StoryboardExportInput {

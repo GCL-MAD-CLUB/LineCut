@@ -434,6 +434,8 @@ struct ProjectStoryboardKeywordUsageCounters {
 #[serde(rename_all = "camelCase")]
 struct ProjectStoryboardState {
     shots: Vec<ProjectStoryboardShot>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    deleted_shots: Vec<ProjectStoryboardShot>,
     shot_stacks: Vec<ProjectStoryboardStack>,
     keyword_nodes: Vec<ProjectStoryboardKeywordNode>,
     recent_keyword_ids: Vec<String>,

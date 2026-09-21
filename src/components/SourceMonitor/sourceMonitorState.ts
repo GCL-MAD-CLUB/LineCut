@@ -56,6 +56,8 @@ interface SourceMonitorState {
   timelineStartFrame: number;
   timelineSpanFrames: number;
   cueRange: MonitorCueRange | null;
+  showStoryboardCuts: boolean;
+  showTimelineTimecodes: boolean;
   playedVideoRecorded: (videoId: string) => void;
   playedVideoRemoved: (videoId: string) => void;
   playbackHistoryCleared: () => void;
@@ -67,6 +69,8 @@ interface SourceMonitorState {
   setTimelineStartFrame: (update: StateUpdate<number>) => void;
   setTimelineSpanFrames: (update: StateUpdate<number>) => void;
   setCueRange: (cueRange: MonitorCueRange | null) => void;
+  setShowStoryboardCuts: (show: boolean) => void;
+  setShowTimelineTimecodes: (show: boolean) => void;
 }
 
 const DEFAULT_TIMELINE_SPAN_FRAMES = DEFAULT_FRAME_RATE * 60;
@@ -82,6 +86,8 @@ export const useSourceMonitorState = createPanelState<SourceMonitorState>(() => 
   timelineStartFrame: 0,
   timelineSpanFrames: DEFAULT_TIMELINE_SPAN_FRAMES,
   cueRange: null,
+  showStoryboardCuts: true,
+  showTimelineTimecodes: false,
   playedVideoRecorded: (videoId) =>
     set((state) => {
       if (!videoId || state.playbackHistoryVideoIds.at(-1) === videoId) {
@@ -133,4 +139,6 @@ export const useSourceMonitorState = createPanelState<SourceMonitorState>(() => 
   setTimelineSpanFrames: (update) =>
     set((state) => ({ timelineSpanFrames: resolveUpdate(state.timelineSpanFrames, update) })),
   setCueRange: (cueRange) => set({ cueRange }),
+  setShowStoryboardCuts: (showStoryboardCuts) => set({ showStoryboardCuts }),
+  setShowTimelineTimecodes: (showTimelineTimecodes) => set({ showTimelineTimecodes }),
 }));

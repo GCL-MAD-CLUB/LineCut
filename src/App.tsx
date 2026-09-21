@@ -1,5 +1,5 @@
 ﻿import { getCurrentWindow } from "@tauri-apps/api/window";
-import { confirm, open, save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { Loader2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
@@ -34,7 +34,7 @@ import { HistoryPanelServicesProvider, historyPanelType } from "./components/His
 import { exportWorkspaceStore } from "./systems/ExportSystem";
 import { ImportWorkspace } from "./components/ImportWorkspace";
 import { mediaBinPanelType, type MediaBinPanelParams } from "./components/MediaBin";
-import { ProjectSaveDialog } from "./components/ProjectSaveDialog";
+import { ProjectDiscardDialog, ProjectSaveDialog } from "./components/ProjectSaveDialog";
 import { ExportConflictDialog } from "./components/ExportConflictDialog";
 import { PreferencesDialog } from "./components/PreferencesDialog";
 import { ProxyCreationDialog } from "./components/ProxyCreationDialog";
@@ -300,7 +300,10 @@ function AppContent() {
   const [launchResolved, setLaunchResolved] = useState(false);
   const [pendingCloseTarget, setPendingCloseTarget] = useState<PendingCloseTarget | null>(null);
   const [closeSavePending, setCloseSavePending] = useState(false);
+  const [pendingDiscardMessage, setPendingDiscardMessage] = useState<string | null>(null);
+  const [discardSavePending, setDiscardSavePending] = useState(false);
   const closingWindowRef = useRef(false);
+  const pendingDiscardResolveRef = useRef<((discard: boolean) => void) | null>(null);
 
   const {
     project,
@@ -582,23 +585,56 @@ function AppContent() {
     };
   }, [projectDirty]);
 
-  async function confirmDiscardChanges(operation: OperationKey, message: string) {
+  function confirmDiscardChanges(message: string) {
     if (!projectDirty) {
       return true;
     }
-    const outcome = await runOperation(operation, async () => {
-      if (!isTauriRuntime()) {
-        return window.confirm(message);
-      }
-      return confirm(message, {
-        title: "LineCut",
-        kind: "warning",
-        okLabel: "不保存",
-        cancelLabel: "取消",
-      });
+    return new Promise<boolean>((resolve) => {
+      pendingDiscardResolveRef.current?.(false);
+      pendingDiscardResolveRef.current = resolve;
+      setPendingDiscardMessage(message);
     });
-    return outcome.status === "success" && outcome.value;
   }
+
+  function completeDiscardConfirmation(discard: boolean) {
+    const resolve = pendingDiscardResolveRef.current;
+    pendingDiscardResolveRef.current = null;
+    setPendingDiscardMessage(null);
+    resolve?.(discard);
+  }
+
+  async function saveAndCompleteDiscardConfirmation() {
+    if (discardSavePending || !pendingDiscardResolveRef.current) {
+      return;
+    }
+    setDiscardSavePending(true);
+    const saved = await saveProjectWithOutcome();
+    if (saved) {
+      completeDiscardConfirmation(true);
+    }
+    setDiscardSavePending(false);
+  }
+
+  function cancelDiscardConfirmation() {
+    if (!discardSavePending) {
+      completeDiscardConfirmation(false);
+    }
+  }
+
+  function discardDiscardConfirmation() {
+    if (!discardSavePending) {
+      completeDiscardConfirmation(true);
+    }
+  }
+
+  useEffect(
+    () => () => {
+      const resolve = pendingDiscardResolveRef.current;
+      pendingDiscardResolveRef.current = null;
+      resolve?.(false);
+    },
+    [],
+  );
 
   async function removeBackendProject(assetId?: string) {
     if (!isTauriRuntime()) {
@@ -651,9 +687,7 @@ function AppContent() {
       messagePublished("请在 Tauri 桌面窗口中新建项目。");
       return;
     }
-    if (
-      !(await confirmDiscardChanges("project.new", "当前项目有尚未保存的更改，仍要新建项目吗？"))
-    ) {
+    if (!(await confirmDiscardChanges("当前项目有尚未保存的更改，仍要新建项目吗？"))) {
       return;
     }
 
@@ -686,12 +720,7 @@ function AppContent() {
       messagePublished("请在 Tauri 桌面窗口中打开项目。");
       return;
     }
-    if (
-      !(await confirmDiscardChanges(
-        "project.open",
-        "当前项目有尚未保存的更改，仍要打开其他项目吗？",
-      ))
-    ) {
+    if (!(await confirmDiscardChanges("当前项目有尚未保存的更改，仍要打开其他项目吗？"))) {
       return;
     }
     const pickOutcome = pathToOpen
@@ -1476,6 +1505,16 @@ function AppContent() {
             onCancel={cancelPendingClose}
             onDiscard={discardAndCompletePendingClose}
             onSave={() => void saveAndCompletePendingClose()}
+          />
+        )}
+
+        {pendingDiscardMessage && (
+          <ProjectDiscardDialog
+            message={pendingDiscardMessage}
+            saving={discardSavePending}
+            onCancel={cancelDiscardConfirmation}
+            onDiscard={discardDiscardConfirmation}
+            onSave={() => void saveAndCompleteDiscardConfirmation()}
           />
         )}
 

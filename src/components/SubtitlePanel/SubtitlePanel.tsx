@@ -1,4 +1,5 @@
-﻿import { useVirtualizer } from "@tanstack/react-virtual";
+﻿import { playbackFollowScrollDuration } from "../playbackFollowScroll";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ArrowDownAZ,
   ArrowDownZA,
@@ -79,8 +80,6 @@ import {
 } from "./subtitlePanelState";
 
 const subtitleEventSource = eventSource("subtitle-panel");
-const MIN_UPCOMING_SCROLL_DURATION_MS = 1000;
-const MAX_UPCOMING_SCROLL_DURATION_MS = 1200;
 const SUBTITLE_THUMBNAIL_HEIGHT = 46;
 const SUBTITLE_THUMBNAIL_WIDTH = 82;
 const SUBTITLE_ROW_VERTICAL_PADDING = 36;
@@ -398,13 +397,16 @@ function cueMatchesFilter(
   );
 }
 
-function seekToCue(cue: SubtitleCue, focusRange = false) {
+function seekToCue(cue: SubtitleCue, videoId: string, focusRange = false) {
   void publishEvent(
     "playback.seek.requested",
     {
       timeUs: cue.start_us,
       focusEndUs: focusRange ? cue.end_us : undefined,
       play: focusRange,
+      focusTarget: focusRange
+        ? { kind: "subtitle", videoId, trackId: cue.track_id, cueId: cue.id }
+        : undefined,
     },
     subtitleEventSource,
   );
@@ -1219,7 +1221,7 @@ export function SubtitlePanel() {
       if (!event.shiftKey) {
         selectionAnchorRef.current = targetId;
         cueSelectionReplaced([targetId], targetId);
-        seekToCue(sortedCues[targetIndex]);
+        seekToCue(sortedCues[targetIndex], activeVideoId);
         rowVirtualizer.scrollToIndex(targetIndex, { align: "auto" });
         return;
       }
@@ -1358,34 +1360,21 @@ export function SubtitlePanel() {
     const distance = Math.abs(initialTargetOffset - startOffset);
     const range = cueFrameRanges[chronologicalFollowCueIndex];
     const animationStartFrame = currentFrameRef.current;
-    const isUpcomingCue =
-      Boolean(range && animationStartFrame < range.startFrame) ||
-      followCueIndex !== currentCueIndex;
-    const viewportDistance = distance / Math.max(1, list.clientHeight);
-    const distanceDuration = clamp(180 + Math.sqrt(viewportDistance) * 300, 160, 900);
-    const preferredDuration = range
-      ? (Math.max(0, range.startFrame - 1 - animationStartFrame) / frameRate) * 1000
-      : distanceDuration;
-    const latestDuration = range
-      ? (Math.max(0, range.endFrame - 1 - animationStartFrame) / frameRate) * 1000
-      : distanceDuration;
-    const duration = isUpcomingCue
-      ? Math.min(
-          clamp(
-            preferredDuration,
-            MIN_UPCOMING_SCROLL_DURATION_MS,
-            MAX_UPCOMING_SCROLL_DURATION_MS,
-          ),
-          latestDuration,
-        )
-      : distanceDuration;
+    const duration = playbackFollowScrollDuration(
+      distance,
+      list.clientHeight,
+      animationStartFrame,
+      range?.startFrame ?? animationStartFrame,
+      range?.endFrame ?? animationStartFrame,
+      frameRate,
+    );
     if (distance < 1 || duration <= 0) {
       list.scrollTop = initialTargetOffset;
+      scrollAnimationRef.current = null;
       return;
     }
-    let startedAt: number | null = null;
+    const startedAt = performance.now();
     const animate = (timestamp: number) => {
-      startedAt ??= timestamp;
       const progress = clamp((timestamp - startedAt) / duration, 0, 1);
       const currentOffsetInfo = rowVirtualizer.getOffsetForIndex(followCueIndex, "center");
       const targetOffset = currentOffsetInfo?.[0] ?? initialTargetOffset;
@@ -1407,7 +1396,6 @@ export function SubtitlePanel() {
   }, [
     chronologicalFollowCueIndex,
     cueFrameRanges,
-    currentCueIndex,
     followCueId,
     followCueIndex,
     frameRate,
@@ -1457,7 +1445,7 @@ export function SubtitlePanel() {
     selectionAnchorRef.current = targetCue.id;
     selectionFocusRef.current = targetCue.id;
     cueSelectionReplaced([targetCue.id], targetCue.id);
-    seekToCue(targetCue);
+    seekToCue(targetCue, activeVideoId);
     rowVirtualizer.scrollToIndex(targetIndex, { align: "auto" });
   }
 
@@ -1535,7 +1523,7 @@ export function SubtitlePanel() {
 
     cueSelectionReplaced(nextSelection, primaryCueId);
     if (shouldSeek && primaryCueId === cue.id) {
-      seekToCue(cue, focusRange);
+      seekToCue(cue, activeVideoId, focusRange);
     }
   }
 
@@ -1544,7 +1532,7 @@ export function SubtitlePanel() {
     if (target.closest(".cue-frame-button, .cue-rating-button, .cue-flag-button")) {
       return;
     }
-    seekToCue(cue, true);
+    seekToCue(cue, activeVideoId, true);
   }
 
   function syncTableHeaderScroll(event: ReactUIEvent<HTMLDivElement>) {
@@ -2045,7 +2033,7 @@ export function SubtitlePanel() {
           <button
             type="button"
             className="subtitle-column-resizer"
-            title={`调整${subtitleResizableColumnLabels[header.resizeColumn]}列宽，双击恢复默认`}
+            title=""
             aria-label={`调整${subtitleResizableColumnLabels[header.resizeColumn]}列宽`}
             onPointerDown={(event) => startColumnResize(event, header.resizeColumn!)}
             onPointerMove={updateColumnResize}

@@ -1818,7 +1818,7 @@ export function MediaBinTable({
                     <button
                       type="button"
                       className="media-bin-column-resizer"
-                      title={`调整${tableHeaders.find((item) => item.id === header.resizeColumn)?.label || "持续时间"}列宽，双击恢复默认`}
+                      title=""
                       aria-label={`调整${tableHeaders.find((item) => item.id === header.resizeColumn)?.label || "持续时间"}列宽`}
                       onPointerDown={(event) => startColumnResize(event, header.resizeColumn!)}
                       onPointerMove={updateColumnResize}
