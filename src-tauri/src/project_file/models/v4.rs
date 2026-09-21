@@ -289,6 +289,8 @@ struct StoryboardKeywordUsageCounters {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StoryboardState {
     shots: Vec<StoryboardShot>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    deleted_shots: Vec<StoryboardShot>,
     shot_stacks: Vec<StoryboardStack>,
     keyword_nodes: Vec<StoryboardKeywordNode>,
     recent_keyword_ids: Vec<String>,

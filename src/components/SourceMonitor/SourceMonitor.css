@@ -493,6 +493,14 @@
   fill: currentColor;
 }
 
+.storyboard-cut-marker .deleted-cut-pattern-base {
+  fill: #333;
+}
+
+.storyboard-cut-marker .deleted-cut-pattern-stripe {
+  fill: currentColor;
+}
+
 .storyboard-cut-marker.selected::after {
   content: "";
   position: absolute;
@@ -500,8 +508,7 @@
   left: 50%;
   width: 2px;
   height: 20px;
-  background: linear-gradient(var(--storyboard-cut-color, #b8b8b8) 1px, transparent 1px) center
-    top / 1px 3px repeat-y;
+  background: linear-gradient(currentColor 1px, transparent 1px) center top / 1px 3px repeat-y;
   transform: translateX(-50%);
   pointer-events: none;
 }

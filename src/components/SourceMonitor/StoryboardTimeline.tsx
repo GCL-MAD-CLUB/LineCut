@@ -1,5 +1,7 @@
 import {
   useEffect,
+  useMemo,
+  useId,
   useRef,
   useState,
   type CSSProperties,
@@ -12,8 +14,10 @@ import { timeUsToFrame } from "../../core/editor/timeline";
 import {
   moveStoryboardCuts,
   removeStoryboardCuts,
+  restoreStoryboardShots,
   splitStoryboardShot,
   storyboardCutDeltaBounds,
+  storyboardSegments,
 } from "../../core/editor/storyboardCuts";
 import { useProjectPort } from "../../systems/ProjectSystem";
 import type { StoryboardShot, StoryboardShotAnnotation } from "../../types";
@@ -88,7 +92,6 @@ export function StoryboardTimeline({
   const { storyboards, storyboardUpdated } = useProjectPort(["storyboards"], ["storyboardUpdated"]);
   const storyboard = storyboards[videoContext];
   const shots = storyboard?.shots ?? emptyShots;
-  const cuts = shots.slice(1);
   const {
     currentFrame,
     cueRange,
@@ -98,6 +101,13 @@ export function StoryboardTimeline({
     hasMedia,
     onSeekFrame,
   } = rulerProps;
+  const segments = useMemo(
+    () => (storyboard ? storyboardSegments(storyboard, durationFrames, frameRate) : emptyShots),
+    [storyboard, durationFrames, frameRate],
+  );
+  const cuts = segments.slice(1);
+  const retainedIds = new Set(shots.map((shot) => shot.id));
+  const patternId = useId();
   const visibleSpan = Math.max(
     1,
     Math.min(durationFrames, timelineStartFrame + timelineSpanFrames) - timelineStartFrame,
@@ -112,10 +122,14 @@ export function StoryboardTimeline({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const selectedCuts = cuts.filter((shot) => selectedIds.has(shot.id));
+  const canRestoreSelectedCuts =
+    selectedCuts.length > 0 && selectedCuts.every((shot) => !retainedIds.has(shot.id));
   const editingIndex = cuts.findIndex((shot) => shot.id === editingId);
   const editingCut = cuts[editingIndex];
   const editFrame = parseMonitorFrame(editValue, frameRate);
-  const editBounds = editingCut ? storyboardCutDeltaBounds(shots, new Set([editingCut.id])) : null;
+  const editBounds = editingCut
+    ? storyboardCutDeltaBounds(segments, new Set([editingCut.id]))
+    : null;
   const validEdit = Boolean(
     editingCut &&
     editFrame !== null &&
@@ -135,7 +149,7 @@ export function StoryboardTimeline({
   const cutFrame = Math.round(currentFrame);
   const canAdd =
     hasMedia &&
-    (shots.length === 0
+    (!storyboard
       ? cutFrame > 0 && cutFrame < durationFrames
       : shots.some((shot) => cutFrame > shot.start_frame && cutFrame <= shot.end_frame));
 
@@ -144,11 +158,11 @@ export function StoryboardTimeline({
   useEffect(() => {
     setSelectedIds((current) => {
       const next = new Set(
-        [...current].filter((id) => shots.slice(1).some((shot) => shot.id === id)),
+        [...current].filter((id) => segments.slice(1).some((shot) => shot.id === id)),
       );
       return next.size === current.size ? current : next;
     });
-    if (editingId && !shots.slice(1).some((shot) => shot.id === editingId)) setEditingId(null);
+    if (editingId && !segments.slice(1).some((shot) => shot.id === editingId)) setEditingId(null);
     const previous = previousShotsRef.current;
     previousShotsRef.current = shots;
     if (!cueRange || previous === shots) return;
@@ -178,7 +192,7 @@ export function StoryboardTimeline({
       nextRange.endFrame !== cueRange.endFrame
     )
       onCueRangeChange(nextRange);
-  }, [shots, editingId, cueRange, frameRate, onCueRangeChange]);
+  }, [shots, segments, editingId, cueRange, frameRate, onCueRangeChange]);
 
   function focusTimeline() {
     rootRef.current?.focus({ preventScroll: true });
@@ -193,7 +207,7 @@ export function StoryboardTimeline({
     }
     onPause();
     storyboardUpdated(videoContext, "清除切点", (current) =>
-      removeStoryboardCuts(current, removed),
+      removeStoryboardCuts(current, removed, durationFrames, frameRate),
     );
     setSelectedIds((current) => new Set([...current].filter((id) => !removed.has(id))));
     setMenu(null);
@@ -208,6 +222,17 @@ export function StoryboardTimeline({
       splitStoryboardShot(current, cutFrame, frameRate, id, durationFrames, durationUs),
     );
     setSelectedIds(new Set([id]));
+    setMenu(null);
+    focusTimeline();
+  }
+
+  function restoreSelectedCuts() {
+    if (!canRestoreSelectedCuts) return;
+    const restoredIds = new Set(selectedCuts.map((shot) => shot.id));
+    onPause();
+    storyboardUpdated(videoContext, "恢复分镜", (current) =>
+      restoreStoryboardShots(current, restoredIds, durationFrames, frameRate),
+    );
     setMenu(null);
     focusTimeline();
   }
@@ -238,9 +263,17 @@ export function StoryboardTimeline({
   function confirmEdit() {
     if (!validEdit || !editingCut || editFrame === null) return;
     storyboardUpdated(videoContext, "编辑切点", (current) => {
-      const cut = current.shots.find((shot) => shot.id === editingCut.id);
+      const cut = storyboardSegments(current, durationFrames, frameRate).find(
+        (shot) => shot.id === editingCut.id,
+      );
       return cut
-        ? moveStoryboardCuts(current, new Set([cut.id]), editFrame - cut.start_frame, frameRate)
+        ? moveStoryboardCuts(
+            current,
+            new Set([cut.id]),
+            editFrame - cut.start_frame,
+            frameRate,
+            durationFrames,
+          )
         : current;
     });
     onSeekFrame(editFrame);
@@ -266,7 +299,7 @@ export function StoryboardTimeline({
       clientX: event.clientX,
       framesPerPixel: visibleSpan / Math.max(1, width),
       ids,
-      ...storyboardCutDeltaBounds(shots, ids),
+      ...storyboardCutDeltaBounds(segments, ids),
       appliedDelta: 0,
       moved: false,
       additive,
@@ -291,7 +324,7 @@ export function StoryboardTimeline({
     storyboardUpdated(
       videoContext,
       "移动切点",
-      (current) => moveStoryboardCuts(current, drag.ids, change, frameRate),
+      (current) => moveStoryboardCuts(current, drag.ids, change, frameRate, durationFrames),
       drag.groupId,
     );
     drag.appliedDelta = delta;
@@ -370,6 +403,7 @@ export function StoryboardTimeline({
             event.target instanceof Element
               ? event.target.closest<HTMLElement>("[data-cut-id]")?.dataset.cutId
               : undefined;
+          if (cutId && !selectedIds.has(cutId)) setSelectedIds(new Set([cutId]));
           setMenu({ x: event.clientX, y: event.clientY, cutId });
         }}
       >
@@ -385,7 +419,7 @@ export function StoryboardTimeline({
                 key={shot.id}
                 type="button"
                 data-cut-id={shot.id}
-                className={`storyboard-cut-marker ${selected ? "selected" : ""} ${selectedCuts.length === 0 ? "unselected-all" : ""}`}
+                className={`storyboard-cut-marker ${selected ? "selected" : ""} ${selectedCuts.length === 0 ? "unselected-all" : ""} ${retainedIds.has(shot.id) ? "" : "deleted"}`}
                 style={
                   {
                     left: `${position * 100}%`,
@@ -403,7 +437,8 @@ export function StoryboardTimeline({
                   if (!drag.moved) {
                     if (!drag.additive) setSelectedIds(new Set([shot.id]));
                     onSeekFrame(shot.start_frame);
-                    if (drag.revealOnClick) onRevealStoryboardShot(shot.id);
+                    if (drag.revealOnClick && retainedIds.has(shot.id))
+                      onRevealStoryboardShot(shot.id);
                   }
                   dragRef.current = null;
                   event.currentTarget.releasePointerCapture(event.pointerId);
@@ -416,8 +451,30 @@ export function StoryboardTimeline({
                 }}
               >
                 <svg viewBox="0 0 18 26" aria-hidden="true">
+                  {!retainedIds.has(shot.id) && (
+                    <defs>
+                      <pattern
+                        id={`${patternId}-${shot.id}`}
+                        width="8"
+                        height="8"
+                        patternUnits="userSpaceOnUse"
+                        patternTransform="rotate(45)"
+                      >
+                        <rect className="deleted-cut-pattern-base" width="8" height="8" />
+                        <rect className="deleted-cut-pattern-stripe" width="3" height="8" />
+                      </pattern>
+                    </defs>
+                  )}
                   <path className="cut-outline" d="M2 2H16V16L9 24L2 16Z" />
-                  <path className="cut-fill" d="M2 2H16V16L9 24L2 16Z" />
+                  <path
+                    className="cut-fill"
+                    d="M2 2H16V16L9 24L2 16Z"
+                    style={
+                      !retainedIds.has(shot.id)
+                        ? { fill: `url(#${patternId}-${shot.id})` }
+                        : undefined
+                    }
+                  />
                 </svg>
               </button>
             );
@@ -454,6 +511,10 @@ export function StoryboardTimeline({
               onSelect={() => removeCuts(rangeCuts.map((shot) => shot.id))}
             >
               清除切点
+            </PopupMenuItem>
+            <PopupMenuSeparator />
+            <PopupMenuItem disabled={!canRestoreSelectedCuts} onSelect={restoreSelectedCuts}>
+              从选中的切点恢复
             </PopupMenuItem>
             <PopupMenuSeparator />
             <PopupMenuItem disabled={!selectedCuts.length} onSelect={() => openEditor(menuEditCut)}>

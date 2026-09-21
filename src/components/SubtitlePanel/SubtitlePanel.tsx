@@ -2030,7 +2030,7 @@ export function SubtitlePanel() {
           <button
             type="button"
             className="subtitle-column-resizer"
-            title={`调整${subtitleResizableColumnLabels[header.resizeColumn]}列宽，双击恢复默认`}
+            title=""
             aria-label={`调整${subtitleResizableColumnLabels[header.resizeColumn]}列宽`}
             onPointerDown={(event) => startColumnResize(event, header.resizeColumn!)}
             onPointerMove={updateColumnResize}

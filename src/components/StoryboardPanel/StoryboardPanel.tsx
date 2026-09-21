@@ -1192,6 +1192,7 @@ export function StoryboardPanel() {
     appendShotKeywords,
     removeShotKeywords,
     deleteShots,
+    mergeShots,
     createShotStack,
     cancelShotStack,
     removeShotFromStack,
@@ -3283,7 +3284,7 @@ export function StoryboardPanel() {
           <button
             type="button"
             className="storyboard-column-resizer"
-            title={`调整${storyboardResizableColumnLabels[header.resizeColumn]}列宽，双击恢复默认`}
+            title=""
             aria-label={`调整${storyboardResizableColumnLabels[header.resizeColumn]}列宽`}
             onPointerDown={(event) => startColumnResize(event, header.resizeColumn!)}
             onPointerMove={updateColumnResize}
@@ -4535,6 +4536,16 @@ export function StoryboardPanel() {
 
             <PopupMenuSeparator />
 
+            <PopupMenuItem
+              mnemonic="M"
+              disabled={selectedAnnotationShotIds.size < 2}
+              onSelect={() => {
+                mergeShots(selectedAnnotationShotIds);
+                setContextMenu(null);
+              }}
+            >
+              合并(M)
+            </PopupMenuItem>
             <PopupMenuSubmenu
               label="堆叠(X)"
               mnemonic="X"

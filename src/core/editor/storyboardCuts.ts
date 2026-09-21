@@ -1,6 +1,61 @@
 import type { StoryboardShot, StoryboardShotAnnotation, StoryboardState } from "../../types";
-import { storyboardDefaultTitle, storyboardShotDefaultTitle } from "./storyboard";
+import { storyboardDefaultTitle, storyboardShotDefaultTitle, storyboardGaps } from "./storyboard";
 import { frameToTimeUs } from "./timeline";
+
+// Include deleted intervals so their original boundaries remain editable.
+export function storyboardSegments(
+  storyboard: StoryboardState,
+  durationFrames?: number,
+  frameRate = 24,
+) {
+  const segments = [...storyboard.shots, ...(storyboard.deletedShots ?? [])];
+  const end = durationFrames ?? Math.max(0, ...segments.map((shot) => shot.end_frame + 1));
+  for (const gap of storyboardGaps(segments, end)) {
+    segments.push({
+      id: `gap:${gap.startFrame}`,
+      sequence: 0,
+      start_frame: gap.startFrame,
+      end_frame: gap.endFrame - 1,
+      start_us: frameToTimeUs(gap.startFrame, frameRate),
+      end_us: frameToTimeUs(gap.endFrame - 1, frameRate),
+    });
+  }
+  return segments.sort((a, b) => a.start_frame - b.start_frame);
+}
+
+export function restoreStoryboardShots(
+  storyboard: StoryboardState,
+  shotIds: ReadonlySet<string>,
+  durationFrames?: number,
+  frameRate = 24,
+): StoryboardState {
+  if (shotIds.size === 0) return storyboard;
+  const titledStoryboard = preserveStoryboardTitles(storyboard);
+  const retainedIds = new Set(titledStoryboard.shots.map((shot) => shot.id));
+  const restored = storyboardSegments(titledStoryboard, durationFrames, frameRate).filter(
+    (shot) => shotIds.has(shot.id) && !retainedIds.has(shot.id),
+  );
+  if (restored.length === 0) return storyboard;
+  const restoredIds = new Set(restored.map((shot) => shot.id));
+  const orderedShots = [...titledStoryboard.shots, ...restored].sort(
+    (left, right) => left.start_frame - right.start_frame,
+  );
+  const shotAnnotations = { ...titledStoryboard.shotAnnotations };
+  for (const [index, shot] of orderedShots.entries()) {
+    if (shotAnnotations[shot.id]?.title?.trim()) continue;
+    shotAnnotations[shot.id] = {
+      ...annotation(titledStoryboard, shot),
+      title: storyboardDefaultTitle(index + 1),
+    };
+  }
+  const shots = orderedShots.map((shot, index) => ({ ...shot, sequence: index + 1 }));
+  return {
+    ...titledStoryboard,
+    shots,
+    deletedShots: (titledStoryboard.deletedShots ?? []).filter((shot) => !restoredIds.has(shot.id)),
+    shotAnnotations,
+  };
+}
 
 function shotTitle(shot: StoryboardShot, storyboard: StoryboardState) {
   return storyboard.shotAnnotations[shot.id]?.title || storyboardShotDefaultTitle(shot);
@@ -24,6 +79,21 @@ function annotation(storyboard: StoryboardState, shot: StoryboardShot): Storyboa
   return { ...current, rating: current?.rating ?? 0, retained: current?.retained ?? false };
 }
 
+function preserveStoryboardTitles(
+  storyboard: StoryboardState,
+  shots: readonly StoryboardShot[] = [...storyboard.shots, ...(storyboard.deletedShots ?? [])],
+) {
+  const shotAnnotations = { ...storyboard.shotAnnotations };
+  for (const shot of shots) {
+    if (shotAnnotations[shot.id]?.title?.trim()) continue;
+    shotAnnotations[shot.id] = {
+      ...annotation(storyboard, shot),
+      title: storyboardShotDefaultTitle(shot),
+    };
+  }
+  return { ...storyboard, shotAnnotations };
+}
+
 export function splitStoryboardShot(
   storyboard: StoryboardState,
   frame: number,
@@ -32,12 +102,19 @@ export function splitStoryboardShot(
   durationFrames?: number,
   durationUs?: number,
 ): StoryboardState {
-  if (!Number.isInteger(frame) || storyboard.shots.some((shot) => shot.id === newShotId)) {
+  if (
+    !Number.isInteger(frame) ||
+    storyboard.shots.some((shot) => shot.id === newShotId) ||
+    storyboard.deletedShots?.some((shot) => shot.id === newShotId)
+  ) {
     return storyboard;
   }
   const normalizedDurationFrames = Math.max(0, Math.round(durationFrames ?? 0));
-  const sourceStoryboard =
-    storyboard.shots.length === 0 && frame > 0 && frame < normalizedDurationFrames
+  const sourceStoryboard = preserveStoryboardTitles(
+    storyboard.shots.length === 0 &&
+      !storyboard.deletedShots?.length &&
+      frame > 0 &&
+      frame < normalizedDurationFrames
       ? {
           ...storyboard,
           shots: [
@@ -54,7 +131,8 @@ export function splitStoryboardShot(
             },
           ],
         }
-      : storyboard;
+      : storyboard,
+  );
   const index = sourceStoryboard.shots.findIndex(
     (shot) => frame > shot.start_frame && frame <= shot.end_frame,
   );
@@ -78,7 +156,6 @@ export function splitStoryboardShot(
     shots: shots.map((shot, shotIndex) => ({ ...shot, sequence: shotIndex + 1 })),
     shotAnnotations: {
       ...sourceStoryboard.shotAnnotations,
-      [original.id]: { ...annotation(sourceStoryboard, original), title },
       [newShotId]: { ...annotation(sourceStoryboard, original), title: newTitle },
     },
     shotStacks: sourceStoryboard.shotStacks.map((stack) => ({
@@ -100,7 +177,10 @@ export function mergeDetectedStoryboardShots(
     }
     let shotId = detectedShot.id;
     let duplicateIndex = 1;
-    while (merged.shots.some((shot) => shot.id === shotId)) {
+    while (
+      merged.shots.some((shot) => shot.id === shotId) ||
+      merged.deletedShots?.some((shot) => shot.id === shotId)
+    ) {
       shotId = `${detectedShot.id}:merged:${duplicateIndex}`;
       duplicateIndex += 1;
     }
@@ -136,13 +216,16 @@ export function moveStoryboardCuts(
   cutIds: ReadonlySet<string>,
   requestedDelta: number,
   frameRate: number,
+  durationFrames?: number,
 ): StoryboardState {
   if (!Number.isFinite(requestedDelta)) return storyboard;
-  const { min, max } = storyboardCutDeltaBounds(storyboard.shots, cutIds);
+  const segments = storyboardSegments(storyboard, durationFrames, frameRate);
+  const retainedIds = new Set(storyboard.shots.map((shot) => shot.id));
+  const { min, max } = storyboardCutDeltaBounds(segments, cutIds);
   const delta = Math.max(min, Math.min(max, Math.round(requestedDelta)));
   if (delta === 0) return storyboard;
   let changed = false;
-  const shots = storyboard.shots.map((shot, index, all) => {
+  const shots = segments.map((shot, index, all) => {
     const moveStart = index > 0 && cutIds.has(shot.id);
     const next = all[index + 1];
     const moveEnd = next && cutIds.has(next.id);
@@ -158,44 +241,57 @@ export function moveStoryboardCuts(
       end_us: moveEnd ? frameToTimeUs(end, frameRate) : shot.end_us,
     };
   });
-  return changed ? { ...storyboard, shots } : storyboard;
+  return changed
+    ? {
+        ...storyboard,
+        shots: shots.filter((shot) => retainedIds.has(shot.id)),
+        deletedShots: shots.filter((shot) => !retainedIds.has(shot.id)),
+      }
+    : storyboard;
 }
 
 export function removeStoryboardCuts(
   storyboard: StoryboardState,
   cutIds: ReadonlySet<string>,
+  durationFrames?: number,
+  frameRate = 24,
 ): StoryboardState {
+  const titledStoryboard = preserveStoryboardTitles(storyboard);
+  const segments = storyboardSegments(titledStoryboard, durationFrames, frameRate);
+  const retainedIds = new Set(titledStoryboard.shots.map((shot) => shot.id));
   const groups: StoryboardShot[][] = [];
-  for (const shot of storyboard.shots) {
+  for (const shot of segments) {
     if (groups.length > 0 && cutIds.has(shot.id)) groups[groups.length - 1].push(shot);
     else groups.push([shot]);
   }
-  if (groups.length === storyboard.shots.length) return storyboard;
-  const shotAnnotations = { ...storyboard.shotAnnotations };
+  if (groups.length === segments.length) return storyboard;
+  const shotAnnotations = { ...titledStoryboard.shotAnnotations };
   const shots = groups.map((group, index) => {
     const first = group[0];
     const last = group[group.length - 1];
-    if (group.length > 1) {
-      const annotations = group.map((shot) => annotation(storyboard, shot));
+    const retainedGroup = group.filter((shot) => retainedIds.has(shot.id));
+    if (group.length > 1 && retainedIds.has(first.id)) {
+      const annotations = retainedGroup.map((shot) => annotation(titledStoryboard, shot));
       const retained = annotations.some((item) => item.retained);
       shotAnnotations[first.id] = {
         ...annotations[0],
-        title: group.map((shot) => shotTitle(shot, storyboard)).join("-"),
         rating: Math.max(...annotations.map((item) => item.rating)),
         retained,
         excluded: !retained && annotations.every((item) => item.excluded),
         keywordIds: [...new Set(annotations.flatMap((item) => item.keywordIds ?? []))],
       };
-      for (const shot of group.slice(1)) delete shotAnnotations[shot.id];
     }
+    for (const shot of group.slice(1)) delete shotAnnotations[shot.id];
     return { ...first, sequence: index + 1, end_frame: last.end_frame, end_us: last.end_us };
   });
-  const remainingIds = new Set(shots.map((shot) => shot.id));
+  const remainingShots = shots.filter((shot) => retainedIds.has(shot.id));
+  const remainingIds = new Set(remainingShots.map((shot) => shot.id));
   return {
-    ...storyboard,
-    shots,
+    ...titledStoryboard,
+    shots: remainingShots.map((shot, index) => ({ ...shot, sequence: index + 1 })),
+    deletedShots: shots.filter((shot) => !retainedIds.has(shot.id)),
     shotAnnotations,
-    shotStacks: storyboard.shotStacks.flatMap((stack) => {
+    shotStacks: titledStoryboard.shotStacks.flatMap((stack) => {
       const shotIds = stack.shotIds.filter((id) => remainingIds.has(id));
       return shotIds.length > 1 ? [{ ...stack, id: shotIds[0], shotIds }] : [];
     }),

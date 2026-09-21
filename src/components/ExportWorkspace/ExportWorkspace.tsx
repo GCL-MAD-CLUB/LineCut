@@ -331,7 +331,7 @@ export function ExportWorkspace() {
         <div
           className="export-zone-seam export-zone-seam-v"
           onPointerDown={(event) => beginColumnDrag("left", event)}
-          title="拖动调整宽度"
+          title=""
         />
 
         <section className="export-zone">
@@ -353,7 +353,7 @@ export function ExportWorkspace() {
         <div
           className="export-zone-seam export-zone-seam-v"
           onPointerDown={(event) => beginColumnDrag("settings", event)}
-          title="拖动调整宽度"
+          title=""
         />
 
         <section className="export-zone export-zone-stack">

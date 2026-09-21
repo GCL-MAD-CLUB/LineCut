@@ -903,7 +903,7 @@ export function DockLayout() {
           }`}
           role="separator"
           aria-orientation={node.axis === "x" ? "vertical" : "horizontal"}
-          title={node.axis === "x" ? "调整左右窗口宽度" : "调整上下窗口高度"}
+          title=""
           onPointerDown={(event) => startSplitResize(event, node)}
         />
         {renderDockNode(node.second)}

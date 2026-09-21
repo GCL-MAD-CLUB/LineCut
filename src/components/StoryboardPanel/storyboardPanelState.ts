@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef } from "react";
 import { createPanelState } from "../../runtime/systems/PanelState";
-import { mergeDetectedStoryboardShots } from "../../core/editor/storyboardCuts";
+import { storyboardShotDefaultTitle } from "../../core/editor/storyboard";
+import {
+  mergeDetectedStoryboardShots,
+  removeStoryboardCuts,
+  storyboardSegments,
+} from "../../core/editor/storyboardCuts";
 import { useProjectPort } from "../../systems/ProjectSystem";
 import type {
   StoryboardKeywordNode,
@@ -172,6 +177,7 @@ interface StoryboardPanelState
     historyGroupId?: string,
   ) => void;
   deleteShots: (shotIds: Iterable<string>, ripple: boolean) => void;
+  mergeShots: (shotIds: Iterable<string>) => void;
   createShotStack: (shotIds: string[]) => void;
   cancelShotStack: (shotId: string) => void;
   removeShotFromStack: (shotId: string) => void;
@@ -1043,6 +1049,25 @@ export function useStoryboardPanelState<Selection>(
         historyGroupId,
       );
     },
+    mergeShots: (shotIds) => {
+      const ids = new Set(shotIds);
+      const selected = storyboard.shots.filter((shot) => ids.has(shot.id));
+      if (selected.length < 2) return;
+      const start = Math.min(...selected.map((shot) => shot.start_frame));
+      const end = Math.max(...selected.map((shot) => shot.start_frame));
+      commitStoryboard("合并分镜", (current) =>
+        removeStoryboardCuts(
+          current,
+          new Set(
+            storyboardSegments(current)
+              .filter((shot) => shot.start_frame > start && shot.start_frame <= end)
+              .map((shot) => shot.id),
+          ),
+        ),
+      );
+      const first = selected.reduce((a, b) => (a.start_frame < b.start_frame ? a : b));
+      uiState.shotSelectionReplaced([first.id], first.id);
+    },
     deleteShots: (shotIds, ripple) => {
       const requestedShotIds = new Set(shotIds);
       const deletedShotIds = new Set(
@@ -1079,12 +1104,26 @@ export function useStoryboardPanelState<Selection>(
             return current;
           }
           const shotAnnotations = { ...current.shotAnnotations };
-          for (const shotId of currentDeletedShotIds) {
-            delete shotAnnotations[shotId];
+          if (ripple) {
+            for (const shotId of currentDeletedShotIds) delete shotAnnotations[shotId];
           }
+          const remainingShots = shotsAfterDeletion(current.shots, currentDeletedShotIds, ripple);
           return {
             ...current,
-            shots: shotsAfterDeletion(current.shots, currentDeletedShotIds, ripple),
+            shots: remainingShots,
+            deletedShots: ripple
+              ? (current.deletedShots ?? []).filter(
+                  (deleted) =>
+                    !remainingShots.some(
+                      (shot) =>
+                        shot.start_frame <= deleted.start_frame &&
+                        shot.end_frame >= deleted.end_frame,
+                    ),
+                )
+              : [
+                  ...(current.deletedShots ?? []),
+                  ...current.shots.filter((shot) => currentDeletedShotIds.has(shot.id)),
+                ],
             shotStacks: current.shotStacks.flatMap((stack) => {
               const remainingShotIds = stack.shotIds.filter(
                 (shotId) => !currentDeletedShotIds.has(shotId),
@@ -1298,8 +1337,18 @@ export function useStoryboardPanelState<Selection>(
           return {
             ...current,
             shots,
+            deletedShots: [],
             shotStacks: [],
-            shotAnnotations: {},
+            shotAnnotations: Object.fromEntries(
+              shots.map((shot) => [
+                shot.id,
+                {
+                  rating: 0,
+                  retained: false,
+                  title: storyboardShotDefaultTitle(shot),
+                },
+              ]),
+            ),
           };
         },
         videoContext,
