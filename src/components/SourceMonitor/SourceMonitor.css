@@ -355,9 +355,22 @@
   background: #4b4b4b;
 }
 
-.timeline-cue-brace {
+.timeline-cue-edge {
   position: absolute;
   bottom: 1px;
+  height: 18px;
+  width: 12px;
+  transform: translateX(-50%);
+  pointer-events: auto;
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+  z-index: 4;
+}
+
+.timeline-cue-brace {
+  position: absolute;
+  inset-block: 0;
   width: 2px;
   height: 18px;
   overflow: visible;
@@ -365,15 +378,38 @@
   stroke: var(--color-accent-monitor);
   stroke-width: 1px;
   vector-effect: non-scaling-stroke;
-  z-index: 2;
 }
 
-.timeline-cue-brace.start {
-  transform: translateX(-100%);
+.timeline-cue-edge.start .timeline-cue-brace {
+  left: 4px;
 }
 
-.timeline-cue-brace.end {
-  transform: none;
+.timeline-cue-edge.end .timeline-cue-brace {
+  left: 6px;
+}
+
+.timeline-cue-move-handle {
+  position: absolute;
+  bottom: 7px;
+  width: 5px;
+  height: 6px;
+  transform: translateX(-50%);
+  background: repeating-linear-gradient(to right, #1d1d1d 0 1px, transparent 1px 2px);
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  z-index: 3;
+}
+
+.timeline-cue-move-handle:active {
+  cursor: grabbing;
+}
+
+.timeline-cue-move-handle::before {
+  content: "";
+  position: absolute;
+  inset: -6px;
 }
 
 .timeline-cursor {
@@ -382,7 +418,8 @@
   width: 11.5px;
   height: 14px;
   transform: translateX(-50%);
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: default;
   z-index: 5;
 }
 

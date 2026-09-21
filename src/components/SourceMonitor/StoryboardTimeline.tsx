@@ -39,6 +39,8 @@ interface StoryboardTimelineProps extends TimelineRulerProps {
   onCueRangeChange: (range: MonitorCueRange | null) => void;
   onPause: () => void;
   onPauseForInteraction: () => void;
+  onPreviewFrame: (frame: number) => void;
+  onPreviewFrameEnd: () => void;
   showStoryboardCuts: boolean;
   onShowStoryboardCutsChange: (show: boolean) => void;
   showTimelineTimecodes: boolean;
@@ -58,6 +60,9 @@ interface CutDrag {
   additive: boolean;
   revealOnClick: boolean;
   groupId: string;
+  originFrame: number;
+  previewFrame: boolean;
+  previewActive: boolean;
 }
 
 const emptyShots: StoryboardShot[] = [];
@@ -82,6 +87,8 @@ export function StoryboardTimeline({
   onCueRangeChange,
   onPause,
   onPauseForInteraction,
+  onPreviewFrame,
+  onPreviewFrameEnd,
   showStoryboardCuts,
   onShowStoryboardCutsChange,
   showTimelineTimecodes,
@@ -305,6 +312,9 @@ export function StoryboardTimeline({
       additive,
       revealOnClick: !additive || selectedIds.size === 0,
       groupId: `cut-drag:${crypto.randomUUID()}`,
+      originFrame: shot.start_frame,
+      previewFrame: ids.size === 1,
+      previewActive: false,
     };
     event.currentTarget.setPointerCapture(event.pointerId);
   }
@@ -319,6 +329,10 @@ export function StoryboardTimeline({
       drag.min,
       Math.min(drag.max, Math.round(distance * drag.framesPerPixel)),
     );
+    if (drag.previewFrame && !drag.previewActive) {
+      drag.previewActive = true;
+      onPreviewFrame(drag.originFrame + delta);
+    }
     const change = delta - drag.appliedDelta;
     if (change === 0) return;
     storyboardUpdated(
@@ -328,6 +342,9 @@ export function StoryboardTimeline({
       drag.groupId,
     );
     drag.appliedDelta = delta;
+    if (drag.previewFrame) {
+      onPreviewFrame(drag.originFrame + delta);
+    }
   }
 
   function deselectFromLabelArea(event: PointerEvent<HTMLDivElement>) {
@@ -392,6 +409,7 @@ export function StoryboardTimeline({
     >
       <TimelineRuler
         {...rulerProps}
+        onCueRangeChange={onCueRangeChange}
         storyboardMode={showStoryboardCuts}
         showTimecodeLabels={showTimelineTimecodes}
         formatTimecodeLabel={(frame) => formatMonitorFrame(frame, frameRate)}
@@ -440,13 +458,16 @@ export function StoryboardTimeline({
                     if (drag.revealOnClick && retainedIds.has(shot.id))
                       onRevealStoryboardShot(shot.id);
                   }
+                  if (drag.previewActive) onPreviewFrameEnd();
                   dragRef.current = null;
                   event.currentTarget.releasePointerCapture(event.pointerId);
                 }}
                 onLostPointerCapture={() => {
+                  if (dragRef.current?.previewActive) onPreviewFrameEnd();
                   dragRef.current = null;
                 }}
                 onPointerCancel={() => {
+                  if (dragRef.current?.previewActive) onPreviewFrameEnd();
                   dragRef.current = null;
                 }}
               >

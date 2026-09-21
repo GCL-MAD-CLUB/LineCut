@@ -250,6 +250,79 @@ export function moveStoryboardCuts(
     : storyboard;
 }
 
+export function resizeStoryboardShot(
+  storyboard: StoryboardState,
+  shotId: string,
+  requestedStartFrame: number,
+  requestedEndFrame: number,
+  frameRate: number,
+  durationFrames: number,
+) {
+  let next = storyboard;
+  let segments = storyboardSegments(next, durationFrames, frameRate);
+  let index = segments.findIndex((shot) => shot.id === shotId);
+  if (index < 0) return storyboard;
+
+  const desiredStart = Math.round(requestedStartFrame);
+  const desiredEnd = Math.round(requestedEndFrame);
+  const target = segments[index];
+  if (desiredStart !== target.start_frame) {
+    if (index > 0) {
+      next = moveStoryboardCuts(
+        next,
+        new Set([shotId]),
+        desiredStart - target.start_frame,
+        frameRate,
+        durationFrames,
+      );
+    } else {
+      next = {
+        ...next,
+        shots: next.shots.map((shot) =>
+          shot.id === shotId
+            ? {
+                ...shot,
+                start_frame: desiredStart,
+                start_us: frameToTimeUs(desiredStart, frameRate),
+              }
+            : shot,
+        ),
+      };
+    }
+  }
+
+  segments = storyboardSegments(next, durationFrames, frameRate);
+  index = segments.findIndex((shot) => shot.id === shotId);
+  if (index < 0) return next;
+  const resizedTarget = segments[index];
+  if (desiredEnd !== resizedTarget.end_frame) {
+    const following = segments[index + 1];
+    if (following) {
+      next = moveStoryboardCuts(
+        next,
+        new Set([following.id]),
+        desiredEnd - resizedTarget.end_frame,
+        frameRate,
+        durationFrames,
+      );
+    } else {
+      next = {
+        ...next,
+        shots: next.shots.map((shot) =>
+          shot.id === shotId
+            ? {
+                ...shot,
+                end_frame: desiredEnd,
+                end_us: frameToTimeUs(desiredEnd, frameRate),
+              }
+            : shot,
+        ),
+      };
+    }
+  }
+  return next;
+}
+
 export function removeStoryboardCuts(
   storyboard: StoryboardState,
   cutIds: ReadonlySet<string>,

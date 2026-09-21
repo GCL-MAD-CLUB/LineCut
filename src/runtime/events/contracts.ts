@@ -14,7 +14,14 @@ export interface ApplicationEventMap {
   "edit.duplicate.requested": Record<string, never>;
   "edit.select-all.requested": Record<string, never>;
   "edit.clear-selection.requested": Record<string, never>;
-  "playback.seek.requested": { timeUs: number; focusEndUs?: number; play?: boolean };
+  "playback.seek.requested": {
+    timeUs: number;
+    focusEndUs?: number;
+    play?: boolean;
+    focusTarget?:
+      | { kind: "subtitle"; videoId: string; trackId: string; cueId: string }
+      | { kind: "storyboard"; videoContext: string; shotId: string };
+  };
   "storyboard.reveal-shot.requested": { videoContext: string; shotId: string };
 }
 

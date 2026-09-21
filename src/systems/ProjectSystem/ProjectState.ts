@@ -92,6 +92,14 @@ interface ProjectCommands {
     cueIds: Iterable<string>,
     ripple: boolean,
   ) => void;
+  subtitleCueTimingUpdated: (
+    videoId: string,
+    trackId: string,
+    cueId: string,
+    startUs: number,
+    endUs: number,
+    historyGroupId?: string,
+  ) => void;
   proxyDialogOpened: () => void;
   proxyDialogClosed: () => void;
   sourcePreviewCleared: () => void;
@@ -1946,6 +1954,50 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
             subtitles,
           };
         },
+      );
+    },
+    subtitleCueTimingUpdated: (
+      videoId,
+      trackId,
+      cueId,
+      requestedStartUs,
+      requestedEndUs,
+      historyGroupId,
+    ) => {
+      if (!videoId || !trackId || !cueId) return;
+      const startUs = Math.max(0, Math.round(requestedStartUs));
+      const endUs = Math.max(startUs, Math.round(requestedEndUs));
+      commitProjectEvent(
+        set,
+        "调整字幕切点",
+        "subtitle",
+        (state) => {
+          const context = subtitleTrackContext(
+            state.project,
+            state.projects,
+            state.mediaItems,
+            videoId,
+            trackId,
+          );
+          if (!context) return state;
+          const sourceCues = context.project.cues[trackId] ?? [];
+          let changed = false;
+          const nextCues = sourceCues.map((cue) => {
+            if (cue.id !== cueId || (cue.start_us === startUs && cue.end_us === endUs)) return cue;
+            changed = true;
+            return { ...cue, start_us: startUs, end_us: endUs };
+          });
+          if (!changed) return state;
+          const nextProject: Project = {
+            ...context.project,
+            cues: { ...context.project.cues, [trackId]: nextCues },
+          };
+          return {
+            project: state.project?.asset.id === nextProject.asset.id ? nextProject : state.project,
+            projects: { ...state.projects, [nextProject.asset.id]: nextProject },
+          };
+        },
+        historyGroupId,
       );
     },
     proxyDialogOpened: () => set({ proxyDialogOpen: true }),

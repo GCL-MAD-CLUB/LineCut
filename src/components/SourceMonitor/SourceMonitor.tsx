@@ -12,6 +12,7 @@ import {
 import { flushSync } from "react-dom";
 import { usePlaybackCapability } from "../../runtime/capabilities/PlaybackCapability";
 import { publishEvent } from "../../runtime/events/react";
+import type { ApplicationEventMap } from "../../runtime/events/contracts";
 import { runBackgroundOperation, runOperation } from "../../errors";
 import { useStableIdentity } from "../../runtime/state/react";
 import { usePanelActive, usePanelInstanceId } from "../../runtime/systems/PanelState";
@@ -32,6 +33,7 @@ import {
 } from "../../core/editor/timeline";
 import { MonitorRange } from "./MonitorRange";
 import { crossedStoryboardGap, storyboardGaps } from "../../core/editor/storyboard";
+import { resizeStoryboardShot } from "../../core/editor/storyboardCuts";
 import { activeMediaDragVideoId, markMediaDragHandled } from "../MediaBin/mediaDrag";
 import { usePanelManagerState } from "../DockLayout";
 import "./SourceMonitor.css";
@@ -207,6 +209,8 @@ export function SourceMonitor() {
     sourcePreviewSelected,
     proxyPreviewSelected,
     proxyDialogOpened,
+    storyboardUpdated,
+    subtitleCueTimingUpdated,
   } = useProjectPort(
     [
       "project",
@@ -224,6 +228,8 @@ export function SourceMonitor() {
       "sourcePreviewSelected",
       "proxyPreviewSelected",
       "proxyDialogOpened",
+      "storyboardUpdated",
+      "subtitleCueTimingUpdated",
     ],
   );
   const {
@@ -274,6 +280,11 @@ export function SourceMonitor() {
   const cuePlaybackPauseFrameRef = useRef<number | null>(null);
   const pendingPreviewRestoreRef = useRef<PendingPreviewRestore | null>(null);
   const cuePlaybackEndFrameRef = useRef<number | null>(null);
+  const cueRangeTargetRef = useRef<NonNullable<
+    ApplicationEventMap["playback.seek.requested"]["focusTarget"]
+  > | null>(null);
+  const cueRangeDragGroupRef = useRef<string | undefined>(undefined);
+  const transientFramePreviewRestoreRef = useRef<number | null>(null);
   const currentFrameRef = useRef(currentFrame);
   const timelineStartFrameRef = useRef(timelineStartFrame);
   const timelineSpanFramesRef = useRef(timelineSpanFrames);
@@ -527,6 +538,7 @@ export function SourceMonitor() {
         setCueRange({ startFrame: rangeStartFrame, endFrame: rangeEndFrame });
         centerTimelineOnFrame(rangeStartFrame);
         cuePlaybackEndFrameRef.current = rangeEndFrame;
+        cueRangeTargetRef.current = detail.focusTarget ?? null;
       }
       const video = videoRef.current;
       seekToFrame(
@@ -882,6 +894,10 @@ export function SourceMonitor() {
 
   function syncCurrentTimeFromVideo(element: HTMLVideoElement) {
     if (cuePlaybackPauseFrameRef.current !== null) {
+      return;
+    }
+    if (transientFramePreviewRestoreRef.current !== null) {
+      finishVideoSeek(element);
       return;
     }
     const nextFrame = usToMonitorFrame(element.currentTime * 1_000_000);
@@ -1328,6 +1344,78 @@ export function SourceMonitor() {
     applyPlaybackMode(0, false, false);
   }
 
+  function beginCueRangeDrag() {
+    cueRangeDragGroupRef.current = `cue-range-drag:${crypto.randomUUID()}`;
+    pausePlaybackForPreciseSeek();
+  }
+
+  function previewFrameWithoutMovingCursor(frame: number) {
+    transientFramePreviewRestoreRef.current ??= currentFrameRef.current;
+    requestVideoSeek(clampMonitorFrame(frame));
+  }
+
+  function finishFramePreview() {
+    const restoreFrame = transientFramePreviewRestoreRef.current;
+    if (restoreFrame === null) return;
+    transientFramePreviewRestoreRef.current = null;
+    requestVideoSeek(restoreFrame);
+  }
+
+  function changeCueRangeFromTimeline(range: { startFrame: number; endFrame: number } | null) {
+    cuePlaybackEndFrameRef.current = range?.endFrame ?? null;
+    const target = cueRangeTargetRef.current;
+    if (!range || !target) {
+      setCueRange(range);
+      return;
+    }
+    if (target.kind === "subtitle") {
+      setCueRange(range);
+      subtitleCueTimingUpdated(
+        target.videoId,
+        target.trackId,
+        target.cueId,
+        frameToClampedUs(range.startFrame),
+        frameToClampedUs(range.endFrame),
+        cueRangeDragGroupRef.current,
+      );
+      return;
+    }
+
+    const currentStoryboard = storyboards[target.videoContext];
+    if (!currentStoryboard) {
+      setCueRange(range);
+      return;
+    }
+    const resized = resizeStoryboardShot(
+      currentStoryboard,
+      target.shotId,
+      range.startFrame,
+      range.endFrame,
+      frameRate,
+      durationFrames,
+    );
+    const resizedShot = resized.shots.find((shot) => shot.id === target.shotId);
+    const actualRange = resizedShot
+      ? { startFrame: resizedShot.start_frame, endFrame: resizedShot.end_frame }
+      : range;
+    cuePlaybackEndFrameRef.current = actualRange.endFrame;
+    setCueRange(actualRange);
+    storyboardUpdated(
+      target.videoContext,
+      "调整分镜切点",
+      (storyboard) =>
+        resizeStoryboardShot(
+          storyboard,
+          target.shotId,
+          range.startFrame,
+          range.endFrame,
+          frameRate,
+          durationFrames,
+        ),
+      cueRangeDragGroupRef.current,
+    );
+  }
+
   function moveCursorByFrames(frameDelta: number) {
     if (!hasMedia || frameDelta === 0) {
       return;
@@ -1485,9 +1573,14 @@ export function SourceMonitor() {
           skippedRanges={skippedRanges}
           frameRate={frameRate}
           durationUs={durationUs}
-          onCueRangeChange={setCueRange}
+          onCueRangeChange={changeCueRangeFromTimeline}
+          onCueRangeDragStart={beginCueRangeDrag}
+          onCueRangePreviewFrame={previewFrameWithoutMovingCursor}
+          onCueRangePreviewEnd={finishFramePreview}
           onPause={pausePlaybackForPreciseSeek}
           onPauseForInteraction={pausePlaybackForCutInteraction}
+          onPreviewFrame={previewFrameWithoutMovingCursor}
+          onPreviewFrameEnd={finishFramePreview}
           showStoryboardCuts={showStoryboardCuts}
           onShowStoryboardCutsChange={setShowStoryboardCuts}
           showTimelineTimecodes={showTimelineTimecodes}

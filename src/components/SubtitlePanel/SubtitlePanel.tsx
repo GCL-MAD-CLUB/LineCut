@@ -397,13 +397,16 @@ function cueMatchesFilter(
   );
 }
 
-function seekToCue(cue: SubtitleCue, focusRange = false) {
+function seekToCue(cue: SubtitleCue, videoId: string, focusRange = false) {
   void publishEvent(
     "playback.seek.requested",
     {
       timeUs: cue.start_us,
       focusEndUs: focusRange ? cue.end_us : undefined,
       play: focusRange,
+      focusTarget: focusRange
+        ? { kind: "subtitle", videoId, trackId: cue.track_id, cueId: cue.id }
+        : undefined,
     },
     subtitleEventSource,
   );
@@ -1218,7 +1221,7 @@ export function SubtitlePanel() {
       if (!event.shiftKey) {
         selectionAnchorRef.current = targetId;
         cueSelectionReplaced([targetId], targetId);
-        seekToCue(sortedCues[targetIndex]);
+        seekToCue(sortedCues[targetIndex], activeVideoId);
         rowVirtualizer.scrollToIndex(targetIndex, { align: "auto" });
         return;
       }
@@ -1442,7 +1445,7 @@ export function SubtitlePanel() {
     selectionAnchorRef.current = targetCue.id;
     selectionFocusRef.current = targetCue.id;
     cueSelectionReplaced([targetCue.id], targetCue.id);
-    seekToCue(targetCue);
+    seekToCue(targetCue, activeVideoId);
     rowVirtualizer.scrollToIndex(targetIndex, { align: "auto" });
   }
 
@@ -1520,7 +1523,7 @@ export function SubtitlePanel() {
 
     cueSelectionReplaced(nextSelection, primaryCueId);
     if (shouldSeek && primaryCueId === cue.id) {
-      seekToCue(cue, focusRange);
+      seekToCue(cue, activeVideoId, focusRange);
     }
   }
 
@@ -1529,7 +1532,7 @@ export function SubtitlePanel() {
     if (target.closest(".cue-frame-button, .cue-rating-button, .cue-flag-button")) {
       return;
     }
-    seekToCue(cue, true);
+    seekToCue(cue, activeVideoId, true);
   }
 
   function syncTableHeaderScroll(event: ReactUIEvent<HTMLDivElement>) {

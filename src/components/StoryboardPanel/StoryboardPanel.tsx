@@ -656,13 +656,14 @@ function annotationShotIdsForSelection(
   return targetShotIds;
 }
 
-function seekToShot(shot: StoryboardShot, focusRange = false) {
+function seekToShot(shot: StoryboardShot, videoContext: string, focusRange = false) {
   void publishEvent(
     "playback.seek.requested",
     {
       timeUs: shot.start_us,
       focusEndUs: focusRange ? shot.end_us : undefined,
       play: focusRange,
+      focusTarget: focusRange ? { kind: "storyboard", videoContext, shotId: shot.id } : undefined,
     },
     storyboardEventSource,
   );
@@ -1976,7 +1977,7 @@ export function StoryboardPanel() {
       if (!event.shiftKey) {
         selectionAnchorRef.current = targetId;
         shotSelectionReplaced([targetId], targetId);
-        seekToShot(sortedShots[targetIndex]);
+        seekToShot(sortedShots[targetIndex], videoContext);
         scrollToTarget();
         return;
       }
@@ -2208,7 +2209,7 @@ export function StoryboardPanel() {
     selectionAnchorRef.current = targetShot.id;
     selectionFocusRef.current = targetShot.id;
     shotSelectionReplaced([targetShot.id], targetShot.id);
-    seekToShot(targetShot);
+    seekToShot(targetShot, videoContext);
     if (viewMode === "list") {
       rowVirtualizer.scrollToIndex(targetIndex, { align: "auto" });
       return;
@@ -3068,7 +3069,7 @@ export function StoryboardPanel() {
 
     shotSelectionReplaced(Array.from(nextSelection), primaryShotId);
     if (shouldSeek && primaryShotId === shot.id) {
-      seekToShot(shot, focusRange);
+      seekToShot(shot, videoContext, focusRange);
     }
   }
 
@@ -3077,7 +3078,7 @@ export function StoryboardPanel() {
     if (target.closest(".shot-frame-button, .shot-rating-button, .shot-flag-button")) {
       return;
     }
-    seekToShot(shot, true);
+    seekToShot(shot, videoContext, true);
   }
 
   function syncTableHeaderScroll(event: ReactUIEvent<HTMLDivElement>) {

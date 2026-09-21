@@ -1,5 +1,10 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
-import type { MouseEventHandler, PointerEventHandler, ReactNode } from "react";
+import type {
+  MouseEventHandler,
+  PointerEvent as ReactPointerEvent,
+  PointerEventHandler,
+  ReactNode,
+} from "react";
 import {
   buildTimelineRuler,
   clampTimelineStartFrame,
@@ -25,6 +30,10 @@ export interface TimelineRulerProps {
   timelineSpanFrames: number;
   cueRange: MonitorCueRange | null;
   skippedRanges?: readonly StoryboardGap[];
+  onCueRangeChange?: (range: MonitorCueRange) => void;
+  onCueRangeDragStart?: () => void;
+  onCueRangePreviewFrame?: (frame: number) => void;
+  onCueRangePreviewEnd?: () => void;
   onMinTimelineSpanFramesChange: (minSpanFrames: number) => void;
   onTimelineStartFrameChange: (startFrame: number) => void;
   onSeekFrame: (frame: number) => number;
@@ -56,6 +65,10 @@ export function TimelineRuler({
   timelineSpanFrames,
   cueRange,
   skippedRanges = [],
+  onCueRangeChange,
+  onCueRangeDragStart,
+  onCueRangePreviewFrame,
+  onCueRangePreviewEnd,
   onMinTimelineSpanFramesChange,
   onTimelineStartFrameChange,
   onSeekFrame,
@@ -66,6 +79,7 @@ export function TimelineRuler({
   const timelineSpanFramesRef = useRef(timelineSpanFrames);
   const timelineDragScrollAtRef = useRef(0);
   const timelineDragCleanupRef = useRef<(() => void) | null>(null);
+  const cueRangeDragCleanupRef = useRef<(() => void) | null>(null);
   const [timelineWidthPx, setTimelineWidthPx] = useState(0);
 
   const timelineEndFrame = Math.min(durationFrames, timelineStartFrame + timelineSpanFrames);
@@ -116,7 +130,13 @@ export function TimelineRuler({
     timelineStartFrameRef.current = timelineStartFrame;
   }, [timelineStartFrame]);
 
-  useEffect(() => () => timelineDragCleanupRef.current?.(), [hasMedia]);
+  useEffect(
+    () => () => {
+      timelineDragCleanupRef.current?.();
+      cueRangeDragCleanupRef.current?.();
+    },
+    [hasMedia],
+  );
 
   useEffect(() => {
     timelineSpanFramesRef.current = timelineSpanFrames;
@@ -262,6 +282,69 @@ export function TimelineRuler({
     animationFrame = requestAnimationFrame(scrollAtEdge);
   };
 
+  function beginCueRangeDrag(
+    event: ReactPointerEvent<HTMLSpanElement>,
+    part: "start" | "end" | "both",
+  ) {
+    if (event.button !== 0 || !cueRange || !onCueRangeChange || timelineWidthPx <= 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    timelineDragCleanupRef.current?.();
+    cueRangeDragCleanupRef.current?.();
+    onCueRangeDragStart?.();
+
+    const originX = event.clientX;
+    const origin = cueRange;
+    onCueRangeChange(origin);
+    if (part !== "both") {
+      onCueRangePreviewFrame?.(part === "start" ? origin.startFrame : origin.endFrame);
+    }
+    const rangeLength = origin.endFrame - origin.startFrame;
+    const framesPerPixel = timelineVisibleSpanFrames / timelineWidthPx;
+
+    const handleMove = (moveEvent: globalThis.PointerEvent) => {
+      moveEvent.preventDefault();
+      const delta = Math.round((moveEvent.clientX - originX) * framesPerPixel);
+      let nextRange: MonitorCueRange;
+      if (part === "start") {
+        nextRange = {
+          startFrame: clamp(origin.startFrame + delta, 0, origin.endFrame),
+          endFrame: origin.endFrame,
+        };
+      } else if (part === "end") {
+        nextRange = {
+          startFrame: origin.startFrame,
+          endFrame: clamp(origin.endFrame + delta, origin.startFrame, durationFrames - 1),
+        };
+      } else {
+        const startFrame = clamp(
+          origin.startFrame + delta,
+          0,
+          Math.max(0, durationFrames - 1 - rangeLength),
+        );
+        nextRange = { startFrame, endFrame: startFrame + rangeLength };
+      }
+      onCueRangeChange(nextRange);
+      if (part !== "both") {
+        onCueRangePreviewFrame?.(part === "start" ? nextRange.startFrame : nextRange.endFrame);
+      }
+    };
+    const handleEnd = () => {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleEnd);
+      window.removeEventListener("pointercancel", handleEnd);
+      window.removeEventListener("blur", handleEnd);
+      cueRangeDragCleanupRef.current = null;
+      if (part !== "both") onCueRangePreviewEnd?.();
+    };
+
+    window.addEventListener("pointermove", handleMove, { passive: false });
+    window.addEventListener("pointerup", handleEnd, { once: true });
+    window.addEventListener("pointercancel", handleEnd, { once: true });
+    window.addEventListener("blur", handleEnd, { once: true });
+    cueRangeDragCleanupRef.current = handleEnd;
+  }
+
   return (
     <div
       ref={timelineRef}
@@ -271,7 +354,7 @@ export function TimelineRuler({
     >
       <div className="timeline-ruler">
         {hasMedia && visibleCueRange && (
-          <div className="timeline-cue-range" aria-hidden="true">
+          <div className="timeline-cue-range">
             <div
               className="timeline-cue-fill"
               style={{
@@ -280,25 +363,40 @@ export function TimelineRuler({
               }}
             />
             {visibleCueRange.showStart && (
-              <svg
-                className="timeline-cue-brace start"
+              <span
+                className="timeline-cue-edge start"
                 style={{ left: `${visibleCueRange.actualStart}%` }}
-                viewBox="0 0 2 20"
-                preserveAspectRatio="none"
+                title="拖动选区起点"
+                onPointerDown={(event) => beginCueRangeDrag(event, "start")}
               >
-                <path d="M2 0V8L0 10L2 12V20" />
-              </svg>
+                <svg className="timeline-cue-brace" viewBox="0 0 2 20" aria-hidden="true">
+                  <path d="M2 0V8L0 10L2 12V20" />
+                </svg>
+              </span>
             )}
             {visibleCueRange.showEnd && (
-              <svg
-                className="timeline-cue-brace end"
+              <span
+                className="timeline-cue-edge end"
                 style={{ left: `${visibleCueRange.actualEnd}%` }}
-                viewBox="0 0 2 20"
-                preserveAspectRatio="none"
+                title="拖动选区终点"
+                onPointerDown={(event) => beginCueRangeDrag(event, "end")}
               >
-                <path d="M0 0V8L2 10L0 12V20" />
-              </svg>
+                <svg className="timeline-cue-brace" viewBox="0 0 2 20" aria-hidden="true">
+                  <path d="M0 0V8L2 10L0 12V20" />
+                </svg>
+              </span>
             )}
+            {(visibleCueRange.actualStart + visibleCueRange.actualEnd) / 2 >= 0 &&
+              (visibleCueRange.actualStart + visibleCueRange.actualEnd) / 2 <= 100 && (
+                <span
+                  className="timeline-cue-move-handle"
+                  style={{
+                    left: `${(visibleCueRange.actualStart + visibleCueRange.actualEnd) / 2}%`,
+                  }}
+                  title="拖动整个选区"
+                  onPointerDown={(event) => beginCueRangeDrag(event, "both")}
+                />
+              )}
           </div>
         )}
         {hasMedia &&
