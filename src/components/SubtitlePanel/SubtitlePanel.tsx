@@ -1040,18 +1040,29 @@ export function SubtitlePanel() {
       direction,
     );
     if (targetIndex < 0) return;
+    focusSearchMatch(targetIndex);
+  }
+  function focusSearchMatch(targetIndex: number) {
     const cue = sortedCues[targetIndex];
+    if (!cue) return;
     selectionAnchorRef.current = cue.id;
     selectionFocusRef.current = cue.id;
     cueSelectionReplaced([cue.id], cue.id);
     seekToCue(cue, activeVideoId);
-    rowVirtualizer.scrollToIndex(targetIndex, { align: "auto" });
+    rowVirtualizer.scrollToIndex(targetIndex, { align: "center" });
   }
   useSearchNavigation(
     panelRef,
     searchMode === "highlight" && Boolean(query.trim()),
     navigateSearch,
   );
+  const searchFocusKey = `${searchMode}\u0000${searchRule}\u0000${query}`;
+  useEffect(() => {
+    if (searchMode !== "highlight" || !query.trim()) return;
+    const firstMatchIndex = matchingCueIndices[0];
+    if (firstMatchIndex === undefined) return;
+    focusSearchMatch(firstMatchIndex);
+  }, [searchFocusKey]);
   const virtualRows = rowVirtualizer.getVirtualItems();
   const thumbnailVisibleRange = timelineThumbnailVisibleRange(
     virtualRows,

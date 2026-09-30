@@ -1518,22 +1518,35 @@ export function StoryboardPanel() {
       direction,
     );
     if (targetIndex < 0) return;
+    focusSearchMatch(targetIndex);
+  }
+  function focusSearchMatch(targetIndex: number) {
     const shot = sortedShots[targetIndex];
+    if (!shot) return;
     selectionAnchorRef.current = shot.id;
     selectionFocusRef.current = shot.id;
     shotSelectionReplaced([shot.id], shot.id);
     seekToShot(shot, videoContext);
-    if (viewMode === "list") rowVirtualizer.scrollToIndex(targetIndex, { align: "auto" });
-    else
-      Array.from(listRef.current?.querySelectorAll<HTMLElement>("[data-storyboard-shot-id]") ?? [])
-        .find((element) => element.dataset.storyboardShotId === shot.id)
-        ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    if (viewMode === "list") {
+      rowVirtualizer.scrollToIndex(targetIndex, { align: "center" });
+      return;
+    }
+    Array.from(listRef.current?.querySelectorAll<HTMLElement>("[data-storyboard-shot-id]") ?? [])
+      .find((element) => element.dataset.storyboardShotId === shot.id)
+      ?.scrollIntoView({ block: "center", inline: "nearest" });
   }
   useSearchNavigation(
     panelRef,
     searchMode === "highlight" && Boolean(query.trim()),
     navigateSearch,
   );
+  const searchFocusKey = `${searchMode}\u0000${searchRule}\u0000${searchScope}\u0000${query}`;
+  useEffect(() => {
+    if (searchMode !== "highlight" || !query.trim()) return;
+    const firstMatchIndex = matchingShotIndices[0];
+    if (firstMatchIndex === undefined) return;
+    focusSearchMatch(firstMatchIndex);
+  }, [searchFocusKey]);
   const virtualRows = rowVirtualizer.getVirtualItems();
   const thumbnailVisibleRange = timelineThumbnailVisibleRange(
     virtualRows,

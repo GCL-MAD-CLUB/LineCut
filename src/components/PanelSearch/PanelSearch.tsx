@@ -245,7 +245,6 @@ export function useSearchNavigation(
     if (!panel || !enabled) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (
-        event.defaultPrevented ||
         event.isComposing ||
         event.altKey ||
         event.ctrlKey ||
