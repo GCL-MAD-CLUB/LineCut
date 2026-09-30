@@ -1051,7 +1051,24 @@ pub(crate) async fn add_external_subtitles(
     state: tauri::State<'_, AppState>,
 ) -> CommandResult<AddExternalSubtitlesResult> {
     let task = register_task(&task_id, state.inner())?;
-    project_clone(&asset_id, &state)?;
+    // Only validate existence; cloning every previously loaded cue here is wasted work.
+    if !state
+        .projects
+        .lock()
+        .map_err(|_| {
+            app_error(
+                ErrorCode::ProjectStateUnavailable,
+                "Project state lock is poisoned",
+            )
+        })?
+        .contains_key(&asset_id)
+    {
+        return Err(app_error(
+            ErrorCode::ProjectNotLoaded,
+            format!("Project is not loaded for media asset: {asset_id}"),
+        )
+        .into());
+    }
     let mut new_tracks = Vec::new();
     let mut new_cues: HashMap<String, Vec<SubtitleCue>> = HashMap::new();
     let mut warnings = Vec::new();

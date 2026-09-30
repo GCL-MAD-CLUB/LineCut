@@ -1167,7 +1167,6 @@ export function StoryboardPanel() {
     recentKeywordIds,
     selectedShotIds,
     shotAnnotations,
-    detectingVideoContext,
     viewMode,
     thumbnailSize,
     gridSize,
@@ -1206,7 +1205,7 @@ export function StoryboardPanel() {
     shotSelectionCleared,
     shotSelectionReplaced,
   } = useStoryboardPanelState((state) => state);
-  const { isRunning: isDetecting } = useTaskProgressStatus("storyboard.detect");
+  const { tasks: detectionTasks } = useTaskProgressStatus("storyboard.detect");
   const playback = usePlaybackStatus();
   const panelRef = useRef<HTMLElement | null>(null);
   const contentLayoutRef = useRef<HTMLDivElement | null>(null);
@@ -1266,6 +1265,7 @@ export function StoryboardPanel() {
     project?.asset.video_stream_index !== null && project?.asset.video_stream_index !== undefined,
   );
   const videoLabel = mediaDisplayName(project, mediaItems, activeVideoId) || "未选择视频";
+  const isDetecting = detectionTasks.some((task) => task.resourceKey === videoContext);
   const canDetect = isTauriRuntime() && Boolean(project) && hasVideo && !isDetecting;
   const selectedCount = selectedShotIds.size;
   const hasSecondarySelection =
@@ -3211,6 +3211,7 @@ export function StoryboardPanel() {
     detectionStarted(context);
     const task = await createTaskProgress({
       operation: "storyboard.detect",
+      resourceKey: context,
       label: `分镜拆分 ${videoLabel}`,
       current: 0,
       total: 1,
@@ -3220,6 +3221,11 @@ export function StoryboardPanel() {
         await cancelFfmpegTask(taskId);
       },
     });
+    if (task.cancelled) {
+      task.remove();
+      detectionFinished(context);
+      return;
+    }
     try {
       const result = await invokeCommand<StoryboardDetectionResult>("detect_storyboard_shots", {
         assetId: project.asset.id,
@@ -3322,7 +3328,7 @@ export function StoryboardPanel() {
           }
           aria-busy={isDetecting}
         >
-          {isDetecting || detectingVideoContext === videoContext ? (
+          {isDetecting ? (
             <Loader2 className="spin" aria-hidden="true" />
           ) : (
             <Scissors aria-hidden="true" />

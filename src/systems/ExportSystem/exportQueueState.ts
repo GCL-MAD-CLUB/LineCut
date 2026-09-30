@@ -46,7 +46,11 @@ export const exportQueueStore = createStore<ExportQueueState>()((set) => ({
           : state.activeEventId === eventId
             ? null
             : state.activeEventId,
-      queuedCount: status === "running" ? Math.max(0, state.queuedCount - 1) : state.queuedCount,
+      queuedCount:
+        state.events.some((event) => event.id === eventId && event.status === "queued") &&
+        status !== "queued"
+          ? Math.max(0, state.queuedCount - 1)
+          : state.queuedCount,
     })),
 }));
 

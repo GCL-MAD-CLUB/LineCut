@@ -49,7 +49,7 @@ export function scheduleMediaAnalysis(results: ImportResult[], startAfter = Prom
       let cancelled = false;
       const task = await createTaskProgress({
         operation: "media.analyze",
-        label: `分析媒体 ${jobs.length} 项`,
+        label: `正在分析 ${jobs.length} 项媒体...`,
         current: 0,
         total: jobs.length,
         blocking: false,
@@ -69,6 +69,7 @@ export function scheduleMediaAnalysis(results: ImportResult[], startAfter = Prom
             );
         },
       });
+      cancelled ||= task.cancelled;
       let failure: unknown;
       try {
         // Limit heavy subtitle/cover work to one media at a time to keep editing responsive.
@@ -81,9 +82,6 @@ export function scheduleMediaAnalysis(results: ImportResult[], startAfter = Prom
           const taskId = taskIds[index];
           running.add(taskId);
           try {
-            task.update({
-              label: `分析媒体 ${index + 1} / ${jobs.length}`,
-            });
             const result = await invokeCommand<ImportResult>("analyze_imported_media", {
               assetId: id,
               taskId,

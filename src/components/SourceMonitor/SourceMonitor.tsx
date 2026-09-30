@@ -23,7 +23,6 @@ import {
   resolvedMediaAudioSources,
   useProjectPort,
 } from "../../systems/ProjectSystem";
-import { useTaskProgressStatus } from "../../systems/TaskSystem";
 import {
   clampTimelineStartFrame,
   frameDurationUs,
@@ -254,7 +253,6 @@ export function SourceMonitor() {
     playedVideoRecorded,
     syncMedia,
   } = useSourceMonitorState((state) => state);
-  const { isRunning: isGeneratingProxy } = useTaskProgressStatus("proxy.generate");
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const boundAudioRefs = useRef(new Map<string, HTMLAudioElement>());
   const rollingPcmAudioRef = useRef<RollingPcmAudioController | null>(null);
@@ -726,7 +724,7 @@ export function SourceMonitor() {
       sourcePreviewSelected();
       return;
     }
-    if (!project || isGeneratingProxy) {
+    if (!project) {
       return;
     }
     if (proxyPath) {

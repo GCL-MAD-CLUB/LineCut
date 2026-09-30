@@ -427,6 +427,20 @@ function externalSubtitleItems(project: Project): MediaBinItem[] {
     }));
 }
 
+/** Unbinding hides a track; it does not discard its parsed or edited cues. */
+export function canReuseSubtitleTrack(item: MediaBinItem, project: Project) {
+  if (item.kind !== "subtitle" || !item.subtitle_track_id) return false;
+  const track = project.tracks.find((candidate) => candidate.id === item.subtitle_track_id);
+  return Boolean(
+    track &&
+    track.asset_id === project.asset.id &&
+    track.source_type === "external" &&
+    track.source_path === item.path &&
+    !track.warning &&
+    (track.cue_count === 0 || project.cues[track.id]),
+  );
+}
+
 export function visibleSubtitleTracks(
   project: Project | null,
   mediaItems: MediaBinItem[],
@@ -1613,11 +1627,14 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
             if (!video || !currentProject) continue;
             const knownTrackIds = new Set(currentProject.tracks.map((track) => track.id));
             const tracks = binding.tracks.filter((track) => !knownTrackIds.has(track.id));
-            const nextProject = {
-              ...currentProject,
-              tracks: [...currentProject.tracks, ...tracks],
-              cues: { ...currentProject.cues, ...binding.cues },
-            };
+            const nextProject =
+              tracks.length > 0 || Object.keys(binding.cues).length > 0
+                ? {
+                    ...currentProject,
+                    tracks: [...currentProject.tracks, ...tracks],
+                    cues: { ...currentProject.cues, ...binding.cues },
+                  }
+                : currentProject;
             projects = { ...projects, [currentProject.asset.id]: nextProject };
             binding.itemIds.forEach((itemId, index) => {
               const track = binding.tracks[index];

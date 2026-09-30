@@ -31,13 +31,10 @@ import { publishEvent } from "../../runtime/events/react";
 import { useStableIdentity } from "../../runtime/state/react";
 import { usePanelActive, usePanelInstanceId } from "../../runtime/systems/PanelState";
 import { invokeCommand, runOperation } from "../../errors";
-import {
-  cancelFfmpegTask,
-  createFfmpegTaskId,
-  listenToFfmpegTaskProgress,
-} from "../../platform/tauri/ffmpegProgress";
+import { createFfmpegTaskId } from "../../platform/tauri/ffmpegProgress";
 import {
   defaultMediaBinFolderColor,
+  canReuseSubtitleTrack,
   isMediaItemEnabled,
   isMediaItemHidden,
   isMediaItemOffline,
@@ -70,7 +67,7 @@ import {
   useCloseOnOutsidePointer,
 } from "../PopupMenu";
 import { SelectDropdown, selectDropdownItems } from "../SelectDropdown";
-import { createTaskProgress, useTaskProgressStatus } from "../../systems/TaskSystem";
+import { useTaskProgressStatus } from "../../systems/TaskSystem";
 import "./MediaBin.css";
 import { MediaBinTable, type MediaBinTableRow } from "./MediaBinTable";
 import { activeMediaDragItemIds, markMediaDragHandled } from "./mediaDrag";
@@ -315,14 +312,9 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
   } = useMediaBinState((state) => state);
   const clipboardItemCount = useMediaBinClipboardItemCount();
   const { isRunning: isImporting } = useTaskProgressStatus("media.import");
-  const { isRunning: isBinding } = useTaskProgressStatus("media.bindSubtitles");
-  const { isRunning: isDemuxing } = useTaskProgressStatus("media.demux");
-  const { isRunning: isRelinking } = useTaskProgressStatus("media.relink");
-  const { isRunning: isGeneratingProxy } = useTaskProgressStatus("proxy.generate");
   const isEditAuthority = panelActive && focusedPanelId === panelInstanceId;
   const isReadOnly = mediaBinReadOnly;
   const setReadOnly = mediaBinReadOnlyChanged;
-  const isBusy = isImporting || isBinding || isDemuxing || isRelinking;
   const panelRef = useRef<HTMLElement | null>(null);
   const [contextMenu, setContextMenu] = useState<MediaBinContextMenuState | null>(null);
   const [linkDialog, setLinkDialog] = useState<MediaLinkDialogState | null>(null);
@@ -676,7 +668,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
   }
 
   function createFolder(parentId: string | null = currentFolderId) {
-    if (isReadOnly || isBusy || !rootFolderAvailable) {
+    if (isReadOnly || !rootFolderAvailable) {
       return;
     }
     const folder = newMediaFolder(parentId);
@@ -690,7 +682,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
   }
 
   function moveItemsToFolder(itemIds: string[], folderId: string | null) {
-    if (isReadOnly || isBusy || itemIds.length === 0) {
+    if (isReadOnly || itemIds.length === 0) {
       return;
     }
     mediaItemsMovedToFolder(itemIds, folderId);
@@ -701,7 +693,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
   }
 
   function moveEntriesToFolder(itemIds: string[], folderIds: string[], folderId: string | null) {
-    if (isReadOnly || isBusy || (itemIds.length === 0 && folderIds.length === 0)) {
+    if (isReadOnly || (itemIds.length === 0 && folderIds.length === 0)) {
       return;
     }
     if (folderId && mediaFolderAndDescendantIds(mediaFolders, folderIds).has(folderId)) {
@@ -721,12 +713,12 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     );
   }
 
-  async function bindItemsToVideo(itemIds: string[], videoId: string) {
+  function bindItemsToVideo(itemIds: string[], videoId: string) {
     const targetVideo = mediaItems.find((item) => item.id === videoId && item.kind === "video");
     const targetProject = targetVideo
       ? mediaItemProject(targetVideo, projects, mediaItems)
       : undefined;
-    if (isReadOnly || isBusy || !targetVideo || !targetProject) {
+    if (isReadOnly || !targetVideo || !targetProject) {
       return;
     }
     const selectedItemsToBind = mediaItems.filter(
@@ -740,48 +732,12 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
       (item) =>
         item.kind === "subtitle" &&
         !isVirtualMediaItem(item) &&
-        (!item.subtitle_track_id || item.bound_to_video_id !== videoId),
+        !canReuseSubtitleTrack(item, targetProject),
     );
     const directItems = selectedItemsToBind.filter(
       (item) => item.kind === "audio" || !subtitlesToParse.includes(item),
     );
 
-    if (subtitlesToParse.length > 0) {
-      const taskId = createFfmpegTaskId("media-bin-bind");
-      let cancelled = false;
-      const task = await createTaskProgress({
-        operation: "media.bindSubtitles",
-        label: `解析并绑定 ${subtitlesToParse.length} 个字幕`,
-        current: 0,
-        total: 1,
-        listener: listenToFfmpegTaskProgress(taskId),
-        on_cancel: async () => {
-          cancelled = true;
-          await cancelFfmpegTask(taskId);
-        },
-      });
-      try {
-        const result = await invokeCommand<AddExternalSubtitlesResult>("add_external_subtitles", {
-          assetId: targetProject.asset.id,
-          paths: subtitlesToParse.map((item) => item.path),
-          taskId,
-        });
-        subtitleTracksAddedToVideo(
-          videoId,
-          result.tracks,
-          result.cues,
-          subtitlesToParse.map((item) => item.id),
-        );
-        warningsAppended(result.warnings);
-        task.update({ current: 1 });
-        task.remove();
-      } catch (error) {
-        if (!cancelled) {
-          task.fail(error, { count: subtitlesToParse.length, resourceKind: "subtitle" });
-        }
-        return;
-      }
-    }
     if (directItems.length > 0) {
       mediaItemsBound(
         directItems.map((item) => item.id),
@@ -789,13 +745,38 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
       );
     }
     messagePublished(`已将 ${selectedItemsToBind.length} 个媒体绑定到 ${targetVideo.file_name}`);
+
+    if (subtitlesToParse.length > 0) {
+      const taskId = createFfmpegTaskId("media-bin-bind");
+      void runOperation(
+        "media.bindSubtitles",
+        () =>
+          invokeCommand<AddExternalSubtitlesResult>("add_external_subtitles", {
+            assetId: targetProject.asset.id,
+            paths: subtitlesToParse.map((item) => item.path),
+            taskId,
+          }),
+        { count: subtitlesToParse.length, resourceKind: "subtitle" },
+      ).then((outcome) => {
+        if (outcome.status !== "success") {
+          return;
+        }
+        subtitleTracksAddedToVideo(
+          videoId,
+          outcome.value.tracks,
+          outcome.value.cues,
+          subtitlesToParse.map((item) => item.id),
+        );
+        warningsAppended(outcome.value.warnings);
+      });
+    }
   }
 
-  async function bindSelectedItems() {
+  function bindSelectedItems() {
     if (!canBind) {
       return;
     }
-    await bindItemsToVideo(
+    bindItemsToVideo(
       selectedAuxiliary.map((item) => item.id),
       selectedBindingVideoId,
     );
@@ -846,7 +827,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     moveItemsToFolder(itemIds, rootFolderId);
   }
 
-  async function demuxSelectedVideo() {
+  function demuxSelectedVideo() {
     if (isReadOnly) {
       return;
     }
@@ -856,36 +837,23 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
       return;
     }
     const taskId = createFfmpegTaskId("media-bin-demux");
-    let cancelled = false;
-    const task = await createTaskProgress({
-      operation: "media.demux",
-      label: `分解 ${video.file_name}`,
-      current: 0,
-      total: 1,
-      listener: listenToFfmpegTaskProgress(taskId),
-      on_cancel: async () => {
-        cancelled = true;
-        await cancelFfmpegTask(taskId);
-      },
-    });
-    try {
-      const result = await invokeCommand<DemuxMediaResult>("demux_media_streams", {
-        assetId: videoProject.asset.id,
-        taskId,
-      });
-      mediaDemuxed(video.id, result);
-      task.update({ current: 1 });
-      task.remove();
-      messagePublished(
-        `已创建 ${result.audio_tracks.length} 条虚拟音轨和 ${result.subtitle_tracks.length} 条虚拟字幕`,
-      );
-    } catch (error) {
-      if (cancelled) {
-        messagePublished("分解已取消");
+    void runOperation(
+      "media.demux",
+      () =>
+        invokeCommand<DemuxMediaResult>("demux_media_streams", {
+          assetId: videoProject.asset.id,
+          taskId,
+        }),
+      { displayName: video.file_name, resourceKind: "media" },
+    ).then((outcome) => {
+      if (outcome.status !== "success") {
         return;
       }
-      task.fail(error, { displayName: video.file_name, resourceKind: "media" });
-    }
+      mediaDemuxed(video.id, outcome.value);
+      messagePublished(
+        `已分解产生 ${outcome.value.audio_tracks.length} 条音轨和 ${outcome.value.subtitle_tracks.length} 条字幕`,
+      );
+    });
   }
 
   async function removeSelection() {
@@ -1047,7 +1015,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
   }
 
   function createFolderFromSelection() {
-    if (isReadOnly || isBusy || !rootFolderAvailable || selectedIds.size === 0) {
+    if (isReadOnly || !rootFolderAvailable || selectedIds.size === 0) {
       return;
     }
     const clipboard = clipboardFromSelection();
@@ -1254,7 +1222,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     active: isEditAuthority,
     offlineSelectionCount: directlySelectedOfflineItems.length,
     onlineSelectionCount: directlySelectedOnlineItems.length,
-    disabled: isReadOnly || isBusy,
+    disabled: isReadOnly,
     handlers: {
       replaceMedia: replaceDirectlySelectedMedia,
       linkMedia: () => openLinkDialog("media", directlySelectedOfflineItems),
@@ -1403,7 +1371,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
         </div>
 
         <div
-          className={`media-bin-content ${viewMode}-view ${isBinding ? "is-binding" : ""}`}
+          className={`media-bin-content ${viewMode}-view`}
           style={contentStyle}
           onContextMenu={openContextMenu}
           onPointerDown={(event) => {
@@ -1428,7 +1396,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
             renamingFolderId={renamingFolderId}
             viewMode={viewMode}
             isReadOnly={isReadOnly}
-            canImport={!isReadOnly && !isBusy && rootFolderAvailable && panelActive}
+            canImport={!isReadOnly && rootFolderAvailable && panelActive}
             onSelectOnly={selectOnly}
             onToggleSelected={toggleSelected}
             onSelectItems={selectItems}
@@ -1526,7 +1494,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                   }
                   setBindingPopoverOpen(true);
                 }}
-                disabled={isReadOnly || !canManageBinding || isBusy}
+                disabled={isReadOnly || !canManageBinding}
                 title={bindingActionIsUnbind ? "解除绑定" : "绑定媒体（也可直接拖到视频标题上）"}
               >
                 {bindingActionIsUnbind ? (
@@ -1538,20 +1506,16 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
             </div>
             <button
               type="button"
-              onClick={() => void demuxSelectedVideo()}
-              disabled={isReadOnly || !canDemuxSelectedVideo || isBusy}
+              onClick={demuxSelectedVideo}
+              disabled={isReadOnly || !canDemuxSelectedVideo}
               title="分解音轨和字幕"
             >
-              {isDemuxing ? (
-                <Loader2 className="spin" aria-hidden="true" />
-              ) : (
-                <SplitSquareVertical aria-hidden="true" />
-              )}
+              <SplitSquareVertical aria-hidden="true" />
             </button>
             <button
               type="button"
               onClick={() => createFolder()}
-              disabled={isReadOnly || isBusy || !rootFolderAvailable}
+              disabled={isReadOnly || !rootFolderAvailable}
               title="新建媒体箱"
             >
               <FolderPlus aria-hidden="true" />
@@ -1567,7 +1531,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                   identity,
                 )
               }
-              disabled={isReadOnly || isBusy || !rootFolderAvailable}
+              disabled={isReadOnly || !rootFolderAvailable}
               title="导入媒体（视频、音频或字幕）"
             >
               {isImporting ? (
@@ -1579,7 +1543,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
             <button
               type="button"
               onClick={() => void removeSelection()}
-              disabled={isReadOnly || selectedIds.size === 0 || isBusy}
+              disabled={isReadOnly || selectedIds.size === 0}
               title="移除所选项目条目"
             >
               <Trash2 aria-hidden="true" />
@@ -1593,16 +1557,16 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
             <ModalDialog
               title="绑定媒体"
               bodyClassName="media-bin-bind-dialog-body"
-              confirmLabel={isBinding ? "绑定中..." : "绑定"}
-              confirmDisabled={isReadOnly || !canBind || isBusy}
+              confirmLabel="绑定"
+              confirmDisabled={isReadOnly || !canBind}
               onCancel={() => setBindingPopoverOpen(false)}
-              onConfirm={() => void bindSelectedItems()}
+              onConfirm={bindSelectedItems}
             >
               <div className="media-bin-bind-dialog-intro">
                 <Link2 aria-hidden="true" />
                 <div>
                   <strong>关联所选媒体与目标视频</strong>
-                  <span>绑定后，音频和字幕会归入目标视频，方便集中预览和整理。</span>
+                  <span>绑定后，音频和字幕会归入目标视频。</span>
                 </div>
               </div>
               <div className="media-bin-bind-dialog-field">
@@ -1689,7 +1653,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                     void removeSelection();
                     setContextMenu(null);
                   }}
-                  disabled={isReadOnly || selectedIds.size === 0 || isBusy}
+                  disabled={isReadOnly || selectedIds.size === 0}
                 >
                   清除
                 </PopupMenuItem>
@@ -1732,7 +1696,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                         : current,
                     )
                   }
-                  disabled={isReadOnly || selectedIds.size === 0 || isBusy}
+                  disabled={isReadOnly || selectedIds.size === 0}
                 >
                   <PopupMenuItem
                     onSelect={() => {
@@ -1780,7 +1744,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                       unbindItems(selectedAuxiliary.map((item) => item.id));
                       setContextMenu(null);
                     }}
-                    disabled={isReadOnly || !canManageBinding || isBusy}
+                    disabled={isReadOnly || !canManageBinding}
                   >
                     解除绑定
                   </PopupMenuItem>
@@ -1802,20 +1766,20 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                           : current,
                       )
                     }
-                    disabled={isReadOnly || !canManageBinding || isBusy}
+                    disabled={isReadOnly || !canManageBinding}
                   >
                     {(selectedVideos.length === 1 ? selectedVideos : videos).map((video) => (
                       <PopupMenuItem
                         key={video.id}
                         onSelect={() => {
                           setBindingVideoId(video.id);
-                          void bindItemsToVideo(
+                          bindItemsToVideo(
                             selectedAuxiliary.map((item) => item.id),
                             video.id,
                           );
                           setContextMenu(null);
                         }}
-                        disabled={isReadOnly || isBusy}
+                        disabled={isReadOnly}
                       >
                         {video.file_name}
                       </PopupMenuItem>
@@ -1824,10 +1788,10 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                 )}
                 <PopupMenuItem
                   onSelect={() => {
-                    void demuxSelectedVideo();
+                    demuxSelectedVideo();
                     setContextMenu(null);
                   }}
-                  disabled={isReadOnly || !canDemuxSelectedVideo || isBusy}
+                  disabled={isReadOnly || !canDemuxSelectedVideo}
                 >
                   分解音轨和字幕
                 </PopupMenuItem>
@@ -1872,7 +1836,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                     createFolder();
                     setContextMenu(null);
                   }}
-                  disabled={isReadOnly || isBusy || !rootFolderAvailable}
+                  disabled={isReadOnly || !rootFolderAvailable}
                 >
                   新建素材箱
                 </PopupMenuItem>
@@ -1881,7 +1845,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                     createFolderFromSelection();
                     setContextMenu(null);
                   }}
-                  disabled={isReadOnly || isBusy || !rootFolderAvailable || selectedIds.size === 0}
+                  disabled={isReadOnly || !rootFolderAvailable || selectedIds.size === 0}
                 >
                   通过选择项新建素材箱
                 </PopupMenuItem>
@@ -1896,7 +1860,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                     );
                     setContextMenu(null);
                   }}
-                  disabled={isReadOnly || isBusy || !rootFolderAvailable}
+                  disabled={isReadOnly || !rootFolderAvailable}
                 >
                   导入...
                 </PopupMenuItem>
@@ -1905,7 +1869,6 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                   onSelect={() => void replaceSelectedMedia()}
                   disabled={
                     isReadOnly ||
-                    isBusy ||
                     selectedFileItems.length !== 1 ||
                     isMediaItemOffline(selectedFileItems[0])
                   }
@@ -1914,13 +1877,13 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                 </PopupMenuItem>
                 <PopupMenuItem
                   onSelect={() => openLinkDialog("media", selectedOfflineItems)}
-                  disabled={isReadOnly || isBusy || selectedOfflineItems.length === 0}
+                  disabled={isReadOnly || selectedOfflineItems.length === 0}
                 >
                   链接媒体...
                 </PopupMenuItem>
                 <PopupMenuItem
                   onSelect={makeSelectedMediaOffline}
-                  disabled={isReadOnly || isBusy || selectedOnlineItems.length === 0}
+                  disabled={isReadOnly || selectedOnlineItems.length === 0}
                 >
                   设为脱机...
                 </PopupMenuItem>
@@ -1950,8 +1913,6 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                     onSelect={createProxyForSelection}
                     disabled={
                       isReadOnly ||
-                      isBusy ||
-                      isGeneratingProxy ||
                       selectedItems.length !== 1 ||
                       selectedProjectVideos.length !== 1 ||
                       isMediaItemOffline(selectedProjectVideos[0])
@@ -1961,13 +1922,13 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                   </PopupMenuItem>
                   <PopupMenuItem
                     onSelect={() => openLinkDialog("proxy", selectedProjectVideos)}
-                    disabled={isReadOnly || isBusy || selectedProjectVideos.length === 0}
+                    disabled={isReadOnly || selectedProjectVideos.length === 0}
                   >
                     连接代理...
                   </PopupMenuItem>
                   <PopupMenuItem
                     onSelect={detachSelectedProxies}
-                    disabled={isReadOnly || isBusy || selectedVideosWithProxy.length === 0}
+                    disabled={isReadOnly || selectedVideosWithProxy.length === 0}
                   >
                     分离代理
                   </PopupMenuItem>
@@ -1979,7 +1940,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                   </PopupMenuItem>
                   <PopupMenuItem
                     onSelect={() => openLinkDialog("full-resolution", selectedOfflineProjectVideos)}
-                    disabled={isReadOnly || isBusy || selectedOfflineProjectVideos.length === 0}
+                    disabled={isReadOnly || selectedOfflineProjectVideos.length === 0}
                   >
                     重新连接完整分辨率媒体...
                   </PopupMenuItem>
@@ -2026,7 +1987,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                     createFolder();
                     setContextMenu(null);
                   }}
-                  disabled={isReadOnly || isBusy || !rootFolderAvailable}
+                  disabled={isReadOnly || !rootFolderAvailable}
                 >
                   新建素材箱
                 </PopupMenuItem>
@@ -2054,7 +2015,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                     );
                     setContextMenu(null);
                   }}
-                  disabled={isReadOnly || isBusy || !rootFolderAvailable}
+                  disabled={isReadOnly || !rootFolderAvailable}
                 >
                   导入
                 </PopupMenuItem>

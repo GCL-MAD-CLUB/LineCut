@@ -5,7 +5,11 @@ import type {
   MediaAutoBindPreset,
   MediaAutoBindType,
 } from "./mediaAutoBinding";
-import { getProjectExportContext, getProjectWorkspaceSnapshot } from "../../systems/ProjectSystem";
+import {
+  canReuseSubtitleTrack,
+  getProjectExportContext,
+  getProjectWorkspaceSnapshot,
+} from "../../systems/ProjectSystem";
 import { createTaskProgress } from "../../systems/TaskSystem";
 import type { AddExternalSubtitlesResult, MediaAutoBindingBatch, UserNotice } from "../../types";
 import type {
@@ -15,7 +19,7 @@ import type {
 
 const MATCHING_PROGRESS_END = 30;
 const BINDING_PROGRESS_END = 95;
-const SUBTITLE_BIND_CONCURRENCY = 2;
+const SUBTITLE_BIND_CONCURRENCY = 1;
 
 interface MediaAutoBindActions {
   mediaAutoBindingsApplied: (batch: MediaAutoBindingBatch) => void;
@@ -99,7 +103,7 @@ async function runMediaAutoBinding({
   const running = new Set<string>();
   const task = await createTaskProgress({
     operation: "media.bindSubtitles",
-    label: "绑定媒体",
+    label: `正在绑定 ${importedItemIds.length} 项媒体...`,
     current: 0,
     total: 100,
     blocking: false,
@@ -110,6 +114,10 @@ async function runMediaAutoBinding({
     },
   });
 
+  if (task.cancelled) {
+    task.remove();
+    return;
+  }
   try {
     const importedItems = currentImportedItems(importedItemIds);
     matching = startMatchingWorker(
@@ -181,14 +189,20 @@ async function runMediaAutoBinding({
         if (getProjectExportContext().projectId !== projectId) return;
         running.add(job.taskId);
         try {
-          task.update({
-            label: `绑定媒体 ${completed + 1}/${subtitleJobs.length}`,
-          });
-          const result = await invokeCommand<AddExternalSubtitlesResult>("add_external_subtitles", {
-            assetId: job.assetId,
-            paths: [job.item.path],
-            taskId: job.taskId,
-          });
+          const project = getProjectWorkspaceSnapshot().projects.find(
+            (candidate) => candidate.asset.id === job.assetId,
+          );
+          const reusableTrack =
+            project && canReuseSubtitleTrack(job.item, project)
+              ? project.tracks.find((track) => track.id === job.item.subtitle_track_id)
+              : undefined;
+          const result: AddExternalSubtitlesResult = reusableTrack
+            ? { tracks: [reusableTrack], cues: {}, warnings: [] }
+            : await invokeCommand<AddExternalSubtitlesResult>("add_external_subtitles", {
+                assetId: job.assetId,
+                paths: [job.item.path],
+                taskId: job.taskId,
+              });
           if (getProjectExportContext().projectId === projectId) {
             const binding: MediaAutoBindingBatch["subtitleBindings"][number] = {
               videoId: job.videoId,

@@ -1,4 +1,16 @@
 use super::*;
+use std::sync::LazyLock;
+
+static SUBTITLE_TIMING_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?P<start>(?:\d{1,2}:)?\d{2}:\d{2}[\.,]\d{1,6})\s*-->\s*(?P<end>(?:\d{1,2}:)?\d{2}:\d{2}[\.,]\d{1,6})")
+        .expect("valid timing regex")
+});
+static ASS_TAG_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\{[^}]*\}").expect("valid ass tag regex"));
+static HTML_TAG_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<[^>]+>").expect("valid html tag regex"));
+static INLINE_SPACE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[ \t]+").expect("valid whitespace regex"));
 
 const IMPORT_SUBTITLE_WORKERS: usize = 3;
 
@@ -246,10 +258,7 @@ pub(crate) fn parse_srt_or_vtt_cancellable(
 ) -> AppResult<Vec<SubtitleCue>> {
     let normalized = normalize_newlines(text);
     let lines = normalized.lines().collect::<Vec<_>>();
-    let timing_re = Regex::new(
-        r"(?P<start>(?:\d{1,2}:)?\d{2}:\d{2}[\.,]\d{1,6})\s*-->\s*(?P<end>(?:\d{1,2}:)?\d{2}:\d{2}[\.,]\d{1,6})",
-    )
-    .expect("valid timing regex");
+    let timing_re = &*SUBTITLE_TIMING_RE;
     let mut cues = Vec::new();
     let mut i = 0usize;
 
@@ -420,16 +429,13 @@ pub(crate) fn clean_plain_text(raw: &str) -> String {
         .replace("\\n", "\n")
         .replace("\\h", " ")
         .replace("&nbsp;", " ");
-    let ass_tag_re = Regex::new(r"\{[^}]*\}").expect("valid ass tag regex");
-    text = ass_tag_re.replace_all(&text, "").into_owned();
-    let html_tag_re = Regex::new(r"<[^>]+>").expect("valid html tag regex");
-    text = html_tag_re.replace_all(&text, "").into_owned();
+    text = ASS_TAG_RE.replace_all(&text, "").into_owned();
+    text = HTML_TAG_RE.replace_all(&text, "").into_owned();
     text = text.replace("\r\n", "\n").replace('\r', "\n");
     // Keep each line of a multi-line cue instead of flattening onto one line,
     // normalizing inline whitespace and dropping blank lines.
-    let inline_space_re = Regex::new(r"[ \t]+").expect("valid whitespace regex");
     text.lines()
-        .map(|line| inline_space_re.replace_all(line.trim(), " ").into_owned())
+        .map(|line| INLINE_SPACE_RE.replace_all(line.trim(), " ").into_owned())
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
@@ -595,7 +601,85 @@ pub(crate) fn codec_from_path(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_decimal_seconds_to_us;
+    use super::*;
+
+    #[test]
+    fn shared_cleaning_patterns_preserve_multiline_text() {
+        for _ in 0..3 {
+            assert_eq!(
+                clean_plain_text("{\\an8}<i>Hello</i>  world\\N  next\t line &nbsp;\\h!\r\n"),
+                "Hello world\nnext line !"
+            );
+            assert_eq!(clean_plain_text("{\\b1}<b></b>\t\\N"), "");
+        }
+    }
+
+    #[test]
+    #[ignore = "manual before/after subtitle cleaning benchmark"]
+    fn benchmark_subtitle_cleaning() {
+        // Preserve the old per-cue compilation path as a performance baseline.
+        fn previous_clean_plain_text(raw: &str) -> String {
+            let mut text = raw
+                .replace("\\N", "\n")
+                .replace("\\n", "\n")
+                .replace("\\h", " ")
+                .replace("&nbsp;", " ");
+            text = Regex::new(r"\{[^}]*\}")
+                .unwrap()
+                .replace_all(&text, "")
+                .into_owned();
+            text = Regex::new(r"<[^>]+>")
+                .unwrap()
+                .replace_all(&text, "")
+                .into_owned();
+            text = text.replace("\r\n", "\n").replace('\r', "\n");
+            let whitespace = Regex::new(r"[ \t]+").unwrap();
+            text.lines()
+                .map(|line| whitespace.replace_all(line.trim(), " ").into_owned())
+                .filter(|line| !line.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+        let sample = "{\\an8}<i>Hello</i>  world\\N  next\t line &nbsp;\\h!\r\n";
+        assert_eq!(previous_clean_plain_text(sample), clean_plain_text(sample));
+        for pass in 1..=2 {
+            let start = std::time::Instant::now();
+            for _ in 0..2_000 {
+                std::hint::black_box(previous_clean_plain_text(std::hint::black_box(sample)));
+            }
+            let before = start.elapsed();
+            let start = std::time::Instant::now();
+            for _ in 0..2_000 {
+                std::hint::black_box(clean_plain_text(std::hint::black_box(sample)));
+            }
+            eprintln!(
+                "2000 cues, pass {pass}: before={before:?}, after={:?}",
+                start.elapsed()
+            );
+        }
+    }
+
+    #[test]
+    fn shared_patterns_keep_srt_ass_and_cancellation_behavior() {
+        let srt = "1\n00:00:01,000 --> 00:00:02,000\n<i>Hello</i>\\Nworld\n";
+        for track in ["first", "second"] {
+            let cues = parse_subtitle_text_cancellable(srt, "srt", track, None).unwrap();
+            assert_eq!(cues.len(), 1);
+            assert_eq!(cues[0].plain_text, "Hello\nworld");
+            assert_eq!(cues[0].track_id, track);
+            assert_eq!(cues[0].start_us, 1_000_000);
+            assert_eq!(cues[0].end_us, 2_000_000);
+        }
+        let ass = "[Events]\nDialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,{\\b1}Hello\\Nworld";
+        let cues = parse_subtitle_text_cancellable(ass, "ass", "ass-track", None).unwrap();
+        assert_eq!(cues[0].plain_text, "Hello\nworld");
+        let cancelled = AtomicBool::new(true);
+        assert!(
+            parse_subtitle_text_cancellable(srt, "srt", "cancelled", Some(&cancelled))
+                .unwrap_err()
+                .is(ErrorCode::TaskCancelled)
+        );
+    }
 
     #[test]
     fn parse_decimal_seconds_to_us_saturates_untrusted_timestamps() {
