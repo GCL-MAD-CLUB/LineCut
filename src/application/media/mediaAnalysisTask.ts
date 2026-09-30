@@ -14,7 +14,7 @@ import { createTaskProgress } from "../../systems/TaskSystem";
 import type { ImportResult } from "../../types";
 
 const pending = new Set<string>();
-const deferredCovers = new Set<string>();
+let analysisQueue = Promise.resolve();
 const listeners = new Set<() => void>();
 function notify() {
   listeners.forEach((listener) => listener());
@@ -26,7 +26,7 @@ function subscribe(listener: () => void) {
   };
 }
 export function useMediaCoverDeferred(assetId: string) {
-  return useSyncExternalStore(subscribe, () => pending.has(assetId) || deferredCovers.has(assetId));
+  return useSyncExternalStore(subscribe, () => pending.has(assetId));
 }
 
 /** This queue lives outside the import workspace and survives its unmount. */
@@ -34,14 +34,19 @@ export function scheduleMediaAnalysis(results: ImportResult[], startAfter = Prom
   const jobs = results.filter((result) => !pending.has(result.project.asset.id));
   if (!jobs.length) return;
   const projectId = getProjectExportContext().projectId;
+  const previousBatch = analysisQueue;
+  let finishBatch!: () => void;
+  analysisQueue = new Promise<void>((resolve) => {
+    finishBatch = resolve;
+  });
   jobs.forEach((job) => {
     pending.add(job.project.asset.id);
-    deferredCovers.add(job.project.asset.id);
   });
   notify();
   // Let the workspace switch paint, then wait for higher-priority automatic binding.
   window.setTimeout(() => {
     void runOperation("media.analyze", async () => {
+      await previousBatch;
       await startAfter;
       if (getProjectExportContext().projectId !== projectId) return;
       const taskIds = jobs.map(() => createFfmpegTaskId("media-analysis"));
@@ -88,10 +93,6 @@ export function scheduleMediaAnalysis(results: ImportResult[], startAfter = Prom
             });
             if (!cancelled) {
               applyAnalyzedMediaResult(result, projectId);
-              if (
-                !result.warnings.some((warning) => warning.code === "VIDEO_COVER_ANALYSIS_FAILED")
-              )
-                deferredCovers.delete(id);
             }
           } catch (error) {
             if (!cancelled) {
@@ -124,6 +125,7 @@ export function scheduleMediaAnalysis(results: ImportResult[], startAfter = Prom
         notify();
       }
     }).finally(() => {
+      finishBatch();
       jobs.forEach((job) => pending.delete(job.project.asset.id));
       notify();
     });

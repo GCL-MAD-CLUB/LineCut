@@ -2,7 +2,7 @@
 
 const maximumCachedVideoCovers = 200;
 const videoCoverCache = new Map<string, Uint8Array>();
-const pendingVideoCovers = new Map<string, Promise<Uint8Array>>();
+const pendingVideoCovers = new Map<string, Promise<Uint8Array | null>>();
 let videoCoverQueue: Promise<void> = Promise.resolve();
 
 function enqueueVideoCover<Value>(task: () => Promise<Value>) {
@@ -26,7 +26,10 @@ function rememberVideoCover(cacheKey: string, bytes: Uint8Array) {
   }
 }
 
-export function extractVideoCover(assetId: string, fingerprint: string): Promise<Uint8Array> {
+export function extractVideoCover(
+  assetId: string,
+  fingerprint: string,
+): Promise<Uint8Array | null> {
   const cached = videoCoverCache.get(fingerprint);
   if (cached) {
     rememberVideoCover(fingerprint, cached);
@@ -39,8 +42,9 @@ export function extractVideoCover(assetId: string, fingerprint: string): Promise
   }
 
   const request = enqueueVideoCover(() =>
-    invokeCommand<number[]>("generate_video_cover_thumbnail", { assetId }),
+    invokeCommand<number[] | null>("get_cached_video_cover_thumbnail", { assetId }),
   ).then((serializedBytes) => {
+    if (serializedBytes === null) return null;
     const bytes = new Uint8Array(serializedBytes);
     rememberVideoCover(fingerprint, bytes);
     return bytes;

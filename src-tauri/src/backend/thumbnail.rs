@@ -3,13 +3,11 @@ use super::*;
 const ANALYSIS_WIDTH: usize = 96;
 const ANALYSIS_HEIGHT: usize = 54;
 const ANALYSIS_FRAME_BYTES: usize = ANALYSIS_WIDTH * ANALYSIS_HEIGHT * 3;
-const MAX_ANALYSIS_SAMPLES: usize = 240;
-const MAX_PARALLEL_SEEKS: usize = 4;
+const MAX_ANALYSIS_SAMPLES: usize = 120;
 const IMPORT_COVER_WORKERS: usize = 3;
 const DEFAULT_TIMELINE_THUMBNAIL_WORKERS: usize = 4;
 const MAX_TIMELINE_THUMBNAIL_WORKERS: usize = 8;
-const SHORT_VIDEO_SAMPLES_PER_SECOND: f64 = 2.0;
-const PREFIX_PERCENT: usize = 37;
+const COVER_POSITION_DECAY: f64 = 0.9966;
 const DETAIL_WEIGHT: f64 = 0.6;
 const COLOR_WEIGHT: f64 = 0.4;
 const DETAIL_NORMALIZATION: f64 = 1_000.0;
@@ -37,6 +35,8 @@ const MAX_TIMELINE_THUMBNAIL_BYTES: usize = 8 * 1024 * 1024;
 const MAX_TIMELINE_THUMBNAIL_RESOLUTIONS: usize = 3;
 const TIMELINE_THUMBNAIL_TEMP_FOLDER: &str = "Timeline Thumbnail Temporary";
 const STALE_TIMELINE_THUMBNAIL_TEMP_DIRECTORY_AGE: Duration = Duration::from_secs(60 * 60);
+
+static COVER_GENERATION_LOCK: futures::lock::Mutex<()> = futures::lock::Mutex::new(());
 
 static THUMBNAIL_CACHE_LOCK: Mutex<()> = Mutex::new(());
 static SUBTITLE_THUMBNAIL_CACHE_LOCK: Mutex<()> = Mutex::new(());
@@ -130,7 +130,7 @@ impl TimelineThumbnailCacheLookup for StoryboardThumbnailCacheLookup {
 type CoverProgressCallback = dyn Fn(f64) + Send + Sync;
 
 fn thumbnail_processing_thread_budget() -> usize {
-    ffmpeg_worker_thread_budget(IMPORT_COVER_WORKERS.saturating_mul(MAX_PARALLEL_SEEKS))
+    ffmpeg_worker_thread_budget(IMPORT_COVER_WORKERS)
 }
 
 fn append_thumbnail_processing_thread_args(args: &mut Vec<String>) {
@@ -160,12 +160,6 @@ fn append_timeline_thumbnail_processing_thread_args(
         args,
         timeline_thumbnail_processing_thread_budget(worker_count),
     );
-}
-
-#[derive(Clone, Copy, Debug)]
-struct CoverCandidate {
-    time_us: i64,
-    score: f64,
 }
 
 #[derive(Clone, Copy)]
@@ -237,11 +231,11 @@ fn timeline_thumbnail_scale_filter(resolution: TimelineThumbnailResolution) -> S
 }
 
 #[tauri::command]
-pub(crate) async fn generate_video_cover_thumbnail(
+pub(crate) async fn get_cached_video_cover_thumbnail(
     asset_id: String,
     state: tauri::State<'_, AppState>,
-) -> CommandResult<Vec<u8>> {
-    let project = state
+) -> CommandResult<Option<Vec<u8>>> {
+    let fingerprint = state
         .projects
         .lock()
         .map_err(|_| {
@@ -251,21 +245,29 @@ pub(crate) async fn generate_video_cover_thumbnail(
             )
         })?
         .get(&asset_id)
-        .cloned()
+        .map(|project| project.asset.fingerprint.clone())
         .ok_or_else(|| {
             app_error(
                 ErrorCode::MediaNotFound,
                 format!("Media asset was not found: {asset_id}"),
             )
         })?;
-    let stream_index = project.asset.video_stream_index.ok_or_else(|| {
-        app_error(
-            ErrorCode::VideoStreamMissing,
-            format!("Media asset has no video stream: {asset_id}"),
-        )
-    })?;
     let preferences = preferences_clone(&state)?;
-    ensure_video_cover_thumbnail(&project, &preferences, None, None, stream_index).await
+    // Generation belongs to the media-analysis queue, including cache repair.
+    tokio::task::spawn_blocking(move || {
+        let layout = thumbnail_cache_layout(&preferences, &fingerprint);
+        Ok(read_media_thumbnail_cache(&layout, &fingerprint)
+            .filter(|cached| cached.version == CACHE_VERSION)
+            .and_then(|cached| cached.cover)
+            .filter(|cover| !cover.is_empty()))
+    })
+    .await
+    .map_err(|error| {
+        app_error(
+            ErrorCode::BlockingTaskFailed,
+            format!("Video cover cache read failed: {error}"),
+        )
+    })?
 }
 
 #[tauri::command]
@@ -622,6 +624,13 @@ pub(crate) async fn cache_storyboard_thumbnail(
     })?
 }
 
+pub(crate) fn has_video_cover_cache(fingerprint: &str, preferences: &Preferences) -> bool {
+    let layout = thumbnail_cache_layout(preferences, fingerprint);
+    read_media_thumbnail_cache(&layout, fingerprint).is_some_and(|cached| {
+        cached.version == CACHE_VERSION && cached.cover.is_some_and(|cover| !cover.is_empty())
+    })
+}
+
 pub(crate) async fn ensure_video_cover_thumbnail(
     project: &Project,
     preferences: &Preferences,
@@ -631,68 +640,50 @@ pub(crate) async fn ensure_video_cover_thumbnail(
 ) -> AppResult<Vec<u8>> {
     report_cover_progress(progress, 0.0);
     let layout = thumbnail_cache_layout(preferences, &project.asset.fingerprint);
-    register_thumbnail_cache(&layout)?;
-    let sample_times = analysis_sample_times(project.asset.duration_us);
-    let mut cached = read_media_thumbnail_cache(&layout, &project.asset.fingerprint)
-        .filter(|cached| cached.version == CACHE_VERSION && cached.sample_times == sample_times)
-        .unwrap_or_else(|| CachedMediaThumbnail {
-            version: CACHE_VERSION,
-            scores: vec![None; sample_times.len()],
-            sample_times: sample_times.clone(),
-            cover: None,
-        });
-    if let Some(cover) = cached.cover {
+    // Coalesce thumbnail requests and background repair before checking the cache again.
+    let lock = COVER_GENERATION_LOCK.lock();
+    tokio::pin!(lock);
+    let _guard = loop {
+        ensure_thumbnail_not_cancelled(cancel.as_ref())?;
+        if let Ok(guard) = tokio::time::timeout(Duration::from_millis(100), &mut lock).await {
+            break guard;
+        }
+    };
+    // Read completed v2 covers before considering the new sampling schedule.
+    if let Some(cover) = read_media_thumbnail_cache(&layout, &project.asset.fingerprint)
+        .filter(|cached| cached.version == CACHE_VERSION)
+        .and_then(|cached| cached.cover)
+        .filter(|cover| !cover.is_empty())
+    {
         report_cover_progress(progress, 1.0);
         return Ok(cover);
     }
-
+    register_thumbnail_cache(&layout)?;
+    let sample_times = analysis_sample_times(project.asset.duration_us);
+    let mut cached = CachedMediaThumbnail {
+        version: CACHE_VERSION,
+        scores: vec![],
+        sample_times,
+        cover: None,
+    };
     ensure_thumbnail_not_cancelled(cancel.as_ref())?;
     let program = ffmpeg_program(preferences);
-    analyze_video_samples(
+    let temp_root = configured_cache_root(preferences).join(TIMELINE_THUMBNAIL_TEMP_FOLDER);
+    let temp_dir = create_timeline_thumbnail_temp_directory(&temp_root)?;
+    let result = analyze_video_samples(
         &program,
         &project.asset.path,
         stream_index,
+        project.asset.duration_us,
+        &temp_dir,
         &mut cached,
-        &layout,
-        &project.asset.fingerprint,
         cancel.as_ref(),
         progress,
     )
-    .await?;
-    report_cover_progress(progress, 0.9);
-    let candidates = cached_candidates(&cached);
-    if candidates.is_empty() {
-        return Err(app_error(
-            ErrorCode::ThumbnailNoFrame,
-            "Video cover analysis produced no usable frame",
-        ));
-    }
-    let selected = select_cover_candidate(&candidates);
+    .await;
+    let _ = fs::remove_dir_all(&temp_dir);
+    let cover = result?;
     ensure_thumbnail_not_cancelled(cancel.as_ref())?;
-    report_cover_progress(progress, 0.94);
-    let cover = match extract_cover_frame(
-        &program,
-        &project.asset.path,
-        stream_index,
-        selected.time_us,
-        true,
-    )
-    .await
-    {
-        Ok(cover) => cover,
-        Err(_) => {
-            extract_cover_frame(
-                &program,
-                &project.asset.path,
-                stream_index,
-                selected.time_us,
-                false,
-            )
-            .await?
-        }
-    };
-    ensure_thumbnail_not_cancelled(cancel.as_ref())?;
-    report_cover_progress(progress, 0.98);
     cached.cover = Some(cover.clone());
     write_media_thumbnail_cache(&layout, &project.asset.fingerprint, &cached)?;
     report_cover_progress(progress, 1.0);
@@ -1127,20 +1118,23 @@ fn current_time_millis() -> u64 {
 }
 
 fn analysis_sample_times(duration_us: i64) -> Vec<i64> {
-    let latest_time_us = duration_us.saturating_sub(1_000).max(0);
-    if latest_time_us == 0 {
-        return vec![0];
-    }
-    let duration_seconds = duration_us.max(0) as f64 / 1_000_000.0;
-    let sample_count = (duration_seconds * SHORT_VIDEO_SAMPLES_PER_SECOND)
-        .ceil()
-        .max(2.0) as usize;
-    let sample_count = sample_count.min(MAX_ANALYSIS_SAMPLES);
-    (0..sample_count)
-        .map(|index| {
-            latest_time_us.saturating_mul(index as i64) / (sample_count.saturating_sub(1) as i64)
-        })
+    let sampling_duration = duration_us.clamp(3_000_000, 15_000_000);
+    (0..MAX_ANALYSIS_SAMPLES)
+        .map(|index| index as i64 * sampling_duration / 30)
+        .take_while(|time| *time == 0 || *time < duration_us)
         .collect()
+}
+
+fn cover_batch_filter(stream_index: i32, duration_us: i64) -> String {
+    let sampling_duration = duration_us.clamp(3_000_000, 15_000_000);
+    // Anchor the output grid at decoded frame zero. Round up input timestamps so
+    // sample zero retains frame zero; fps also fills gaps in low-rate/VFR sources.
+    // Sample before scaling and stop decoding after the bounded prefix.
+    format!(
+        "[0:{stream_index}]setpts=PTS-STARTPTS,fps=fps=30000000/{sampling_duration}:start_time=0:round=up:eof_action=pass,trim=end_frame={MAX_ANALYSIS_SAMPLES},split=2[score][cover];\
+         [score]scale={ANALYSIS_WIDTH}:{ANALYSIS_HEIGHT}:flags=fast_bilinear,format=rgb24[s];\
+         [cover]scale=640:360:force_original_aspect_ratio=decrease:force_divisible_by=2[c]"
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1148,139 +1142,103 @@ async fn analyze_video_samples(
     program: &str,
     input_path: &str,
     stream_index: i32,
+    duration_us: i64,
+    temp_dir: &Path,
     cached: &mut CachedMediaThumbnail,
-    layout: &ThumbnailCacheLayout,
-    fingerprint: &str,
     cancel: Option<&Arc<AtomicBool>>,
     progress: Option<&CoverProgressCallback>,
-) -> AppResult<()> {
-    let mut first_error: Option<AppError> = None;
-    let total = cached.sample_times.len().max(1);
-    let mut completed = cached.scores.iter().filter(|score| score.is_some()).count();
-    report_cover_progress(progress, completed as f64 / total as f64 * 0.9);
-    for batch_start in (0..cached.sample_times.len()).step_by(MAX_PARALLEL_SEEKS) {
-        ensure_thumbnail_not_cancelled(cancel)?;
-        let batch_end = (batch_start + MAX_PARALLEL_SEEKS).min(cached.sample_times.len());
-        let missing = (batch_start..batch_end)
-            .filter(|index| cached.scores[*index].is_none())
-            .collect::<Vec<_>>();
-        if missing.is_empty() {
-            continue;
-        }
-        let batch_size = missing.len();
-        let mut tasks = tokio::task::JoinSet::new();
-        for index in missing {
-            let program = program.to_string();
-            let input_path = input_path.to_string();
-            let time_us = cached.sample_times[index];
-            tasks.spawn(async move {
-                analyze_video_sample(&program, &input_path, stream_index, time_us)
-                    .await
-                    .map(|score| (index, score))
-            });
-        }
-        while let Some(result) = tasks.join_next().await {
-            match result {
-                Ok(Ok((index, score))) => cached.scores[index] = Some(score),
-                Ok(Err(error)) => {
-                    first_error.get_or_insert(error);
-                }
-                Err(error) => {
-                    first_error.get_or_insert_with(|| {
-                        app_error(
-                            ErrorCode::BlockingTaskFailed,
-                            format!("Video cover analysis task failed: {error}"),
-                        )
-                    });
-                }
-            }
-        }
-        write_media_thumbnail_cache(layout, fingerprint, cached)?;
-        completed = (completed + batch_size).min(total);
-        report_cover_progress(progress, completed as f64 / total as f64 * 0.9);
-        ensure_thumbnail_not_cancelled(cancel)?;
-    }
-    if cached.scores.iter().all(Option::is_none) {
-        return Err(first_error.unwrap_or_else(|| {
-            app_error(
-                ErrorCode::ThumbnailNoFrame,
-                "Video cover analysis produced no usable frame",
-            )
-        }));
-    }
-    Ok(())
-}
-
-async fn analyze_video_sample(
-    program: &str,
-    input_path: &str,
-    stream_index: i32,
-    time_us: i64,
-) -> AppResult<f64> {
-    let mut args = fast_seek_input_args(input_path, time_us, true);
+) -> AppResult<Vec<u8>> {
+    let mut args = vec![
+        "-nostdin".into(),
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "error".into(),
+    ];
+    append_thumbnail_processing_thread_args(&mut args);
     args.extend([
-        "-map".to_string(),
-        format!("0:{stream_index}"),
-        "-frames:v".to_string(),
-        "1".to_string(),
-        "-vf".to_string(),
-        format!("scale={ANALYSIS_WIDTH}:{ANALYSIS_HEIGHT}:flags=fast_bilinear"),
-        "-pix_fmt".to_string(),
-        "rgb24".to_string(),
-        "-f".to_string(),
-        "rawvideo".to_string(),
-        "pipe:1".to_string(),
+        "-i".into(),
+        input_path.into(),
+        "-filter_complex".into(),
+        cover_batch_filter(stream_index, duration_us),
+        "-map".into(),
+        "[s]".into(),
+        "-frames:v".into(),
+        MAX_ANALYSIS_SAMPLES.to_string(),
+        "-fps_mode".into(),
+        "passthrough".into(),
+        "-c:v".into(),
+        "rawvideo".into(),
+        "-threads:v".into(),
+        "1".into(),
+        "-f".into(),
+        "rawvideo".into(),
+        "pipe:1".into(),
+        "-map".into(),
+        "[c]".into(),
+        "-frames:v".into(),
+        MAX_ANALYSIS_SAMPLES.to_string(),
+        "-fps_mode".into(),
+        "passthrough".into(),
+        "-q:v".into(),
+        "3".into(),
+        "-threads:v".into(),
+        "1".into(),
+        temp_dir.join("%03d.jpg").to_string_lossy().into_owned(),
     ]);
-    let output = hidden_command(program)
+    let mut command = hidden_command(program);
+    command
         .args(args)
+        .kill_on_drop(true)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|error| {
-            app_error(
-                ErrorCode::ExternalToolStartFailed,
-                format!("Failed to start {program} for video cover analysis: {error}"),
-            )
-        })?;
+        .stderr(Stdio::piped());
+    let output = command.output();
+    tokio::pin!(output);
+    let output = loop {
+        ensure_thumbnail_not_cancelled(cancel)?;
+        if let Ok(result) = tokio::time::timeout(Duration::from_millis(100), &mut output).await {
+            break result.map_err(|error| {
+                app_error(
+                    ErrorCode::ExternalToolStartFailed,
+                    format!("Failed to run video cover batch: {error}"),
+                )
+            })?;
+        }
+    };
     if !output.status.success() {
         return Err(app_error(
             ErrorCode::ExternalToolExecutionFailed,
             format!(
-                "Video cover analysis failed; stderr={}",
-                String::from_utf8_lossy(&output.stderr).trim()
+                "Video cover batch failed: {}",
+                String::from_utf8_lossy(&output.stderr)
             ),
         ));
     }
-    if output.stdout.len() < ANALYSIS_FRAME_BYTES {
+    if output.stdout.is_empty() || output.stdout.len() % ANALYSIS_FRAME_BYTES != 0 {
         return Err(app_error(
-            ErrorCode::ExternalToolOutputInvalid,
-            format!(
-                "Video cover analysis returned an incomplete frame: {} of {ANALYSIS_FRAME_BYTES} bytes",
-                output.stdout.len()
-            ),
+            ErrorCode::ThumbnailNoFrame,
+            "Video cover batch produced no complete frames",
         ));
     }
-    Ok(frame_information_score(
-        &output.stdout[..ANALYSIS_FRAME_BYTES],
-    ))
-}
-
-fn fast_seek_input_args(input_path: &str, time_us: i64, keyframes_only: bool) -> Vec<String> {
-    let mut args = vec![
-        "-hide_banner".to_string(),
-        "-loglevel".to_string(),
-        "error".to_string(),
-        "-ss".to_string(),
-        format!("{:.6}", time_us.max(0) as f64 / 1_000_000.0),
-        "-noaccurate_seek".to_string(),
-    ];
-    if keyframes_only {
-        args.extend(["-skip_frame".to_string(), "nokey".to_string()]);
+    let frames = output.stdout.chunks_exact(ANALYSIS_FRAME_BYTES);
+    let total = frames.len();
+    let mut best_index = 0;
+    let mut best_score = f64::NEG_INFINITY;
+    for (index, frame) in frames.enumerate() {
+        ensure_thumbnail_not_cancelled(cancel)?;
+        let score = frame_information_score(frame) * COVER_POSITION_DECAY.powi(index as i32);
+        cached.scores.push(Some(score));
+        if score > best_score {
+            best_index = index;
+            best_score = score;
+        }
+        report_cover_progress(progress, 0.8 + 0.18 * (index + 1) as f64 / total as f64);
     }
-    append_thumbnail_processing_thread_args(&mut args);
-    args.extend(["-i".to_string(), input_path.to_string()]);
-    args
+    fs::read(temp_dir.join(format!("{:03}.jpg", best_index + 1))).map_err(|error| {
+        app_error(
+            ErrorCode::ThumbnailExtractionFailed,
+            format!("Failed to read selected cover: {error}"),
+        )
+    })
 }
 
 fn frame_information_score(rgb: &[u8]) -> f64 {
@@ -1331,90 +1289,6 @@ fn frame_information_score(rgb: &[u8]) -> f64 {
     }
     let color_score = (color_entropy / MAX_COLOR_ENTROPY).clamp(0.0, 1.0);
     DETAIL_WEIGHT * detail_score + COLOR_WEIGHT * color_score
-}
-
-fn cached_candidates(cached: &CachedMediaThumbnail) -> Vec<CoverCandidate> {
-    cached
-        .sample_times
-        .iter()
-        .copied()
-        .zip(cached.scores.iter().copied())
-        .filter_map(|(time_us, score)| score.map(|score| CoverCandidate { time_us, score }))
-        .collect()
-}
-
-fn select_cover_candidate(candidates: &[CoverCandidate]) -> CoverCandidate {
-    let prefix_len = candidates
-        .len()
-        .saturating_mul(PREFIX_PERCENT)
-        .div_ceil(100)
-        .clamp(1, candidates.len());
-    let mut prefix_best_index = 0;
-    for index in 1..prefix_len {
-        if candidates[index].score > candidates[prefix_best_index].score {
-            prefix_best_index = index;
-        }
-    }
-    let prefix_best = candidates[prefix_best_index];
-    candidates[prefix_len..]
-        .iter()
-        .find(|candidate| candidate.score > prefix_best.score)
-        .copied()
-        .unwrap_or(prefix_best)
-}
-
-async fn extract_cover_frame(
-    program: &str,
-    input_path: &str,
-    stream_index: i32,
-    time_us: i64,
-    keyframes_only: bool,
-) -> AppResult<Vec<u8>> {
-    let mut args = fast_seek_input_args(input_path, time_us, keyframes_only);
-    args.extend([
-        "-map".to_string(),
-        format!("0:{stream_index}"),
-        "-frames:v".to_string(),
-        "1".to_string(),
-        "-vf".to_string(),
-        "scale=640:360:force_original_aspect_ratio=decrease:force_divisible_by=2".to_string(),
-        "-q:v".to_string(),
-        "3".to_string(),
-        "-f".to_string(),
-        "image2pipe".to_string(),
-        "-vcodec".to_string(),
-        "mjpeg".to_string(),
-    ]);
-    append_ffmpeg_video_output_thread_args(&mut args, thumbnail_processing_thread_budget());
-    args.push("pipe:1".to_string());
-    let output = hidden_command(program)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|error| {
-            app_error(
-                ErrorCode::ExternalToolStartFailed,
-                format!("Failed to start {program} for video cover extraction: {error}"),
-            )
-        })?;
-    if !output.status.success() {
-        return Err(app_error(
-            ErrorCode::ThumbnailExtractionFailed,
-            format!(
-                "Video cover extraction failed; stderr={}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ),
-        ));
-    }
-    if output.stdout.is_empty() {
-        return Err(app_error(
-            ErrorCode::ExternalToolOutputInvalid,
-            "Video cover extraction returned an empty image",
-        ));
-    }
-    Ok(output.stdout)
 }
 
 async fn extract_timeline_thumbnail(
@@ -1907,6 +1781,217 @@ mod tests {
     use super::*;
 
     #[test]
+    fn completed_legacy_cover_survives_a_different_sampling_schedule() {
+        let root = std::env::temp_dir().join(format!("linecut-legacy-test-{}", Uuid::new_v4()));
+        let preferences = Preferences {
+            cache_dir: root.to_string_lossy().into_owned(),
+            ..Preferences::default()
+        };
+        let project: Project = serde_json::from_value(serde_json::json!({
+            "asset": { "id": "legacy", "path": "missing-video", "file_name": "legacy.mp4",
+                "file_size": 0, "modified_at": 0, "fingerprint": "legacy-cover-test",
+                "duration_us": 120000000, "start_time_us": 0,
+                "video_stream_index": 0, "audio_stream_index": null },
+            "streams": [], "tracks": [], "cues": {}, "cache_dir": "", "proxy_path": null
+        }))
+        .unwrap();
+        let layout = thumbnail_cache_layout(&preferences, &project.asset.fingerprint);
+        register_thumbnail_cache(&layout).unwrap();
+        let legacy = CachedMediaThumbnail {
+            version: CACHE_VERSION,
+            sample_times: vec![0, 119999000],
+            scores: vec![Some(0.1), Some(0.2)],
+            cover: Some(vec![1, 2, 3]),
+        };
+        write_media_thumbnail_cache(&layout, &project.asset.fingerprint, &legacy).unwrap();
+        let before = fs::read(&layout.cache_path).unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        assert_eq!(
+            runtime
+                .block_on(ensure_video_cover_thumbnail(
+                    &project,
+                    &preferences,
+                    None,
+                    None,
+                    0
+                ))
+                .unwrap(),
+            vec![1, 2, 3]
+        );
+        assert_eq!(before, fs::read(&layout.cache_path).unwrap());
+        assert!(has_video_cover_cache(
+            &project.asset.fingerprint,
+            &preferences
+        ));
+        fs::remove_file(&layout.cache_path).unwrap();
+        assert!(!has_video_cover_cache(
+            &project.asset.fingerprint,
+            &preferences
+        ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cover_schedule_starts_at_zero_and_caps_the_prefix() {
+        assert_eq!(analysis_sample_times(0), vec![0]);
+        assert_eq!(analysis_sample_times(50_000), vec![0]);
+        assert_eq!(
+            analysis_sample_times(1_000_000),
+            (0..10).map(|i| i * 100_000).collect::<Vec<_>>()
+        );
+        assert_eq!(analysis_sample_times(9_000_000)[1], 300_000);
+        let long = analysis_sample_times(3_600_000_000);
+        assert_eq!(long.len(), 120);
+        assert_eq!(long[119], 59_500_000);
+        assert_eq!(long, analysis_sample_times(3_600_000_000));
+    }
+
+    #[test]
+    fn cover_decay_is_weak_and_prefers_earlier_equal_scores() {
+        assert_eq!(COVER_POSITION_DECAY.powi(0), 1.0);
+        assert!(COVER_POSITION_DECAY.powi(119) > 0.66);
+        assert!(COVER_POSITION_DECAY.powi(1) < 1.0);
+        assert!(0.9 * COVER_POSITION_DECAY.powi(119) > 0.5);
+    }
+
+    // Opt in with LINECUT_TEST_FFMPEG; uses the production graph and cache path.
+    #[test]
+    fn cover_batch_ffmpeg_regression() {
+        let Ok(program) = std::env::var("LINECUT_TEST_FFMPEG") else {
+            return;
+        };
+        let root = std::env::temp_dir().join(format!("linecut-cover-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let input = root.join("input.mkv");
+        let status = std::process::Command::new(&program)
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=160x90:rate=10:duration=70",
+                "-c:v",
+                "ffv1",
+                input.to_str().unwrap(),
+            ])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let mut cached = CachedMediaThumbnail {
+            version: CACHE_VERSION,
+            sample_times: analysis_sample_times(70_000_000),
+            scores: vec![],
+            cover: None,
+        };
+        let first = runtime
+            .block_on(analyze_video_samples(
+                &program,
+                input.to_str().unwrap(),
+                0,
+                70_000_000,
+                &root,
+                &mut cached,
+                None,
+                None,
+            ))
+            .unwrap();
+        assert_eq!(cached.scores.len(), 120);
+        assert!(first.starts_with(&[0xff, 0xd8]));
+        let scores = cached.scores.clone();
+        for index in 1..=120 {
+            fs::remove_file(root.join(format!("{index:03}.jpg"))).unwrap();
+        }
+        cached.scores.clear();
+        let second = runtime
+            .block_on(analyze_video_samples(
+                &program,
+                input.to_str().unwrap(),
+                0,
+                70_000_000,
+                &root,
+                &mut cached,
+                None,
+                None,
+            ))
+            .unwrap();
+        assert_eq!(first, second);
+        assert_eq!(scores, cached.scores);
+        for (name, source, duration_us, expected) in [
+            (
+                "low-rate",
+                "testsrc2=size=160x90:rate=1:duration=70",
+                70_000_000,
+                120,
+            ),
+            (
+                "single-frame",
+                "testsrc2=size=160x90:rate=25:duration=0.04",
+                40_000,
+                1,
+            ),
+        ] {
+            let directory = root.join(name);
+            fs::create_dir(&directory).unwrap();
+            let input = directory.join("input.mkv");
+            assert!(std::process::Command::new(&program)
+                .args([
+                    "-v",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    source,
+                    "-vf",
+                    "setpts=PTS+5/TB",
+                    "-c:v",
+                    "ffv1",
+                    input.to_str().unwrap(),
+                ])
+                .status()
+                .unwrap()
+                .success());
+            cached.scores.clear();
+            runtime
+                .block_on(analyze_video_samples(
+                    &program,
+                    input.to_str().unwrap(),
+                    0,
+                    duration_us,
+                    &directory,
+                    &mut cached,
+                    None,
+                    None,
+                ))
+                .unwrap();
+            assert_eq!(cached.scores.len(), expected, "{name}");
+        }
+        let cancel = Arc::new(AtomicBool::new(true));
+        assert!(runtime
+            .block_on(analyze_video_samples(
+                &program,
+                input.to_str().unwrap(),
+                0,
+                70_000_000,
+                &root,
+                &mut cached,
+                Some(&cancel),
+                None
+            ))
+            .unwrap_err()
+            .is(ErrorCode::TaskCancelled));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn base_timeline_thumbnail_uses_fast_scaling() {
         let filter = timeline_thumbnail_scale_filter(
             timeline_thumbnail_resolution(Some(SUBTITLE_THUMBNAIL_WIDTH)).unwrap(),
@@ -1928,10 +2013,10 @@ mod tests {
     }
 
     #[test]
-    fn timeline_thumbnail_workers_receive_at_least_the_cover_worker_budget() {
+    fn single_cover_batch_receives_at_least_the_timeline_worker_budget() {
         assert!(
-            timeline_thumbnail_processing_thread_budget(Some(2))
-                >= thumbnail_processing_thread_budget()
+            thumbnail_processing_thread_budget()
+                >= timeline_thumbnail_processing_thread_budget(Some(4))
         );
     }
 

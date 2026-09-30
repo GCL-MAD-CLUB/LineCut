@@ -56,6 +56,7 @@ import type {
   MediaBinFolder,
   MediaBinItem,
 } from "../../types";
+import { scheduleMediaAnalysis } from "../../application/media/mediaAnalysisTask";
 import { runMediaImportTask } from "../../application/media/mediaImportTask";
 import { MediaLinkDialog, type MediaLinkCandidate, type MediaLinkMode } from "../MediaLinkDialog";
 import { ModalDialog } from "../ModalDialog";
@@ -583,6 +584,53 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     showHidden,
     viewMode,
   ]);
+
+  const analysisRetryAfter = useRef(new Map<string, number>());
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    let disposed = false;
+    let checking = false;
+    const checkAnalysis = async () => {
+      if (checking) return;
+      checking = true;
+      try {
+        const candidates = Object.values(projects).filter((project) =>
+          mediaItems.some((item) => item.id === project.asset.id && !isMediaItemOffline(item)),
+        );
+        if (!candidates.length) return;
+        const outcome = await runOperation("media.analyze", () =>
+          invokeCommand<string[]>("find_media_needing_analysis", {
+            assetIds: candidates.map((project) => project.asset.id),
+          }),
+        );
+        if (!disposed && outcome.status === "success") {
+          const missing = new Set(
+            outcome.value.filter((id) => {
+              const key = `${id}:${projects[id]?.asset.fingerprint}`;
+              if ((analysisRetryAfter.current.get(key) ?? 0) > Date.now()) return false;
+              analysisRetryAfter.current.set(key, Date.now() + 60_000);
+              return true;
+            }),
+          );
+          scheduleMediaAnalysis(
+            candidates
+              .filter((project) => missing.has(project.asset.id))
+              .map((project) => ({ project, warnings: [] })),
+          );
+        }
+      } finally {
+        checking = false;
+      }
+    };
+    // Defer the first check so imports can enqueue analysis after automatic binding.
+    const initial = window.setTimeout(() => void checkAnalysis(), 1000);
+    const retry = window.setInterval(() => void checkAnalysis(), 60_000);
+    return () => {
+      disposed = true;
+      window.clearTimeout(initial);
+      window.clearInterval(retry);
+    };
+  }, [projects, mediaItems]);
 
   useEffect(() => {
     setVisibleItemCount(rows.length);
