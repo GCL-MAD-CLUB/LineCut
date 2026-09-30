@@ -31,7 +31,7 @@ import {
 } from "./components/DockLayout";
 import { ExportWorkspace } from "./components/ExportWorkspace";
 import { HistoryPanelServicesProvider, historyPanelType } from "./components/HistoryPanel";
-import { exportWorkspaceStore } from "./systems/ExportSystem";
+import { exportWorkspaceStore, useExportWorkspaceState } from "./systems/ExportSystem";
 import { ImportWorkspace } from "./components/ImportWorkspace";
 import { mediaBinPanelType, type MediaBinPanelParams } from "./components/MediaBin";
 import { ProjectDiscardDialog, ProjectSaveDialog } from "./components/ProjectSaveDialog";
@@ -287,6 +287,8 @@ type PendingCloseTarget = "project" | "window";
 function AppContent() {
   const identity = useStableIdentity("app-shell");
   const [activeWorkspace, setActiveWorkspace] = useState<AppWorkspace>("edit");
+  const exportHistoryCursor = useExportWorkspaceState((state) => state.rangeHistoryCursor);
+  const exportHistoryLength = useExportWorkspaceState((state) => state.rangeHistory.length);
   const focusedPanelId = usePanelManagerState((state) => state.focusedPanelId);
   const panelInstances = usePanelManagerState((state) => state.instances);
   const openPanel = usePanelManagerState((state) => state.openPanel);
@@ -394,8 +396,14 @@ function AppContent() {
   const { tasks: runningTasks } = useTaskProgressStatus();
   const isBusy = runningTasks.some((task) => task.blocking) || historyNavigating;
   const hasProject = Boolean(projectFilePath || mediaItems.length > 0 || mediaFolders.length > 0);
-  const canUndo = projectHistory.active && projectHistory.cursor > 0;
-  const canRedo = projectHistory.active && projectHistory.cursor < projectHistory.entries.length;
+  const canUndo =
+    activeWorkspace === "export"
+      ? exportHistoryCursor > 0
+      : projectHistory.active && projectHistory.cursor > 0;
+  const canRedo =
+    activeWorkspace === "export"
+      ? exportHistoryCursor < exportHistoryLength
+      : projectHistory.active && projectHistory.cursor < projectHistory.entries.length;
   const canCloseFocusedPanel = activeWorkspace === "edit" && Boolean(focusedPanel) && !isBusy;
   const canRestoreProject = hasProject && projectDirty && !isBusy;
   const editScope = activeWorkspace === "edit" ? focusedPanel : undefined;
@@ -1120,6 +1128,22 @@ function AppContent() {
     await navigateProjectHistory(projectHistory.cursor + 1);
   }
 
+  function undoCurrentOperation() {
+    if (activeWorkspace === "export") {
+      exportWorkspaceStore.getState().undoClipRange();
+    } else {
+      void undoProjectOperation();
+    }
+  }
+
+  function redoCurrentOperation() {
+    if (activeWorkspace === "export") {
+      exportWorkspaceStore.getState().redoClipRange();
+    } else {
+      void redoProjectOperation();
+    }
+  }
+
   async function deleteCurrentHistoryBranch(selectedCursor: number) {
     if (isBusy || selectedCursor <= 0 || selectedCursor > projectHistory.entries.length) {
       return;
@@ -1191,10 +1215,10 @@ function AppContent() {
         }
         const action = event.shiftKey
           ? canRedo
-            ? redoProjectOperation
+            ? redoCurrentOperation
             : undefined
           : canUndo
-            ? undoProjectOperation
+            ? undoCurrentOperation
             : undefined;
         if (action) {
           event.preventDefault();
@@ -1393,8 +1417,8 @@ function AppContent() {
       exit: { enabled: true, execute: exitApplication },
     },
     edit: {
-      undo: { enabled: canUndo && !isBusy, execute: undoProjectOperation },
-      redo: { enabled: canRedo && !isBusy, execute: redoProjectOperation },
+      undo: { enabled: canUndo && !isBusy, execute: undoCurrentOperation },
+      redo: { enabled: canRedo && !isBusy, execute: redoCurrentOperation },
       copy: { enabled: canCopy && !isBusy, execute: copyInEditScope },
       paste: { enabled: canPaste && !isBusy, execute: pasteInEditScope },
       clear: { enabled: canClear && !isBusy, execute: clearInEditScope },

@@ -83,7 +83,7 @@ export function TimelineRuler({
   const [timelineWidthPx, setTimelineWidthPx] = useState(0);
 
   const timelineEndFrame = Math.min(durationFrames, timelineStartFrame + timelineSpanFrames);
-  const timelineVisibleSpanFrames = Math.max(1, timelineEndFrame - timelineStartFrame);
+  const timelineVisibleSpanFrames = Math.max(1, timelineSpanFrames);
   const currentFrameClamped = clamp(currentFrame, 0, durationFrames || currentFrame);
   const cursorPercent =
     currentFrameClamped >= timelineStartFrame && currentFrameClamped <= timelineEndFrame

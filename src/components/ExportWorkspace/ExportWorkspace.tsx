@@ -260,6 +260,8 @@ export function ExportWorkspace() {
   const previewClip = source
     ? (source.clips.find((clip) => clip.id === previewClipId) ?? source.clips[0] ?? null)
     : null;
+  const previewClipRef = useRef(previewClip);
+  previewClipRef.current = previewClip;
   const mediaItemsRef = useRef(mediaItems);
   mediaItemsRef.current = mediaItems;
   const [previewRequestId, setPreviewRequestId] = useState(0);
@@ -270,6 +272,7 @@ export function ExportWorkspace() {
   }
 
   useEffect(() => {
+    const previewClip = previewClipRef.current;
     if (!previewClip) {
       return;
     }
@@ -291,7 +294,13 @@ export function ExportWorkspace() {
       },
       exportWorkspaceEventSource,
     );
-  }, [activeVideoChanged, activeVideoId, previewClip, previewRequestId]);
+  }, [
+    activeVideoChanged,
+    activeVideoId,
+    previewClip?.id,
+    previewClip?.sourcePath,
+    previewRequestId,
+  ]);
 
   const selectedDurationUs = source
     ? source.clips
