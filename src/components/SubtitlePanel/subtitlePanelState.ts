@@ -1,4 +1,9 @@
 import { createPanelState } from "../../runtime/systems/PanelState";
+import {
+  canHighlightSearchRule,
+  type SearchMode,
+  type SearchRule,
+} from "../../core/editor/textSearch";
 import { useProjectPort } from "../../systems/ProjectSystem";
 import type { SubtitleCueAnnotation, SubtitleCueColorLabel, SubtitleState } from "../../types";
 
@@ -12,6 +17,8 @@ export type SubtitleRatingComparator = "gte" | "lte" | "eq";
 
 interface SubtitleTrackSessionState {
   query: string;
+  searchMode: SearchMode;
+  searchRule: SearchRule;
   showOnlySelected: boolean;
   minimumRating: number;
   ratingComparator: SubtitleRatingComparator;
@@ -28,6 +35,8 @@ interface SubtitlePanelUiState extends SubtitleTrackSessionState {
   thumbnailSize: number;
   syncTrackContext: (trackContext: string) => void;
   setQuery: (query: string) => void;
+  setSearchMode: (mode: SearchMode) => void;
+  setSearchRule: (rule: SearchRule) => void;
   setShowOnlySelected: (value: boolean) => void;
   setMinimumRating: (rating: number) => void;
   setRatingComparator: (comparator: SubtitleRatingComparator) => void;
@@ -60,6 +69,8 @@ interface SubtitlePanelState extends SubtitlePanelUiState, SubtitleState {
 function defaultTrackSessionState(): SubtitleTrackSessionState {
   return {
     query: "",
+    searchMode: "filter",
+    searchRule: "containsAll",
     showOnlySelected: false,
     minimumRating: 0,
     ratingComparator: "gte",
@@ -74,6 +85,8 @@ function defaultTrackSessionState(): SubtitleTrackSessionState {
 function trackSessionFromState(state: SubtitlePanelUiState): SubtitleTrackSessionState {
   return {
     query: state.query,
+    searchMode: state.searchMode,
+    searchRule: state.searchRule,
     showOnlySelected: state.showOnlySelected,
     minimumRating: state.minimumRating,
     ratingComparator: state.ratingComparator,
@@ -122,6 +135,21 @@ const useSubtitlePanelUiState = createPanelState<SubtitlePanelUiState>(() => (se
       };
     }),
   setQuery: (query) => set({ query }),
+  setSearchMode: (searchMode) =>
+    set((state) => ({
+      searchMode,
+      searchRule:
+        searchMode === "highlight" && !canHighlightSearchRule(state.searchRule)
+          ? "contains"
+          : state.searchRule,
+    })),
+  setSearchRule: (searchRule) =>
+    set((state) => ({
+      searchRule:
+        state.searchMode === "highlight" && !canHighlightSearchRule(searchRule)
+          ? "contains"
+          : searchRule,
+    })),
   setShowOnlySelected: (showOnlySelected) => set({ showOnlySelected }),
   setMinimumRating: (minimumRating) => set({ minimumRating: normalizedRating(minimumRating) }),
   setRatingComparator: (ratingComparator) => set({ ratingComparator }),

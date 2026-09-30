@@ -18,6 +18,7 @@ import {
   type TimelineThumbnailWindowPlan,
 } from "../../timelineThumbnail";
 import type { SubtitleCue } from "../../types";
+import { SearchHighlight, type SearchHighlightOptions } from "../PanelSearch/PanelSearch";
 import { subtitleCueColorLabels } from "./SubtitleColorLabelButtons";
 import { SubtitleCueThumbnail } from "./SubtitleCueThumbnail";
 import { useSubtitlePanelState, type SubtitleCueVisualLabel } from "./subtitlePanelState";
@@ -37,6 +38,7 @@ function annotationTargets(cueId: string, selectedCueIds: ReadonlySet<string>) {
 }
 
 interface SubtitleListViewProps {
+  searchHighlight?: SearchHighlightOptions;
   cues: SubtitleCue[];
   currentCueIndex: number;
   tableStyle: CSSProperties;
@@ -71,6 +73,7 @@ interface SubtitleListViewProps {
 }
 
 export function SubtitleListView({
+  searchHighlight,
   cues,
   currentCueIndex,
   tableStyle,
@@ -295,7 +298,13 @@ export function SubtitleListView({
                     title={cue.plain_text}
                     onClick={() => activateCell(cue.id, "subtitle")}
                   >
-                    <span className="cue-subtitle-copy">{cue.plain_text}</span>
+                    <span className="cue-subtitle-copy">
+                      <SearchHighlight
+                        text={cue.plain_text}
+                        search={searchHighlight}
+                        itemId={cue.id}
+                      />
+                    </span>
                   </span>
                   <span
                     className={cellClassName(cue.id, "mediaStart", selected, "cue-time-cell")}
@@ -411,7 +420,11 @@ export function SubtitleListView({
                           beginLabelEdit(cue);
                         }}
                       >
-                        {cueLabel(cue) || "无"}
+                        <SearchHighlight
+                          text={cueLabel(cue) || "无"}
+                          search={searchHighlight}
+                          itemId={cue.id}
+                        />
                       </span>
                     )}
                   </span>

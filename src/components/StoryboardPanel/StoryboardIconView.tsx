@@ -19,6 +19,7 @@ import {
   type TimelineThumbnailVisibleRange,
 } from "../../timelineThumbnail";
 import type { StoryboardShot } from "../../types";
+import { SearchHighlight, type SearchHighlightOptions } from "../PanelSearch/PanelSearch";
 import {
   PopupMenu,
   PopupMenuItem,
@@ -63,6 +64,7 @@ const storyboardIconMetadataOptions: Array<
 ];
 
 interface StoryboardIconViewProps {
+  searchHighlight?: SearchHighlightOptions;
   shots: StoryboardShot[];
   currentShotId: string | undefined;
   assetId: string;
@@ -199,6 +201,7 @@ function metadataText(
 }
 
 export function StoryboardIconView({
+  searchHighlight,
   shots,
   currentShotId,
   assetId,
@@ -586,7 +589,11 @@ export function StoryboardIconView({
                     )}
                     {text !== null && (
                       <span className="storyboard-icon-metadata-text" title={text}>
-                        {text}
+                        <SearchHighlight
+                          text={text}
+                          search={iconMetadataMode === "title" ? searchHighlight : undefined}
+                          itemId={shot.id}
+                        />
                       </span>
                     )}
                   </div>
