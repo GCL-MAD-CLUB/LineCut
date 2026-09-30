@@ -1066,8 +1066,7 @@ pub(crate) async fn add_external_subtitles(
         return Err(app_error(
             ErrorCode::ProjectNotLoaded,
             format!("Project is not loaded for media asset: {asset_id}"),
-        )
-        .into());
+        ));
     }
     let mut new_tracks = Vec::new();
     let mut new_cues: HashMap<String, Vec<SubtitleCue>> = HashMap::new();
