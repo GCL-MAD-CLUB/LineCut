@@ -1571,8 +1571,8 @@ export function SubtitlePanel() {
     const submission = enqueueQuickExport(source, exportState);
     messagePublished(
       submission.queuePosition === 1
-        ? "已开始导出"
-        : `已加入导出队列，前面有 ${submission.queuePosition - 1} 个任务`,
+        ? "已开始导出。"
+        : `已加入导出队列，前面有 ${submission.queuePosition - 1} 个任务。`,
     );
     const outcome = await submission.completion;
     if (outcome.status === "success") {
@@ -1580,9 +1580,9 @@ export function SubtitlePanel() {
         (output) => output.status === "completed",
       ).length;
       const failed = outcome.result.outputs.filter((output) => output.status === "failed").length;
-      messagePublished(`已导出 ${completed} 个片段${failed > 0 ? `，${failed} 个失败` : ""}`);
+      messagePublished(`已导出 ${completed} 个片段${failed > 0 ? `，${failed} 个失败` : ""}。`);
     } else if (outcome.status === "cancelled") {
-      messagePublished("导出已取消");
+      messagePublished("已取消导出。");
     }
   }
 

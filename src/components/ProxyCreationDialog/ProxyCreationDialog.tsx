@@ -11,7 +11,7 @@ import { isTauriRuntime } from "../../platform/tauri/runtime";
 import type { ProxyResult } from "../../types";
 import { ModalDialog } from "../ModalDialog";
 import { SelectDropdown, selectDropdownItems, type SelectDropdownItem } from "../SelectDropdown";
-import { createTaskProgress, useTaskProgressStatus } from "../../systems/TaskSystem";
+import { createTaskProgress } from "../../systems/TaskSystem";
 import "./ProxyCreationDialog.css";
 
 export type ProxyFrameSize = "full" | "half" | "quarter" | "custom";
@@ -70,7 +70,6 @@ export function ProxyCreationDialog() {
     ["proxyDialogClosed", "proxyGenerated", "messagePublished"],
   );
   const cacheDir = preferences.cache_dir;
-  const { isRunning: isGeneratingProxy } = useTaskProgressStatus("proxy.generate");
   const [frameSize, setFrameSize] = useState<ProxyFrameSize>("full");
   const [customWidth, setCustomWidth] = useState(1280);
   const [customHeight, setCustomHeight] = useState(720);
@@ -143,7 +142,7 @@ export function ProxyCreationDialog() {
       return;
     }
     if (!isTauriRuntime()) {
-      setMessage("浏览器预览不能生成代理，请运行 Tauri 桌面应用。");
+      setMessage("此功能仅在桌面版可用。");
       return;
     }
 
@@ -160,6 +159,10 @@ export function ProxyCreationDialog() {
         await cancelFfmpegTask(proxyTaskId);
       },
     });
+    if (proxyTask.cancelled) {
+      proxyTask.remove();
+      return;
+    }
     try {
       const result = await invokeCommand<ProxyResult>("generate_proxy", {
         assetId: project.asset.id,
@@ -167,12 +170,13 @@ export function ProxyCreationDialog() {
         taskId: proxyTaskId,
       });
       proxyGenerated(result.proxy_path);
-      setMessage("预览代理已生成");
+      setMessage("已生成预览代理。");
       proxyTask.update({ current: 1 });
       proxyTask.remove();
     } catch (error) {
       if (proxyCancelled) {
-        setMessage("代理生成已取消");
+        proxyTask.remove();
+        setMessage("已取消代理生成。");
         return;
       }
       proxyTask.fail(error, { displayName: projectDisplayName, resourceKind: "proxy" });
@@ -204,7 +208,6 @@ export function ProxyCreationDialog() {
     <ModalDialog
       title="创建代理"
       bodyClassName="proxy-dialog-body"
-      confirmDisabled={isGeneratingProxy}
       onCancel={closeProxyDialog}
       onConfirm={confirm}
     >

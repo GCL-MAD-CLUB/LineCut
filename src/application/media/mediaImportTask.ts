@@ -19,7 +19,7 @@ export type MediaImportBatchTaskOutcome =
   | { status: "partial"; results: ImportResult[]; failedPaths: string[] }
   | { status: "cancelled"; results: ImportResult[] };
 
-const MEDIA_IMPORT_BATCH_WORKER_COUNT = 3;
+const MEDIA_IMPORT_BATCH_WORKER_COUNT = 1;
 
 interface RunMediaImportTaskOptions {
   path: string;
@@ -66,7 +66,7 @@ export async function runMediaImportTask({
   taskIdPrefix,
   assetId,
   label,
-  blocking = true,
+  blocking = false,
   onSuccess,
 }: RunMediaImportTaskOptions): Promise<MediaImportTaskOutcome> {
   const taskId = createFfmpegTaskId(taskIdPrefix);
@@ -84,6 +84,10 @@ export async function runMediaImportTask({
     },
   });
 
+  if (task.cancelled) {
+    task.remove();
+    return { status: "cancelled", path };
+  }
   try {
     const result = await invokeCommand<ImportResult>("import_media", {
       path,
@@ -117,7 +121,7 @@ export async function runMediaImportBatchTask({
   operation,
   taskIdPrefix,
   label,
-  blocking = true,
+  blocking = false,
   onSuccess,
 }: RunMediaImportBatchTaskOptions): Promise<MediaImportBatchTaskOutcome> {
   const batchPaths = uniquePaths(paths);
@@ -129,7 +133,7 @@ export async function runMediaImportBatchTask({
   let cancelled = false;
   const task = await createTaskProgress({
     operation,
-    label: label ?? `导入 ${batchPaths.length} 个媒体`,
+    label: label ?? `正在导入 ${batchPaths.length} 个媒体...`,
     current: 0,
     total: batchPaths.length,
     blocking,
@@ -151,6 +155,10 @@ export async function runMediaImportBatchTask({
     },
   });
 
+  if (task.cancelled) {
+    task.remove();
+    return { status: "cancelled", results: [] };
+  }
   const settled: Array<PromiseSettledResult<ImportResult> | undefined> = Array(batchPaths.length);
   let nextJobIndex = 0;
   const consumeImportQueue = async () => {

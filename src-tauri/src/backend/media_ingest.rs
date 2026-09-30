@@ -1,5 +1,58 @@
 use super::*;
 
+/// Check disk caches as well as project data, including projects reopened after cache cleanup.
+#[tauri::command]
+pub(crate) async fn find_media_needing_analysis(
+    asset_ids: Vec<String>,
+    state: tauri::State<'_, AppState>,
+) -> CommandResult<Vec<String>> {
+    let preferences = preferences_clone(&state)?;
+    let projects = {
+        let projects = state.projects.lock().map_err(|_| {
+            app_error(
+                ErrorCode::ProjectStateUnavailable,
+                "Project state lock is poisoned",
+            )
+        })?;
+        asset_ids
+            .into_iter()
+            .filter_map(|id| {
+                let project = projects.get(&id)?;
+                let missing_subtitles = project.streams.iter().any(|stream| {
+                    stream.codec_type == "subtitle"
+                        && is_text_subtitle_codec(&stream.codec_name)
+                        && !project.tracks.iter().any(|track| {
+                            matches!(track.source_type, SubtitleSourceType::Embedded)
+                                && track.stream_index == Some(stream.index)
+                                && project.cues.contains_key(&track.id)
+                        })
+                });
+                // Do not clone potentially large subtitle cue collections for a cache check.
+                Some((project.asset.clone(), missing_subtitles))
+            })
+            .collect::<Vec<_>>()
+    };
+    tokio::task::spawn_blocking(move || {
+        Ok(projects
+            .into_iter()
+            .filter(|(asset, missing_subtitles)| {
+                Path::new(&asset.path).is_file()
+                    && (*missing_subtitles
+                        || (asset.video_stream_index.is_some()
+                            && !has_video_cover_cache(&asset.fingerprint, &preferences)))
+            })
+            .map(|(asset, _)| asset.id)
+            .collect())
+    })
+    .await
+    .map_err(|error| {
+        app_error(
+            ErrorCode::BlockingTaskFailed,
+            format!("Media analysis cache check failed: {error}"),
+        )
+    })?
+}
+
 #[tauri::command]
 pub(crate) async fn register_import_media(
     path: String,
@@ -174,8 +227,28 @@ pub(crate) async fn analyze_imported_media(
     let mut text_subtitle_index = 0usize;
 
     for stream in source.streams.iter().filter(|s| s.codec_type == "subtitle") {
+        if let Some(existing) = source.tracks.iter().find(|track| {
+            matches!(track.source_type, SubtitleSourceType::Embedded)
+                && track.stream_index == Some(stream.index)
+                && source.cues.contains_key(&track.id)
+        }) {
+            tracks.push(existing.clone());
+            cues.insert(existing.id.clone(), source.cues[&existing.id].clone());
+            if is_text_subtitle_codec(&stream.codec_name) {
+                text_subtitle_index += 1;
+            }
+            continue;
+        }
         let codec = stream.codec_name.clone();
-        let track_id = Uuid::new_v4().to_string();
+        let track_id = source
+            .tracks
+            .iter()
+            .find(|track| {
+                matches!(track.source_type, SubtitleSourceType::Embedded)
+                    && track.stream_index == Some(stream.index)
+            })
+            .map(|track| track.id.clone())
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
         let kind = if is_text_subtitle_codec(&codec) {
             SubtitleKind::Text
         } else {
@@ -312,6 +385,19 @@ pub(crate) async fn analyze_imported_media(
                 && current.asset.fingerprint == source.asset.fingerprint
             {
                 for track in &project.tracks {
+                    if !current.cues.contains_key(&track.id) {
+                        if let Some(repaired) = project.cues.get(&track.id) {
+                            current.cues.insert(track.id.clone(), repaired.clone());
+                            if let Some(existing) = current
+                                .tracks
+                                .iter_mut()
+                                .find(|existing| existing.id == track.id)
+                            {
+                                existing.cue_count = track.cue_count;
+                                existing.warning = None;
+                            }
+                        }
+                    }
                     if !current.tracks.iter().any(|existing| {
                         matches!(existing.source_type, SubtitleSourceType::Embedded)
                             && existing.stream_index == track.stream_index

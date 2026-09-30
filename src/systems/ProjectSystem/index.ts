@@ -1,6 +1,7 @@
 export * from "./ProjectHistory";
 export {
   defaultMediaBinFolderColor,
+  canReuseSubtitleTrack,
   defaultPreferences,
   applyImportedMediaResult,
   applyAnalyzedMediaResult,

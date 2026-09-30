@@ -1167,7 +1167,6 @@ export function StoryboardPanel() {
     recentKeywordIds,
     selectedShotIds,
     shotAnnotations,
-    detectingVideoContext,
     viewMode,
     thumbnailSize,
     gridSize,
@@ -1206,7 +1205,7 @@ export function StoryboardPanel() {
     shotSelectionCleared,
     shotSelectionReplaced,
   } = useStoryboardPanelState((state) => state);
-  const { isRunning: isDetecting } = useTaskProgressStatus("storyboard.detect");
+  const { tasks: detectionTasks } = useTaskProgressStatus("storyboard.detect");
   const playback = usePlaybackStatus();
   const panelRef = useRef<HTMLElement | null>(null);
   const contentLayoutRef = useRef<HTMLDivElement | null>(null);
@@ -1266,6 +1265,7 @@ export function StoryboardPanel() {
     project?.asset.video_stream_index !== null && project?.asset.video_stream_index !== undefined,
   );
   const videoLabel = mediaDisplayName(project, mediaItems, activeVideoId) || "未选择视频";
+  const isDetecting = detectionTasks.some((task) => task.resourceKey === videoContext);
   const canDetect = isTauriRuntime() && Boolean(project) && hasVideo && !isDetecting;
   const selectedCount = selectedShotIds.size;
   const hasSecondarySelection =
@@ -2936,8 +2936,8 @@ export function StoryboardPanel() {
     const submission = enqueueQuickExport(source, exportState);
     messagePublished(
       submission.queuePosition === 1
-        ? "已开始导出"
-        : `已加入导出队列，前面有 ${submission.queuePosition - 1} 个任务`,
+        ? "已开始导出。"
+        : `已加入导出队列，前面有 ${submission.queuePosition - 1} 个任务。`,
     );
     const outcome = await submission.completion;
     if (outcome.status === "success") {
@@ -2945,9 +2945,9 @@ export function StoryboardPanel() {
         (output) => output.status === "completed",
       ).length;
       const failed = outcome.result.outputs.filter((output) => output.status === "failed").length;
-      messagePublished(`已导出 ${completed} 个片段${failed > 0 ? `，${failed} 个失败` : ""}`);
+      messagePublished(`已导出 ${completed} 个片段${failed > 0 ? `，${failed} 个失败` : ""}。`);
     } else if (outcome.status === "cancelled") {
-      messagePublished("导出已取消");
+      messagePublished("已取消导出。");
     }
   }
 
@@ -3211,6 +3211,7 @@ export function StoryboardPanel() {
     detectionStarted(context);
     const task = await createTaskProgress({
       operation: "storyboard.detect",
+      resourceKey: context,
       label: `分镜拆分 ${videoLabel}`,
       current: 0,
       total: 1,
@@ -3220,6 +3221,11 @@ export function StoryboardPanel() {
         await cancelFfmpegTask(taskId);
       },
     });
+    if (task.cancelled) {
+      task.remove();
+      detectionFinished(context);
+      return;
+    }
     try {
       const result = await invokeCommand<StoryboardDetectionResult>("detect_storyboard_shots", {
         assetId: project.asset.id,
@@ -3322,7 +3328,7 @@ export function StoryboardPanel() {
           }
           aria-busy={isDetecting}
         >
-          {isDetecting || detectingVideoContext === videoContext ? (
+          {isDetecting ? (
             <Loader2 className="spin" aria-hidden="true" />
           ) : (
             <Scissors aria-hidden="true" />

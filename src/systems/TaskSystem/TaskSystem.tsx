@@ -4,11 +4,12 @@ import { captureOperationError, type OperationKey, type PublicContext } from "..
 import "../../components/TaskProgress/TaskProgress.css";
 
 export interface CreateTaskProgressOptions {
+  resourceKey?: string;
   operation: OperationKey;
   label: string;
   current: number;
   total: number;
-  /** Non-blocking tasks remain visible but do not lock normal application commands. */
+  /** @deprecated All queued tasks are non-blocking. */
   blocking?: boolean;
   listener?: TaskProgressListener;
   on_cancel?: () => void | Promise<void>;
@@ -26,6 +27,7 @@ export type TaskProgressListener = (
 ) => void | TaskProgressListenerCleanup | Promise<void | TaskProgressListenerCleanup>;
 
 export interface TaskProgressHandle {
+  readonly cancelled: boolean;
   update: (update: TaskProgressUpdate) => void;
   remove: () => void;
   fail: (error: unknown, context?: PublicContext) => void;
@@ -33,11 +35,13 @@ export interface TaskProgressHandle {
 
 export interface TaskProgressView {
   id: string;
+  resourceKey?: string;
   operation: OperationKey;
   label: string;
   current: number;
   total: number;
   percent: number;
+  state: "queued" | "running";
   blocking: boolean;
   cancellable: boolean;
   isCancelling: boolean;
@@ -51,11 +55,14 @@ export interface TaskProgressStatus {
 }
 
 interface TaskProgressRecord {
+  control: { cancelled: boolean; start: () => void; done: Promise<void>; finish: () => void };
   id: string;
+  resourceKey?: string;
   operation: OperationKey;
   label: string;
   current: number;
   total: number;
+  state: "queued" | "running";
   blocking: boolean;
   is_cancelling: boolean;
   listener_cleanup?: TaskProgressListenerCleanup;
@@ -90,7 +97,9 @@ function taskPercent(task: Pick<TaskProgressRecord, "current" | "total">) {
 function toViewTask(task: TaskProgressRecord): TaskProgressView {
   return {
     id: task.id,
+    resourceKey: task.resourceKey,
     operation: task.operation,
+    state: task.state,
     label: task.label,
     current: task.current,
     total: task.total,
@@ -124,6 +133,18 @@ function getTaskProgressSnapshot() {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
+function startNextTask() {
+  if (snapshot.tasks.some((task) => task.state === "running")) return;
+  const next = snapshot.tasks[0];
+  if (!next) return;
+  setSnapshot({
+    tasks: snapshot.tasks.map((task) =>
+      task.id === next.id ? { ...task, state: "running" } : task,
+    ),
+  });
+  next.control.start();
+}
+
 function removeTask(id: string) {
   const task = snapshot.tasks.find((currentTask) => currentTask.id === id);
   if (!task) {
@@ -134,6 +155,8 @@ function removeTask(id: string) {
     ...snapshot,
     tasks: snapshot.tasks.filter((task) => task.id !== id),
   });
+  task.control.finish();
+  startNextTask();
 }
 
 async function stopTaskListener(task: TaskProgressRecord) {
@@ -150,7 +173,16 @@ async function stopTaskListener(task: TaskProgressRecord) {
 }
 
 async function runTaskCancel(task: TaskProgressRecord) {
-  if (!task.on_cancel || task.is_cancelling) {
+  const live = snapshot.tasks.find((current) => current.id === task.id);
+  if (!live) return;
+  task = live;
+  if (task.control.cancelled || task.is_cancelling) {
+    return;
+  }
+  if (task.state === "queued") {
+    task.control.cancelled = true;
+    removeTask(task.id);
+    task.control.start();
     return;
   }
   setSnapshot({
@@ -161,10 +193,17 @@ async function runTaskCancel(task: TaskProgressRecord) {
         : currentTask,
     ),
   });
+  task.control.cancelled = true;
   try {
-    await task.on_cancel();
-    removeTask(task.id);
+    await task.on_cancel?.();
+    task.control.cancelled = true;
+    // The owner releases the serial slot only after backend work has settled.
   } catch (error) {
+    if ((error as { code?: string } | null)?.code === "TASK_NOT_RUNNING") {
+      task.control.cancelled = true;
+      return;
+    }
+    task.control.cancelled = false;
     setSnapshot({
       ...snapshot,
       tasks: snapshot.tasks.map((currentTask) =>
@@ -177,29 +216,47 @@ async function runTaskCancel(task: TaskProgressRecord) {
   }
 }
 
+/** Registers immediately and resolves when the task owns the serial slot.
+ * Check cancelled before starting work; remove/fail only after work settles.
+ */
 export async function createTaskProgress({
   operation,
+  resourceKey,
   label,
   current,
   total,
-  blocking = true,
   listener,
   on_cancel,
 }: CreateTaskProgressOptions): Promise<TaskProgressHandle> {
   const normalizedTotal = Number.isFinite(total) ? Math.max(0, total) : 0;
   const id = `task-progress:${nextTaskId++}`;
+  let start!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    start = resolve;
+  });
+  let finish!: () => void;
+  const done = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const control = { cancelled: false, start, done, finish };
   const task: TaskProgressRecord = {
+    control,
+    resourceKey,
+    state: "queued",
     id,
     operation,
     label,
     current: clamp(Number.isFinite(current) ? current : 0, 0, normalizedTotal),
     total: normalizedTotal,
-    blocking,
+    blocking: false,
     is_cancelling: false,
     on_cancel,
   };
 
   const handle: TaskProgressHandle = {
+    get cancelled() {
+      return control.cancelled;
+    },
     update: ({ current: nextCurrent, label: nextLabel }) => {
       if (!snapshot.tasks.some((currentTask) => currentTask.id === id)) {
         return;
@@ -227,22 +284,28 @@ export async function createTaskProgress({
     },
   };
 
+  setSnapshot({ tasks: [...snapshot.tasks, task] });
+  startNextTask();
+  await ready;
+  if (control.cancelled) {
+    removeTask(id);
+    return handle;
+  }
+
   if (listener) {
     try {
       const cleanup = await listener(handle.update);
       if (cleanup) {
-        task.listener_cleanup = cleanup;
+        const live = snapshot.tasks.find((entry) => entry.id === id);
+        if (live) live.listener_cleanup = cleanup;
+        else await cleanup();
       }
     } catch (error) {
       captureOperationError("task.listener", error);
     }
   }
 
-  setSnapshot({
-    ...snapshot,
-    tasks: [...snapshot.tasks, task],
-  });
-
+  if (control.cancelled) removeTask(id);
   return handle;
 }
 
@@ -252,15 +315,10 @@ export async function cancelAllTaskProgress() {
     return;
   }
 
-  setSnapshot({
-    ...snapshot,
-    tasks: [],
-  });
-
-  await Promise.all([
-    ...tasks.map((task) => stopTaskListener(task)),
-    ...tasks.map((task) => runTaskCancel(task)),
-  ]);
+  // Remove queued work first so cancelling the active task cannot start it.
+  await Promise.all(tasks.filter((task) => task.state === "queued").map(runTaskCancel));
+  await Promise.all(tasks.filter((task) => task.state === "running").map(runTaskCancel));
+  await Promise.all(tasks.map((task) => task.control.done));
 }
 
 export function useTaskProgressStatus(operation?: OperationKey): TaskProgressStatus {
@@ -290,8 +348,14 @@ export function TaskProgress({ children }: TaskProgressProps) {
     const percent = Math.round(fillPercent);
     return (
       <>
-        <div className="topbar-progress" title={`${task.label} ${percent}%`}>
-          <span>{task.label}</span>
+        <div
+          className="topbar-progress"
+          title={`${task.label} ${task.state === "queued" ? "排队中" : `${percent}%`}`}
+        >
+          <span>
+            {task.label}
+            {task.state === "queued" ? "（排队中）" : ""}
+          </span>
           <div className="topbar-progress-row">
             <div className="topbar-progress-track">
               <div className="topbar-progress-fill" style={{ width: `${fillPercent}%` }} />
@@ -316,19 +380,19 @@ export function TaskProgress({ children }: TaskProgressProps) {
   return (
     <>
       <div className="topbar-progress topbar-progress-multi">
-        <span>{`正在执行 ${tasks.length} 项操作...`}</span>
+        <span>{`正在执行 ${tasks.length}  项操作...`}</span>
         <div
           className="topbar-progress-stack"
-          style={{ gridTemplateRows: `repeat(${tasks.length}, minmax(0, 1fr))` }}
+          style={{ gridTemplateRows: `repeat(${Math.min(tasks.length, 3)}, minmax(0, 1fr))` }}
         >
-          {tasks.map((task) => {
+          {tasks.slice(0, 3).map((task) => {
             const fillPercent = taskPercent(task);
             const percent = Math.round(fillPercent);
             return (
               <div
                 key={task.id}
                 className="topbar-progress-track"
-                title={`${task.label} ${percent}%`}
+                title={`${task.label} ${task.state === "queued" ? "排队中" : `${percent}%`}`}
               >
                 <div className="topbar-progress-fill" style={{ width: `${fillPercent}%` }} />
               </div>

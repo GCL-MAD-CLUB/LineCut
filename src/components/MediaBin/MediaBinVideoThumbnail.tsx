@@ -42,16 +42,16 @@ export function MediaBinVideoThumbnail({
     () => (hoverProgress === null ? null : hoverThumbnailTimeUs(project, hoverProgress)),
     [hoverProgress, project],
   );
-  const [thumbnailSrc, setThumbnailSrc] = useState("");
-  const [useVideoFallback, setUseVideoFallback] = useState(false);
+  const [thumbnail, setThumbnail] = useState<{ fingerprint: string; src: string } | null>(null);
   const [hoverFrameReady, setHoverFrameReady] = useState(false);
+  const firstFrameVideoRef = useRef<HTMLVideoElement | null>(null);
   const hoverVideoRef = useRef<HTMLVideoElement | null>(null);
   const fallbackPath = project.proxy_path || item.path;
   const fallbackSrc = isTauriRuntime() ? convertFileSrc(fallbackPath) : fallbackPath;
 
   useEffect(() => {
     if (analysisPending) {
-      setUseVideoFallback(true);
+      setThumbnail(null);
       return;
     }
     let cancelled = false;
@@ -64,12 +64,10 @@ export function MediaBinVideoThumbnail({
       const imageBuffer = new ArrayBuffer(bytes.byteLength);
       new Uint8Array(imageBuffer).set(bytes);
       objectUrl = URL.createObjectURL(new Blob([imageBuffer], { type: "image/jpeg" }));
-      setThumbnailSrc(objectUrl);
-      setUseVideoFallback(false);
+      setThumbnail({ fingerprint: project.asset.fingerprint, src: objectUrl });
     };
 
     if (!isTauriRuntime()) {
-      setUseVideoFallback(true);
       return () => {
         cancelled = true;
       };
@@ -78,10 +76,8 @@ export function MediaBinVideoThumbnail({
     void runOperation("thumbnail.video", () =>
       extractVideoCover(item.id, project.asset.fingerprint),
     ).then((outcome) => {
-      if (outcome.status === "success") {
+      if (outcome.status === "success" && outcome.value) {
         showThumbnail(outcome.value);
-      } else if (!cancelled) {
-        setUseVideoFallback(true);
       }
     });
 
@@ -92,6 +88,15 @@ export function MediaBinVideoThumbnail({
       }
     };
   }, [item.id, project.asset.fingerprint, analysisPending]);
+
+  useEffect(() => {
+    const video = firstFrameVideoRef.current;
+    if (!video) return;
+    video.pause();
+    if (video.readyState >= HTMLMediaElement.HAVE_METADATA && video.currentTime !== 0) {
+      video.currentTime = 0;
+    }
+  }, [fallbackSrc]);
 
   useEffect(() => {
     if (hoverTargetTimeUs === null) {
@@ -138,7 +143,9 @@ export function MediaBinVideoThumbnail({
     />
   );
 
-  if (thumbnailSrc && !useVideoFallback) {
+  const thumbnailSrc = thumbnail?.fingerprint === project.asset.fingerprint ? thumbnail.src : "";
+
+  if (thumbnailSrc && !analysisPending) {
     return (
       <>
         <img className="media-bin-card-thumbnail" src={thumbnailSrc} alt="" draggable={false} />
@@ -147,22 +154,25 @@ export function MediaBinVideoThumbnail({
     );
   }
 
-  if (useVideoFallback) {
-    return (
-      <>
-        <video
-          className="media-bin-card-thumbnail"
-          src={fallbackSrc}
-          muted
-          playsInline
-          preload="auto"
-          aria-hidden="true"
-          draggable={false}
-        />
-        {hoverThumbnail}
-      </>
-    );
-  }
-
-  return hoverThumbnail;
+  return (
+    <>
+      <video
+        ref={firstFrameVideoRef}
+        className="media-bin-card-thumbnail"
+        src={fallbackSrc}
+        muted
+        playsInline
+        preload="auto"
+        aria-hidden="true"
+        draggable={false}
+        onLoadedMetadata={(event) => {
+          const video = currentVideo(event);
+          video.pause();
+          if (video.currentTime !== 0) video.currentTime = 0;
+        }}
+        onLoadedData={(event) => currentVideo(event).pause()}
+      />
+      {hoverThumbnail}
+    </>
+  );
 }

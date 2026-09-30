@@ -46,7 +46,7 @@ export function PreferencesDialog({ open: isOpen, onClose }: PreferencesDialogPr
 
   async function choosePreferenceDir() {
     if (!isTauriRuntime()) {
-      setMessage("请在 Tauri 桌面窗口中选择目录。");
+      setMessage("此功能仅在桌面版可用。");
       return;
     }
     const outcome = await runOperation("preferences.update", () =>
@@ -67,7 +67,7 @@ export function PreferencesDialog({ open: isOpen, onClose }: PreferencesDialogPr
 
   async function chooseExecutable(key: "ffmpeg_path" | "ffprobe_path") {
     if (!isTauriRuntime()) {
-      setMessage("请在 Tauri 桌面窗口中选择可执行文件。");
+      setMessage("此功能仅在桌面版可用。");
       return;
     }
     const outcome = await runOperation("preferences.update", () =>
@@ -88,7 +88,7 @@ export function PreferencesDialog({ open: isOpen, onClose }: PreferencesDialogPr
 
   async function savePreferences() {
     if (!isTauriRuntime()) {
-      setMessage("浏览器预览不能保存首选项。");
+      setMessage("此功能仅在桌面版可用。");
       return;
     }
     const preferencesTaskId = createFfmpegTaskId("preferences");
@@ -104,7 +104,7 @@ export function PreferencesDialog({ open: isOpen, onClose }: PreferencesDialogPr
       setPreferences(saved);
       setDraftPreferences(saved);
       onClose();
-      setMessage("首选项已保存");
+      setMessage("已保存首选项。");
     }
     setIsSavingPreferences(false);
   }

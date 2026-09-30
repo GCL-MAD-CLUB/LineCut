@@ -74,8 +74,7 @@ export function MonitorRange({
   const [rangeMinBarWidthPx, setRangeMinBarWidthPx] = useState(0);
   const [activeRangeHandle, setActiveRangeHandle] = useState<ActiveRangeHandle>(null);
 
-  const timelineEndFrame = Math.min(durationFrames, timelineStartFrame + timelineSpanFrames);
-  const timelineVisibleSpanFrames = Math.max(1, timelineEndFrame - timelineStartFrame);
+  const timelineVisibleSpanFrames = Math.max(1, timelineSpanFrames);
   const indicatorWidthRatio = rangeWidthRatioForSpan(timelineVisibleSpanFrames);
   const indicatorLeftRatio = rangeLeftRatioForStart(timelineStartFrame, timelineVisibleSpanFrames);
   const rangeBarStyle = {

@@ -23,7 +23,6 @@ import {
   resolvedMediaAudioSources,
   useProjectPort,
 } from "../../systems/ProjectSystem";
-import { useTaskProgressStatus } from "../../systems/TaskSystem";
 import {
   clampTimelineStartFrame,
   frameDurationUs,
@@ -36,6 +35,7 @@ import { crossedStoryboardGap, storyboardGaps } from "../../core/editor/storyboa
 import { resizeStoryboardShot } from "../../core/editor/storyboardCuts";
 import { activeMediaDragVideoId, markMediaDragHandled } from "../MediaBin/mediaDrag";
 import { usePanelManagerState } from "../DockLayout";
+import { useExportWorkspaceState } from "../../systems/ExportSystem";
 import "./SourceMonitor.css";
 import { TimelineRuler } from "./TimelineRuler";
 import { StoryboardTimeline } from "./StoryboardTimeline";
@@ -180,6 +180,16 @@ function isEditableKeyboardTarget(target: EventTarget | null) {
 
 export function SourceMonitor() {
   const panelInstanceId = usePanelInstanceId();
+  const isExportMonitor = panelInstanceId === "export-source";
+  const exportSource = useExportWorkspaceState((state) => state.source);
+  const exportPreviewClipId = useExportWorkspaceState((state) => state.previewClipId);
+  const exportPreviewVersion = useExportWorkspaceState((state) => state.previewVersion);
+  const updateExportClipRange = useExportWorkspaceState((state) => state.updateClipRange);
+  const exportClip = isExportMonitor
+    ? exportSource?.clips.find((clip) => clip.id === exportPreviewClipId)
+    : undefined;
+  const exportClipRef = useRef(exportClip);
+  exportClipRef.current = exportClip;
   const panelActive = usePanelActive();
   const focusedPanelId = usePanelManagerState((state) => state.focusedPanelId);
   const storyboardVisible = usePanelManagerState((state) =>
@@ -254,7 +264,6 @@ export function SourceMonitor() {
     playedVideoRecorded,
     syncMedia,
   } = useSourceMonitorState((state) => state);
-  const { isRunning: isGeneratingProxy } = useTaskProgressStatus("proxy.generate");
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const boundAudioRefs = useRef(new Map<string, HTMLAudioElement>());
   const rollingPcmAudioRef = useRef<RollingPcmAudioController | null>(null);
@@ -441,6 +450,64 @@ export function SourceMonitor() {
     setMinTimelineSpanFrames((current) => (current === spanFrames ? current : spanFrames));
   }, []);
 
+  const exportRange =
+    exportClip && durationFrames > 0
+      ? {
+          startFrame: clamp(timeUsToFrame(exportClip.startUs, frameRate), 0, durationFrames - 1),
+          endFrame: clamp(
+            exportClip.endUs > 0
+              ? Math.ceil((exportClip.endUs / 1_000_000) * frameRate) - 1
+              : durationFrames - 1,
+            0,
+            durationFrames - 1,
+          ),
+        }
+      : null;
+  const exportRangeStartFrame = exportRange?.startFrame;
+  const exportRangeEndFrame = exportRange?.endFrame;
+
+  useEffect(() => {
+    if (!isExportMonitor) return;
+    const range =
+      exportRangeStartFrame === undefined || exportRangeEndFrame === undefined
+        ? null
+        : {
+            startFrame: exportRangeStartFrame,
+            endFrame: Math.max(exportRangeStartFrame, exportRangeEndFrame),
+          };
+    setCueRange(range);
+    cuePlaybackEndFrameRef.current = range?.endFrame ?? null;
+  }, [isExportMonitor, exportRangeStartFrame, exportRangeEndFrame, setCueRange]);
+
+  useEffect(() => {
+    if (!isExportMonitor || durationFrames <= 0) return;
+    const clip = exportClipRef.current;
+    if (!clip) return;
+    const start = clamp(timeUsToFrame(clip.startUs, frameRate), 0, durationFrames - 1);
+    const end = clamp(
+      clip.endUs > 0 ? Math.ceil((clip.endUs / 1_000_000) * frameRate) : durationFrames,
+      start + 1,
+      durationFrames,
+    );
+    const span = Math.min(durationFrames, Math.max(minTimelineSpanFrames, end - start));
+    const idealStart = start - (span - (end - start)) / 2;
+    const timelineStart =
+      span > end - start
+        ? clamp(idealStart, -span / 2, durationFrames - span / 2)
+        : clampTimelineStartFrame(idealStart, span, durationFrames);
+    updateTimelineSpanFrames(span);
+    updateTimelineStartFrame(timelineStart);
+  }, [
+    isExportMonitor,
+    exportPreviewVersion,
+    mediaKey,
+    durationFrames,
+    frameRate,
+    minTimelineSpanFrames,
+    updateTimelineSpanFrames,
+    updateTimelineStartFrame,
+  ]);
+
   useLayoutEffect(() => {
     const mediaChanged = panelMediaKey !== mediaKey;
     const nextSpan = durationFrames > 0 ? durationFrames : defaultTimelineSpanFrames;
@@ -500,7 +567,9 @@ export function SourceMonitor() {
       const next = clamp(safeCurrent, minTimelineSpanFrames, durationFrames);
       timelineSpanFramesRef.current = next;
       setTimelineStartFrame((start) => {
-        const nextStart = clampTimelineStartFrame(start, next, durationFrames);
+        const nextStart = isExportMonitor
+          ? clamp(start, -next / 2, durationFrames - next / 2)
+          : clampTimelineStartFrame(start, next, durationFrames);
         timelineStartFrameRef.current = nextStart;
         return nextStart;
       });
@@ -511,7 +580,7 @@ export function SourceMonitor() {
       currentFrameRef.current = next;
       return next;
     });
-  }, [durationFrames, minTimelineSpanFrames]);
+  }, [durationFrames, isExportMonitor, minTimelineSpanFrames]);
 
   const { isAuthority: isPlaybackShortcutAuthority } = usePlaybackCapability({
     identity,
@@ -535,9 +604,16 @@ export function SourceMonitor() {
             durationUs,
           ),
         );
-        setCueRange({ startFrame: rangeStartFrame, endFrame: rangeEndFrame });
-        centerTimelineOnFrame(rangeStartFrame);
-        cuePlaybackEndFrameRef.current = rangeEndFrame;
+        const focusedRange =
+          isExportMonitor && exportRange
+            ? {
+                startFrame: exportRange.startFrame,
+                endFrame: Math.max(exportRange.startFrame, exportRange.endFrame),
+              }
+            : { startFrame: rangeStartFrame, endFrame: rangeEndFrame };
+        setCueRange(focusedRange);
+        if (!isExportMonitor) centerTimelineOnFrame(rangeStartFrame);
+        cuePlaybackEndFrameRef.current = focusedRange.endFrame;
         cueRangeTargetRef.current = detail.focusTarget ?? null;
       }
       const video = videoRef.current;
@@ -716,7 +792,7 @@ export function SourceMonitor() {
   function changePreviewMode(value: PreviewMode) {
     if (value === "source") {
       if (activeVideoOffline) {
-        messagePublished("完整分辨率媒体已脱机，请先重新链接媒体。");
+        messagePublished("完整分辨率媒体已脱机，请重新链接媒体。");
         return;
       }
       if (!useProxy) {
@@ -726,7 +802,7 @@ export function SourceMonitor() {
       sourcePreviewSelected();
       return;
     }
-    if (!project || isGeneratingProxy) {
+    if (!project) {
       return;
     }
     if (proxyPath) {
@@ -746,11 +822,11 @@ export function SourceMonitor() {
       if (proxyPath) {
         preservePreviewPlayback();
         proxyPreviewSelected();
-        messagePublished("原文件无法直接播放，已切换到代理模式。");
+        messagePublished("原文件无法直接播放，已切换到代理。");
       } else {
         pendingPreviewRestoreRef.current = null;
         proxyDialogOpened();
-        messagePublished("原文件无法直接播放，请创建代理后预览。");
+        messagePublished("原文件无法直接播放，请先创建代理。");
       }
     }
   }
@@ -1363,6 +1439,20 @@ export function SourceMonitor() {
 
   function changeCueRangeFromTimeline(range: { startFrame: number; endFrame: number } | null) {
     cuePlaybackEndFrameRef.current = range?.endFrame ?? null;
+    if (isExportMonitor) {
+      setCueRange(range);
+      const clip = exportClipRef.current;
+      if (range && clip) {
+        const startUs = Math.min(frameToClampedUs(range.startFrame), Math.max(0, durationUs - 1));
+        updateExportClipRange(
+          clip.id,
+          startUs,
+          Math.max(startUs + 1, Math.min(durationUs, frameToClampedUs(range.endFrame + 1))),
+          cueRangeDragGroupRef.current,
+        );
+      }
+      return;
+    }
     const target = cueRangeTargetRef.current;
     if (!range || !target) {
       setCueRange(range);
