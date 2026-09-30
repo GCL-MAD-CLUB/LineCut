@@ -726,7 +726,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     }
     selectOnly(folder.id);
     setRenamingFolderId(folder.id);
-    messagePublished(`已新建媒体箱“${folder.name}”`);
+    messagePublished(`已新建媒体箱“${folder.name}”。`);
   }
 
   function moveItemsToFolder(itemIds: string[], folderId: string | null) {
@@ -737,7 +737,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     const folderName = folderId
       ? mediaFolders.find((folder) => folder.id === folderId)?.name
       : "项目媒体";
-    messagePublished(`已将 ${itemIds.length} 个媒体移到“${folderName ?? "项目媒体"}”`);
+    messagePublished(`已将 ${itemIds.length} 个媒体移到“${folderName ?? "项目媒体"}”。`);
   }
 
   function moveEntriesToFolder(itemIds: string[], folderIds: string[], folderId: string | null) {
@@ -745,7 +745,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
       return;
     }
     if (folderId && mediaFolderAndDescendantIds(mediaFolders, folderIds).has(folderId)) {
-      messagePublished("不能将媒体箱移动到自身或其子媒体箱中");
+      messagePublished("无法将媒体箱移入自身或其子媒体箱。");
       return;
     }
     mediaEntriesMovedToFolder(itemIds, folderIds, folderId);
@@ -757,7 +757,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
       ? mediaFolders.find((folder) => folder.id === folderId)?.name
       : "项目媒体";
     messagePublished(
-      `已将 ${itemIds.length + folderIds.length} 个项目条目移到“${folderName ?? "项目媒体"}”`,
+      `已将 ${itemIds.length + folderIds.length} 个项目条目移到“${folderName ?? "项目媒体"}”。`,
     );
   }
 
@@ -773,7 +773,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
       (item) => itemIds.includes(item.id) && item.kind !== "video" && item.id !== videoId,
     );
     if (selectedItemsToBind.length === 0) {
-      messagePublished("只有音频和字幕可以绑定到视频。");
+      messagePublished("仅音频和字幕可绑定到视频。");
       return;
     }
     const subtitlesToParse = selectedItemsToBind.filter(
@@ -792,7 +792,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
         videoId,
       );
     }
-    messagePublished(`已将 ${selectedItemsToBind.length} 个媒体绑定到 ${targetVideo.file_name}`);
+    messagePublished(`已将 ${selectedItemsToBind.length} 个媒体绑定到 ${targetVideo.file_name}。`);
 
     if (subtitlesToParse.length > 0) {
       const taskId = createFfmpegTaskId("media-bin-bind");
@@ -844,7 +844,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
       return;
     }
     mediaItemsUnbound(boundItemIds);
-    messagePublished(`已解除 ${boundItemIds.length} 个媒体的绑定`);
+    messagePublished(`已解除 ${boundItemIds.length} 个媒体的绑定。`);
   }
 
   function handleContentDragOver(event: DragEvent<HTMLDivElement>) {
@@ -899,7 +899,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
       }
       mediaDemuxed(video.id, outcome.value);
       messagePublished(
-        `已分解产生 ${outcome.value.audio_tracks.length} 条音轨和 ${outcome.value.subtitle_tracks.length} 条字幕`,
+        `已分解出 ${outcome.value.audio_tracks.length} 条音轨、${outcome.value.subtitle_tracks.length} 条字幕。`,
       );
     });
   }
@@ -938,7 +938,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
       directlySelectedItems.map((item) => item.id),
     );
     clearSelection();
-    messagePublished(`已从项目移除 ${selectedIds.size} 个项目条目`);
+    messagePublished(`已从项目移除 ${selectedIds.size} 个项目条目。`);
   }
 
   function previewVideo(videoId: string) {
@@ -946,11 +946,11 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
       (item) => item.id === videoId && item.kind === "video" && isMediaItemEnabled(item),
     );
     if (!video) {
-      messagePublished("已禁用的媒体无法拖到源播放器预览");
+      messagePublished("已禁用的媒体无法在源播放器中预览。");
       return;
     }
     activeVideoChanged(videoId);
-    messagePublished(`源预览已切换到 ${video.file_name}`);
+    messagePublished(`已将源预览切换到 ${video.file_name}。`);
   }
 
   function clipboardFromSelection(): MediaBinClipboard {
@@ -1033,7 +1033,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     }
     mediaBinClipboard = clipboard;
     setMediaBinClipboardItemCount(count);
-    messagePublished(`已复制 ${count} 个项目条目`);
+    messagePublished(`已复制 ${count} 个项目条目。`);
   }
 
   function pasteClipboard() {
@@ -1044,7 +1044,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     const copies = copiedClipboardEntries(mediaBinClipboard, currentFolderId, false, false);
     mediaBinEntriesAdded(copies.folders, copies.items, `粘贴 ${clipboardCount} 个项目条目`);
     selectItems(copies.rootEntryIds);
-    messagePublished(`已粘贴 ${clipboardCount} 个项目条目`);
+    messagePublished(`已粘贴 ${clipboardCount} 个项目条目。`);
   }
 
   function duplicateSelection() {
@@ -1059,7 +1059,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     const copies = copiedClipboardEntries(clipboard, currentFolderId, true, true);
     mediaBinEntriesAdded(copies.folders, copies.items, `重复 ${count} 个项目条目`);
     selectItems(copies.rootEntryIds);
-    messagePublished(`已重复 ${count} 个项目条目`);
+    messagePublished(`已重复 ${count} 个项目条目。`);
   }
 
   function createFolderFromSelection() {
@@ -1084,7 +1084,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     setExpandedFolderIds((current) => new Set(current).add(folder.id));
     selectOnly(folder.id);
     setRenamingFolderId(folder.id);
-    messagePublished(`已复制所选内容并创建媒体箱“${folder.name}”`);
+    messagePublished(`已复制所选内容并创建媒体箱“${folder.name}”。`);
   }
 
   useEditCapability({
@@ -1157,11 +1157,11 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     const currentProject = mediaItemProject(item, projects, mediaItems);
     if (!currentProject) {
       mediaItemRelinked(item.id, path, null, historyLabel);
-      messagePublished(`已重新链接 ${item.file_name}`);
+      messagePublished(`已重新链接 ${item.file_name}。`);
       return true;
     }
     if (!isTauriRuntime()) {
-      messagePublished("浏览器预览不能重新链接本地媒体，请运行 Tauri 桌面应用。");
+      messagePublished("此功能仅在桌面版可用。");
       return false;
     }
 
@@ -1189,7 +1189,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
 
     mediaItemRelinked(item.id, path, outcome.result.project, historyLabel);
     warningsAppended(outcome.result.warnings);
-    messagePublished(`已重新链接 ${item.file_name}`);
+    messagePublished(`已重新链接 ${item.file_name}。`);
     return true;
   }
 
@@ -1200,7 +1200,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     }
     if (linkDialog.mode === "proxy") {
       mediaProxyPathChanged(item.id, path);
-      messagePublished(`已为 ${item.file_name} 连接代理`);
+      messagePublished(`已为 ${item.file_name} 连接代理。`);
       return true;
     }
     return relinkMediaItem(
@@ -1222,7 +1222,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     setContextMenu(null);
     if (!item || isMediaItemOffline(item) || !isTauriRuntime()) {
       if (!isTauriRuntime()) {
-        messagePublished("请在 Tauri 桌面窗口中替换本地素材。");
+        messagePublished("此功能仅在桌面版可用。");
       }
       return;
     }
@@ -1257,7 +1257,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
       items.map((item) => item.id),
       true,
     );
-    messagePublished(`已将 ${items.length} 个媒体设为脱机`);
+    messagePublished(`已将 ${items.length} 个媒体设为脱机。`);
     setContextMenu(null);
   }
 
@@ -1293,7 +1293,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
       mediaProxyPathChanged(video.id, null);
     }
     if (selectedVideosWithProxy.length > 0) {
-      messagePublished(`已分离 ${selectedVideosWithProxy.length} 个代理`);
+      messagePublished(`已分离 ${selectedVideosWithProxy.length} 个代理。`);
     }
     setContextMenu(null);
   }
@@ -1339,8 +1339,8 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     const submission = enqueueQuickExport(source, exportState);
     messagePublished(
       submission.queuePosition === 1
-        ? "已开始导出"
-        : `已加入导出队列，前面有 ${submission.queuePosition - 1} 个任务`,
+        ? "已开始导出。"
+        : `已加入导出队列，前面有 ${submission.queuePosition - 1} 个任务。`,
     );
     const outcome = await submission.completion;
     if (outcome.status === "success") {
@@ -1348,9 +1348,9 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
         (output) => output.status === "completed",
       ).length;
       const failed = outcome.result.outputs.filter((output) => output.status === "failed").length;
-      messagePublished(`已导出 ${completed} 个片段${failed > 0 ? `，${failed} 个失败` : ""}`);
+      messagePublished(`已导出 ${completed} 个片段${failed > 0 ? `，${failed} 个失败` : ""}。`);
     } else if (outcome.status === "cancelled") {
-      messagePublished("导出已取消");
+      messagePublished("已取消导出。");
     }
   }
 

@@ -138,7 +138,7 @@ async function runMediaAutoBinding({
 
     if (prepared.bindings.length === 0) {
       task.remove();
-      actions.messagePublished("自动绑定未找到足够接近的媒体组合");
+      actions.messagePublished("自动绑定未找到匹配的媒体组合。");
       return;
     }
 
@@ -253,7 +253,7 @@ async function runMediaAutoBinding({
 
     if (failure) task.fail(failure, { resourceKind: "subtitle" });
     else task.remove();
-    if (!cancelled) actions.messagePublished(`已自动绑定 ${boundCount} 个媒体`);
+    if (!cancelled) actions.messagePublished(`已自动绑定 ${boundCount} 个媒体。`);
   } catch (error) {
     if (!cancelled) task.fail(error);
   }

@@ -142,7 +142,7 @@ export function ProxyCreationDialog() {
       return;
     }
     if (!isTauriRuntime()) {
-      setMessage("浏览器预览不能生成代理，请运行 Tauri 桌面应用。");
+      setMessage("此功能仅在桌面版可用。");
       return;
     }
 
@@ -170,13 +170,13 @@ export function ProxyCreationDialog() {
         taskId: proxyTaskId,
       });
       proxyGenerated(result.proxy_path);
-      setMessage("预览代理已生成");
+      setMessage("已生成预览代理。");
       proxyTask.update({ current: 1 });
       proxyTask.remove();
     } catch (error) {
       if (proxyCancelled) {
         proxyTask.remove();
-        setMessage("代理生成已取消");
+        setMessage("已取消代理生成。");
         return;
       }
       proxyTask.fail(error, { displayName: projectDisplayName, resourceKind: "proxy" });

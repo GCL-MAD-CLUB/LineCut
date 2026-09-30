@@ -44,8 +44,8 @@ export function ExportActionBar() {
     });
     messagePublished(
       submission.queuePosition === 1
-        ? "已开始导出"
-        : `已加入导出队列，前面有 ${submission.queuePosition - 1} 个任务`,
+        ? "已开始导出。"
+        : `已加入导出队列，前面有 ${submission.queuePosition - 1} 个任务。`,
     );
     void submission.completion.then((outcome) => {
       const stillShowingSource = exportWorkspaceStore.getState().source === capturedSource;
@@ -66,7 +66,7 @@ export function ExportActionBar() {
         }
       } else if (stillShowingSource) {
         if (outcome.status === "cancelled") {
-          messagePublished("导出已取消");
+          messagePublished("已取消导出。");
         }
         setStatus("idle");
       }

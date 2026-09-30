@@ -658,33 +658,33 @@ function AppContent() {
 
   async function openLineCutHelp() {
     if (!isTauriRuntime()) {
-      messagePublished("请在 LineCut 桌面应用中打开在线帮助。");
+      messagePublished("此功能仅在桌面版可用。");
       return;
     }
     const outcome = await runOperation("help.openDocumentation", () =>
       invokeCommand("open_user_guide"),
     );
     if (outcome.status === "success") {
-      messagePublished("已在默认浏览器中打开 LineCut 帮助");
+      messagePublished("已在默认浏览器中打开帮助。");
     }
   }
 
   async function showLogFiles() {
     if (!isTauriRuntime()) {
-      messagePublished("日志文件仅在 LineCut 桌面应用中提供。");
+      messagePublished("此功能仅在桌面版可用。");
       return;
     }
     const outcome = await runOperation("help.openLogDirectory", () =>
       invokeCommand("open_log_directory"),
     );
     if (outcome.status === "success") {
-      messagePublished("已打开 LineCut 日志文件夹");
+      messagePublished("已打开日志文件夹。");
     }
   }
 
   async function newProject() {
     if (!isTauriRuntime()) {
-      messagePublished("请在 Tauri 桌面窗口中新建项目。");
+      messagePublished("此功能仅在桌面版可用。");
       return;
     }
     if (!(await confirmDiscardChanges("当前项目有尚未保存的更改，仍要新建项目吗？"))) {
@@ -698,7 +698,7 @@ function AppContent() {
       setActiveWorkspace("import");
     });
     if (outcome.status === "success") {
-      messagePublished("已新建项目");
+      messagePublished("已新建项目。");
     }
   }
 
@@ -717,7 +717,7 @@ function AppContent() {
 
   async function openProject(pathToOpen?: string) {
     if (!isTauriRuntime()) {
-      messagePublished("请在 Tauri 桌面窗口中打开项目。");
+      messagePublished("此功能仅在桌面版可用。");
       return;
     }
     if (!(await confirmDiscardChanges("当前项目有尚未保存的更改，仍要打开其他项目吗？"))) {
@@ -751,7 +751,7 @@ function AppContent() {
       projectOpened(result.workspace, result.path, result.project_id);
       warningsReplaced(result.warnings);
       rememberRecentProject({ path: result.path, projectId: result.project_id });
-      messagePublished(`已打开项目 ${fileName(result.path)}`);
+      messagePublished(`已打开项目 ${fileName(result.path)}。`);
     } else if (outcome.status === "failed") {
       if (pathToOpen) {
         forgetRecentProject(pathToOpen);
@@ -765,7 +765,7 @@ function AppContent() {
       projectClosed();
     });
     if (outcome.status === "success") {
-      messagePublished("项目已关闭");
+      messagePublished("已关闭项目。");
     }
   }
 
@@ -799,9 +799,9 @@ function AppContent() {
     });
     if (makeCurrent) {
       projectSaved(savedPath, targetId);
-      messagePublished(`项目已保存到 ${fileName(savedPath)}`);
+      messagePublished(`已保存项目到 ${fileName(savedPath)}。`);
     } else {
-      messagePublished(`项目副本已保存到 ${fileName(savedPath)}`);
+      messagePublished(`已保存项目副本到 ${fileName(savedPath)}。`);
     }
     // A new document identity starts with the current export settings so the
     // copy/另存为 behaves like the original. The file is already saved, so a
@@ -835,7 +835,7 @@ function AppContent() {
 
   async function saveProjectAsWithOutcome(makeCurrent = true) {
     if (!isTauriRuntime()) {
-      messagePublished("请在 Tauri 桌面窗口中保存项目。");
+      messagePublished("此功能仅在桌面版可用。");
       return false;
     }
     const pickOutcome = await runOperation("project.save", () =>
@@ -952,7 +952,7 @@ function AppContent() {
       setHistoryNavigating(false);
       return;
     }
-    messagePublished("已还原到上次保存的状态");
+    messagePublished("已还原到上次保存状态。");
     setHistoryNavigating(false);
   }
 
@@ -1014,7 +1014,7 @@ function AppContent() {
       return;
     }
     if (!isTauriRuntime()) {
-      messagePublished("请在 Tauri 桌面窗口中导入本地媒体。");
+      messagePublished("此功能仅在桌面版可用。");
       return;
     }
     const pickOutcome = pathsToImport
@@ -1069,10 +1069,10 @@ function AppContent() {
 
     const importedCount = loaded.length + subtitlePaths.length;
     const resultParts = [
-      importedCount > 0 ? `已导入 ${importedCount} 个媒体` : "未导入任何媒体",
+      importedCount > 0 ? `已导入 ${importedCount} 个媒体` : "未导入媒体",
       ...(cancelledCount > 0 ? [`${cancelledCount} 个已取消`] : []),
     ];
-    messagePublished(resultParts.join("，"));
+    messagePublished(`${resultParts.join("，")}。`);
   }
 
   async function navigateProjectHistory(targetCursor: number): Promise<boolean> {
@@ -1097,11 +1097,11 @@ function AppContent() {
     if (outcome.status === "success") {
       const target = Math.max(0, Math.min(targetCursor, projectHistory.entries.length));
       if (Math.abs(target - previousCursor) > 1) {
-        messagePublished("已跳转到所选历史记录");
+        messagePublished("已跳转到所选历史记录。");
       } else if (target < previousCursor) {
-        messagePublished("已撤销上一步项目操作");
+        messagePublished("已撤销上一步操作。");
       } else {
-        messagePublished("已重做下一步项目操作");
+        messagePublished("已重做下一步操作。");
       }
       setHistoryNavigating(false);
       return true;
@@ -1129,7 +1129,7 @@ function AppContent() {
       return;
     }
     projectHistoryFutureDiscarded();
-    messagePublished(`已删除当前事件及其后的 ${removedCount} 条历史记录`);
+    messagePublished(`已删除当前及其后的 ${removedCount} 条历史记录。`);
   }
 
   useBroadcastEvent(identity, "media.import.requested", async ({ payload }) => {

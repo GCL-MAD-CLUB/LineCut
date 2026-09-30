@@ -147,7 +147,7 @@ export function ImportWorkspace({ onImportCompleted, onCancel }: ImportWorkspace
       }
       const remaining = selection.files.filter((entry) => !completed.has(entry.path));
       selection.retainFiles(remaining);
-      const message = `已导入 ${completed.size} 个媒体${remaining.length ? `，${remaining.length} 个未完成，可重试` : ""}`;
+      const message = `已导入 ${completed.size} 个媒体${remaining.length ? `，${remaining.length} 个未完成，可重试` : ""}。`;
       setStatus(message);
       messagePublished(message);
       if (completed.size && !remaining.length) onImportCompleted?.();

@@ -714,7 +714,7 @@ export function SourceMonitor() {
   function changePreviewMode(value: PreviewMode) {
     if (value === "source") {
       if (activeVideoOffline) {
-        messagePublished("完整分辨率媒体已脱机，请先重新链接媒体。");
+        messagePublished("完整分辨率媒体已脱机，请重新链接媒体。");
         return;
       }
       if (!useProxy) {
@@ -744,11 +744,11 @@ export function SourceMonitor() {
       if (proxyPath) {
         preservePreviewPlayback();
         proxyPreviewSelected();
-        messagePublished("原文件无法直接播放，已切换到代理模式。");
+        messagePublished("原文件无法直接播放，已切换到代理。");
       } else {
         pendingPreviewRestoreRef.current = null;
         proxyDialogOpened();
-        messagePublished("原文件无法直接播放，请创建代理后预览。");
+        messagePublished("原文件无法直接播放，请先创建代理。");
       }
     }
   }
