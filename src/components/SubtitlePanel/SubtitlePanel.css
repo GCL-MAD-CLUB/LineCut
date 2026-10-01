@@ -1176,6 +1176,7 @@ body.is-resizing-subtitle-column {
 .subtitle-footer .subtitle-footer-sort-trigger > svg,
 .subtitle-track-trigger > svg {
   display: block;
+  align-self: center;
   width: 12px;
   height: 12px;
   color: #777;

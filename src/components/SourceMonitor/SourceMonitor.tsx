@@ -33,6 +33,7 @@ import {
 import { MonitorRange } from "./MonitorRange";
 import { crossedStoryboardGap, storyboardGaps } from "../../core/editor/storyboard";
 import { resizeStoryboardShot } from "../../core/editor/storyboardCuts";
+import { storyboardVideoContext } from "../../core/editor/storyboardDetection";
 import { activeMediaDragVideoId, markMediaDragHandled } from "../MediaBin/mediaDrag";
 import { usePanelManagerState } from "../DockLayout";
 import { useExportWorkspaceState } from "../../systems/ExportSystem";
@@ -421,8 +422,8 @@ export function SourceMonitor() {
   const mediaKey = project
     ? `${activeVideoId}:${project.asset.id}:${durationUs}:${frameRate}`
     : `empty:${frameRate}`;
-  const storyboardVideoContext = `${activeVideoId}:${project?.asset.id ?? ""}:${project?.asset.fingerprint ?? ""}`;
-  const storyboard = storyboards[storyboardVideoContext];
+  const videoContext = storyboardVideoContext(activeVideoId, project);
+  const storyboard = storyboards[videoContext];
   const skippedRanges = useMemo(
     () => (storyboard ? storyboardGaps(storyboard.shots, durationFrames) : []),
     [storyboard, durationFrames],
@@ -1659,7 +1660,7 @@ export function SourceMonitor() {
         />
         <TimelineComponent
           key={`${mediaKey}:${project?.asset.fingerprint ?? ""}:${storyboardVisible && panelActive}`}
-          videoContext={storyboardVideoContext}
+          videoContext={videoContext}
           skippedRanges={skippedRanges}
           frameRate={frameRate}
           durationUs={durationUs}
@@ -1678,7 +1679,7 @@ export function SourceMonitor() {
           onRevealStoryboardShot={(shotId) => {
             void publishEvent(
               "storyboard.reveal-shot.requested",
-              { videoContext: storyboardVideoContext, shotId },
+              { videoContext: videoContext, shotId },
               identity,
             );
           }}

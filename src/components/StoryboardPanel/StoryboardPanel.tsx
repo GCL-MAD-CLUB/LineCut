@@ -27,7 +27,6 @@ import {
   type UIEvent as ReactUIEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import { invokeCommand } from "../../errors";
 import { useEditCapability } from "../../runtime/capabilities/EditCapability";
 import { useExportCapability } from "../../runtime/capabilities/ExportCapability";
 import { usePlaybackStatus } from "../../runtime/capabilities/PlaybackCapability";
@@ -35,19 +34,12 @@ import { eventSource } from "../../runtime/events/EventHub";
 import { publishEvent, useBroadcastEvent } from "../../runtime/events/react";
 import { useStableIdentity } from "../../runtime/state/react";
 import { usePanelActive, usePanelInstanceId } from "../../runtime/systems/PanelState";
-import {
-  cancelFfmpegTask,
-  createFfmpegTaskId,
-  listenToFfmpegTaskProgress,
-} from "../../platform/tauri/ffmpegProgress";
 import { mediaDisplayName, useProjectPort } from "../../systems/ProjectSystem";
 import {
   buildStoryboardExportSource,
   enqueueQuickExport,
   requestExport,
 } from "../../systems/ExportSystem";
-import { createTaskProgress, useTaskProgressStatus } from "../../systems/TaskSystem";
-import { isTauriRuntime } from "../../platform/tauri/runtime";
 import { normalizeFrameRate } from "../../core/editor/timeline";
 import { storyboardShotDefaultTitle } from "../../core/editor/storyboard";
 import {
@@ -57,9 +49,12 @@ import {
   useTimelineThumbnailListResizeAnchor,
   useTimelineThumbnailWindow,
 } from "../../timelineThumbnail";
-import type { StoryboardDetectionResult, StoryboardShot } from "../../types";
+import type { StoryboardShot } from "../../types";
 import { usePanelManagerState } from "../DockLayout";
-import { ModalDialog } from "../ModalDialog";
+import { MediaSourceMenu } from "../MediaSourceMenu";
+import { panelMediaSources } from "../../application/media/panelMediaSources";
+import { storyboardVideoContext } from "../../core/editor/storyboardDetection";
+import { canDetectStoryboard, useStoryboardDetection } from "./useStoryboardDetection";
 import { annotationShortcutAction, annotationShortcutAutoAdvances } from "../annotationShortcuts";
 import {
   sprayEraserCursor,
@@ -74,6 +69,7 @@ import {
   PopupMenuItem,
   PopupMenuSeparator,
   PopupMenuSubmenu,
+  useCloseOnOutsidePointer,
 } from "../PopupMenu";
 import "./StoryboardPanel.css";
 import {
@@ -1077,22 +1073,25 @@ export function StoryboardPanel() {
     project,
     activeVideoId,
     mediaItems,
+    mediaFolders,
     projects,
     detachedVideoIds,
     storyboards,
     exportState,
     messagePublished,
+    activeVideoChanged,
   } = useProjectPort(
     [
       "project",
       "activeVideoId",
       "mediaItems",
+      "mediaFolders",
       "projects",
       "detachedVideoIds",
       "storyboards",
       "exportState",
     ],
-    ["messagePublished"],
+    ["messagePublished", "activeVideoChanged"],
   );
   const {
     query,
@@ -1146,13 +1145,12 @@ export function StoryboardPanel() {
     splitShotStack,
     setShotStackExpanded,
     setAllShotStacksExpanded,
-    detectionStarted,
-    detectionCompleted,
-    detectionFinished,
+    setExpandedStackIds,
     shotSelectionCleared,
     shotSelectionReplaced,
   } = useStoryboardPanelState((state) => state);
-  const { tasks: detectionTasks } = useTaskProgressStatus("storyboard.detect");
+  const { requestDetection, canRequestDetection, detectionDialog, detectionTasks } =
+    useStoryboardDetection();
   const playback = usePlaybackStatus();
   const panelRef = useRef<HTMLElement | null>(null);
   const contentLayoutRef = useRef<HTMLDivElement | null>(null);
@@ -1195,7 +1193,7 @@ export function StoryboardPanel() {
     useState<StoryboardShotKeywordDragPreview | null>(null);
   const [contextMenu, setContextMenu] = useState<StoryboardContextMenuState | null>(null);
   const [annotationMenu, setAnnotationMenu] = useState<StoryboardAnnotationMenuState | null>(null);
-  const [detectionConflictOpen, setDetectionConflictOpen] = useState(false);
+  const [videoMenu, setVideoMenu] = useState<StoryboardMenuAnchor | null>(null);
   const [storyboardColumnWidths, setStoryboardColumnWidths] = useState(
     initialStoryboardColumnWidths,
   );
@@ -1205,13 +1203,33 @@ export function StoryboardPanel() {
     startWidth: number;
     pointerId: number;
   } | null>(null);
-  const videoContext = `${activeVideoId}:${project?.asset.id ?? ""}:${project?.asset.fingerprint ?? ""}`;
-  const hasVideo = Boolean(
-    project?.asset.video_stream_index !== null && project?.asset.video_stream_index !== undefined,
-  );
+  const videoContext = storyboardVideoContext(activeVideoId, project);
   const videoLabel = mediaDisplayName(project, mediaItems, activeVideoId) || "未选择";
   const isDetecting = detectionTasks.some((task) => task.resourceKey === videoContext);
-  const canDetect = isTauriRuntime() && Boolean(project) && hasVideo && !isDetecting;
+  const canDetect = useMemo(
+    () => canRequestDetection([activeVideoId]),
+    [activeVideoId, canRequestDetection],
+  );
+  // Every playable video is offered, because picking one only switches which storyboard is shown.
+  // Detection is a side effect that additionally needs a readable source file, so it is gated per
+  // pick below rather than by hiding entries detection cannot process.
+  const videoSources = useMemo(
+    () => panelMediaSources(projects, mediaItems),
+    [projects, mediaItems],
+  );
+  const videoSourceById = useMemo(
+    () => new Map(videoSources.map((source) => [source.item.id, source])),
+    [videoSources],
+  );
+  const selectableVideos = useMemo(() => videoSources.map((source) => source.item), [videoSources]);
+  useCloseOnOutsidePointer(Boolean(videoMenu), () => setVideoMenu(null));
+  useBroadcastEvent(identity, "storyboard.detection.completed", ({ payload }) => {
+    if (payload.videoContext !== videoContext) return "ignored";
+    shotSelectionReplaced(payload.firstShotId ? [payload.firstShotId] : [], payload.firstShotId);
+    setShowOnlySelected(false);
+    setExpandedStackIds([]);
+    return "handled";
+  });
   const selectedCount = selectedShotIds.size;
   const hasSecondarySelection =
     selectedCount > (activeShotId && selectedShotIds.has(activeShotId) ? 1 : 0);
@@ -1690,6 +1708,7 @@ export function StoryboardPanel() {
       contextMenu.exportSubmenuOpen),
   );
   const annotationShortcutMenuOpen = Boolean(
+    videoMenu ||
     contextMenu ||
     annotationMenu ||
     ratingComparatorMenu ||
@@ -1736,7 +1755,7 @@ export function StoryboardPanel() {
     setSprayActive(false);
     setContextMenu(null);
     setAnnotationMenu(null);
-    setDetectionConflictOpen(false);
+    setVideoMenu(null);
     setRatingComparatorMenu(null);
     setFooterSortMenu(null);
     setFooterSprayMenu(null);
@@ -3215,62 +3234,8 @@ export function StoryboardPanel() {
     },
   });
 
-  async function detectStoryboard(mode: "merge" | "overwrite") {
-    if (!project || !canDetect) {
-      return;
-    }
-    const taskId = createFfmpegTaskId("storyboard-detect");
-    const context = videoContext;
-    let cancelled = false;
-    detectionStarted(context);
-    const task = await createTaskProgress({
-      operation: "storyboard.detect",
-      resourceKey: context,
-      label: `分镜拆分 ${videoLabel}`,
-      current: 0,
-      total: 1,
-      listener: listenToFfmpegTaskProgress(taskId),
-      on_cancel: async () => {
-        cancelled = true;
-        await cancelFfmpegTask(taskId);
-      },
-    });
-    if (task.cancelled) {
-      task.remove();
-      detectionFinished(context);
-      return;
-    }
-    try {
-      const result = await invokeCommand<StoryboardDetectionResult>("detect_storyboard_shots", {
-        assetId: project.asset.id,
-        taskId,
-      });
-      if (cancelled) {
-        task.remove();
-        detectionFinished(context);
-        return;
-      }
-      detectionCompleted(context, result.shots, frameRate, mode);
-      task.remove();
-    } catch (error) {
-      if (cancelled) {
-        task.remove();
-      } else {
-        task.fail(error, { displayName: videoLabel, resourceKind: "media" });
-      }
-      detectionFinished(context);
-    }
-  }
-
   function requestStoryboardDetection() {
-    if (!canDetect) {
-      return;
-    }
-    if (shots.length > 1) {
-      setDetectionConflictOpen(true);
-      return;
-    }
-    void detectStoryboard("overwrite");
+    requestDetection([activeVideoId]);
   }
 
   function renderTableHeader(header: (typeof storyboardTableHeaders)[number]) {
@@ -3323,9 +3288,34 @@ export function StoryboardPanel() {
       <div className="storyboard-project-row">
         <Film aria-hidden="true" />
         <span>分镜</span>
-        <span className="storyboard-video-name" title={videoLabel}>
-          {videoLabel}
-        </span>
+        <button
+          type="button"
+          className={`storyboard-video-trigger ${videoMenu ? "active" : ""}`}
+          title={videoLabel}
+          aria-label={`选择分镜视频，当前为${videoLabel}`}
+          aria-haspopup="menu"
+          aria-expanded={Boolean(videoMenu)}
+          disabled={selectableVideos.length === 0}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            if (videoMenu) {
+              setVideoMenu(null);
+              return;
+            }
+            setContextMenu(null);
+            setAnnotationMenu(null);
+            setRatingComparatorMenu(null);
+            setFooterSortMenu(null);
+            setFooterSprayMenu(null);
+            setFooterOptionsMenu(null);
+            const bounds = event.currentTarget.getBoundingClientRect();
+            setVideoMenu({ x: bounds.left, y: bounds.bottom });
+          }}
+        >
+          <span className="storyboard-video-name">{videoLabel}</span>
+          <ChevronsUpDown aria-hidden="true" />
+        </button>
         <button
           type="button"
           className={`storyboard-detect-button ${isDetecting ? "is-detecting" : ""}`}
@@ -4593,58 +4583,40 @@ export function StoryboardPanel() {
           </PopupMenu>,
           document.body,
         )}
-      {detectionConflictOpen &&
+      {videoMenu &&
         createPortal(
-          <ModalDialog
-            title=""
-            className="storyboard-detection-conflict-dialog"
-            bodyClassName="storyboard-detection-conflict-dialog-body"
-            onCancel={() => setDetectionConflictOpen(false)}
-            onConfirm={() => {
-              setDetectionConflictOpen(false);
-              void detectStoryboard("merge");
-            }}
-            actions={
-              <>
-                <button
-                  type="button"
-                  className="modal-dialog-confirm"
-                  autoFocus
-                  onClick={() => {
-                    setDetectionConflictOpen(false);
-                    void detectStoryboard("merge");
-                  }}
-                >
-                  合并
-                </button>
-                <button
-                  type="button"
-                  className="modal-dialog-cancel"
-                  onClick={() => {
-                    setDetectionConflictOpen(false);
-                    void detectStoryboard("overwrite");
-                  }}
-                >
-                  覆盖
-                </button>
-                <button
-                  type="button"
-                  className="modal-dialog-cancel"
-                  onClick={() => setDetectionConflictOpen(false)}
-                >
-                  取消
-                </button>
-              </>
-            }
+          <PopupMenu
+            contextMenuAnchor={videoMenu}
+            ariaLabel="选择分镜视频"
+            style={{ position: "fixed", left: videoMenu.x, top: videoMenu.y }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onContextMenu={(event) => event.preventDefault()}
           >
-            <h3 className="storyboard-detection-conflict-title">当前已有切分</h3>
-            <div className="storyboard-detection-conflict-divider" />
-            <p className="storyboard-detection-conflict-message">
-              请选择合并自动识别到的切点，或覆盖当前切分。
-            </p>
-          </ModalDialog>,
+            <MediaSourceMenu
+              folders={mediaFolders}
+              videos={selectableVideos}
+              renderVideo={(video) => (
+                <PopupMenuItem
+                  checked={activeVideoId === video.id}
+                  onSelect={() => {
+                    activeVideoChanged(video.id);
+                    setVideoMenu(null);
+                    // Only auto-detect videos with a readable source; a pick never promises more
+                    // than switching the active storyboard.
+                    const source = videoSourceById.get(video.id);
+                    if (source && canDetectStoryboard(source.item, source.project)) {
+                      requestDetection([video.id], true);
+                    }
+                  }}
+                >
+                  {video.file_name}
+                </PopupMenuItem>
+              )}
+            />
+          </PopupMenu>,
           document.body,
         )}
+      {detectionDialog}
     </section>
   );
 }

@@ -23,6 +23,7 @@ export interface ApplicationEventMap {
       | { kind: "storyboard"; videoContext: string; shotId: string };
   };
   "storyboard.reveal-shot.requested": { videoContext: string; shotId: string };
+  "storyboard.detection.completed": { videoContext: string; firstShotId?: string };
 }
 
 export type ApplicationEventType = keyof ApplicationEventMap;

@@ -5,12 +5,7 @@ import {
   type SearchMode,
   type SearchRule,
 } from "../../core/editor/textSearch";
-import { storyboardShotDefaultTitle } from "../../core/editor/storyboard";
-import {
-  mergeDetectedStoryboardShots,
-  removeStoryboardCuts,
-  storyboardSegments,
-} from "../../core/editor/storyboardCuts";
+import { removeStoryboardCuts, storyboardSegments } from "../../core/editor/storyboardCuts";
 import { useProjectPort } from "../../systems/ProjectSystem";
 import type {
   StoryboardKeywordNode,
@@ -79,7 +74,6 @@ interface StoryboardVideoSessionState {
 interface StoryboardPanelUiState extends StoryboardVideoSessionState {
   videoContext: string;
   sessions: Record<string, StoryboardVideoSessionState>;
-  detectingVideoContext: string | null;
   viewMode: StoryboardViewMode;
   iconMetadataMode: StoryboardIconMetadataMode;
   thumbnailSize: number;
@@ -103,8 +97,6 @@ interface StoryboardPanelUiState extends StoryboardVideoSessionState {
   setThumbnailSize: (size: number) => void;
   setGridSize: (size: number) => void;
   setKeywordEditorMode: (mode: StoryboardKeywordEditorMode) => void;
-  detectionStarted: (videoContext: string) => void;
-  detectionFinished: (videoContext: string) => void;
   shotSelectionCleared: () => void;
   shotSelectionReplaced: (shotIds: string[], primaryShotId?: string | null) => void;
   setExpandedStackIds: (stackIds: Iterable<string>) => void;
@@ -183,12 +175,6 @@ interface StoryboardPanelState
   splitShotStack: (shotId: string) => void;
   setShotStackExpanded: (shotId: string, expanded: boolean) => void;
   setAllShotStacksExpanded: (expanded: boolean) => void;
-  detectionCompleted: (
-    videoContext: string,
-    shots: StoryboardShot[],
-    frameRate: number,
-    mode: "merge" | "overwrite",
-  ) => void;
 }
 
 function defaultVideoSessionState(): StoryboardVideoSessionState {
@@ -344,7 +330,6 @@ const useStoryboardPanelUiState = createPanelState<StoryboardPanelUiState>(() =>
   videoContext: "",
   sessions: {},
   ...defaultVideoSessionState(),
-  detectingVideoContext: null,
   viewMode: "list",
   iconMetadataMode: "ratingAndColorLabel",
   thumbnailSize: 0,
@@ -409,11 +394,6 @@ const useStoryboardPanelUiState = createPanelState<StoryboardPanelUiState>(() =>
       gridSize: Number.isFinite(gridSize) ? Math.min(100, Math.max(0, gridSize)) : 0,
     }),
   setKeywordEditorMode: (keywordEditorMode) => set({ keywordEditorMode }),
-  detectionStarted: (detectingVideoContext) => set({ detectingVideoContext }),
-  detectionFinished: (videoContext) =>
-    set((state) =>
-      state.detectingVideoContext === videoContext ? { detectingVideoContext: null } : state,
-    ),
   shotSelectionCleared: () => set({ selectedShotIds: new Set<string>(), activeShotId: null }),
   shotSelectionReplaced: (shotIds, primaryShotId) =>
     set(() => {
@@ -1337,48 +1317,6 @@ export function useStoryboardPanelState<Selection>(
           ? visibleActiveShotId
           : null,
       );
-    },
-    detectionCompleted: (videoContext, shots, frameRate, mode) => {
-      let completedShots = shots;
-      commitStoryboard(
-        mode === "merge" ? "合并分镜切点" : "生成分镜",
-        (current) => {
-          if (mode === "merge") {
-            const merged = mergeDetectedStoryboardShots(current, shots, frameRate);
-            completedShots = merged.shots;
-            return merged;
-          }
-          completedShots = shots;
-          return {
-            ...current,
-            shots,
-            deletedShots: [],
-            shotStacks: [],
-            shotAnnotations: Object.fromEntries(
-              shots.map((shot) => [
-                shot.id,
-                {
-                  rating: 0,
-                  retained: false,
-                  title: storyboardShotDefaultTitle(shot),
-                },
-              ]),
-            ),
-          };
-        },
-        videoContext,
-      );
-      if (uiState.videoContext === videoContext) {
-        const firstShotId = completedShots[0]?.id;
-        if (firstShotId) {
-          uiState.shotSelectionReplaced([firstShotId], firstShotId);
-        } else {
-          uiState.shotSelectionCleared();
-        }
-        uiState.setShowOnlySelected(false);
-        uiState.setExpandedStackIds([]);
-      }
-      uiState.detectionFinished(videoContext);
     },
   };
 

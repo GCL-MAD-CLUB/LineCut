@@ -60,6 +60,7 @@ import { scheduleMediaAnalysis } from "../../application/media/mediaAnalysisTask
 import { runMediaImportTask } from "../../application/media/mediaImportTask";
 import { MediaLinkDialog, type MediaLinkCandidate, type MediaLinkMode } from "../MediaLinkDialog";
 import { ModalDialog } from "../ModalDialog";
+import { useStoryboardDetection } from "../StoryboardPanel/useStoryboardDetection";
 import {
   PopupMenu,
   PopupMenuItem,
@@ -223,6 +224,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
   const focusedPanelId = usePanelManagerState((state) => state.focusedPanelId);
   const openPanel = usePanelManagerState((state) => state.openPanel);
   const identity = useStableIdentity("media-bin", panelInstanceId);
+  const { requestDetection, canRequestDetection, detectionDialog } = useStoryboardDetection();
   const {
     projects,
     mediaFolders,
@@ -391,6 +393,12 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     .join(" · ");
   const selectedAuxiliaryNames = selectedAuxiliary.map((item) => item.file_name).join("、");
   const selectedVideos = selectedItems.filter((item) => item.kind === "video");
+  const selectedVideoIds = useMemo(() => selectedVideos.map((video) => video.id), [selectedVideos]);
+  // MediaBin re-renders on every task progress tick, so the eligibility scan is memoized.
+  const canDetectSelectedVideos = useMemo(
+    () => canRequestDetection(selectedVideoIds),
+    [canRequestDetection, selectedVideoIds],
+  );
   const videos = useMemo(() => mediaItems.filter((item) => item.kind === "video"), [mediaItems]);
   const selectedFileItems = selectedItems.filter(
     (item) => item.origin === "imported" && !item.extracted,
@@ -1760,7 +1768,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                       selectedFolders.every((folder) => folder.parent_id === null)
                     }
                   >
-                    项目媒体（根目录）
+                    项目媒体
                   </PopupMenuItem>
                   {mediaFolders
                     .filter((folder) => !selectedFolderTreeIds.has(folder.id))
@@ -1938,6 +1946,15 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                 <PopupMenuItem mnemonic="O" disabled>
                   脱机编辑(O)...
                 </PopupMenuItem>
+                <PopupMenuItem
+                  disabled={isReadOnly || !canDetectSelectedVideos}
+                  onSelect={() => {
+                    setContextMenu(null);
+                    requestDetection(selectedVideoIds);
+                  }}
+                >
+                  分镜识别
+                </PopupMenuItem>
                 <PopupMenuSubmenu
                   label="代理"
                   open={contextMenu.proxySubmenuOpen}
@@ -2096,6 +2113,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
           </PopupMenu>,
           document.body,
         )}
+      {detectionDialog}
     </>
   );
 }

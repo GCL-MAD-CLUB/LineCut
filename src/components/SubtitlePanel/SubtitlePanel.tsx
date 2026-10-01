@@ -35,7 +35,7 @@ import { publishEvent } from "../../runtime/events/react";
 import { useStableIdentity } from "../../runtime/state/react";
 import { usePanelActive, usePanelInstanceId } from "../../runtime/systems/PanelState";
 import {
-  isMediaItemEnabled,
+  mediaDisplayName,
   subtitleTrackCues,
   useProjectPort,
   visibleSubtitleTracks,
@@ -57,6 +57,8 @@ import type { SubtitleCue } from "../../types";
 import { annotationShortcutAction, annotationShortcutAutoAdvances } from "../annotationShortcuts";
 import { sprayEraserCursor, useSprayToolModifiers } from "../sprayToolModifiers";
 import { usePanelManagerState } from "../DockLayout";
+import { MediaSourceMenu } from "../MediaSourceMenu";
+import { panelMediaSources, subtitleTrackLabel } from "../../application/media/panelMediaSources";
 import {
   isPopupMenuEventTarget,
   PopupMenu,
@@ -733,11 +735,13 @@ export function SubtitlePanel() {
     project,
     projects,
     mediaItems,
+    mediaFolders,
     activeVideoId,
     activeTrackId,
     detachedVideoIds,
     exportState,
     activeTrackChanged,
+    activeVideoChanged,
     messagePublished,
     subtitleCuesDeleted,
   } = useProjectPort(
@@ -745,12 +749,13 @@ export function SubtitlePanel() {
       "project",
       "projects",
       "mediaItems",
+      "mediaFolders",
       "activeVideoId",
       "activeTrackId",
       "detachedVideoIds",
       "exportState",
     ],
-    ["activeTrackChanged", "messagePublished", "subtitleCuesDeleted"],
+    ["activeTrackChanged", "activeVideoChanged", "messagePublished", "subtitleCuesDeleted"],
   );
   const {
     query,
@@ -823,6 +828,14 @@ export function SubtitlePanel() {
   const visibleTracks = useMemo(
     () => visibleSubtitleTracks(project, mediaItems, activeVideoId, projects),
     [activeVideoId, mediaItems, project, projects],
+  );
+  const subtitleSources = useMemo(
+    () => panelMediaSources(projects, mediaItems).filter((source) => source.tracks.length > 0),
+    [projects, mediaItems],
+  );
+  const subtitleVideos = useMemo(
+    () => subtitleSources.map((source) => source.item),
+    [subtitleSources],
   );
   const activeTrack = visibleTracks.find((track) => track.id === activeTrackId);
   const allCues = useMemo(
@@ -1164,22 +1177,12 @@ export function SubtitlePanel() {
       contextMenu.colorSubmenuOpen ||
       contextMenu.exportSubmenuOpen),
   );
-  const trackOptions = visibleTracks.map((track) => {
-    const mediaItem = mediaItems.find(
-      (item) =>
-        item.kind === "subtitle" &&
-        item.bound_to_video_id === activeVideoId &&
-        item.subtitle_track_id === track.id &&
-        isMediaItemEnabled(item),
-    );
-    return {
-      id: track.id,
-      label: `${mediaItem?.file_name || track.title || track.language || track.codec} ${track.cue_count} 条`,
-    };
-  });
-  const activeTrackLabel =
-    trackOptions.find((option) => option.id === activeTrack?.id)?.label ??
-    (project ? "无字幕" : "未选择");
+  const videoLabel = mediaDisplayName(project, mediaItems, activeVideoId);
+  const activeTrackLabel = activeTrack
+    ? `${videoLabel} ${subtitleTrackLabel(mediaItems, activeVideoId, activeTrack)}`
+    : project
+      ? `${videoLabel} 无字幕`
+      : "未选择";
 
   useEffect(() => {
     rowVirtualizer.measure();
@@ -2144,7 +2147,7 @@ export function SubtitlePanel() {
         <button
           type="button"
           className={`subtitle-track-trigger ${trackMenu ? "active" : ""}`}
-          disabled={trackOptions.length === 0}
+          disabled={subtitleSources.length === 0}
           title={activeTrackLabel}
           aria-label={`选择字幕，当前为${activeTrackLabel}`}
           aria-haspopup="menu"
@@ -2742,18 +2745,29 @@ export function SubtitlePanel() {
             onPointerDown={(event) => event.stopPropagation()}
             onContextMenu={(event) => event.preventDefault()}
           >
-            {trackOptions.map((option) => (
-              <PopupMenuItem
-                key={option.id}
-                checked={activeTrack?.id === option.id}
-                onSelect={() => {
-                  activeTrackChanged(option.id);
-                  setTrackMenu(null);
-                }}
-              >
-                {option.label}
-              </PopupMenuItem>
-            ))}
+            <MediaSourceMenu
+              folders={mediaFolders}
+              videos={subtitleVideos}
+              renderVideo={(video, open, onOpenChange) => (
+                <PopupMenuSubmenu label={video.file_name} open={open} onOpenChange={onOpenChange}>
+                  {subtitleSources
+                    .find((source) => source.item.id === video.id)
+                    ?.tracks.map((track) => (
+                      <PopupMenuItem
+                        key={track.id}
+                        checked={activeVideoId === video.id && activeTrack?.id === track.id}
+                        onSelect={() => {
+                          activeVideoChanged(video.id);
+                          activeTrackChanged(track.id);
+                          setTrackMenu(null);
+                        }}
+                      >
+                        {subtitleTrackLabel(mediaItems, video.id, track)}
+                      </PopupMenuItem>
+                    ))}
+                </PopupMenuSubmenu>
+              )}
+            />
           </PopupMenu>,
           document.body,
         )}
