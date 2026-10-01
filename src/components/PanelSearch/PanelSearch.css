@@ -127,8 +127,8 @@
   flex: 0 0 auto;
   align-items: center;
   height: 16px;
-  margin: 0 2px;
-  color: #d8d8d8;
+  margin: 0 4px 0 2px;
+  color: #bbb;
   white-space: nowrap;
 }
 
@@ -138,7 +138,7 @@
   height: 16px;
   min-height: 16px;
   padding: 0 2px;
-  color: #d8d8d8;
+  color: #bbb;
   font: inherit;
   line-height: 16px;
   text-align: left;
