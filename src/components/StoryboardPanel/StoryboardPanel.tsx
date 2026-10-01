@@ -4586,6 +4586,7 @@ export function StoryboardPanel() {
       {videoMenu &&
         createPortal(
           <PopupMenu
+            className="media-source-menu"
             contextMenuAnchor={videoMenu}
             ariaLabel="选择分镜视频"
             style={{ position: "fixed", left: videoMenu.x, top: videoMenu.y }}
@@ -4597,6 +4598,7 @@ export function StoryboardPanel() {
               videos={selectableVideos}
               renderVideo={(video) => (
                 <PopupMenuItem
+                  title={video.file_name}
                   checked={activeVideoId === video.id}
                   onSelect={() => {
                     activeVideoChanged(video.id);

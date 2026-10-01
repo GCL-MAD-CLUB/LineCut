@@ -13,40 +13,33 @@ interface MediaSourceMenuProps {
   ) => ReactNode;
 }
 
-type OpenChange = (id: string, open: boolean) => void;
-
 function nodeKey(node: MediaSourceNode) {
   return node.kind === "folder" ? `folder:${node.folder.id}` : `video:${node.item.id}`;
 }
 
 function MediaSourceMenuLevel({
   nodes,
-  openId,
-  onOpenChange,
   renderVideo,
 }: {
   nodes: MediaSourceNode[];
-  openId: string | null;
-  onOpenChange: OpenChange;
   renderVideo: MediaSourceMenuProps["renderVideo"];
 }) {
+  // Keep one open sibling per level so descendants do not close their ancestor menus.
+  const [openId, setOpenId] = useState<string | null>(null);
   return nodes.map((node) => {
     const key = nodeKey(node);
-    const setOpen = (open: boolean) => onOpenChange(key, open);
+    const setOpen = (open: boolean) => setOpenId(open ? key : null);
     if (node.kind === "folder") {
       return (
         <PopupMenuSubmenu
           key={key}
           label={node.folder.name}
+          title={node.folder.name}
+          menuClassName="media-source-menu"
           open={openId === key}
           onOpenChange={setOpen}
         >
-          <MediaSourceMenuLevel
-            nodes={node.children}
-            openId={openId}
-            onOpenChange={onOpenChange}
-            renderVideo={renderVideo}
-          />
+          <MediaSourceMenuLevel nodes={node.children} renderVideo={renderVideo} />
         </PopupMenuSubmenu>
       );
     }
@@ -57,15 +50,5 @@ function MediaSourceMenuLevel({
 
 export function MediaSourceMenu({ folders, videos, renderVideo }: MediaSourceMenuProps) {
   const nodes = useMemo(() => mediaSourceTree(folders, videos), [folders, videos]);
-  // One open submenu for the whole tree, so nesting depth cannot leave two open at once.
-  const [openId, setOpenId] = useState<string | null>(null);
-  const onOpenChange: OpenChange = (id, open) => setOpenId(open ? id : null);
-  return (
-    <MediaSourceMenuLevel
-      nodes={nodes}
-      openId={openId}
-      onOpenChange={onOpenChange}
-      renderVideo={renderVideo}
-    />
-  );
+  return <MediaSourceMenuLevel nodes={nodes} renderVideo={renderVideo} />;
 }

@@ -24,6 +24,12 @@
   width: 8px;
 }
 
+.popup-menu.media-source-menu {
+  width: max-content;
+  min-width: 220px;
+  max-width: 280px;
+}
+
 .popup-menu::-webkit-scrollbar-thumb {
   background: #aaa;
   border: 2px solid #fff;

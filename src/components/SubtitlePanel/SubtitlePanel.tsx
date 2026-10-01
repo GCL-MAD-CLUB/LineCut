@@ -2738,7 +2738,7 @@ export function SubtitlePanel() {
       {trackMenu &&
         createPortal(
           <PopupMenu
-            className="subtitle-track-menu"
+            className="media-source-menu"
             contextMenuAnchor={trackMenu}
             ariaLabel="选择字幕"
             style={{ position: "fixed", left: trackMenu.x, top: trackMenu.y }}
@@ -2749,12 +2749,19 @@ export function SubtitlePanel() {
               folders={mediaFolders}
               videos={subtitleVideos}
               renderVideo={(video, open, onOpenChange) => (
-                <PopupMenuSubmenu label={video.file_name} open={open} onOpenChange={onOpenChange}>
+                <PopupMenuSubmenu
+                  label={video.file_name}
+                  title={video.file_name}
+                  menuClassName="media-source-menu"
+                  open={open}
+                  onOpenChange={onOpenChange}
+                >
                   {subtitleSources
                     .find((source) => source.item.id === video.id)
                     ?.tracks.map((track) => (
                       <PopupMenuItem
                         key={track.id}
+                        title={subtitleTrackLabel(mediaItems, video.id, track)}
                         checked={activeVideoId === video.id && activeTrack?.id === track.id}
                         onSelect={() => {
                           activeVideoChanged(video.id);

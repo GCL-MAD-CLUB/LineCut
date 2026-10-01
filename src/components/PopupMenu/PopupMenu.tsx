@@ -510,6 +510,7 @@ export function PopupMenuSelectionItem({
 
 interface PopupMenuSubmenuProps {
   label: ReactNode;
+  title?: string;
   children: ReactNode;
   open: boolean;
   disabled?: boolean;
@@ -521,6 +522,7 @@ interface PopupMenuSubmenuProps {
 
 export function PopupMenuSubmenu({
   label,
+  title,
   children,
   open,
   disabled,
@@ -564,6 +566,7 @@ export function PopupMenuSubmenu({
     <div ref={hostRef} className="popup-menu-submenu">
       <PopupMenuItem
         submenu
+        title={title}
         disabled={disabled}
         mnemonic={mnemonic}
         onSelect={() => onOpenChange(!open)}
