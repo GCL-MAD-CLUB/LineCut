@@ -18,6 +18,7 @@ import {
   type TimelineThumbnailWindowPlan,
 } from "../../timelineThumbnail";
 import type { StoryboardShot } from "../../types";
+import { SearchHighlight, type SearchHighlightOptions } from "../PanelSearch/PanelSearch";
 import { storyboardShotColorLabels } from "./StoryboardColorLabelButtons";
 import { StoryboardShotThumbnail } from "./StoryboardShotThumbnail";
 import { parseStoryboardKeywordInput, renderStoryboardKeywordLabel } from "./storyboardKeywords";
@@ -30,6 +31,16 @@ import {
 
 const cellEditDelayMs = 350;
 
+// Keyword paths and their individual names are independently searchable fields.
+function keywordSearchFields(value: string) {
+  return [/[^,]+/g, /[^,<]+/g].flatMap((pattern) =>
+    Array.from(value.matchAll(pattern), (match) => ({
+      start: match.index,
+      end: match.index + match[0].length,
+    })),
+  );
+}
+
 type EditableColumn = "title" | "keywords" | "label";
 type ActiveColumn = EditableColumn | "mediaStart" | "mediaEnd" | "duration";
 type StoryboardAnnotationMenuKind = "flag" | "color";
@@ -40,6 +51,8 @@ interface ActiveCell {
 }
 
 interface StoryboardListViewProps {
+  searchHighlight?: SearchHighlightOptions;
+  searchScope: "any" | "title" | "keywords";
   shots: StoryboardShot[];
   currentShotIndex: number;
   tableStyle: CSSProperties;
@@ -106,6 +119,8 @@ function annotationTargets(
 }
 
 export function StoryboardListView({
+  searchHighlight,
+  searchScope,
   shots,
   currentShotIndex,
   tableStyle,
@@ -327,11 +342,21 @@ export function StoryboardListView({
           beginCellEdit(shot, columnId);
         }}
       >
-        {columnId !== "title" && !value
-          ? "无"
-          : columnId === "keywords"
-            ? renderStoryboardKeywordLabel(value)
-            : value}
+        {columnId !== "title" && !value ? (
+          "无"
+        ) : (
+          <SearchHighlight
+            text={value}
+            itemId={shot.id}
+            searchFields={columnId === "keywords" ? keywordSearchFields(value) : undefined}
+            search={
+              columnId !== "label" && (searchScope === "any" || searchScope === columnId)
+                ? searchHighlight
+                : undefined
+            }
+            renderText={columnId === "keywords" ? renderStoryboardKeywordLabel : undefined}
+          />
+        )}
       </span>
     );
   }

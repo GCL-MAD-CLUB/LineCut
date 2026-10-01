@@ -1,4 +1,10 @@
-﻿import { playbackFollowScrollDuration } from "../playbackFollowScroll";
+import {
+  matchesTextSearch,
+  nextSearchMatchIndex,
+  type SearchRule,
+} from "../../core/editor/textSearch";
+import { PanelSearch, useSearchNavigation } from "../PanelSearch/PanelSearch";
+import { playbackFollowScrollDuration } from "../playbackFollowScroll";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ArrowDownAZ,
@@ -7,7 +13,6 @@ import {
   ChevronDown,
   ChevronsUpDown,
   ListFilter,
-  Search,
   Star,
 } from "lucide-react";
 import {
@@ -356,18 +361,13 @@ function cueMatches(
   cue: SubtitleCue,
   annotation: SubtitleCueAnnotation | undefined,
   query: string,
+  rule: SearchRule,
 ) {
-  const normalized = query.trim().toLocaleLowerCase();
-  if (!normalized) {
-    return true;
-  }
-  const haystack = `${cue.plain_text} ${cue.speaker ?? ""} ${cue.style ?? ""} ${cueLabel(
-    annotation,
-  )}`.toLocaleLowerCase();
-  return normalized
-    .split(/\s+/)
-    .filter(Boolean)
-    .every((token) => haystack.includes(token));
+  return matchesTextSearch(
+    [cue.plain_text, cue.speaker ?? "", cue.style ?? "", cueLabel(annotation)],
+    query,
+    rule,
+  );
 }
 
 function cueMatchesFilter(
@@ -754,6 +754,8 @@ export function SubtitlePanel() {
   );
   const {
     query,
+    searchMode,
+    searchRule,
     showOnlySelected,
     minimumRating,
     ratingComparator,
@@ -766,6 +768,8 @@ export function SubtitlePanel() {
     thumbnailSize,
     syncTrackContext,
     setQuery,
+    setSearchMode,
+    setSearchRule,
     setShowOnlySelected,
     setMinimumRating,
     setRatingComparator,
@@ -836,7 +840,8 @@ export function SubtitlePanel() {
       allCues.filter(
         (cue) =>
           (!showOnlySelected || selectedCueIds.has(cue.id)) &&
-          cueMatches(cue, cueAnnotations[cue.id], query) &&
+          (searchMode === "highlight" ||
+            cueMatches(cue, cueAnnotations[cue.id], query, searchRule)) &&
           cueMatchesFilter(
             cueAnnotations[cue.id],
             minimumRating,
@@ -854,6 +859,8 @@ export function SubtitlePanel() {
       flagFilters,
       minimumRating,
       query,
+      searchMode,
+      searchRule,
       ratingComparator,
       selectedCueIds,
       showOnlySelected,
@@ -862,6 +869,38 @@ export function SubtitlePanel() {
   const sortedCues = useMemo(
     () => sortSubtitleCues(filteredCues, cueSort, cueAnnotations),
     [cueAnnotations, cueSort, filteredCues],
+  );
+  const matchingCueIndices = useMemo(
+    () =>
+      searchMode === "highlight" && query.trim()
+        ? sortedCues.flatMap((cue, index) =>
+            cueMatches(cue, cueAnnotations[cue.id], query, searchRule) ? [index] : [],
+          )
+        : [],
+    [sortedCues, cueAnnotations, query, searchMode, searchRule],
+  );
+  const [searchFocusedCueId, setSearchFocusedCueId] = useState<string | null>(null);
+  useEffect(() => {
+    if (searchMode !== "highlight" || !query.trim()) {
+      setSearchFocusedCueId(null);
+      return;
+    }
+    const focusedIndex = sortedCues.findIndex((cue) => cue.id === activeCueId);
+    if (focusedIndex >= 0 && matchingCueIndices.includes(focusedIndex)) {
+      setSearchFocusedCueId(activeCueId);
+    }
+  }, [activeCueId, matchingCueIndices, query, searchMode, sortedCues]);
+  const searchHighlight = useMemo(
+    () =>
+      searchMode === "highlight" && query.trim()
+        ? {
+            query,
+            rule: searchRule,
+            focusedId: searchFocusedCueId,
+            matchingIds: new Set(matchingCueIndices.map((index) => sortedCues[index].id)),
+          }
+        : undefined,
+    [query, searchMode, searchRule, searchFocusedCueId, matchingCueIndices, sortedCues],
   );
   const selectedCount = selectedCueIds.size;
   const hasSecondarySelection =
@@ -1005,6 +1044,45 @@ export function SubtitlePanel() {
     scrollRef: listRef,
     scrollToOffset: rowVirtualizer.scrollToOffset,
   });
+  function navigateSearch(direction: -1 | 1) {
+    const targetIndex = nextSearchMatchIndex(
+      matchingCueIndices,
+      sortedCues.findIndex((cue) => cue.id === activeCueId),
+      direction,
+    );
+    if (targetIndex < 0) return;
+    focusSearchMatch(targetIndex);
+  }
+  function focusSearchMatch(targetIndex: number) {
+    const cue = sortedCues[targetIndex];
+    if (!cue) return;
+    selectionAnchorRef.current = cue.id;
+    selectionFocusRef.current = cue.id;
+    cueSelectionReplaced([cue.id], cue.id);
+    seekToCue(cue, activeVideoId);
+    rowVirtualizer.scrollToIndex(targetIndex, { align: "center" });
+  }
+  useSearchNavigation(
+    panelRef,
+    searchMode === "highlight" && Boolean(query.trim()),
+    navigateSearch,
+  );
+  const searchFocusKey = `${searchMode}\u0000${searchRule}\u0000${query}`;
+  useEffect(() => {
+    if (searchMode !== "highlight" || !query.trim()) return;
+    const firstMatchIndex = matchingCueIndices[0];
+    if (firstMatchIndex === undefined) return;
+    focusSearchMatch(firstMatchIndex);
+  }, [searchFocusKey]);
+  const activeSearchMatchNumber = useMemo(() => {
+    const focusedIndex = sortedCues.findIndex((cue) => cue.id === searchFocusedCueId);
+    return focusedIndex < 0 ? 0 : matchingCueIndices.indexOf(focusedIndex) + 1;
+  }, [sortedCues, searchFocusedCueId, matchingCueIndices]);
+  function jumpToSearchMatch(matchNumber: number) {
+    const targetIndex = matchingCueIndices[matchNumber - 1];
+    if (targetIndex === undefined) return;
+    focusSearchMatch(targetIndex);
+  }
   const virtualRows = rowVirtualizer.getVirtualItems();
   const thumbnailVisibleRange = timelineThumbnailVisibleRange(
     virtualRows,
@@ -1096,7 +1174,7 @@ export function SubtitlePanel() {
     );
     return {
       id: track.id,
-      label: `${mediaItem?.file_name || track.title || track.language || track.codec} · ${track.cue_count} 条`,
+      label: `${mediaItem?.file_name || track.title || track.language || track.codec} ${track.cue_count} 条`,
     };
   });
   const activeTrackLabel =
@@ -2093,20 +2171,26 @@ export function SubtitlePanel() {
         </button>
       </div>
 
-      <div className="subtitle-search-row">
-        <label className="subtitle-search">
-          <Search aria-hidden="true" />
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.currentTarget.value)}
-            placeholder="搜索字幕"
-            disabled={!activeTrack}
-          />
-        </label>
-        <span className="subtitle-selection-summary">
-          {selectedCount} 条已选择，共 {sortedCues.length} 条
-        </span>
-      </div>
+      <PanelSearch
+        label="字幕"
+        query={query}
+        mode={searchMode}
+        rule={searchRule}
+        disabled={!activeTrack}
+        canNavigate={matchingCueIndices.length > 0}
+        matchCount={matchingCueIndices.length}
+        activeMatchNumber={activeSearchMatchNumber}
+        onQueryChange={setQuery}
+        onModeChange={setSearchMode}
+        onRuleChange={setSearchRule}
+        onMatchNumberChange={jumpToSearchMatch}
+        onNavigate={navigateSearch}
+        summary={
+          <>
+            {selectedCount} 条已选择，共 {sortedCues.length} 条
+          </>
+        }
+      />
 
       <div
         className={`subtitle-filter-row ${
@@ -2242,6 +2326,7 @@ export function SubtitlePanel() {
       >
         {activeTrack?.warning && <div className="warning-line">{activeTrack.warning}</div>}
         <SubtitleListView
+          searchHighlight={searchHighlight}
           cues={sortedCues}
           currentCueIndex={currentCueIndex}
           tableStyle={tableStyle}

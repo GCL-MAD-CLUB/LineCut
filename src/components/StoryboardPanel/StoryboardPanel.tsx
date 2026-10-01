@@ -1,4 +1,6 @@
-﻿import { playbackFollowScrollDuration } from "../playbackFollowScroll";
+import { matchesTextSearch, nextSearchMatchIndex } from "../../core/editor/textSearch";
+import { PanelSearch, useSearchNavigation } from "../PanelSearch/PanelSearch";
+import { playbackFollowScrollDuration } from "../playbackFollowScroll";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ArrowDownAZ,
@@ -11,7 +13,6 @@ import {
   ListFilter,
   Loader2,
   Scissors,
-  Search,
   Star,
 } from "lucide-react";
 import {
@@ -259,21 +260,6 @@ const storyboardRatingComparatorLabels: Record<StoryboardRatingComparator, strin
   lte: "星级小于等于",
   eq: "星级等于",
 };
-const storyboardSearchScopeLabels: Record<StoryboardSearchScope, string> = {
-  any: "任何可搜索的字段",
-  title: "标题",
-  keywords: "关键字",
-};
-const storyboardSearchRuleLabels: Record<StoryboardSearchRule, string> = {
-  contains: "包含",
-  containsAll: "包含所有",
-  containsWords: "包含单词",
-  doesNotContain: "不含",
-  startsWith: "开头为",
-  endsWith: "结尾为",
-  isEmpty: "为空",
-  isNotEmpty: "不为空",
-};
 const storyboardShotFlags: StoryboardShotFlag[] = ["retained", "none", "excluded"];
 const storyboardShotEditFilters: StoryboardShotEditFilter[] = ["edited", "unedited"];
 const storyboardShotFlagLabels: Record<StoryboardShotFlag, string> = {
@@ -440,19 +426,6 @@ function storyboardShotIsEdited(annotation: StoryboardShotAnnotation | undefined
   );
 }
 
-function storyboardSearchTerms(query: string) {
-  const normalized = query.trim().toLocaleLowerCase();
-  if (!normalized) {
-    return [];
-  }
-  return normalized.match(/[\p{L}\p{N}_]+/gu) ?? [normalized];
-}
-
-function containsWholeSearchWord(value: string, term: string) {
-  const escapedTerm = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(?:^|[^\\p{L}\\p{N}_])${escapedTerm}(?:$|[^\\p{L}\\p{N}_])`, "u").test(value);
-}
-
 function shotMatchesSearch(
   shot: StoryboardShot,
   annotation: StoryboardShotAnnotation | undefined,
@@ -469,36 +442,8 @@ function shotMatchesSearch(
     ...(scope === "any" || scope === "keywords"
       ? storyboardKeywordSearchValues(annotation?.keywordIds, keywordNodes)
       : []),
-  ].map((value) => value.trim().toLocaleLowerCase());
-  const populatedValues = values.filter(Boolean);
-  if (rule === "isEmpty") {
-    return populatedValues.length === 0;
-  }
-  if (rule === "isNotEmpty") {
-    return populatedValues.length > 0;
-  }
-  const normalizedQuery = query.trim().toLocaleLowerCase();
-  if (!normalizedQuery) {
-    return true;
-  }
-  const terms = storyboardSearchTerms(query);
-  const searchableText = populatedValues.join(" ");
-  if (rule === "contains") {
-    return terms.some((term) => searchableText.includes(term));
-  }
-  if (rule === "containsAll") {
-    return terms.every((term) => searchableText.includes(term));
-  }
-  if (rule === "containsWords") {
-    return terms.every((term) => containsWholeSearchWord(searchableText, term));
-  }
-  if (rule === "doesNotContain") {
-    return terms.every((term) => !searchableText.includes(term));
-  }
-  if (rule === "startsWith") {
-    return populatedValues.some((value) => value.startsWith(normalizedQuery));
-  }
-  return populatedValues.some((value) => value.endsWith(normalizedQuery));
+  ];
+  return matchesTextSearch(values, query, rule);
 }
 
 function shotMatchesFilter(
@@ -1151,6 +1096,7 @@ export function StoryboardPanel() {
   );
   const {
     query,
+    searchMode,
     searchScope,
     searchRule,
     showOnlySelected,
@@ -1172,6 +1118,7 @@ export function StoryboardPanel() {
     gridSize,
     syncVideoContext,
     setQuery,
+    setSearchMode,
     setSearchScope,
     setSearchRule,
     setShowOnlySelected,
@@ -1226,8 +1173,6 @@ export function StoryboardPanel() {
   const [ratingComparatorMenu, setRatingComparatorMenu] = useState<StoryboardMenuAnchor | null>(
     null,
   );
-  const [searchScopeMenu, setSearchScopeMenu] = useState<StoryboardMenuAnchor | null>(null);
-  const [searchRuleMenu, setSearchRuleMenu] = useState<StoryboardMenuAnchor | null>(null);
   const [footerSortMenu, setFooterSortMenu] = useState<StoryboardMenuAnchor | null>(null);
   const [footerSprayMenu, setFooterSprayMenu] = useState<StoryboardMenuAnchor | null>(null);
   const [footerOptionsMenu, setFooterOptionsMenu] = useState<StoryboardMenuAnchor | null>(null);
@@ -1285,15 +1230,16 @@ export function StoryboardPanel() {
       displayShots.filter(
         (shot) =>
           (!showOnlySelected || selectedShotIds.has(shot.id)) &&
-          shotMatchesSearch(
-            shot,
-            shotAnnotations[shot.id],
-            shotCount,
-            keywordNodes,
-            query,
-            searchScope,
-            searchRule,
-          ) &&
+          (searchMode === "highlight" ||
+            shotMatchesSearch(
+              shot,
+              shotAnnotations[shot.id],
+              shotCount,
+              keywordNodes,
+              query,
+              searchScope,
+              searchRule,
+            )) &&
           shotMatchesFilter(
             shotAnnotations[shot.id],
             minimumRating,
@@ -1318,6 +1264,7 @@ export function StoryboardPanel() {
       query,
       quickFilterKeywordIds,
       ratingComparator,
+      searchMode,
       searchRule,
       searchScope,
       selectedShotIds,
@@ -1339,6 +1286,57 @@ export function StoryboardPanel() {
         sortShotsById,
       ),
     [activeShotSort, filteredShots, keywordNodes, shotAnnotations, shotCount, sortShotsById],
+  );
+  const matchingShotIndices = useMemo(
+    () =>
+      searchMode === "highlight" && query.trim()
+        ? sortedShots.flatMap((shot, index) =>
+            shotMatchesSearch(
+              shot,
+              shotAnnotations[shot.id],
+              shotCount,
+              keywordNodes,
+              query,
+              searchScope,
+              searchRule,
+            )
+              ? [index]
+              : [],
+          )
+        : [],
+    [
+      sortedShots,
+      shotAnnotations,
+      shotCount,
+      keywordNodes,
+      query,
+      searchScope,
+      searchRule,
+      searchMode,
+    ],
+  );
+  const [searchFocusedShotId, setSearchFocusedShotId] = useState<string | null>(null);
+  useEffect(() => {
+    if (searchMode !== "highlight" || !query.trim()) {
+      setSearchFocusedShotId(null);
+      return;
+    }
+    const focusedIndex = sortedShots.findIndex((shot) => shot.id === activeShotId);
+    if (focusedIndex >= 0 && matchingShotIndices.includes(focusedIndex)) {
+      setSearchFocusedShotId(activeShotId);
+    }
+  }, [activeShotId, matchingShotIndices, query, searchMode, sortedShots]);
+  const searchHighlight = useMemo(
+    () =>
+      searchMode === "highlight" && query.trim()
+        ? {
+            query,
+            rule: searchRule,
+            focusedId: searchFocusedShotId,
+            matchingIds: new Set(matchingShotIndices.map((index) => sortedShots[index].id)),
+          }
+        : undefined,
+    [query, searchMode, searchRule, searchFocusedShotId, matchingShotIndices, sortedShots],
   );
   const footerSortLabel =
     storyboardGridSortOptions.find((option) => option.id === activeShotSort.columnId)?.label ??
@@ -1524,6 +1522,51 @@ export function StoryboardPanel() {
     scrollRef: listRef,
     scrollToOffset: rowVirtualizer.scrollToOffset,
   });
+  function navigateSearch(direction: -1 | 1) {
+    const targetIndex = nextSearchMatchIndex(
+      matchingShotIndices,
+      sortedShots.findIndex((shot) => shot.id === activeShotId),
+      direction,
+    );
+    if (targetIndex < 0) return;
+    focusSearchMatch(targetIndex);
+  }
+  function focusSearchMatch(targetIndex: number) {
+    const shot = sortedShots[targetIndex];
+    if (!shot) return;
+    selectionAnchorRef.current = shot.id;
+    selectionFocusRef.current = shot.id;
+    shotSelectionReplaced([shot.id], shot.id);
+    seekToShot(shot, videoContext);
+    if (viewMode === "list") {
+      rowVirtualizer.scrollToIndex(targetIndex, { align: "center" });
+      return;
+    }
+    Array.from(listRef.current?.querySelectorAll<HTMLElement>("[data-storyboard-shot-id]") ?? [])
+      .find((element) => element.dataset.storyboardShotId === shot.id)
+      ?.scrollIntoView({ block: "center", inline: "nearest" });
+  }
+  useSearchNavigation(
+    panelRef,
+    searchMode === "highlight" && Boolean(query.trim()),
+    navigateSearch,
+  );
+  const searchFocusKey = `${searchMode}\u0000${searchRule}\u0000${searchScope}\u0000${query}`;
+  useEffect(() => {
+    if (searchMode !== "highlight" || !query.trim()) return;
+    const firstMatchIndex = matchingShotIndices[0];
+    if (firstMatchIndex === undefined) return;
+    focusSearchMatch(firstMatchIndex);
+  }, [searchFocusKey]);
+  const activeSearchMatchNumber = useMemo(() => {
+    const focusedIndex = sortedShots.findIndex((shot) => shot.id === searchFocusedShotId);
+    return focusedIndex < 0 ? 0 : matchingShotIndices.indexOf(focusedIndex) + 1;
+  }, [sortedShots, searchFocusedShotId, matchingShotIndices]);
+  function jumpToSearchMatch(matchNumber: number) {
+    const targetIndex = matchingShotIndices[matchNumber - 1];
+    if (targetIndex === undefined) return;
+    focusSearchMatch(targetIndex);
+  }
   const virtualRows = rowVirtualizer.getVirtualItems();
   const thumbnailVisibleRange = timelineThumbnailVisibleRange(
     virtualRows,
@@ -1650,8 +1693,6 @@ export function StoryboardPanel() {
     contextMenu ||
     annotationMenu ||
     ratingComparatorMenu ||
-    searchScopeMenu ||
-    searchRuleMenu ||
     footerSortMenu ||
     footerSprayMenu ||
     footerOptionsMenu,
@@ -1697,8 +1738,6 @@ export function StoryboardPanel() {
     setAnnotationMenu(null);
     setDetectionConflictOpen(false);
     setRatingComparatorMenu(null);
-    setSearchScopeMenu(null);
-    setSearchRuleMenu(null);
     setFooterSortMenu(null);
     setFooterSprayMenu(null);
     setFooterOptionsMenu(null);
@@ -1780,31 +1819,6 @@ export function StoryboardPanel() {
       window.removeEventListener("blur", close);
     };
   }, [ratingComparatorMenu]);
-
-  useEffect(() => {
-    if (!searchScopeMenu && !searchRuleMenu) {
-      return;
-    }
-    const close = () => {
-      setSearchScopeMenu(null);
-      setSearchRuleMenu(null);
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        close();
-      }
-    };
-    window.addEventListener("pointerdown", close);
-    window.addEventListener("keydown", closeOnEscape);
-    window.addEventListener("resize", close);
-    window.addEventListener("blur", close);
-    return () => {
-      window.removeEventListener("pointerdown", close);
-      window.removeEventListener("keydown", closeOnEscape);
-      window.removeEventListener("resize", close);
-      window.removeEventListener("blur", close);
-    };
-  }, [searchRuleMenu, searchScopeMenu]);
 
   useEffect(() => {
     if (!footerSortMenu) {
@@ -3336,76 +3350,28 @@ export function StoryboardPanel() {
         </button>
       </div>
 
-      <div className="storyboard-search-row">
-        <label className="storyboard-search">
-          <Search aria-hidden="true" />
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.currentTarget.value)}
-            placeholder="搜索分镜"
-            disabled={shots.length === 0}
-          />
-        </label>
-        <span
-          className="storyboard-filter-separator storyboard-search-separator"
-          aria-hidden="true"
-        />
-        <div className="storyboard-search-dropdown-control storyboard-search-scope-control">
-          <StoryboardDropdownTrigger
-            label="范围："
-            value={storyboardSearchScopeLabels[searchScope]}
-            open={Boolean(searchScopeMenu)}
-            disabled={shots.length === 0}
-            onClick={(event) => {
-              event.stopPropagation();
-              setContextMenu(null);
-              setAnnotationMenu(null);
-              setRatingComparatorMenu(null);
-              setSearchRuleMenu(null);
-              setFooterSortMenu(null);
-              setFooterSprayMenu(null);
-              setFooterOptionsMenu(null);
-              if (searchScopeMenu) {
-                setSearchScopeMenu(null);
-                return;
-              }
-              const bounds = event.currentTarget.getBoundingClientRect();
-              setSearchScopeMenu({ x: bounds.left, y: bounds.bottom });
-            }}
-          />
-        </div>
-        <span
-          className="storyboard-filter-separator storyboard-search-separator"
-          aria-hidden="true"
-        />
-        <div className="storyboard-search-dropdown-control">
-          <StoryboardDropdownTrigger
-            label="规则："
-            value={storyboardSearchRuleLabels[searchRule]}
-            open={Boolean(searchRuleMenu)}
-            disabled={shots.length === 0}
-            onClick={(event) => {
-              event.stopPropagation();
-              setContextMenu(null);
-              setAnnotationMenu(null);
-              setRatingComparatorMenu(null);
-              setSearchScopeMenu(null);
-              setFooterSortMenu(null);
-              setFooterSprayMenu(null);
-              setFooterOptionsMenu(null);
-              if (searchRuleMenu) {
-                setSearchRuleMenu(null);
-                return;
-              }
-              const bounds = event.currentTarget.getBoundingClientRect();
-              setSearchRuleMenu({ x: bounds.left, y: bounds.bottom });
-            }}
-          />
-        </div>
-        <span className="storyboard-selection-summary">
-          {selectedCount} 条已选择，共 {sortedShots.length} 条
-        </span>
-      </div>
+      <PanelSearch
+        label="分镜"
+        query={query}
+        mode={searchMode}
+        rule={searchRule}
+        scope={searchScope}
+        disabled={shots.length === 0}
+        canNavigate={matchingShotIndices.length > 0}
+        matchCount={matchingShotIndices.length}
+        activeMatchNumber={activeSearchMatchNumber}
+        onQueryChange={setQuery}
+        onModeChange={setSearchMode}
+        onRuleChange={setSearchRule}
+        onScopeChange={setSearchScope}
+        onMatchNumberChange={jumpToSearchMatch}
+        onNavigate={navigateSearch}
+        summary={
+          <>
+            {selectedCount} 条已选择，共 {sortedShots.length} 条
+          </>
+        }
+      />
 
       <div
         className={`storyboard-filter-row ${
@@ -3489,8 +3455,6 @@ export function StoryboardPanel() {
             }
             setContextMenu(null);
             setAnnotationMenu(null);
-            setSearchScopeMenu(null);
-            setSearchRuleMenu(null);
             setFooterSortMenu(null);
             setFooterSprayMenu(null);
             setFooterOptionsMenu(null);
@@ -3555,6 +3519,8 @@ export function StoryboardPanel() {
         <div className="storyboard-primary-view">
           {viewMode === "list" ? (
             <StoryboardListView
+              searchHighlight={searchHighlight}
+              searchScope={searchScope}
               shots={sortedShots}
               currentShotIndex={currentShotIndex}
               tableStyle={tableStyle}
@@ -3583,6 +3549,7 @@ export function StoryboardPanel() {
             />
           ) : (
             <StoryboardIconView
+              searchHighlight={searchScope !== "keywords" ? searchHighlight : undefined}
               shots={sortedShots}
               currentShotId={currentShotId}
               assetId={thumbnailAssetId}
@@ -3704,8 +3671,6 @@ export function StoryboardPanel() {
                         event.stopPropagation();
                         setContextMenu(null);
                         setAnnotationMenu(null);
-                        setSearchScopeMenu(null);
-                        setSearchRuleMenu(null);
                         setFooterSortMenu(null);
                         setFooterOptionsMenu(null);
                         if (footerSprayMenu) {
@@ -3889,8 +3854,6 @@ export function StoryboardPanel() {
                     event.stopPropagation();
                     setContextMenu(null);
                     setAnnotationMenu(null);
-                    setSearchScopeMenu(null);
-                    setSearchRuleMenu(null);
                     setFooterOptionsMenu(null);
                     if (footerSortMenu) {
                       setFooterSortMenu(null);
@@ -4040,8 +4003,6 @@ export function StoryboardPanel() {
                   event.stopPropagation();
                   setContextMenu(null);
                   setAnnotationMenu(null);
-                  setSearchScopeMenu(null);
-                  setSearchRuleMenu(null);
                   setFooterSortMenu(null);
                   if (footerOptionsMenu) {
                     setFooterOptionsMenu(null);
@@ -4082,104 +4043,6 @@ export function StoryboardPanel() {
                 }}
               >
                 {label}
-              </PopupMenuItem>
-            ))}
-          </PopupMenu>,
-          document.body,
-        )}
-
-      {searchScopeMenu &&
-        createPortal(
-          <PopupMenu
-            className="storyboard-search-scope-menu"
-            contextMenuAnchor={searchScopeMenu}
-            ariaLabel="分镜搜索范围"
-            style={{
-              position: "fixed",
-              left: searchScopeMenu.x,
-              top: searchScopeMenu.y,
-            }}
-            onPointerDown={(event) => event.stopPropagation()}
-            onContextMenu={(event) => event.preventDefault()}
-          >
-            <PopupMenuItem
-              checked={searchScope === "any"}
-              onSelect={() => {
-                setSearchScope("any");
-                setSearchScopeMenu(null);
-              }}
-            >
-              {storyboardSearchScopeLabels.any}
-            </PopupMenuItem>
-            <PopupMenuSeparator />
-            {(["title", "keywords"] as const).map((scope) => (
-              <PopupMenuItem
-                key={scope}
-                checked={searchScope === scope}
-                onSelect={() => {
-                  setSearchScope(scope);
-                  setSearchScopeMenu(null);
-                }}
-              >
-                {storyboardSearchScopeLabels[scope]}
-              </PopupMenuItem>
-            ))}
-          </PopupMenu>,
-          document.body,
-        )}
-
-      {searchRuleMenu &&
-        createPortal(
-          <PopupMenu
-            className="storyboard-search-rule-menu"
-            contextMenuAnchor={searchRuleMenu}
-            ariaLabel="分镜搜索规则"
-            style={{
-              position: "fixed",
-              left: searchRuleMenu.x,
-              top: searchRuleMenu.y,
-            }}
-            onPointerDown={(event) => event.stopPropagation()}
-            onContextMenu={(event) => event.preventDefault()}
-          >
-            {(["contains", "containsAll", "containsWords", "doesNotContain"] as const).map(
-              (rule) => (
-                <PopupMenuItem
-                  key={rule}
-                  checked={searchRule === rule}
-                  onSelect={() => {
-                    setSearchRule(rule);
-                    setSearchRuleMenu(null);
-                  }}
-                >
-                  {storyboardSearchRuleLabels[rule]}
-                </PopupMenuItem>
-              ),
-            )}
-            <PopupMenuSeparator />
-            {(["startsWith", "endsWith"] as const).map((rule) => (
-              <PopupMenuItem
-                key={rule}
-                checked={searchRule === rule}
-                onSelect={() => {
-                  setSearchRule(rule);
-                  setSearchRuleMenu(null);
-                }}
-              >
-                {storyboardSearchRuleLabels[rule]}
-              </PopupMenuItem>
-            ))}
-            <PopupMenuSeparator />
-            {(["isEmpty", "isNotEmpty"] as const).map((rule) => (
-              <PopupMenuItem
-                key={rule}
-                checked={searchRule === rule}
-                onSelect={() => {
-                  setSearchRule(rule);
-                  setSearchRuleMenu(null);
-                }}
-              >
-                {storyboardSearchRuleLabels[rule]}
               </PopupMenuItem>
             ))}
           </PopupMenu>,

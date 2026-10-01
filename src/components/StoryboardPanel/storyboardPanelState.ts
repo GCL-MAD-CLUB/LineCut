@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef } from "react";
 import { createPanelState } from "../../runtime/systems/PanelState";
+import {
+  canHighlightSearchRule,
+  type SearchMode,
+  type SearchRule,
+} from "../../core/editor/textSearch";
 import { storyboardShotDefaultTitle } from "../../core/editor/storyboard";
 import {
   mergeDetectedStoryboardShots,
@@ -36,15 +41,7 @@ export interface StoryboardShotStack extends StoryboardShotStackState {
 
 export type StoryboardRatingComparator = "gte" | "lte" | "eq";
 export type StoryboardSearchScope = "any" | "title" | "keywords";
-export type StoryboardSearchRule =
-  | "contains"
-  | "containsAll"
-  | "containsWords"
-  | "doesNotContain"
-  | "startsWith"
-  | "endsWith"
-  | "isEmpty"
-  | "isNotEmpty";
+export type StoryboardSearchRule = SearchRule;
 export type StoryboardShotFlag = "retained" | "none" | "excluded";
 export type StoryboardShotEditFilter = "edited" | "unedited";
 export type StoryboardShotVisualLabel = StoryboardShotColorLabel | "custom";
@@ -64,6 +61,7 @@ export type StoryboardIconMetadataMode =
 
 interface StoryboardVideoSessionState {
   query: string;
+  searchMode: SearchMode;
   searchScope: StoryboardSearchScope;
   searchRule: StoryboardSearchRule;
   showOnlySelected: boolean;
@@ -89,6 +87,7 @@ interface StoryboardPanelUiState extends StoryboardVideoSessionState {
   keywordEditorMode: StoryboardKeywordEditorMode;
   syncVideoContext: (videoContext: string) => void;
   setQuery: (query: string) => void;
+  setSearchMode: (mode: SearchMode) => void;
   setSearchScope: (scope: StoryboardSearchScope) => void;
   setSearchRule: (rule: StoryboardSearchRule) => void;
   setShowOnlySelected: (value: boolean) => void;
@@ -195,6 +194,7 @@ interface StoryboardPanelState
 function defaultVideoSessionState(): StoryboardVideoSessionState {
   return {
     query: "",
+    searchMode: "filter",
     searchScope: "any",
     searchRule: "contains",
     showOnlySelected: false,
@@ -213,6 +213,7 @@ function defaultVideoSessionState(): StoryboardVideoSessionState {
 function videoSessionFromState(state: StoryboardPanelUiState): StoryboardVideoSessionState {
   return {
     query: state.query,
+    searchMode: state.searchMode,
     searchScope: state.searchScope,
     searchRule: state.searchRule,
     showOnlySelected: state.showOnlySelected,
@@ -367,8 +368,22 @@ const useStoryboardPanelUiState = createPanelState<StoryboardPanelUiState>(() =>
       };
     }),
   setQuery: (query) => set({ query }),
+  setSearchMode: (searchMode) =>
+    set((state) => ({
+      searchMode,
+      searchRule:
+        searchMode === "highlight" && !canHighlightSearchRule(state.searchRule)
+          ? "contains"
+          : state.searchRule,
+    })),
   setSearchScope: (searchScope) => set({ searchScope }),
-  setSearchRule: (searchRule) => set({ searchRule }),
+  setSearchRule: (searchRule) =>
+    set((state) => ({
+      searchRule:
+        state.searchMode === "highlight" && !canHighlightSearchRule(searchRule)
+          ? "contains"
+          : searchRule,
+    })),
   setShowOnlySelected: (showOnlySelected) => set({ showOnlySelected }),
   setMinimumRating: (minimumRating) => set({ minimumRating: normalizedRating(minimumRating) }),
   setRatingComparator: (ratingComparator) => set({ ratingComparator }),
