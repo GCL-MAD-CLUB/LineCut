@@ -37,11 +37,14 @@ interface PanelSearchProps {
   scope?: SearchScope;
   disabled: boolean;
   canNavigate: boolean;
+  matchCount?: number;
+  activeMatchNumber?: number;
   summary: ReactNode;
   onQueryChange: (query: string) => void;
   onModeChange: (mode: SearchMode) => void;
   onRuleChange: (rule: SearchRule) => void;
   onScopeChange?: (scope: SearchScope) => void;
+  onMatchNumberChange?: (matchNumber: number) => void;
   onNavigate: (direction: -1 | 1) => void;
 }
 
@@ -53,11 +56,14 @@ export function PanelSearch({
   scope,
   disabled,
   canNavigate,
+  matchCount = 0,
+  activeMatchNumber = 0,
   summary,
   onQueryChange,
   onModeChange,
   onRuleChange,
   onScopeChange,
+  onMatchNumberChange,
   onNavigate,
 }: PanelSearchProps) {
   const [menu, setMenu] = useState<{
@@ -65,8 +71,32 @@ export function PanelSearch({
     x: number;
     y: number;
   } | null>(null);
+  const [matchDraft, setMatchDraft] = useState<string | null>(null);
   useCloseOnOutsidePointer(Boolean(menu), () => setMenu(null));
-  useEffect(() => setMenu(null), [disabled, mode, rule, scope]);
+  useEffect(() => {
+    setMenu(null);
+    setMatchDraft(null);
+  }, [disabled, mode, rule, scope]);
+
+  const navigationDisabled = disabled || mode !== "highlight" || !query.trim() || !canNavigate;
+  const showMatchCount = !disabled && mode === "highlight" && matchCount > 0;
+  const matchDigits = Math.max(1, String(matchCount).length);
+
+  function commitMatchNumber() {
+    if (matchDraft === null) {
+      return;
+    }
+    setMatchDraft(null);
+    const target = Number.parseInt(matchDraft, 10);
+    if (!Number.isFinite(target) || matchCount <= 0) {
+      return;
+    }
+    const clamped = Math.min(Math.max(target, 1), matchCount);
+    if (clamped === activeMatchNumber) {
+      return;
+    }
+    onMatchNumberChange?.(clamped);
+  }
 
   function dropdown(kind: "mode" | "scope" | "rule", name: string, value: string) {
     return (
@@ -107,22 +137,57 @@ export function PanelSearch({
       <span className="panel-search-separator" aria-hidden="true" />
       {dropdown("mode", "模式", mode === "filter" ? "过滤" : "高亮")}
       <div className="panel-search-navigation" aria-label="切换搜索结果">
-        {([-1, 1] as const).map((direction) => (
-          <button
-            key={direction}
-            type="button"
-            disabled={disabled || mode !== "highlight" || !query.trim() || !canNavigate}
-            title={direction === -1 ? "上一个搜索项（←）" : "下一个搜索项（→）"}
-            aria-label={direction === -1 ? "上一个搜索项" : "下一个搜索项"}
-            onClick={() => onNavigate(direction)}
-          >
-            {direction === -1 ? (
-              <ChevronLeft aria-hidden="true" />
-            ) : (
-              <ChevronRight aria-hidden="true" />
-            )}
-          </button>
-        ))}
+        <button
+          type="button"
+          disabled={navigationDisabled}
+          title="上一个搜索项（←）"
+          aria-label="上一个搜索项"
+          onClick={() => onNavigate(-1)}
+        >
+          <ChevronLeft aria-hidden="true" />
+        </button>
+        {showMatchCount && (
+          <span className="panel-search-count">
+            <input
+              className="panel-search-count-input"
+              value={matchDraft ?? (activeMatchNumber > 0 ? String(activeMatchNumber) : "")}
+              style={{ width: `calc(${matchDigits}ch + 4px)` }}
+              inputMode="numeric"
+              aria-label={`跳转到第几条${label}搜索结果，共 ${matchCount} 条`}
+              onFocus={(event) => {
+                setMatchDraft(activeMatchNumber > 0 ? String(activeMatchNumber) : "");
+                event.currentTarget.select();
+              }}
+              onChange={(event) => setMatchDraft(event.currentTarget.value.replace(/\D+/g, ""))}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => event.stopPropagation()}
+              onBlur={() => commitMatchNumber()}
+              onKeyDown={(event) => {
+                event.stopPropagation();
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  commitMatchNumber();
+                  event.currentTarget.blur();
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  setMatchDraft(null);
+                  event.currentTarget.blur();
+                }
+              }}
+            />
+            <span className="panel-search-count-slash">/</span>
+            <span className="panel-search-count-total">{matchCount}</span>
+          </span>
+        )}
+        <button
+          type="button"
+          disabled={navigationDisabled}
+          title="下一个搜索项（→）"
+          aria-label="下一个搜索项"
+          onClick={() => onNavigate(1)}
+        >
+          <ChevronRight aria-hidden="true" />
+        </button>
       </div>
       {scope !== undefined && (
         <>
@@ -158,16 +223,18 @@ export function PanelSearch({
                 ))
               : menu.kind === "scope"
                 ? (Object.keys(scopeLabels) as SearchScope[]).map((value) => (
-                    <PopupMenuItem
-                      key={value}
-                      checked={scope === value}
-                      onSelect={() => {
-                        onScopeChange?.(value);
-                        setMenu(null);
-                      }}
-                    >
-                      {scopeLabels[value]}
-                    </PopupMenuItem>
+                    <Fragment key={value}>
+                      <PopupMenuItem
+                        checked={scope === value}
+                        onSelect={() => {
+                          onScopeChange?.(value);
+                          setMenu(null);
+                        }}
+                      >
+                        {scopeLabels[value]}
+                      </PopupMenuItem>
+                      {value === "any" && <PopupMenuSeparator />}
+                    </Fragment>
                   ))
                 : (Object.keys(ruleLabels) as SearchRule[]).map((value) => (
                     <Fragment key={value}>

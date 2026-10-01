@@ -1315,17 +1315,28 @@ export function StoryboardPanel() {
       searchMode,
     ],
   );
+  const [searchFocusedShotId, setSearchFocusedShotId] = useState<string | null>(null);
+  useEffect(() => {
+    if (searchMode !== "highlight" || !query.trim()) {
+      setSearchFocusedShotId(null);
+      return;
+    }
+    const focusedIndex = sortedShots.findIndex((shot) => shot.id === activeShotId);
+    if (focusedIndex >= 0 && matchingShotIndices.includes(focusedIndex)) {
+      setSearchFocusedShotId(activeShotId);
+    }
+  }, [activeShotId, matchingShotIndices, query, searchMode, sortedShots]);
   const searchHighlight = useMemo(
     () =>
       searchMode === "highlight" && query.trim()
         ? {
             query,
             rule: searchRule,
-            focusedId: activeShotId,
+            focusedId: searchFocusedShotId,
             matchingIds: new Set(matchingShotIndices.map((index) => sortedShots[index].id)),
           }
         : undefined,
-    [query, searchMode, searchRule, activeShotId, matchingShotIndices, sortedShots],
+    [query, searchMode, searchRule, searchFocusedShotId, matchingShotIndices, sortedShots],
   );
   const footerSortLabel =
     storyboardGridSortOptions.find((option) => option.id === activeShotSort.columnId)?.label ??
@@ -1547,6 +1558,15 @@ export function StoryboardPanel() {
     if (firstMatchIndex === undefined) return;
     focusSearchMatch(firstMatchIndex);
   }, [searchFocusKey]);
+  const activeSearchMatchNumber = useMemo(() => {
+    const focusedIndex = sortedShots.findIndex((shot) => shot.id === searchFocusedShotId);
+    return focusedIndex < 0 ? 0 : matchingShotIndices.indexOf(focusedIndex) + 1;
+  }, [sortedShots, searchFocusedShotId, matchingShotIndices]);
+  function jumpToSearchMatch(matchNumber: number) {
+    const targetIndex = matchingShotIndices[matchNumber - 1];
+    if (targetIndex === undefined) return;
+    focusSearchMatch(targetIndex);
+  }
   const virtualRows = rowVirtualizer.getVirtualItems();
   const thumbnailVisibleRange = timelineThumbnailVisibleRange(
     virtualRows,
@@ -3338,10 +3358,13 @@ export function StoryboardPanel() {
         scope={searchScope}
         disabled={shots.length === 0}
         canNavigate={matchingShotIndices.length > 0}
+        matchCount={matchingShotIndices.length}
+        activeMatchNumber={activeSearchMatchNumber}
         onQueryChange={setQuery}
         onModeChange={setSearchMode}
         onRuleChange={setSearchRule}
         onScopeChange={setSearchScope}
+        onMatchNumberChange={jumpToSearchMatch}
         onNavigate={navigateSearch}
         summary={
           <>

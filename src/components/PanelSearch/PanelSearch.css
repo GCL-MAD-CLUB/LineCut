@@ -98,8 +98,10 @@
 
 .panel-search-navigation {
   display: flex;
-  flex: 0 0 34px;
+  flex: 0 0 auto;
+  align-items: center;
   gap: 0;
+  min-width: 34px;
   margin: 0 -10px;
 }
 
@@ -109,7 +111,7 @@
   width: 16px;
   height: 22px;
   padding: 0;
-  color: #bbb;
+  color: #777;
   background: transparent;
   border: 0;
   border-radius: 4px;
@@ -118,6 +120,42 @@
 .panel-search-navigation svg {
   width: 14px;
   height: 14px;
+}
+
+.panel-search-count {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  height: 16px;
+  margin: 0 2px;
+  color: #d8d8d8;
+  white-space: nowrap;
+}
+
+.panel-search-count-input {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  height: 16px;
+  min-height: 16px;
+  padding: 0 2px;
+  color: #d8d8d8;
+  font: inherit;
+  line-height: 16px;
+  text-align: left;
+  background: #1d1d1d;
+  border: 0;
+  border-radius: 0;
+  outline: 0;
+  cursor: text;
+  user-select: text;
+}
+
+.panel-search-count-input:focus {
+  background: #000;
+}
+
+.panel-search-count-slash {
+  margin-right: 2px;
 }
 
 .panel-search-row button:hover:not(:disabled),
@@ -163,11 +201,13 @@
   color: #fff;
   font-weight: 700;
   background: transparent;
+  text-decoration: underline;
 }
 
 .panel-search-highlight.is-focused {
   color: #1d1d1d;
   background: #fff;
+  text-decoration: none;
 }
 
 @media (max-width: 1100px) {

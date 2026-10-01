@@ -879,17 +879,28 @@ export function SubtitlePanel() {
         : [],
     [sortedCues, cueAnnotations, query, searchMode, searchRule],
   );
+  const [searchFocusedCueId, setSearchFocusedCueId] = useState<string | null>(null);
+  useEffect(() => {
+    if (searchMode !== "highlight" || !query.trim()) {
+      setSearchFocusedCueId(null);
+      return;
+    }
+    const focusedIndex = sortedCues.findIndex((cue) => cue.id === activeCueId);
+    if (focusedIndex >= 0 && matchingCueIndices.includes(focusedIndex)) {
+      setSearchFocusedCueId(activeCueId);
+    }
+  }, [activeCueId, matchingCueIndices, query, searchMode, sortedCues]);
   const searchHighlight = useMemo(
     () =>
       searchMode === "highlight" && query.trim()
         ? {
             query,
             rule: searchRule,
-            focusedId: activeCueId,
+            focusedId: searchFocusedCueId,
             matchingIds: new Set(matchingCueIndices.map((index) => sortedCues[index].id)),
           }
         : undefined,
-    [query, searchMode, searchRule, activeCueId, matchingCueIndices, sortedCues],
+    [query, searchMode, searchRule, searchFocusedCueId, matchingCueIndices, sortedCues],
   );
   const selectedCount = selectedCueIds.size;
   const hasSecondarySelection =
@@ -1063,6 +1074,15 @@ export function SubtitlePanel() {
     if (firstMatchIndex === undefined) return;
     focusSearchMatch(firstMatchIndex);
   }, [searchFocusKey]);
+  const activeSearchMatchNumber = useMemo(() => {
+    const focusedIndex = sortedCues.findIndex((cue) => cue.id === searchFocusedCueId);
+    return focusedIndex < 0 ? 0 : matchingCueIndices.indexOf(focusedIndex) + 1;
+  }, [sortedCues, searchFocusedCueId, matchingCueIndices]);
+  function jumpToSearchMatch(matchNumber: number) {
+    const targetIndex = matchingCueIndices[matchNumber - 1];
+    if (targetIndex === undefined) return;
+    focusSearchMatch(targetIndex);
+  }
   const virtualRows = rowVirtualizer.getVirtualItems();
   const thumbnailVisibleRange = timelineThumbnailVisibleRange(
     virtualRows,
@@ -2158,9 +2178,12 @@ export function SubtitlePanel() {
         rule={searchRule}
         disabled={!activeTrack}
         canNavigate={matchingCueIndices.length > 0}
+        matchCount={matchingCueIndices.length}
+        activeMatchNumber={activeSearchMatchNumber}
         onQueryChange={setQuery}
         onModeChange={setSearchMode}
         onRuleChange={setSearchRule}
+        onMatchNumberChange={jumpToSearchMatch}
         onNavigate={navigateSearch}
         summary={
           <>
