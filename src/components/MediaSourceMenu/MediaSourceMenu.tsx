@@ -7,6 +7,7 @@ interface MediaSourceMenuProps {
   folders: MediaBinFolder[];
   videos: MediaBinItem[];
   selectedVideoId?: string;
+  selectedVideoIds?: string[];
   renderVideo: (
     item: MediaBinItem,
     open: boolean,
@@ -61,19 +62,22 @@ export function MediaSourceMenu({
   folders,
   videos,
   selectedVideoId,
+  selectedVideoIds,
   renderVideo,
 }: MediaSourceMenuProps) {
   const nodes = useMemo(() => mediaSourceTree(folders, videos), [folders, videos]);
   const selectedFolderIds = useMemo(() => {
     const folderIds = new Set<string>();
     const foldersById = new Map(folders.map((folder) => [folder.id, folder]));
-    let folderId = videos.find((video) => video.id === selectedVideoId)?.bin_id;
-    while (folderId && foldersById.has(folderId) && !folderIds.has(folderId)) {
-      folderIds.add(folderId);
-      folderId = foldersById.get(folderId)?.parent_id;
+    for (const videoId of selectedVideoIds ?? [selectedVideoId]) {
+      let folderId = videos.find((video) => video.id === videoId)?.bin_id;
+      while (folderId && foldersById.has(folderId) && !folderIds.has(folderId)) {
+        folderIds.add(folderId);
+        folderId = foldersById.get(folderId)?.parent_id;
+      }
     }
     return folderIds;
-  }, [folders, videos, selectedVideoId]);
+  }, [folders, videos, selectedVideoId, selectedVideoIds]);
   return (
     <MediaSourceMenuLevel
       nodes={nodes}

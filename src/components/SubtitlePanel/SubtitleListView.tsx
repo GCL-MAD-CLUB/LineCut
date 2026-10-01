@@ -1,4 +1,5 @@
-﻿import type { VirtualItem, Virtualizer } from "@tanstack/react-virtual";
+import type { PanelRowSource } from "../../core/editor/multiSource";
+import type { VirtualItem, Virtualizer } from "@tanstack/react-virtual";
 import { Star } from "lucide-react";
 import {
   useEffect,
@@ -38,6 +39,8 @@ function annotationTargets(cueId: string, selectedCueIds: ReadonlySet<string>) {
 }
 
 interface SubtitleListViewProps {
+  sourceForRow: (row: SubtitleCue) => PanelRowSource;
+  showSource: boolean;
   searchHighlight?: SearchHighlightOptions;
   cues: SubtitleCue[];
   currentCueIndex: number;
@@ -73,6 +76,8 @@ interface SubtitleListViewProps {
 }
 
 export function SubtitleListView({
+  sourceForRow,
+  showSource,
   searchHighlight,
   cues,
   currentCueIndex,
@@ -215,6 +220,8 @@ export function SubtitleListView({
           >
             {virtualRows.map((virtualRow) => {
               const cue = cues[virtualRow.index];
+              const source = sourceForRow(cue);
+              const rowFrameRate = source?.frameRate ?? frameRate;
               const selected = selectedCueIds.has(cue.id);
               const annotation = cueAnnotations[cue.id];
               const rating = annotation?.rating ?? 0;
@@ -271,10 +278,10 @@ export function SubtitleListView({
                       rating={rating}
                       flag={flag}
                       colorLabel={visualLabel}
-                      assetId={assetId}
-                      fingerprint={fingerprint}
-                      videoPath={videoPath}
-                      previewVideoPath={previewVideoPath}
+                      assetId={source?.assetId ?? assetId}
+                      fingerprint={source?.fingerprint ?? fingerprint}
+                      videoPath={source?.videoPath ?? videoPath}
+                      previewVideoPath={source?.previewVideoPath ?? previewVideoPath}
                       priority={Math.abs(virtualRow.index - thumbnailWindow.centerIndex)}
                       requestEnabled={timelineThumbnailWindowContains(
                         thumbnailWindow,
@@ -292,6 +299,11 @@ export function SubtitleListView({
                       onOpenColorMenu={(event) => onOpenAnnotationMenu(event, cue.id, "color")}
                     />
                   </div>
+                  {showSource && (
+                    <span className="cue-source-cell" role="cell" title={source?.name}>
+                      <span className="cue-source-copy">{source?.name}</span>
+                    </span>
+                  )}
                   <span
                     className={cellClassName(cue.id, "subtitle", selected, "cue-subtitle-cell")}
                     role="cell"
@@ -311,21 +323,21 @@ export function SubtitleListView({
                     role="cell"
                     onClick={() => activateCell(cue.id, "mediaStart")}
                   >
-                    {formatMonitorTime(cue.start_us, frameRate)}
+                    {formatMonitorTime(cue.start_us, rowFrameRate)}
                   </span>
                   <span
                     className={cellClassName(cue.id, "mediaEnd", selected, "cue-time-cell")}
                     role="cell"
                     onClick={() => activateCell(cue.id, "mediaEnd")}
                   >
-                    {formatMonitorTime(cue.end_us, frameRate)}
+                    {formatMonitorTime(cue.end_us, rowFrameRate)}
                   </span>
                   <span
                     className={cellClassName(cue.id, "duration", selected, "cue-duration-cell")}
                     role="cell"
                     onClick={() => activateCell(cue.id, "duration")}
                   >
-                    {formatMonitorTime(Math.max(0, cue.end_us - cue.start_us), frameRate)}
+                    {formatMonitorTime(Math.max(0, cue.end_us - cue.start_us), rowFrameRate)}
                   </span>
                   <div className="cue-rating-cell" role="cell" aria-label={`${rating} 星`}>
                     {[1, 2, 3, 4, 5].map((star) => (

@@ -9,8 +9,9 @@ export const storyboardPanelDefinition = definePanel({
   type: storyboardPanelType,
   Component: StoryboardPanel,
   useTitle: () => {
-    const { activeVideoId, project } = usePanelMediaSourceSelection();
+    const { activeVideoId, project, selectedSources } = usePanelMediaSourceSelection();
     const { mediaItems, storyboards } = useProjectPort(["mediaItems", "storyboards"], []);
+    if (selectedSources.length > 1) return `分镜：${selectedSources.length} 个来源`;
     if (!project) {
       return "分镜：（无剪辑）";
     }

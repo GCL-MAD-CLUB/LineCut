@@ -1,3 +1,9 @@
+import {
+  sourceScope,
+  sourceRowId,
+  sourceRowParts,
+  sortBySource,
+} from "../../core/editor/multiSource";
 import { matchesTextSearch, nextSearchMatchIndex } from "../../core/editor/textSearch";
 import { PanelSearch, useSearchNavigation } from "../PanelSearch/PanelSearch";
 import { playbackFollowScrollDuration } from "../playbackFollowScroll";
@@ -53,7 +59,6 @@ import type { StoryboardShot } from "../../types";
 import { usePanelManagerState } from "../DockLayout";
 import { MediaSourceMenu } from "../MediaSourceMenu";
 import { panelMediaSources, usePanelMediaSource } from "../../application/media/panelMediaSources";
-import { storyboardVideoContext } from "../../core/editor/storyboardDetection";
 import { canDetectStoryboard, useStoryboardDetection } from "./useStoryboardDetection";
 import { annotationShortcutAction, annotationShortcutAutoAdvances } from "../annotationShortcuts";
 import {
@@ -117,6 +122,7 @@ const STORYBOARD_STATUS_GUTTER_WIDTH = 16;
 
 type StoryboardResizableColumnId =
   | "thumbnail"
+  | "source"
   | "title"
   | "mediaStart"
   | "mediaEnd"
@@ -194,6 +200,7 @@ type StoryboardResizableColumnWidths = Record<StoryboardResizableColumnId, numbe
 
 const initialStoryboardColumnWidths: StoryboardResizableColumnWidths = {
   thumbnail: 104,
+  source: 180,
   title: 128,
   mediaStart: 128,
   mediaEnd: 128,
@@ -206,6 +213,7 @@ const initialStoryboardColumnWidths: StoryboardResizableColumnWidths = {
 
 const minimumStoryboardColumnWidths: StoryboardResizableColumnWidths = {
   thumbnail: 60,
+  source: 38,
   title: 38,
   mediaStart: 21,
   mediaEnd: 21,
@@ -218,6 +226,7 @@ const minimumStoryboardColumnWidths: StoryboardResizableColumnWidths = {
 
 const maximumStoryboardColumnWidths: StoryboardResizableColumnWidths = {
   thumbnail: 720,
+  source: 720,
   title: 720,
   mediaStart: 300,
   mediaEnd: 300,
@@ -230,6 +239,7 @@ const maximumStoryboardColumnWidths: StoryboardResizableColumnWidths = {
 
 const storyboardResizableColumnLabels: Record<StoryboardResizableColumnId, string> = {
   thumbnail: "缩略图",
+  source: "来源",
   title: "标题",
   mediaStart: "媒体开始",
   mediaEnd: "媒体结束",
@@ -597,10 +607,16 @@ function annotationShotIdsForSelection(
   return targetShotIds;
 }
 
-function seekToShot(shot: StoryboardShot, videoContext: string, focusRange = false) {
+function emitSeekToShot(
+  shot: StoryboardShot,
+  videoContext: string,
+  videoId: string,
+  focusRange = false,
+) {
   void publishEvent(
     "playback.seek.requested",
     {
+      videoId,
       timeUs: shot.start_us,
       focusEndUs: focusRange ? shot.end_us : undefined,
       play: focusRange,
@@ -1069,7 +1085,14 @@ export function StoryboardPanel() {
   const panelActive = usePanelActive();
   const focusedPanelId = usePanelManagerState((state) => state.focusedPanelId);
   const identity = useStableIdentity("storyboard-panel", panelInstanceId);
-  const { project, activeVideoId, previewVideoId, selectVideo } = usePanelMediaSource("storyboard");
+  const {
+    project,
+    activeVideoId,
+    previewVideoId,
+    selectedSources: sources,
+    toggleSource,
+    previewSource,
+  } = usePanelMediaSource("storyboard");
   const {
     mediaItems,
     mediaFolders,
@@ -1193,12 +1216,31 @@ export function StoryboardPanel() {
     startWidth: number;
     pointerId: number;
   } | null>(null);
-  const videoContext = storyboardVideoContext(activeVideoId, project);
-  const videoLabel = mediaDisplayName(project, mediaItems, activeVideoId) || "未选择";
-  const isDetecting = detectionTasks.some((task) => task.resourceKey === videoContext);
+  const videoContext = sourceScope(sources.map((source) => source.context));
+  const multipleSources = sources.length > 1;
+  const [sourceDirection, setSourceDirection] = useState<StoryboardSortDirection>("ascending");
+  const sourceForShot = (shot: StoryboardShot) =>
+    sources.find((source) => source.context === sourceRowParts(shot.id)?.[0]) ?? sources[0];
+  function seekToShot(shot: StoryboardShot, _context: string, focusRange = false) {
+    const source = sourceForShot(shot);
+    if (!source) return;
+    previewSource(source.videoId, source.trackId, shot.start_frame);
+    emitSeekToShot(
+      { ...shot, id: sourceRowParts(shot.id)?.[1] ?? shot.id },
+      source.context,
+      source.videoId,
+      focusRange,
+    );
+  }
+  const videoLabel = multipleSources
+    ? `${sources.length} 个来源`
+    : mediaDisplayName(project, mediaItems, activeVideoId) || "未选择";
+  const isDetecting = detectionTasks.some((task) =>
+    sources.some((source) => source.context === task.resourceKey),
+  );
   const canDetect = useMemo(
-    () => canRequestDetection([activeVideoId]),
-    [activeVideoId, canRequestDetection],
+    () => canRequestDetection(sources.map((source) => source.videoId)),
+    [sources, canRequestDetection],
   );
   // Every playable video is offered, because picking one only switches which storyboard is shown.
   // Detection is a side effect that additionally needs a readable source file, so it is gated per
@@ -1214,7 +1256,8 @@ export function StoryboardPanel() {
   const selectableVideos = useMemo(() => videoSources.map((source) => source.item), [videoSources]);
   useCloseOnOutsidePointer(Boolean(videoMenu), () => setVideoMenu(null));
   useBroadcastEvent(identity, "storyboard.detection.completed", ({ payload }) => {
-    if (payload.videoContext !== videoContext) return "ignored";
+    if (!sources.some((source) => source.context === payload.videoContext)) return "ignored";
+    if (multipleSources) return "handled";
     shotSelectionReplaced(payload.firstShotId ? [payload.firstShotId] : [], payload.firstShotId);
     setShowOnlySelected(false);
     setExpandedStackIds([]);
@@ -1285,15 +1328,28 @@ export function StoryboardPanel() {
   const setActiveShotSort = viewMode === "grid" ? setGridShotSort : setShotSort;
   const sortedShots = useMemo(
     () =>
-      sortStoryboardShots(
-        filteredShots,
-        activeShotSort,
-        shotAnnotations,
-        keywordNodes,
-        shotCount,
-        sortShotsById,
+      sortBySource(
+        sortStoryboardShots(
+          filteredShots,
+          activeShotSort,
+          shotAnnotations,
+          keywordNodes,
+          shotCount,
+          sortShotsById,
+        ),
+        sourceForShot,
+        sourceDirection,
       ),
-    [activeShotSort, filteredShots, keywordNodes, shotAnnotations, shotCount, sortShotsById],
+    [
+      activeShotSort,
+      filteredShots,
+      keywordNodes,
+      shotAnnotations,
+      shotCount,
+      sortShotsById,
+      sources,
+      sourceDirection,
+    ],
   );
   const matchingShotIndices = useMemo(
     () =>
@@ -1392,31 +1448,38 @@ export function StoryboardPanel() {
   const isPlaying = playback?.isPlaying ?? false;
   const currentFrameRef = useRef(currentFrame);
   currentFrameRef.current = currentFrame;
+  const playbackShots = useMemo(
+    () =>
+      filteredShots
+        .filter((shot) => sourceForShot(shot)?.videoId === activeVideoId)
+        .sort((a, b) => a.start_frame - b.start_frame),
+    [filteredShots, sources, activeVideoId],
+  );
   const chronologicalCurrentShotIndex = useMemo(
-    () => shotIndexAtFrame(filteredShots, currentFrame),
-    [currentFrame, filteredShots],
+    () => shotIndexAtFrame(playbackShots, currentFrame),
+    [currentFrame, playbackShots],
   );
   const chronologicalUpcomingShotIndex = useMemo(
-    () => nextShotIndexAfterFrame(filteredShots, currentFrame),
-    [currentFrame, filteredShots],
+    () => nextShotIndexAfterFrame(playbackShots, currentFrame),
+    [currentFrame, playbackShots],
   );
   const nextChronologicalShotAfterCurrentIndex = useMemo(
     () =>
       chronologicalCurrentShotIndex >= 0
-        ? nextShotIndexAfterCurrentShot(filteredShots, chronologicalCurrentShotIndex, currentFrame)
+        ? nextShotIndexAfterCurrentShot(playbackShots, chronologicalCurrentShotIndex, currentFrame)
         : -1,
-    [chronologicalCurrentShotIndex, currentFrame, filteredShots],
+    [chronologicalCurrentShotIndex, currentFrame, playbackShots],
   );
   const currentShotId =
     chronologicalCurrentShotIndex >= 0
-      ? filteredShots[chronologicalCurrentShotIndex]?.id
+      ? playbackShots[chronologicalCurrentShotIndex]?.id
       : undefined;
   const chronologicalFollowShotIndex = useMemo(() => {
     if (chronologicalCurrentShotIndex < 0) {
       return chronologicalUpcomingShotIndex;
     }
     if (
-      currentFrame >= filteredShots[chronologicalCurrentShotIndex].end_frame &&
+      currentFrame >= playbackShots[chronologicalCurrentShotIndex].end_frame &&
       nextChronologicalShotAfterCurrentIndex >= 0
     ) {
       return nextChronologicalShotAfterCurrentIndex;
@@ -1426,11 +1489,11 @@ export function StoryboardPanel() {
     chronologicalCurrentShotIndex,
     chronologicalUpcomingShotIndex,
     currentFrame,
-    filteredShots,
+    playbackShots,
     nextChronologicalShotAfterCurrentIndex,
   ]);
   const followShotId =
-    chronologicalFollowShotIndex >= 0 ? filteredShots[chronologicalFollowShotIndex]?.id : undefined;
+    chronologicalFollowShotIndex >= 0 ? playbackShots[chronologicalFollowShotIndex]?.id : undefined;
   const currentShotIndex = useMemo(
     () => (currentShotId ? sortedShots.findIndex((shot) => shot.id === currentShotId) : -1),
     [currentShotId, sortedShots],
@@ -1460,6 +1523,7 @@ export function StoryboardPanel() {
     ) + STORYBOARD_STATUS_GUTTER_WIDTH;
   const tableMinWidth =
     thumbnailColumnWidth +
+    (multipleSources ? storyboardColumnWidths.source : 0) +
     storyboardColumnWidths.title +
     storyboardColumnWidths.mediaStart +
     storyboardColumnWidths.mediaEnd +
@@ -1471,6 +1535,7 @@ export function StoryboardPanel() {
   const tableStyle = {
     "--storyboard-fixed-thumbnail-width": `${thumbnailColumnWidth}px`,
     "--storyboard-status-gutter-width": `${STORYBOARD_STATUS_GUTTER_WIDTH}px`,
+    "--storyboard-col-source": multipleSources ? `${storyboardColumnWidths.source}px` : " ",
     "--storyboard-col-thumbnail": `${thumbnailColumnWidth}px`,
     "--storyboard-col-title": `${storyboardColumnWidths.title}px`,
     "--storyboard-col-media-start": `${storyboardColumnWidths.mediaStart}px`,
@@ -1500,11 +1565,14 @@ export function StoryboardPanel() {
     overscan: 4,
   });
   useBroadcastEvent(identity, "storyboard.reveal-shot.requested", ({ payload }) => {
-    if (!panelActive || payload.videoContext !== videoContext) {
+    if (!panelActive || !sources.some((source) => source.context === payload.videoContext)) {
       return "ignored";
     }
-    const stack = shotStacksByShotId.get(payload.shotId);
-    const visibleShotId = stack && !stack.expanded ? stack.shotIds[0] : payload.shotId;
+    const requestedShotId = multipleSources
+      ? sourceRowId(payload.videoContext, payload.shotId)
+      : payload.shotId;
+    const stack = shotStacksByShotId.get(requestedShotId);
+    const visibleShotId = stack && !stack.expanded ? stack.shotIds[0] : requestedShotId;
     const targetIndex = sortedShots.findIndex((shot) => shot.id === visibleShotId);
     if (targetIndex < 0) {
       return "ignored";
@@ -1583,7 +1651,7 @@ export function StoryboardPanel() {
   );
   const thumbnailWindow = useTimelineThumbnailWindow({
     enabled: viewMode === "list" && Boolean(thumbnailVideoPath),
-    sourceKey: `${thumbnailAssetId}:${thumbnailFingerprint}:${thumbnailVideoPath}`,
+    sourceKey: videoContext,
     items: sortedShots,
     getItemKey: (shot) => `${shot.id}:${shot.start_us}`,
     visibleRange: thumbnailVisibleRange,
@@ -1591,22 +1659,22 @@ export function StoryboardPanel() {
     requestThumbnail: (shot, _index, resolution, priority) =>
       timelineThumbnails.request({
         kind: "storyboard",
-        assetId: thumbnailAssetId,
-        fingerprint: thumbnailFingerprint,
-        videoPath: thumbnailVideoPath,
+        assetId: sourceForShot(shot).assetId,
+        fingerprint: sourceForShot(shot).fingerprint,
+        videoPath: sourceForShot(shot).videoPath,
         timeUs: shot.start_us,
-        frameRate,
+        frameRate: sourceForShot(shot).frameRate,
         priority,
         resolution,
       }),
     backfillThumbnail: (shot, _index, resolution, priority) =>
       timelineThumbnails.backfill({
         kind: "storyboard",
-        assetId: thumbnailAssetId,
-        fingerprint: thumbnailFingerprint,
-        videoPath: thumbnailVideoPath,
+        assetId: sourceForShot(shot).assetId,
+        fingerprint: sourceForShot(shot).fingerprint,
+        videoPath: sourceForShot(shot).videoPath,
         timeUs: shot.start_us,
-        frameRate,
+        frameRate: sourceForShot(shot).frameRate,
         priority,
         resolution,
       }),
@@ -1668,7 +1736,26 @@ export function StoryboardPanel() {
     annotationMenuColorLabels.every((colorLabel) => colorLabel === annotationMenuColorLabels[0])
       ? annotationMenuColorLabels[0]
       : undefined;
-  const composableShotIds = stackCompositionShotIds(selectedShotIds, shots, shotStacksByShotId);
+  const selectedSourceGroups = sources.map((source) =>
+    shots.filter(
+      (shot) =>
+        selectedAnnotationShotIds.has(shot.id) && sourceForShot(shot)?.context === source.context,
+    ),
+  );
+  const canMergeShots = selectedSourceGroups.some((group) => group.length >= 2);
+  const composableGroups = selectedSourceGroups
+    .filter((group) => group.length >= 2)
+    .map((group) =>
+      stackCompositionShotIds(
+        new Set(group.map((shot) => shot.id)),
+        shots.filter((shot) => sourceForShot(shot)?.context === sourceForShot(group[0])?.context),
+        shotStacksByShotId,
+      ),
+    );
+  const composableShotIds =
+    composableGroups.length && composableGroups.every((group) => group !== null)
+      ? composableGroups.flatMap((group) => group!)
+      : null;
   const canCreateShotStack = composableShotIds !== null;
   const contextMenuStackShotIds = Array.from(selectedShotIds).filter((shotId) =>
     shotStacksByShotId.has(shotId),
@@ -1745,7 +1832,6 @@ export function StoryboardPanel() {
     setSprayActive(false);
     setContextMenu(null);
     setAnnotationMenu(null);
-    setVideoMenu(null);
     setRatingComparatorMenu(null);
     setFooterSortMenu(null);
     setFooterSprayMenu(null);
@@ -1945,7 +2031,12 @@ export function StoryboardPanel() {
     }
 
     const handleSelectionKeyDown = (event: KeyboardEvent) => {
-      if (event.altKey || isEditableKeyboardTarget(event.target) || sortedShots.length === 0) {
+      if (
+        event.defaultPrevented ||
+        event.altKey ||
+        isEditableKeyboardTarget(event.target) ||
+        sortedShots.length === 0
+      ) {
         return;
       }
       const target = event.target as HTMLElement | null;
@@ -2930,16 +3021,35 @@ export function StoryboardPanel() {
   }
 
   function buildCurrentStoryboardSource() {
-    return buildStoryboardExportSource({
-      videoId: activeVideoId,
-      assetId: project?.asset.id ?? "",
-      fingerprint: project?.asset.fingerprint ?? "",
-      shotIds: contextMenuShotIds,
-      storyboards,
-      mediaItems,
-      projects,
-      detachedVideoIds,
+    const exports = sources.flatMap((source) => {
+      const result = buildStoryboardExportSource({
+        videoId: source.videoId,
+        assetId: source.assetId,
+        fingerprint: source.fingerprint,
+        shotIds: shots
+          .filter(
+            (shot) =>
+              selectedAnnotationShotIds.has(shot.id) &&
+              sourceForShot(shot).context === source.context,
+          )
+          .map((shot) => sourceRowParts(shot.id)?.[1] ?? shot.id),
+        storyboards,
+        mediaItems,
+        projects,
+        detachedVideoIds,
+      });
+      return result ? [result] : [];
     });
+    if (!exports.length) return null;
+    const clips = exports.flatMap((source) =>
+      source.clips.map((clip) => ({ ...clip, id: `${clip.videoId}:${clip.id}` })),
+    );
+    return {
+      ...exports[0],
+      clips,
+      title: `${clips.length} 个分镜片段`,
+      assetId: exports.length === 1 ? exports[0].assetId : undefined,
+    };
   }
 
   function exportSelectedShots() {
@@ -3225,15 +3335,37 @@ export function StoryboardPanel() {
   });
 
   function requestStoryboardDetection() {
-    requestDetection([activeVideoId]);
+    requestDetection(sources.map((source) => source.videoId));
   }
 
+  function renderSourceHeader() {
+    return (
+      <span
+        key="source"
+        className="storyboard-column-header"
+        role="columnheader"
+        aria-sort={sourceDirection}
+      >
+        <button
+          type="button"
+          className="storyboard-column-sort-button active"
+          onClick={() =>
+            setSourceDirection((value) => (value === "ascending" ? "descending" : "ascending"))
+          }
+        >
+          <span className="storyboard-column-label-text">来源</span>
+          <SortArrow direction={sourceDirection} />
+        </button>
+      </span>
+    );
+  }
   function renderTableHeader(header: (typeof storyboardTableHeaders)[number]) {
     const isActive =
       header.sortColumnId !== undefined &&
       displayShots.length > 0 &&
       shotSort.columnId === header.sortColumnId;
     const nextDirection = isActive && shotSort.direction === "ascending" ? "降序" : "升序";
+    const resizeColumn = header.id === "title" && multipleSources ? "source" : header.resizeColumn;
     return (
       <span
         key={header.id}
@@ -3256,17 +3388,17 @@ export function StoryboardPanel() {
         ) : header.label ? (
           <span className="storyboard-column-label-text">{header.label}</span>
         ) : null}
-        {header.resizeColumn && (
+        {resizeColumn && (
           <button
             type="button"
             className="storyboard-column-resizer"
             title=""
-            aria-label={`调整${storyboardResizableColumnLabels[header.resizeColumn]}列宽`}
-            onPointerDown={(event) => startColumnResize(event, header.resizeColumn!)}
+            aria-label={`调整${storyboardResizableColumnLabels[resizeColumn]}列宽`}
+            onPointerDown={(event) => startColumnResize(event, resizeColumn)}
             onPointerMove={updateColumnResize}
             onPointerUp={finishColumnResize}
             onPointerCancel={finishColumnResize}
-            onDoubleClick={() => resetColumnWidth(header.resizeColumn!)}
+            onDoubleClick={() => resetColumnWidth(resizeColumn)}
           />
         )}
       </span>
@@ -3290,7 +3422,6 @@ export function StoryboardPanel() {
           onClick={(event) => {
             event.stopPropagation();
             if (videoMenu) {
-              setVideoMenu(null);
               return;
             }
             setContextMenu(null);
@@ -3502,9 +3633,15 @@ export function StoryboardPanel() {
               searchHighlight={searchHighlight}
               searchScope={searchScope}
               shots={sortedShots}
+              sourceForRow={sourceForShot}
+              showSource={multipleSources}
               currentShotIndex={currentShotIndex}
               tableStyle={tableStyle}
-              headerContent={storyboardTableHeaders.map(renderTableHeader)}
+              headerContent={storyboardTableHeaders.flatMap((header) =>
+                header.id === "title" && multipleSources
+                  ? [renderSourceHeader(), renderTableHeader(header)]
+                  : [renderTableHeader(header)],
+              )}
               rowVirtualizer={rowVirtualizer}
               virtualRows={virtualRows}
               thumbnailWindow={thumbnailWindow}
@@ -3531,6 +3668,7 @@ export function StoryboardPanel() {
             <StoryboardIconView
               searchHighlight={searchScope !== "keywords" ? searchHighlight : undefined}
               shots={sortedShots}
+              sourceForRow={sourceForShot}
               currentShotId={currentShotId}
               assetId={thumbnailAssetId}
               fingerprint={thumbnailFingerprint}
@@ -4388,7 +4526,7 @@ export function StoryboardPanel() {
 
             <PopupMenuItem
               mnemonic="M"
-              disabled={selectedAnnotationShotIds.size < 2}
+              disabled={!canMergeShots}
               onSelect={() => {
                 mergeShots(selectedAnnotationShotIds);
                 setContextMenu(null);
@@ -4586,18 +4724,18 @@ export function StoryboardPanel() {
             <MediaSourceMenu
               folders={mediaFolders}
               videos={selectableVideos}
-              selectedVideoId={activeVideoId}
+              selectedVideoIds={sources.map((source) => source.videoId)}
               renderVideo={(video) => (
                 <PopupMenuItem
                   title={video.file_name}
-                  checked={activeVideoId === video.id}
+                  checked={sources.some((source) => source.videoId === video.id)}
                   onSelect={() => {
-                    selectVideo(video.id);
-                    setVideoMenu(null);
+                    const adding = !sources.some((source) => source.videoId === video.id);
+                    toggleSource(video.id);
                     // Only auto-detect videos with a readable source; a pick never promises more
                     // than switching the active storyboard.
                     const source = videoSourceById.get(video.id);
-                    if (source && canDetectStoryboard(source.item, source.project)) {
+                    if (adding && source && canDetectStoryboard(source.item, source.project)) {
                       requestDetection([video.id], true);
                     }
                   }}

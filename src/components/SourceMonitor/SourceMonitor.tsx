@@ -296,6 +296,14 @@ export function SourceMonitor() {
   const cueRangeDragGroupRef = useRef<string | undefined>(undefined);
   const transientFramePreviewRestoreRef = useRef<number | null>(null);
   const currentFrameRef = useRef(currentFrame);
+  const activeVideoIdRef = useRef(activeVideoId);
+  activeVideoIdRef.current = activeVideoId;
+  const loadedVideoIdRef = useRef<string | null>(null);
+  // Cross-source row clicks change the active video before its media element is ready.
+  const pendingSourceSeekRef = useRef<ApplicationEventMap["playback.seek.requested"] | null>(null);
+  const applySeekRequestRef = useRef<
+    ((detail: Readonly<ApplicationEventMap["playback.seek.requested"]>) => boolean) | null
+  >(null);
   const restoredSourceRevisionRef = useRef<number | undefined>(undefined);
   const timelineStartFrameRef = useRef(timelineStartFrame);
   const timelineSpanFramesRef = useRef(timelineSpanFrames);
@@ -573,6 +581,15 @@ export function SourceMonitor() {
   }, [currentFrame]);
 
   useEffect(() => {
+    const pendingSeek = pendingSourceSeekRef.current;
+    if (pendingSeek?.videoId !== undefined && pendingSeek.videoId !== activeVideoId) {
+      pendingSourceSeekRef.current = null;
+      return;
+    }
+    flushPendingSourceSeek();
+  }, [activeVideoId, mediaKey]);
+
+  useEffect(() => {
     playbackModeRef.current = playbackMode;
   }, [playbackMode]);
 
@@ -620,6 +637,72 @@ export function SourceMonitor() {
     });
   }, [durationFrames, isExportMonitor, minTimelineSpanFrames]);
 
+  function applySeekRequest(
+    detail: Readonly<ApplicationEventMap["playback.seek.requested"]>,
+  ): boolean {
+    if (!hasMedia) {
+      return false;
+    }
+    if (detail.focusEndUs !== undefined) {
+      const rangeStartFrame = usToMonitorFrame(
+        clamp(Math.min(detail.timeUs, detail.focusEndUs), 0, durationUs),
+      );
+      const rangeEndFrame = usToMonitorFrame(
+        clamp(
+          Math.max(detail.timeUs, detail.focusEndUs),
+          frameToClampedUs(rangeStartFrame),
+          durationUs,
+        ),
+      );
+      const focusedRange =
+        isExportMonitor && exportRange
+          ? {
+              startFrame: exportRange.startFrame,
+              endFrame: Math.max(exportRange.startFrame, exportRange.endFrame),
+            }
+          : { startFrame: rangeStartFrame, endFrame: rangeEndFrame };
+      setCueRange(focusedRange);
+      if (!isExportMonitor) centerTimelineOnFrame(rangeStartFrame);
+      cuePlaybackEndFrameRef.current = focusedRange.endFrame;
+      cueRangeTargetRef.current = detail.focusTarget ?? null;
+    }
+    const video = videoRef.current;
+    seekToFrame(
+      usToMonitorFrame(detail.timeUs),
+      detail.focusEndUs !== undefined,
+      detail.focusEndUs === undefined,
+    );
+    if (detail.focusEndUs !== undefined && video) {
+      startCuePlaybackFrameMonitor(video);
+    }
+    if (detail.play && video) {
+      applyPlaybackMode(1, detail.focusEndUs !== undefined);
+    }
+    return true;
+  }
+  applySeekRequestRef.current = applySeekRequest;
+
+  function videoIsReadyForSeek() {
+    return Boolean(
+      videoRef.current &&
+      videoRef.current.readyState >= 1 &&
+      loadedVideoIdRef.current === activeVideoIdRef.current,
+    );
+  }
+
+  function flushPendingSourceSeek() {
+    const pending = pendingSourceSeekRef.current;
+    if (
+      !pending ||
+      !videoIsReadyForSeek() ||
+      (pending.videoId !== undefined && pending.videoId !== activeVideoIdRef.current)
+    ) {
+      return;
+    }
+    pendingSourceSeekRef.current = null;
+    applySeekRequestRef.current?.(pending);
+  }
+
   const { isAuthority: isPlaybackShortcutAuthority } = usePlaybackCapability({
     identity,
     active: panelActive,
@@ -633,47 +716,19 @@ export function SourceMonitor() {
       if (!hasMedia) {
         return false;
       }
-      if (detail.focusEndUs !== undefined) {
-        const rangeStartFrame = usToMonitorFrame(
-          clamp(Math.min(detail.timeUs, detail.focusEndUs), 0, durationUs),
-        );
-        const rangeEndFrame = usToMonitorFrame(
-          clamp(
-            Math.max(detail.timeUs, detail.focusEndUs),
-            frameToClampedUs(rangeStartFrame),
-            durationUs,
-          ),
-        );
-        const focusedRange =
-          isExportMonitor && exportRange
-            ? {
-                startFrame: exportRange.startFrame,
-                endFrame: Math.max(exportRange.startFrame, exportRange.endFrame),
-              }
-            : { startFrame: rangeStartFrame, endFrame: rangeEndFrame };
-        setCueRange(focusedRange);
-        if (!isExportMonitor) centerTimelineOnFrame(rangeStartFrame);
-        cuePlaybackEndFrameRef.current = focusedRange.endFrame;
-        cueRangeTargetRef.current = detail.focusTarget ?? null;
+      if (
+        detail.videoId !== undefined &&
+        (detail.videoId !== activeVideoIdRef.current || !videoIsReadyForSeek())
+      ) {
+        pendingSourceSeekRef.current = detail;
+        return true;
       }
-      const video = videoRef.current;
-      seekToFrame(
-        usToMonitorFrame(detail.timeUs),
-        detail.focusEndUs !== undefined,
-        detail.focusEndUs === undefined,
-      );
-      if (detail.focusEndUs !== undefined && video) {
-        startCuePlaybackFrameMonitor(video);
-      }
-      if (detail.play && video) {
-        applyPlaybackMode(1, detail.focusEndUs !== undefined);
-      }
-      return true;
+      return applySeekRequest(detail);
     },
   });
 
   useEffect(() => {
-    const isShortcutScopeActive = () => {
+    const isShortcutScopeActive = (target?: EventTarget | null) => {
       if (!panelActive || !isPlaybackShortcutAuthority) {
         return false;
       }
@@ -681,12 +736,21 @@ export function SourceMonitor() {
       if (!element) {
         return false;
       }
+      const targetElement = target instanceof Element ? target : null;
+      if (targetElement?.closest(".popup-menu")) {
+        return false;
+      }
+      // A focused subtitle/storyboard panel owns arrow-key navigation.
+      const targetPanel = targetElement?.closest(".dock-panel-surface");
+      if (targetPanel && targetPanel !== element.closest(".dock-panel-surface")) {
+        return false;
+      }
       const rect = element.getBoundingClientRect();
       return rect.width > 0 && rect.height > 0;
     };
 
     const suppressSpaceEvent = (event: KeyboardEvent) => {
-      if ((event.code !== "Space" && event.key !== " ") || !isShortcutScopeActive()) {
+      if ((event.code !== "Space" && event.key !== " ") || !isShortcutScopeActive(event.target)) {
         return false;
       }
       event.preventDefault();
@@ -699,7 +763,7 @@ export function SourceMonitor() {
       event.code === "KeyJ" || event.code === "KeyK" || event.code === "KeyL";
 
     const suppressShuttleEvent = (event: KeyboardEvent) => {
-      if (!isShuttleKey(event) || !isShortcutScopeActive()) {
+      if (!isShuttleKey(event) || !isShortcutScopeActive(event.target)) {
         return false;
       }
       event.preventDefault();
@@ -722,7 +786,7 @@ export function SourceMonitor() {
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!isShortcutScopeActive()) {
+      if (!isShortcutScopeActive(event.target)) {
         return;
       }
       const isFrameStep = event.key === "ArrowLeft" || event.key === "ArrowRight";
@@ -788,6 +852,8 @@ export function SourceMonitor() {
       ) {
         return;
       }
+      event.stopPropagation();
+      event.stopImmediatePropagation();
       event.preventDefault();
       stepFrame(event.key === "ArrowLeft" ? -1 : 1);
     };
@@ -1419,27 +1485,27 @@ export function SourceMonitor() {
   }
 
   function handleLoadedMetadata(element: HTMLVideoElement) {
+    loadedVideoIdRef.current = activeVideoIdRef.current;
     element.preservesPitch = true;
     element.muted = shouldMuteVideo(playbackModeRef.current);
     const restore = pendingPreviewRestoreRef.current;
     const restoredFrame = clampMonitorFrame(restore?.frame ?? currentFrame);
     seekTargetFrameRef.current = restoredFrame;
-    const restorePlayback = () => {
-      if (pendingPreviewRestoreRef.current !== restore) {
-        return;
+    const restorePlaybackAndPendingSeek = () => {
+      if (pendingPreviewRestoreRef.current === restore) {
+        pendingPreviewRestoreRef.current = null;
+        if (restore && restore.playbackMode !== 0) {
+          applyPlaybackMode(restore.playbackMode);
+        }
       }
-      pendingPreviewRestoreRef.current = null;
-      if (!restore || restore.playbackMode === 0) {
-        return;
-      }
-      applyPlaybackMode(restore.playbackMode);
+      flushPendingSourceSeek();
     };
     if (usToMonitorFrame(element.currentTime * 1_000_000) !== restoredFrame || element.seeking) {
-      element.addEventListener("seeked", restorePlayback, { once: true });
+      element.addEventListener("seeked", restorePlaybackAndPendingSeek, { once: true });
       requestVideoSeek(restoredFrame);
       return;
     }
-    restorePlayback();
+    restorePlaybackAndPendingSeek();
   }
 
   function togglePlayback() {

@@ -1,3 +1,5 @@
+import { useMemo } from "react";
+import { scopedSubtitles } from "../../core/editor/multiSource";
 import { createPanelState } from "../../runtime/systems/PanelState";
 import {
   canHighlightSearchRule,
@@ -179,7 +181,10 @@ export function useSubtitlePanelState<Selection>(
 ) {
   const uiState = useSubtitlePanelUiState((state) => state);
   const { subtitles, subtitleUpdated } = useProjectPort(["subtitles"], ["subtitleUpdated"]);
-  const subtitle = subtitles[uiState.trackContext] ?? { cueAnnotations: {} };
+  const subtitle = useMemo(
+    () => scopedSubtitles(subtitles, uiState.trackContext),
+    [subtitles, uiState.trackContext],
+  );
   const commitSubtitle = (
     historyLabel: string,
     recipe: (current: SubtitleState) => SubtitleState,

@@ -16,6 +16,8 @@ export interface ApplicationEventMap {
   "edit.select-all.requested": Record<string, never>;
   "edit.clear-selection.requested": Record<string, never>;
   "playback.seek.requested": {
+    /** Defers the seek until this media is the loaded source in the active monitor. */
+    videoId?: string;
     timeUs: number;
     focusEndUs?: number;
     play?: boolean;

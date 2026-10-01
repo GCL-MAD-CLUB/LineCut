@@ -1,4 +1,5 @@
-import { useCallback, useLayoutEffect, useRef } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
+import { normalizeFrameRate } from "../../core/editor/timeline";
 import { usePlaybackStatus } from "../../runtime/capabilities/PlaybackCapability";
 import { usePanelManagerState, type PanelManagerState } from "../../components/DockLayout";
 import { useBroadcastEvent } from "../../runtime/events/react";
@@ -30,6 +31,8 @@ export interface PanelMediaSource {
 }
 
 interface PanelMediaSelection {
+  sources: { videoId: string; trackId: string }[];
+  setSources: (sources: { videoId: string; trackId: string }[]) => void;
   projectId: string | null | undefined;
   videoId: string | null;
   trackId: string;
@@ -38,9 +41,34 @@ interface PanelMediaSelection {
   rememberFrame: (videoId: string, frame: number) => void;
   savedFrame: () => number;
   openVideo: (projectId: string | null, videoId: string, trackId: string) => void;
+  previewVideo: (
+    projectId: string | null,
+    videoId: string,
+    trackId: string,
+    sources: { videoId: string; trackId: string }[],
+    frame: number,
+  ) => void;
 }
 
 const usePanelMediaSelection = createPanelState<PanelMediaSelection>(() => (set, get) => ({
+  sources: [],
+  setSources: (sources) =>
+    set((current) => {
+      if (
+        sources.some(
+          (source) => source.videoId === current.videoId && source.trackId === current.trackId,
+        ) ||
+        !sources.length
+      )
+        return { sources };
+      return {
+        sources,
+        videoId: sources[0].videoId,
+        trackId: sources[0].trackId,
+        frame: 0,
+        openVersion: current.openVersion + 1,
+      };
+    }),
   projectId: undefined,
   videoId: null,
   trackId: "",
@@ -56,8 +84,18 @@ const usePanelMediaSelection = createPanelState<PanelMediaSelection>(() => (set,
       projectId,
       videoId,
       trackId,
+      sources: [{ videoId, trackId }],
       openVersion: current.openVersion + 1,
       frame: current.projectId === projectId && current.videoId === videoId ? current.frame : 0,
+    })),
+  previewVideo: (projectId, videoId, trackId, sources, frame) =>
+    set((current) => ({
+      projectId,
+      videoId,
+      trackId,
+      sources,
+      openVersion: current.openVersion + 1,
+      frame: Math.max(0, Math.round(frame)),
     })),
 }));
 
@@ -126,7 +164,89 @@ export function usePanelMediaSourceSelection() {
     },
     [activeTrackId, activeVideoId, mediaItems, projectId, projects, selection.openVideo],
   );
+  const selectedSources = useMemo(() => {
+    const requested = initialized
+      ? selection.sources
+      : [{ videoId: activeVideoId, trackId: activeTrackId }];
+    return requested.flatMap((entry) => {
+      const item = mediaItems.find(
+        (item) => item.id === entry.videoId && item.kind === "video" && isMediaItemEnabled(item),
+      );
+      const project = item && mediaItemProject(item, projects, mediaItems);
+      if (!item || !project) return [];
+      const tracks = visibleSubtitleTracks(project, mediaItems, item.id, projects);
+      const trackId =
+        tracks.find((track) => track.id === entry.trackId)?.id ??
+        tracks.find((track) => track.kind === "text" && track.cue_count > 0)?.id ??
+        tracks[0]?.id ??
+        "";
+      const stream =
+        project.streams.find((stream) => stream.index === project.asset.video_stream_index) ??
+        project.streams.find((stream) => stream.codec_type === "video");
+      return [
+        {
+          videoId: item.id,
+          trackId,
+          item,
+          project,
+          name: item.file_name,
+          context: `${item.id}:${project.asset.id}:${project.asset.fingerprint ?? ""}`,
+          assetId: project.asset.id,
+          fingerprint: project.asset.fingerprint ?? "",
+          videoPath: project.proxy_path || project.asset.path,
+          previewVideoPath: project.proxy_path || project.asset.path,
+          frameRate: normalizeFrameRate(stream?.avg_frame_rate, stream?.r_frame_rate),
+        },
+      ];
+    });
+  }, [initialized, selection.sources, activeVideoId, activeTrackId, mediaItems, projects]);
+  const toggleSource = (videoId: string, trackId?: string) => {
+    const existing = selectedSources.find((source) => source.videoId === videoId);
+    const sources = selectedSources.map(({ videoId, trackId }) => ({ videoId, trackId }));
+    if (existing && trackId !== undefined && existing.trackId !== trackId) {
+      selection.setSources(
+        sources.map((source) => (source.videoId === videoId ? { videoId, trackId } : source)),
+      );
+      return;
+    }
+    if (existing && selectedSources.length === 1) return;
+    if (existing)
+      selection.setSources(
+        sources.filter(
+          (source) => source.videoId !== videoId || source.trackId !== existing.trackId,
+        ),
+      );
+    else {
+      const item = mediaItems.find((item) => item.id === videoId);
+      const project = item && mediaItemProject(item, projects, mediaItems);
+      if (!project) return;
+      const tracks = visibleSubtitleTracks(project, mediaItems, videoId, projects);
+      selection.setSources([
+        ...sources,
+        {
+          videoId,
+          trackId:
+            trackId ??
+            tracks.find((track) => track.kind === "text" && track.cue_count > 0)?.id ??
+            tracks[0]?.id ??
+            "",
+        },
+      ]);
+    }
+  };
+  const previewSource = (videoId: string, trackId: string, frame = 0) => {
+    if (selection.videoId === videoId && selection.trackId === trackId) return;
+    const sources = (
+      selection.sources.length
+        ? selection.sources
+        : selectedSources.map(({ videoId, trackId }) => ({ videoId, trackId }))
+    ).map((source) => (source.videoId === videoId ? { videoId, trackId } : { ...source }));
+    selection.previewVideo(projectId, videoId, trackId, sources, frame);
+  };
   return {
+    selectedSources,
+    toggleSource,
+    previewSource,
     project,
     activeVideoId,
     activeTrackId,
@@ -141,6 +261,15 @@ export function usePanelMediaSourceSelection() {
 export function usePanelMediaSource(kind: "subtitles" | "storyboard") {
   const source = usePanelMediaSourceSelection();
   const { selection, projectId, activeVideoId, activeTrackId, previewVideoId, project } = source;
+  useLayoutEffect(() => {
+    const valid = source.selectedSources;
+    if (
+      valid.length &&
+      !valid.some((entry) => entry.videoId === activeVideoId && entry.trackId === activeTrackId)
+    ) {
+      selection.setSources(valid.map(({ videoId, trackId }) => ({ videoId, trackId })));
+    }
+  }, [source.selectedSources, activeVideoId, activeTrackId, selection.setSources]);
   const panelId = usePanelInstanceId();
   const panelActive = usePanelActive();
   const identity = useStableIdentity("media-panel", panelId);

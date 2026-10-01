@@ -134,6 +134,7 @@ export function StoryboardKeywordPanel({
 }: StoryboardKeywordPanelProps) {
   const {
     keywordNodes,
+    libraryKeywordNodes,
     keywordUsageCounters,
     recentKeywordIds,
     shots,
@@ -220,7 +221,7 @@ export function StoryboardKeywordPanel({
     setKeywordModeMenu(null);
     setTreeContextMenu(null);
     setAltShortcutHintsVisible(false);
-    setShortcutKeywordIds([]);
+    setShortcutKeywordIds((current) => (current.length ? [] : current));
     shortcutKeywordIdsRef.current = [];
   }, [resetKey]);
 
@@ -289,14 +290,14 @@ export function StoryboardKeywordPanel({
   useEffect(() => {
     if (!active || !panelOpen || !recentOpen || keywordShortcutBlocked) {
       setAltShortcutHintsVisible(false);
-      setShortcutKeywordIds([]);
+      setShortcutKeywordIds((current) => (current.length ? [] : current));
       shortcutKeywordIdsRef.current = [];
       return;
     }
 
     const hideShortcutHints = () => {
       setAltShortcutHintsVisible(false);
-      setShortcutKeywordIds([]);
+      setShortcutKeywordIds((current) => (current.length ? [] : current));
       shortcutKeywordIdsRef.current = [];
     };
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -472,7 +473,7 @@ export function StoryboardKeywordPanel({
 
   const childrenByParent = useMemo(() => {
     const result = new Map<string | null, StoryboardKeywordNode[]>();
-    for (const node of keywordNodes) {
+    for (const node of libraryKeywordNodes) {
       const parentId = node.parentId ?? null;
       const children = result.get(parentId) ?? [];
       children.push(node);
@@ -482,7 +483,7 @@ export function StoryboardKeywordPanel({
       children.sort(keywordNodeOrder);
     }
     return result;
-  }, [keywordNodes]);
+  }, [libraryKeywordNodes]);
 
   const normalizedFilter = filter.trim().toLocaleLowerCase();
 
@@ -510,14 +511,14 @@ export function StoryboardKeywordPanel({
 
   const matchingTreeNodeIds = useMemo(() => {
     if (!normalizedFilter) {
-      return new Set(keywordNodes.map((node) => node.id));
+      return new Set(libraryKeywordNodes.map((node) => node.id));
     }
-    const nodeById = new Map(keywordNodes.map((node) => [node.id, node]));
+    const nodeById = new Map(libraryKeywordNodes.map((node) => [node.id, node]));
     const matchingIds = new Set<string>();
-    for (const node of keywordNodes) {
+    for (const node of libraryKeywordNodes) {
       if (
         !node.name.toLocaleLowerCase().includes(normalizedFilter) &&
-        !storyboardKeywordLabel(node.id, keywordNodes)
+        !storyboardKeywordLabel(node.id, libraryKeywordNodes)
           .toLocaleLowerCase()
           .includes(normalizedFilter)
       ) {
@@ -530,7 +531,7 @@ export function StoryboardKeywordPanel({
       }
     }
     return matchingIds;
-  }, [keywordNodes, normalizedFilter]);
+  }, [libraryKeywordNodes, normalizedFilter]);
 
   const visibleOrderedTreeNodeIds = useMemo(() => {
     const orderedIds: string[] = [];
@@ -828,7 +829,7 @@ export function StoryboardKeywordPanel({
     }
     const parentId =
       createNestIntoParent && createParentCandidate ? createParentCandidate.id : null;
-    const duplicate = keywordNodes.some(
+    const duplicate = libraryKeywordNodes.some(
       (node) => (node.parentId ?? null) === parentId && node.name === createKeywordName,
     );
     if (duplicate) {

@@ -1612,10 +1612,10 @@ body.is-resizing-storyboard-keyword-panel * {
   --storyboard-thumbnail-width: 88px;
   --storyboard-thumbnail-height: 50px;
   --storyboard-row-height: 82px;
-  --storyboard-table-columns: var(--storyboard-col-thumbnail) var(--storyboard-col-title)
-    var(--storyboard-col-media-start) var(--storyboard-col-media-end) var(--storyboard-col-duration)
-    var(--storyboard-col-keywords) var(--storyboard-col-rating) var(--storyboard-col-retained)
-    var(--storyboard-col-label) minmax(0, 1fr);
+  --storyboard-table-columns: var(--storyboard-col-thumbnail) var(--storyboard-col-source,)
+    var(--storyboard-col-title) var(--storyboard-col-media-start) var(--storyboard-col-media-end)
+    var(--storyboard-col-duration) var(--storyboard-col-keywords) var(--storyboard-col-rating)
+    var(--storyboard-col-retained) var(--storyboard-col-label) minmax(0, 1fr);
   --storyboard-table-min-width: 1140px;
 }
 
@@ -2553,6 +2553,7 @@ body.is-resizing-storyboard-keyword-panel * {
 
 .shot-row > .shot-time-cell,
 .shot-row > .shot-duration-cell,
+.shot-row > .shot-source-cell,
 .shot-row > .shot-title-cell,
 .shot-row > .shot-keywords-cell,
 .shot-row > .shot-label-cell,
@@ -2583,6 +2584,10 @@ body.is-resizing-storyboard-keyword-panel * {
   gap: 6px;
 }
 
+.shot-row > .shot-source-cell {
+  align-items: center;
+}
+
 .shot-title-copy,
 .shot-keywords-copy,
 .shot-label-copy {
@@ -2592,6 +2597,21 @@ body.is-resizing-storyboard-keyword-panel * {
   overflow: hidden;
   text-overflow: clip;
   white-space: nowrap;
+}
+
+.shot-source-copy {
+  align-self: center;
+  display: -webkit-box;
+  min-width: 0;
+  overflow: hidden;
+  color: #d0d0d0;
+  font-size: 12px;
+  line-height: 16px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
 }
 
 .shot-title-editor {

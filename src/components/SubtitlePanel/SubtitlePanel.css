@@ -433,9 +433,10 @@
   --subtitle-thumbnail-width: 82px;
   --subtitle-thumbnail-height: 46px;
   --subtitle-row-height: 82px;
-  --subtitle-table-columns: var(--subtitle-col-thumbnail) var(--subtitle-col-subtitle)
-    var(--subtitle-col-media-start) var(--subtitle-col-media-end) var(--subtitle-col-duration)
-    var(--subtitle-col-rating) var(--subtitle-col-retained) var(--subtitle-col-label) minmax(0, 1fr);
+  --subtitle-table-columns: var(--subtitle-col-thumbnail) var(--subtitle-col-source,)
+    var(--subtitle-col-subtitle) var(--subtitle-col-media-start) var(--subtitle-col-media-end)
+    var(--subtitle-col-duration) var(--subtitle-col-rating) var(--subtitle-col-retained)
+    var(--subtitle-col-label) minmax(0, 1fr);
   --subtitle-table-min-width: 1012px;
 }
 
@@ -957,6 +958,7 @@ body.is-marquee-selecting * {
 }
 
 .cue-row > .cue-subtitle-cell,
+.cue-row > .cue-source-cell,
 .cue-row > .cue-time-cell,
 .cue-row > .cue-duration-cell,
 .cue-row > .cue-label-cell,
@@ -1510,6 +1512,10 @@ body.is-resizing-subtitle-column {
   align-items: center;
 }
 
+.cue-row > .cue-source-cell {
+  align-items: center;
+}
+
 .cue-subtitle-copy {
   align-self: center;
   display: -webkit-box;
@@ -1518,6 +1524,21 @@ body.is-resizing-subtitle-column {
   color: #d0d0d0;
   font-size: 12px;
   font-weight: 500;
+  line-height: 16px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+}
+
+.cue-source-copy {
+  align-self: center;
+  display: -webkit-box;
+  min-width: 0;
+  overflow: hidden;
+  color: #d0d0d0;
+  font-size: 12px;
   line-height: 16px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;

@@ -1,4 +1,5 @@
-﻿import type { VirtualItem, Virtualizer } from "@tanstack/react-virtual";
+import type { PanelRowSource } from "../../core/editor/multiSource";
+import type { VirtualItem, Virtualizer } from "@tanstack/react-virtual";
 import {
   useEffect,
   useRef,
@@ -51,6 +52,8 @@ interface ActiveCell {
 }
 
 interface StoryboardListViewProps {
+  sourceForRow: (row: StoryboardShot) => PanelRowSource;
+  showSource: boolean;
   searchHighlight?: SearchHighlightOptions;
   searchScope: "any" | "title" | "keywords";
   shots: StoryboardShot[];
@@ -119,6 +122,8 @@ function annotationTargets(
 }
 
 export function StoryboardListView({
+  sourceForRow,
+  showSource,
   searchHighlight,
   searchScope,
   shots,
@@ -392,6 +397,8 @@ export function StoryboardListView({
           >
             {virtualRows.map((virtualRow) => {
               const shot = shots[virtualRow.index];
+              const source = sourceForRow(shot);
+              const rowFrameRate = source?.frameRate ?? frameRate;
               const selected = selectedShotIds.has(shot.id);
               const annotation = shotAnnotations[shot.id];
               const rating = annotation?.rating ?? 0;
@@ -459,11 +466,11 @@ export function StoryboardListView({
                       colorLabel={visualLabel}
                       stack={stack}
                       stackIndex={stackIndex}
-                      assetId={assetId}
-                      fingerprint={fingerprint}
-                      videoPath={videoPath}
-                      previewVideoPath={previewVideoPath}
-                      frameRate={frameRate}
+                      assetId={source?.assetId ?? assetId}
+                      fingerprint={source?.fingerprint ?? fingerprint}
+                      videoPath={source?.videoPath ?? videoPath}
+                      previewVideoPath={source?.previewVideoPath ?? previewVideoPath}
+                      frameRate={rowFrameRate}
                       priority={Math.abs(virtualRow.index - thumbnailWindow.centerIndex)}
                       requestEnabled={timelineThumbnailWindowContains(
                         thumbnailWindow,
@@ -483,6 +490,11 @@ export function StoryboardListView({
                       onOpenColorMenu={(event) => onOpenAnnotationMenu(event, shot.id, "color")}
                     />
                   </div>
+                  {showSource && (
+                    <span className="shot-source-cell" role="cell" title={source?.name}>
+                      <span className="shot-source-copy">{source?.name}</span>
+                    </span>
+                  )}
                   <span
                     className={cellClassName(shot.id, "title", selected, "shot-title-cell")}
                     role="cell"
@@ -495,14 +507,14 @@ export function StoryboardListView({
                     role="cell"
                     onClick={() => activateCell(shot.id, "mediaStart")}
                   >
-                    {formatMonitorTime(shot.start_us, frameRate)}
+                    {formatMonitorTime(shot.start_us, rowFrameRate)}
                   </span>
                   <span
                     className={cellClassName(shot.id, "mediaEnd", selected, "shot-time-cell")}
                     role="cell"
                     onClick={() => activateCell(shot.id, "mediaEnd")}
                   >
-                    {formatMonitorTime(shot.end_us, frameRate)}
+                    {formatMonitorTime(shot.end_us, rowFrameRate)}
                   </span>
                   <span
                     className={cellClassName(shot.id, "duration", selected, "shot-duration-cell")}
@@ -511,7 +523,7 @@ export function StoryboardListView({
                   >
                     {formatMonitorFrame(
                       Math.max(0, shot.end_frame - shot.start_frame + 1),
-                      frameRate,
+                      rowFrameRate,
                     )}
                   </span>
                   <span
