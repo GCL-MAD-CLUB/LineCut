@@ -1209,7 +1209,7 @@ export function StoryboardPanel() {
   const hasVideo = Boolean(
     project?.asset.video_stream_index !== null && project?.asset.video_stream_index !== undefined,
   );
-  const videoLabel = mediaDisplayName(project, mediaItems, activeVideoId) || "未选择视频";
+  const videoLabel = mediaDisplayName(project, mediaItems, activeVideoId) || "未选择";
   const isDetecting = detectionTasks.some((task) => task.resourceKey === videoContext);
   const canDetect = isTauriRuntime() && Boolean(project) && hasVideo && !isDetecting;
   const selectedCount = selectedShotIds.size;

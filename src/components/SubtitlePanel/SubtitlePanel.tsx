@@ -1,4 +1,4 @@
-import {
+﻿import {
   matchesTextSearch,
   nextSearchMatchIndex,
   type SearchRule,
@@ -1179,7 +1179,7 @@ export function SubtitlePanel() {
   });
   const activeTrackLabel =
     trackOptions.find((option) => option.id === activeTrack?.id)?.label ??
-    (project ? "无可用字幕" : "未选择视频");
+    (project ? "无字幕" : "未选择");
 
   useEffect(() => {
     rowVirtualizer.measure();
