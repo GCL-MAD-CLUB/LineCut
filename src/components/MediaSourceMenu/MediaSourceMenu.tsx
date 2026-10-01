@@ -6,6 +6,7 @@ import type { MediaBinFolder, MediaBinItem } from "../../types";
 interface MediaSourceMenuProps {
   folders: MediaBinFolder[];
   videos: MediaBinItem[];
+  selectedVideoId?: string;
   renderVideo: (
     item: MediaBinItem,
     open: boolean,
@@ -19,9 +20,11 @@ function nodeKey(node: MediaSourceNode) {
 
 function MediaSourceMenuLevel({
   nodes,
+  selectedFolderIds,
   renderVideo,
 }: {
   nodes: MediaSourceNode[];
+  selectedFolderIds: Set<string>;
   renderVideo: MediaSourceMenuProps["renderVideo"];
 }) {
   // Keep one open sibling per level so descendants do not close their ancestor menus.
@@ -35,11 +38,17 @@ function MediaSourceMenuLevel({
           key={key}
           label={node.folder.name}
           title={node.folder.name}
+          checked={selectedFolderIds.has(node.folder.id)}
+          indicator="dot"
           menuClassName="media-source-menu"
           open={openId === key}
           onOpenChange={setOpen}
         >
-          <MediaSourceMenuLevel nodes={node.children} renderVideo={renderVideo} />
+          <MediaSourceMenuLevel
+            nodes={node.children}
+            selectedFolderIds={selectedFolderIds}
+            renderVideo={renderVideo}
+          />
         </PopupMenuSubmenu>
       );
     }
@@ -48,7 +57,28 @@ function MediaSourceMenuLevel({
   });
 }
 
-export function MediaSourceMenu({ folders, videos, renderVideo }: MediaSourceMenuProps) {
+export function MediaSourceMenu({
+  folders,
+  videos,
+  selectedVideoId,
+  renderVideo,
+}: MediaSourceMenuProps) {
   const nodes = useMemo(() => mediaSourceTree(folders, videos), [folders, videos]);
-  return <MediaSourceMenuLevel nodes={nodes} renderVideo={renderVideo} />;
+  const selectedFolderIds = useMemo(() => {
+    const folderIds = new Set<string>();
+    const foldersById = new Map(folders.map((folder) => [folder.id, folder]));
+    let folderId = videos.find((video) => video.id === selectedVideoId)?.bin_id;
+    while (folderId && foldersById.has(folderId) && !folderIds.has(folderId)) {
+      folderIds.add(folderId);
+      folderId = foldersById.get(folderId)?.parent_id;
+    }
+    return folderIds;
+  }, [folders, videos, selectedVideoId]);
+  return (
+    <MediaSourceMenuLevel
+      nodes={nodes}
+      selectedFolderIds={selectedFolderIds}
+      renderVideo={renderVideo}
+    />
+  );
 }

@@ -2748,10 +2748,13 @@ export function SubtitlePanel() {
             <MediaSourceMenu
               folders={mediaFolders}
               videos={subtitleVideos}
+              selectedVideoId={activeTrack ? activeVideoId : undefined}
               renderVideo={(video, open, onOpenChange) => (
                 <PopupMenuSubmenu
                   label={video.file_name}
                   title={video.file_name}
+                  checked={activeVideoId === video.id && Boolean(activeTrack)}
+                  indicator="dot"
                   menuClassName="media-source-menu"
                   open={open}
                   onOpenChange={onOpenChange}

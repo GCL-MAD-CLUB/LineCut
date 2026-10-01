@@ -4596,6 +4596,7 @@ export function StoryboardPanel() {
             <MediaSourceMenu
               folders={mediaFolders}
               videos={selectableVideos}
+              selectedVideoId={activeVideoId}
               renderVideo={(video) => (
                 <PopupMenuItem
                   title={video.file_name}
