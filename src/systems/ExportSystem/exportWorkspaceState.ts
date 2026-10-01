@@ -73,6 +73,10 @@ export interface ExportWorkspaceState {
   redoClipRange: () => void;
 }
 
+export function canEditExportClipRange(state: Pick<ExportWorkspaceState, "source">) {
+  return state.source?.kind === "storyboard";
+}
+
 export function defaultExportSettings(): ExportSettings {
   return {
     mode: "individual",
@@ -214,6 +218,7 @@ export const exportWorkspaceStore = createStore<ExportWorkspaceState>()((set) =>
     set((state) => ({ previewClipId, previewVersion: state.previewVersion + 1 })),
   updateClipRange: (clipId, startUs, endUs, groupId) =>
     set((state) => {
+      if (!canEditExportClipRange(state)) return state;
       const clip = state.source?.clips.find((candidate) => candidate.id === clipId);
       if (!clip || (clip.startUs === startUs && clip.endUs === endUs)) return state;
       const before = { startUs: clip.startUs, endUs: clip.endUs };
@@ -238,7 +243,8 @@ export const exportWorkspaceStore = createStore<ExportWorkspaceState>()((set) =>
     }),
   undoClipRange: () =>
     set((state) => {
-      if (!state.source || state.rangeHistoryCursor === 0) return state;
+      if (!canEditExportClipRange(state) || !state.source || state.rangeHistoryCursor === 0)
+        return state;
       const entry = state.rangeHistory[state.rangeHistoryCursor - 1];
       return {
         source: {
@@ -252,7 +258,12 @@ export const exportWorkspaceStore = createStore<ExportWorkspaceState>()((set) =>
     }),
   redoClipRange: () =>
     set((state) => {
-      if (!state.source || state.rangeHistoryCursor >= state.rangeHistory.length) return state;
+      if (
+        !canEditExportClipRange(state) ||
+        !state.source ||
+        state.rangeHistoryCursor >= state.rangeHistory.length
+      )
+        return state;
       const entry = state.rangeHistory[state.rangeHistoryCursor];
       return {
         source: {

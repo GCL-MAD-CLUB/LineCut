@@ -29,6 +29,7 @@ export interface TimelineRulerProps {
   timelineStartFrame: number;
   timelineSpanFrames: number;
   cueRange: MonitorCueRange | null;
+  cueRangeEditable?: boolean;
   skippedRanges?: readonly StoryboardGap[];
   onCueRangeChange?: (range: MonitorCueRange) => void;
   onCueRangeDragStart?: () => void;
@@ -64,6 +65,7 @@ export function TimelineRuler({
   timelineStartFrame,
   timelineSpanFrames,
   cueRange,
+  cueRangeEditable = true,
   skippedRanges = [],
   onCueRangeChange,
   onCueRangeDragStart,
@@ -81,6 +83,7 @@ export function TimelineRuler({
   const timelineDragCleanupRef = useRef<(() => void) | null>(null);
   const cueRangeDragCleanupRef = useRef<(() => void) | null>(null);
   const [timelineWidthPx, setTimelineWidthPx] = useState(0);
+  const canEditCueRange = cueRangeEditable && Boolean(onCueRangeChange);
 
   const timelineEndFrame = Math.min(durationFrames, timelineStartFrame + timelineSpanFrames);
   const timelineVisibleSpanFrames = Math.max(1, timelineSpanFrames);
@@ -135,7 +138,7 @@ export function TimelineRuler({
       timelineDragCleanupRef.current?.();
       cueRangeDragCleanupRef.current?.();
     },
-    [hasMedia],
+    [hasMedia, canEditCueRange],
   );
 
   useEffect(() => {
@@ -286,7 +289,14 @@ export function TimelineRuler({
     event: ReactPointerEvent<HTMLSpanElement>,
     part: "start" | "end" | "both",
   ) {
-    if (event.button !== 0 || !cueRange || !onCueRangeChange || timelineWidthPx <= 0) return;
+    if (
+      event.button !== 0 ||
+      !canEditCueRange ||
+      !cueRange ||
+      !onCueRangeChange ||
+      timelineWidthPx <= 0
+    )
+      return;
     event.preventDefault();
     event.stopPropagation();
     timelineDragCleanupRef.current?.();
@@ -354,7 +364,7 @@ export function TimelineRuler({
     >
       <div className="timeline-ruler">
         {hasMedia && visibleCueRange && (
-          <div className="timeline-cue-range">
+          <div className={`timeline-cue-range ${canEditCueRange ? "" : "read-only"}`}>
             <div
               className="timeline-cue-fill"
               style={{
@@ -366,8 +376,10 @@ export function TimelineRuler({
               <span
                 className="timeline-cue-edge start"
                 style={{ left: `${visibleCueRange.actualStart}%` }}
-                title="拖动选区起点"
-                onPointerDown={(event) => beginCueRangeDrag(event, "start")}
+                title={canEditCueRange ? "拖动选区起点" : undefined}
+                onPointerDown={
+                  canEditCueRange ? (event) => beginCueRangeDrag(event, "start") : undefined
+                }
               >
                 <svg className="timeline-cue-brace" viewBox="0 0 2 20" aria-hidden="true">
                   <path d="M2 0V8L0 10L2 12V20" />
@@ -378,8 +390,10 @@ export function TimelineRuler({
               <span
                 className="timeline-cue-edge end"
                 style={{ left: `${visibleCueRange.actualEnd}%` }}
-                title="拖动选区终点"
-                onPointerDown={(event) => beginCueRangeDrag(event, "end")}
+                title={canEditCueRange ? "拖动选区终点" : undefined}
+                onPointerDown={
+                  canEditCueRange ? (event) => beginCueRangeDrag(event, "end") : undefined
+                }
               >
                 <svg className="timeline-cue-brace" viewBox="0 0 2 20" aria-hidden="true">
                   <path d="M0 0V8L2 10L0 12V20" />
@@ -393,8 +407,10 @@ export function TimelineRuler({
                   style={{
                     left: `${(visibleCueRange.actualStart + visibleCueRange.actualEnd) / 2}%`,
                   }}
-                  title="拖动整个选区"
-                  onPointerDown={(event) => beginCueRangeDrag(event, "both")}
+                  title={canEditCueRange ? "拖动整个选区" : undefined}
+                  onPointerDown={
+                    canEditCueRange ? (event) => beginCueRangeDrag(event, "both") : undefined
+                  }
                 />
               )}
           </div>

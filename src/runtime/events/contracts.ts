@@ -2,6 +2,7 @@ import type { ExportSource } from "../../systems/ExportSystem/exportTypes";
 
 export interface ApplicationEventMap {
   "media.import.requested": { paths?: string[]; folderId?: string };
+  "media.video.opened": { videoId: string };
   "media.replace-selection.requested": Record<string, never>;
   "media.link-selection.requested": Record<string, never>;
   "media.make-selection-offline.requested": Record<string, never>;

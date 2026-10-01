@@ -1,6 +1,7 @@
 import {
+  useCallback,
   useEffect,
-  useMemo,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -13,6 +14,7 @@ interface VideoDisplayProps {
   stageRef: RefObject<HTMLDivElement | null>;
   videoRef: RefObject<HTMLVideoElement | null>;
   videoSrc: string | null;
+  frameRate: number;
   muted: boolean;
   zoomLevel: MonitorZoomLevel;
   zoomPan: ZoomPan;
@@ -21,6 +23,19 @@ interface VideoDisplayProps {
   onSyncCurrentTime: (video: HTMLVideoElement) => void;
   onPlay: (video: HTMLVideoElement) => void;
   onPause: (video: HTMLVideoElement) => void;
+}
+
+interface VideoLayer {
+  id: number;
+  source: string;
+  transform: string;
+}
+
+interface VideoLayers {
+  requestedSource: string | null;
+  current: VideoLayer | null;
+  displayed: VideoLayer | null;
+  nextId: number;
 }
 
 function currentVideo(event: SyntheticEvent<HTMLVideoElement>) {
@@ -42,6 +57,7 @@ export function VideoDisplay({
   stageRef,
   videoRef,
   videoSrc,
+  frameRate,
   muted,
   zoomLevel,
   zoomPan,
@@ -53,10 +69,178 @@ export function VideoDisplay({
 }: VideoDisplayProps) {
   const setZoomLevel = useSourceMonitorState((state) => state.setZoomLevel);
   const setZoomPan = useSourceMonitorState((state) => state.setZoomPan);
-  const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
-  const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 });
   const zoomLevelRef = useRef(zoomLevel);
   const zoomPanRef = useRef(zoomPan);
+  const requestedSource = videoSrc || null;
+  const zoomScale = zoomLevel === "fit" ? 1 : zoomLevel / 100;
+  const currentZoomPan = zoomLevel === "fit" ? { x: 0, y: 0 } : zoomPan;
+  const transform = `translate(${currentZoomPan.x}px, ${currentZoomPan.y}px) scale(${zoomScale})`;
+  const [layers, setLayers] = useState<VideoLayers>(() => ({
+    requestedSource,
+    current: requestedSource ? { id: 0, source: requestedSource, transform } : null,
+    displayed: null,
+    nextId: 1,
+  }));
+  const displayedTransformRef = useRef(transform);
+  if (layers.requestedSource === requestedSource && layers.current?.id === layers.displayed?.id) {
+    displayedTransformRef.current = transform;
+  }
+  if (layers.requestedSource !== requestedSource) {
+    const displayed = layers.displayed
+      ? { ...layers.displayed, transform: displayedTransformRef.current }
+      : null;
+    const current = requestedSource
+      ? displayed?.source === requestedSource
+        ? displayed
+        : { id: layers.nextId, source: requestedSource, transform }
+      : null;
+    setLayers({
+      requestedSource,
+      current,
+      displayed: requestedSource ? displayed : null,
+      nextId: layers.nextId + (current?.id === layers.nextId ? 1 : 0),
+    });
+  }
+  const layersRef = useRef(layers);
+  layersRef.current = layers;
+  const transformRef = useRef(transform);
+  transformRef.current = transform;
+  const frameRateRef = useRef(frameRate);
+  frameRateRef.current = frameRate;
+  const videosRef = useRef(new Map<number, HTMLVideoElement>());
+  const bindingsRef = useRef(new Map<number, (video: HTMLVideoElement | null) => void>());
+  const pendingFrameRef = useRef<{ video: HTMLVideoElement; id: number } | null>(null);
+  const pendingRevealRef = useRef<number | null>(null);
+  const presentedFrameRef = useRef<{ video: HTMLVideoElement; time: number } | null>(null);
+
+  function finishIncomingFrame(video: HTMLVideoElement) {
+    const current = layersRef.current.current;
+    if (!current || video !== videoRef.current || video.readyState < 2 || video.seeking)
+      return false;
+    if (typeof video.requestVideoFrameCallback === "function") {
+      const presented = presentedFrameRef.current;
+      if (
+        !presented ||
+        presented.video !== video ||
+        Math.abs(presented.time - video.currentTime) > 1 / Math.max(1, frameRateRef.current)
+      )
+        return false;
+    }
+    setLayers((state) =>
+      state.current?.id === current.id && state.displayed?.id !== current.id
+        ? { ...state, displayed: { ...state.current, transform: transformRef.current } }
+        : state,
+    );
+    const pending = pendingFrameRef.current;
+    if (pending?.video === video) {
+      pending.video.cancelVideoFrameCallback(pending.id);
+      pendingFrameRef.current = null;
+    }
+    if (pendingRevealRef.current !== null) {
+      cancelAnimationFrame(pendingRevealRef.current);
+      pendingRevealRef.current = null;
+    }
+    return true;
+  }
+
+  function watchIncomingFrame(video: HTMLVideoElement) {
+    if (
+      video !== videoRef.current ||
+      layersRef.current.displayed?.id === layersRef.current.current?.id
+    )
+      return;
+    if (typeof video.requestVideoFrameCallback === "function" && finishIncomingFrame(video)) return;
+    if (pendingFrameRef.current?.video === video || pendingRevealRef.current !== null) return;
+    if (typeof video.requestVideoFrameCallback === "function") {
+      const id = video.requestVideoFrameCallback((_now, metadata) => {
+        if (video !== videoRef.current) return;
+        pendingFrameRef.current = null;
+        presentedFrameRef.current = { video, time: metadata.mediaTime };
+        if (!finishIncomingFrame(video)) watchIncomingFrame(video);
+      });
+      pendingFrameRef.current = { video, id };
+    } else if (video.readyState >= 2 && !video.seeking) {
+      pendingRevealRef.current = requestAnimationFrame(() => {
+        pendingRevealRef.current = requestAnimationFrame(() => {
+          pendingRevealRef.current = null;
+          finishIncomingFrame(video);
+        });
+      });
+    }
+  }
+
+  const bindVideo = useCallback(
+    (id: number, video: HTMLVideoElement | null) => {
+      const previous = videosRef.current.get(id);
+      const pending = pendingFrameRef.current;
+      if (!video && pending && pending.video === previous) {
+        pending.video.cancelVideoFrameCallback(pending.id);
+        pendingFrameRef.current = null;
+      }
+      if (!video && previous === videoRef.current && pendingRevealRef.current !== null) {
+        cancelAnimationFrame(pendingRevealRef.current);
+        pendingRevealRef.current = null;
+      }
+      if (video) {
+        videosRef.current.set(id, video);
+        if (id === layersRef.current.current?.id) {
+          videoRef.current = video;
+          watchIncomingFrame(video);
+        }
+      } else {
+        videosRef.current.delete(id);
+        if (previous === videoRef.current) videoRef.current = null;
+      }
+      if (previous && previous !== video) {
+        // Ref callbacks are replayed in StrictMode without removing the element.
+        queueMicrotask(() => {
+          if (!previous.isConnected && previous !== videoRef.current) {
+            previous.pause();
+            previous.removeAttribute("src");
+            previous.load();
+            bindingsRef.current.delete(id);
+          }
+        });
+      }
+    },
+    [videoRef],
+  );
+
+  function layerBinding(id: number) {
+    let binding = bindingsRef.current.get(id);
+    if (!binding) {
+      binding = (video) => bindVideo(id, video);
+      bindingsRef.current.set(id, binding);
+    }
+    return binding;
+  }
+
+  useLayoutEffect(() => {
+    const video = layers.current && videosRef.current.get(layers.current.id);
+    videoRef.current = video ?? null;
+    const pending = pendingFrameRef.current;
+    if (pending && pending.video !== video) {
+      pending.video.cancelVideoFrameCallback(pending.id);
+      pendingFrameRef.current = null;
+    }
+    if (pendingRevealRef.current !== null) {
+      cancelAnimationFrame(pendingRevealRef.current);
+      pendingRevealRef.current = null;
+    }
+    for (const candidate of videosRef.current.values()) {
+      if (candidate !== video && !candidate.paused) candidate.pause();
+    }
+    if (!video) return;
+    watchIncomingFrame(video);
+  }, [layers.current?.id, videoRef]);
+
+  function handleVideoEvent(
+    event: SyntheticEvent<HTMLVideoElement>,
+    handler: (video: HTMLVideoElement) => void,
+  ) {
+    const video = currentVideo(event);
+    if (video === videoRef.current) handler(video);
+  }
 
   useEffect(() => {
     zoomLevelRef.current = zoomLevel;
@@ -65,27 +249,6 @@ export function VideoDisplay({
   useEffect(() => {
     zoomPanRef.current = zoomPan;
   }, [zoomPan]);
-
-  const fittedSize = useMemo(() => {
-    if (
-      stageSize.width <= 0 ||
-      stageSize.height <= 0 ||
-      naturalSize.width <= 0 ||
-      naturalSize.height <= 0
-    ) {
-      return null;
-    }
-
-    const scale = Math.min(
-      stageSize.width / naturalSize.width,
-      stageSize.height / naturalSize.height,
-    );
-
-    return {
-      width: Math.max(1, Math.floor(naturalSize.width * scale)),
-      height: Math.max(1, Math.floor(naturalSize.height * scale)),
-    };
-  }, [stageSize, naturalSize]);
 
   useEffect(() => {
     const stage = stageRef.current;
@@ -100,36 +263,7 @@ export function VideoDisplay({
 
     stage.addEventListener("wheel", handleWheel, { passive: false, capture: true });
     return () => stage.removeEventListener("wheel", handleWheel, true);
-  }, [stageRef, videoSrc]);
-
-  useEffect(() => {
-    const stage = stageRef.current;
-    if (!stage) {
-      return;
-    }
-
-    const updateSize = () => {
-      const rect = stage.getBoundingClientRect();
-      setStageSize({ width: rect.width, height: rect.height });
-    };
-    updateSize();
-    const resizeObserver = new ResizeObserver(updateSize);
-    resizeObserver.observe(stage);
-    return () => resizeObserver.disconnect();
   }, [stageRef]);
-
-  useEffect(() => {
-    setNaturalSize({ width: 0, height: 0 });
-  }, [videoSrc]);
-
-  const zoomScale = zoomLevel === "fit" ? 1 : zoomLevel / 100;
-  const currentZoomPan = zoomLevel === "fit" ? { x: 0, y: 0 } : zoomPan;
-  const videoStyle: CSSProperties = {
-    width: fittedSize ? `${fittedSize.width}px` : "100%",
-    height: fittedSize ? `${fittedSize.height}px` : "100%",
-    transform: `translate(${currentZoomPan.x}px, ${currentZoomPan.y}px) scale(${zoomScale})`,
-    transformOrigin: "50% 50%",
-  };
 
   function focusStage(stage = stageRef.current) {
     if (!stage || document.activeElement === stage) {
@@ -142,19 +276,8 @@ export function VideoDisplay({
     }
   }
 
-  function handleLoadedMetadata(video: HTMLVideoElement) {
-    if (video.videoWidth > 0 && video.videoHeight > 0) {
-      setNaturalSize((current) =>
-        current.width === video.videoWidth && current.height === video.videoHeight
-          ? current
-          : { width: video.videoWidth, height: video.videoHeight },
-      );
-    }
-    onLoadedMetadata(video);
-  }
-
   function handleVideoWheel(event: WheelEvent, stage: HTMLDivElement) {
-    const hasMedia = Boolean(videoSrc);
+    const hasMedia = Boolean(layersRef.current.requestedSource);
     if (!hasMedia) {
       return;
     }
@@ -198,22 +321,46 @@ export function VideoDisplay({
       tabIndex={-1}
       onPointerDown={() => focusStage()}
     >
-      {videoSrc && (
+      {(layers.displayed && layers.displayed.id !== layers.current?.id
+        ? [layers.displayed, ...(layers.current ? [layers.current] : [])]
+        : layers.current
+          ? [layers.current]
+          : []
+      ).map((layer) => (
         <video
-          ref={videoRef}
-          src={videoSrc}
-          muted={muted}
+          key={layer.id}
+          ref={layerBinding(layer.id)}
+          src={layer.source}
+          className={`source-video-layer ${layer.id === layers.displayed?.id ? "visible" : "loading"}`}
+          muted={layer.id !== layers.current?.id || muted}
           controls={false}
           preload="auto"
-          onError={onVideoError}
-          onLoadedMetadata={(event) => handleLoadedMetadata(currentVideo(event))}
-          onTimeUpdate={(event) => onSyncCurrentTime(currentVideo(event))}
-          onSeeked={(event) => onSyncCurrentTime(currentVideo(event))}
-          onPlay={(event) => onPlay(currentVideo(event))}
-          onPause={(event) => onPause(currentVideo(event))}
-          style={videoStyle}
+          onError={(event) => handleVideoEvent(event, onVideoError)}
+          onLoadedMetadata={(event) =>
+            handleVideoEvent(event, (video) => {
+              onLoadedMetadata(video);
+              watchIncomingFrame(video);
+            })
+          }
+          onLoadedData={(event) => handleVideoEvent(event, watchIncomingFrame)}
+          onCanPlay={(event) => handleVideoEvent(event, watchIncomingFrame)}
+          onTimeUpdate={(event) => handleVideoEvent(event, onSyncCurrentTime)}
+          onSeeked={(event) =>
+            handleVideoEvent(event, (video) => {
+              onSyncCurrentTime(video);
+              watchIncomingFrame(video);
+            })
+          }
+          onPlay={(event) => handleVideoEvent(event, onPlay)}
+          onPause={(event) => handleVideoEvent(event, onPause)}
+          style={
+            {
+              transform: layer.id === layers.current?.id ? transform : layer.transform,
+              transformOrigin: "50% 50%",
+            } as CSSProperties
+          }
         />
-      )}
+      ))}
     </div>
   );
 }

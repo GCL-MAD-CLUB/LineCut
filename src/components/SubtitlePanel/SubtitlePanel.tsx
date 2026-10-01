@@ -58,7 +58,11 @@ import { annotationShortcutAction, annotationShortcutAutoAdvances } from "../ann
 import { sprayEraserCursor, useSprayToolModifiers } from "../sprayToolModifiers";
 import { usePanelManagerState } from "../DockLayout";
 import { MediaSourceMenu } from "../MediaSourceMenu";
-import { panelMediaSources, subtitleTrackLabel } from "../../application/media/panelMediaSources";
+import {
+  panelMediaSources,
+  subtitleTrackLabel,
+  usePanelMediaSource,
+} from "../../application/media/panelMediaSources";
 import {
   isPopupMenuEventTarget,
   PopupMenu,
@@ -731,31 +735,19 @@ export function SubtitlePanel() {
   const panelActive = usePanelActive();
   const focusedPanelId = usePanelManagerState((state) => state.focusedPanelId);
   const identity = useStableIdentity("subtitle-panel", panelInstanceId);
+  const { project, activeVideoId, activeTrackId, previewVideoId, selectVideo } =
+    usePanelMediaSource("subtitles");
   const {
-    project,
     projects,
     mediaItems,
     mediaFolders,
-    activeVideoId,
-    activeTrackId,
     detachedVideoIds,
     exportState,
-    activeTrackChanged,
-    activeVideoChanged,
     messagePublished,
     subtitleCuesDeleted,
   } = useProjectPort(
-    [
-      "project",
-      "projects",
-      "mediaItems",
-      "mediaFolders",
-      "activeVideoId",
-      "activeTrackId",
-      "detachedVideoIds",
-      "exportState",
-    ],
-    ["activeTrackChanged", "activeVideoChanged", "messagePublished", "subtitleCuesDeleted"],
+    ["projects", "mediaItems", "mediaFolders", "detachedVideoIds", "exportState"],
+    ["messagePublished", "subtitleCuesDeleted"],
   );
   const {
     query,
@@ -790,7 +782,8 @@ export function SubtitlePanel() {
     cueSelectionCleared,
     cueSelectionReplaced,
   } = useSubtitlePanelState((state) => state);
-  const playback = usePlaybackStatus();
+  const playbackStatus = usePlaybackStatus();
+  const playback = previewVideoId === activeVideoId ? playbackStatus : undefined;
   const panelRef = useRef<HTMLElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const tableHeaderRef = useRef<HTMLDivElement | null>(null);
@@ -2767,8 +2760,7 @@ export function SubtitlePanel() {
                         title={subtitleTrackLabel(mediaItems, video.id, track)}
                         checked={activeVideoId === video.id && activeTrack?.id === track.id}
                         onSelect={() => {
-                          activeVideoChanged(video.id);
-                          activeTrackChanged(track.id);
+                          selectVideo(video.id, track.id);
                           setTrackMenu(null);
                         }}
                       >

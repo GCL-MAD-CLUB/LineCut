@@ -12,6 +12,7 @@ export {
 } from "./exportRename";
 export type { ExportFileName } from "./exportRename";
 export {
+  canEditExportClipRange,
   defaultExportSettings,
   exportWorkspaceStore,
   readRememberedExportDir,

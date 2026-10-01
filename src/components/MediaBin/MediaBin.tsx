@@ -958,6 +958,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
       return;
     }
     activeVideoChanged(videoId);
+    void publishEvent("media.video.opened", { videoId }, identity);
     messagePublished(`已将源预览切换到 ${video.file_name}。`);
   }
 
@@ -1292,6 +1293,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
       return;
     }
     activeVideoChanged(video.id);
+    void publishEvent("media.video.opened", { videoId: video.id }, identity);
     proxyDialogOpened();
     setContextMenu(null);
   }

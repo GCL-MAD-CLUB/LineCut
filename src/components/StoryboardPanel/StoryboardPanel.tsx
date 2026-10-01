@@ -52,7 +52,7 @@ import {
 import type { StoryboardShot } from "../../types";
 import { usePanelManagerState } from "../DockLayout";
 import { MediaSourceMenu } from "../MediaSourceMenu";
-import { panelMediaSources } from "../../application/media/panelMediaSources";
+import { panelMediaSources, usePanelMediaSource } from "../../application/media/panelMediaSources";
 import { storyboardVideoContext } from "../../core/editor/storyboardDetection";
 import { canDetectStoryboard, useStoryboardDetection } from "./useStoryboardDetection";
 import { annotationShortcutAction, annotationShortcutAutoAdvances } from "../annotationShortcuts";
@@ -1069,9 +1069,8 @@ export function StoryboardPanel() {
   const panelActive = usePanelActive();
   const focusedPanelId = usePanelManagerState((state) => state.focusedPanelId);
   const identity = useStableIdentity("storyboard-panel", panelInstanceId);
+  const { project, activeVideoId, previewVideoId, selectVideo } = usePanelMediaSource("storyboard");
   const {
-    project,
-    activeVideoId,
     mediaItems,
     mediaFolders,
     projects,
@@ -1079,19 +1078,9 @@ export function StoryboardPanel() {
     storyboards,
     exportState,
     messagePublished,
-    activeVideoChanged,
   } = useProjectPort(
-    [
-      "project",
-      "activeVideoId",
-      "mediaItems",
-      "mediaFolders",
-      "projects",
-      "detachedVideoIds",
-      "storyboards",
-      "exportState",
-    ],
-    ["messagePublished", "activeVideoChanged"],
+    ["mediaItems", "mediaFolders", "projects", "detachedVideoIds", "storyboards", "exportState"],
+    ["messagePublished"],
   );
   const {
     query,
@@ -1151,7 +1140,8 @@ export function StoryboardPanel() {
   } = useStoryboardPanelState((state) => state);
   const { requestDetection, canRequestDetection, detectionDialog, detectionTasks } =
     useStoryboardDetection();
-  const playback = usePlaybackStatus();
+  const playbackStatus = usePlaybackStatus();
+  const playback = previewVideoId === activeVideoId ? playbackStatus : undefined;
   const panelRef = useRef<HTMLElement | null>(null);
   const contentLayoutRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -4602,7 +4592,7 @@ export function StoryboardPanel() {
                   title={video.file_name}
                   checked={activeVideoId === video.id}
                   onSelect={() => {
-                    activeVideoChanged(video.id);
+                    selectVideo(video.id);
                     setVideoMenu(null);
                     // Only auto-detect videos with a readable source; a pick never promises more
                     // than switching the active storyboard.

@@ -261,6 +261,7 @@ const operationPolicies = {
   "project.sync": modal("无法同步项目状态"),
   "proxy.generate": modal("生成代理失败"),
   "runtime.render": modal("应用界面发生错误"),
+  "runtime.resizeObserver": silent("界面尺寸测量通知延后"),
   "runtime.unhandled": modal("应用发生未处理错误"),
   "storage.recentPaths": silent("最近记录更新失败"),
   "storyboard.detect": modal("分镜切分失败"),
@@ -383,6 +384,16 @@ export function runBackgroundOperation(
 
 export function installGlobalErrorHandlers() {
   const handleError = (event: ErrorEvent) => {
+    // Pending resize notifications are delivered in a later rendering step.
+    if (
+      event.error == null &&
+      (event.message === "ResizeObserver loop completed with undelivered notifications." ||
+        event.message === "ResizeObserver loop limit exceeded")
+    ) {
+      event.preventDefault();
+      captureOperationError("runtime.resizeObserver", event.message);
+      return;
+    }
     captureOperationError("runtime.unhandled", event.error ?? event.message);
   };
   const handleRejection = (event: PromiseRejectionEvent) => {

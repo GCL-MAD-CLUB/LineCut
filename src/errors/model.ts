@@ -33,6 +33,7 @@ export type OperationKey =
   | "project.sync"
   | "proxy.generate"
   | "runtime.render"
+  | "runtime.resizeObserver"
   | "runtime.unhandled"
   | "storage.recentPaths"
   | "storyboard.detect"

@@ -5,6 +5,7 @@ import {
 } from "../../systems/ProjectSystem";
 import { definePanel } from "../DockLayout";
 import { SubtitlePanel } from "./SubtitlePanel";
+import { usePanelMediaSourceSelection } from "../../application/media/panelMediaSources";
 
 export const subtitlePanelType = "subtitles";
 
@@ -12,10 +13,8 @@ export const subtitlePanelDefinition = definePanel({
   type: subtitlePanelType,
   Component: SubtitlePanel,
   useTitle: () => {
-    const { activeVideoId, mediaItems, project, projects } = useProjectPort(
-      ["activeVideoId", "mediaItems", "project", "projects"],
-      [],
-    );
+    const { activeVideoId, project } = usePanelMediaSourceSelection();
+    const { mediaItems, projects } = useProjectPort(["mediaItems", "projects"], []);
     if (!project) {
       return "字幕：（无剪辑）";
     }

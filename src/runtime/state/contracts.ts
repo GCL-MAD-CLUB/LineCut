@@ -2,6 +2,7 @@ export const EDIT_CAPABILITY_PROJECTION = "edit.capability";
 export const EXPORT_CAPABILITY_PROJECTION = "export.capability";
 export const MEDIA_SELECTION_CAPABILITY_PROJECTION = "media.selection.capability";
 export const PLAYBACK_STATUS_PROJECTION = "playback.status";
+export const PLAYBACK_SOURCE_MODE_PROJECTION = "playback.source-mode";
 
 export interface EditCapabilityProjection {
   active: boolean;
@@ -41,4 +42,12 @@ export interface PlaybackStatusProjection {
   lastFocusedAt: number;
   currentFrame: number;
   isPlaying: boolean;
+  videoId: string;
+  sourcePanelId: string | null;
+}
+
+export interface PlaybackSourceModeProjection {
+  mode: "subtitles" | "storyboard";
+  videoId: string;
+  frame: number;
 }

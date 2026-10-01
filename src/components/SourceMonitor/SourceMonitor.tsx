@@ -10,6 +10,7 @@ import {
   type SyntheticEvent,
 } from "react";
 import { flushSync } from "react-dom";
+import { useSourcePreviewRequest } from "../../application/media/panelMediaSources";
 import { usePlaybackCapability } from "../../runtime/capabilities/PlaybackCapability";
 import { publishEvent } from "../../runtime/events/react";
 import type { ApplicationEventMap } from "../../runtime/events/contracts";
@@ -36,7 +37,7 @@ import { resizeStoryboardShot } from "../../core/editor/storyboardCuts";
 import { storyboardVideoContext } from "../../core/editor/storyboardDetection";
 import { activeMediaDragVideoId, markMediaDragHandled } from "../MediaBin/mediaDrag";
 import { usePanelManagerState } from "../DockLayout";
-import { useExportWorkspaceState } from "../../systems/ExportSystem";
+import { canEditExportClipRange, useExportWorkspaceState } from "../../systems/ExportSystem";
 import "./SourceMonitor.css";
 import { TimelineRuler } from "./TimelineRuler";
 import { StoryboardTimeline } from "./StoryboardTimeline";
@@ -183,6 +184,7 @@ export function SourceMonitor() {
   const panelInstanceId = usePanelInstanceId();
   const isExportMonitor = panelInstanceId === "export-source";
   const exportSource = useExportWorkspaceState((state) => state.source);
+  const exportClipRangeEditable = useExportWorkspaceState(canEditExportClipRange);
   const exportPreviewClipId = useExportWorkspaceState((state) => state.previewClipId);
   const exportPreviewVersion = useExportWorkspaceState((state) => state.previewVersion);
   const updateExportClipRange = useExportWorkspaceState((state) => state.updateClipRange);
@@ -193,12 +195,6 @@ export function SourceMonitor() {
   exportClipRef.current = exportClip;
   const panelActive = usePanelActive();
   const focusedPanelId = usePanelManagerState((state) => state.focusedPanelId);
-  const storyboardVisible = usePanelManagerState((state) =>
-    Object.values(state.layout.areas).some(
-      (area) => area.activePanelId && state.instances[area.activePanelId]?.type === "storyboard",
-    ),
-  );
-  const TimelineComponent = storyboardVisible && panelActive ? StoryboardTimeline : TimelineRuler;
   const identity = useStableIdentity("source-monitor", panelInstanceId);
   const [lastFocusedAt, setLastFocusedAt] = useState(panelInstanceId === "source" ? 1 : 0);
   useEffect(() => {
@@ -221,7 +217,6 @@ export function SourceMonitor() {
     proxyPreviewSelected,
     proxyDialogOpened,
     storyboardUpdated,
-    subtitleCueTimingUpdated,
   } = useProjectPort(
     [
       "project",
@@ -240,7 +235,6 @@ export function SourceMonitor() {
       "proxyPreviewSelected",
       "proxyDialogOpened",
       "storyboardUpdated",
-      "subtitleCueTimingUpdated",
     ],
   );
   const {
@@ -264,7 +258,13 @@ export function SourceMonitor() {
     mediaKey: panelMediaKey,
     playedVideoRecorded,
     syncMedia,
+    playbackPanelId,
+    restorePanelFrame,
   } = useSourceMonitorState((state) => state);
+  const sourceRequest = useSourcePreviewRequest();
+  const sourceMode = sourceRequest?.value.mode ?? "subtitles";
+  const storyboardMode = sourceMode === "storyboard" && panelActive && !isExportMonitor;
+  const TimelineComponent = storyboardMode ? StoryboardTimeline : TimelineRuler;
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const boundAudioRefs = useRef(new Map<string, HTMLAudioElement>());
   const rollingPcmAudioRef = useRef<RollingPcmAudioController | null>(null);
@@ -296,6 +296,7 @@ export function SourceMonitor() {
   const cueRangeDragGroupRef = useRef<string | undefined>(undefined);
   const transientFramePreviewRestoreRef = useRef<number | null>(null);
   const currentFrameRef = useRef(currentFrame);
+  const restoredSourceRevisionRef = useRef<number | undefined>(undefined);
   const timelineStartFrameRef = useRef(timelineStartFrame);
   const timelineSpanFramesRef = useRef(timelineSpanFrames);
   const [isVideoDragOver, setIsVideoDragOver] = useState(false);
@@ -531,6 +532,42 @@ export function SourceMonitor() {
     setPlaybackMode(0);
   }, [mediaKey]);
 
+  useLayoutEffect(() => {
+    if (
+      isExportMonitor ||
+      !panelActive ||
+      !hasMedia ||
+      !sourceRequest ||
+      sourceRequest.value.videoId !== activeVideoId ||
+      restoredSourceRevisionRef.current === sourceRequest.revision
+    )
+      return;
+    const sourcePanelId = sourceRequest.owner.instanceId;
+    if (!sourcePanelId) return;
+    restoredSourceRevisionRef.current = sourceRequest.revision;
+    const frame = clampMonitorFrame(sourceRequest.value.frame);
+    pendingPreviewRestoreRef.current = { frame, playbackMode: 0 };
+    applyPlaybackMode(0, false, false);
+    currentFrameRef.current = frame;
+    seekTargetFrameRef.current = frame;
+    restorePanelFrame(sourcePanelId, frame);
+    setCueRange(null);
+    cueRangeTargetRef.current = null;
+    centerTimelineIfFrameHidden(frame);
+    requestVideoSeek(frame);
+    if (videoRef.current && videoRef.current.readyState >= 1) {
+      pendingPreviewRestoreRef.current = null;
+    }
+  }, [
+    activeVideoId,
+    hasMedia,
+    isExportMonitor,
+    mediaKey,
+    panelActive,
+    restorePanelFrame,
+    sourceRequest,
+  ]);
+
   useEffect(() => {
     currentFrameRef.current = currentFrame;
   }, [currentFrame]);
@@ -589,6 +626,8 @@ export function SourceMonitor() {
     lastFocusedAt,
     currentFrame,
     isPlaying,
+    videoId: panelMediaKey === mediaKey ? activeVideoId : "",
+    sourcePanelId: isExportMonitor ? null : playbackPanelId,
     fallbackAuthority: identity.instanceId === "source",
     onSeek: (detail) => {
       if (!hasMedia) {
@@ -902,7 +941,7 @@ export function SourceMonitor() {
   function flushPendingVideoSeek() {
     const video = videoRef.current;
     const targetFrame = pendingVideoSeekFrameRef.current;
-    if (!video || targetFrame === null || videoSeekInFlightRef.current) {
+    if (!video || video.readyState < 1 || targetFrame === null || videoSeekInFlightRef.current) {
       return;
     }
     if (usToMonitorFrame(video.currentTime * 1_000_000) === targetFrame && !video.seeking) {
@@ -1395,15 +1434,9 @@ export function SourceMonitor() {
       }
       applyPlaybackMode(restore.playbackMode);
     };
-    if (usToMonitorFrame(element.currentTime * 1_000_000) !== restoredFrame) {
+    if (usToMonitorFrame(element.currentTime * 1_000_000) !== restoredFrame || element.seeking) {
       element.addEventListener("seeked", restorePlayback, { once: true });
-      try {
-        element.currentTime =
-          videoFrameSeekUs(frameToClampedUs(restoredFrame), frameRate) / 1_000_000;
-      } catch {
-        element.removeEventListener("seeked", restorePlayback);
-        restorePlayback();
-      }
+      requestVideoSeek(restoredFrame);
       return;
     }
     restorePlayback();
@@ -1439,6 +1472,12 @@ export function SourceMonitor() {
   }
 
   function changeCueRangeFromTimeline(range: { startFrame: number; endFrame: number } | null) {
+    const target = cueRangeTargetRef.current;
+    if (
+      target?.kind === "subtitle" ||
+      (isExportMonitor ? !exportClipRangeEditable : !storyboardMode)
+    )
+      return;
     cuePlaybackEndFrameRef.current = range?.endFrame ?? null;
     if (isExportMonitor) {
       setCueRange(range);
@@ -1454,24 +1493,10 @@ export function SourceMonitor() {
       }
       return;
     }
-    const target = cueRangeTargetRef.current;
     if (!range || !target) {
       setCueRange(range);
       return;
     }
-    if (target.kind === "subtitle") {
-      setCueRange(range);
-      subtitleCueTimingUpdated(
-        target.videoId,
-        target.trackId,
-        target.cueId,
-        frameToClampedUs(range.startFrame),
-        frameToClampedUs(range.endFrame),
-        cueRangeDragGroupRef.current,
-      );
-      return;
-    }
-
     const currentStoryboard = storyboards[target.videoContext];
     if (!currentStoryboard) {
       setCueRange(range);
@@ -1554,10 +1579,10 @@ export function SourceMonitor() {
       onDrop={handleVideoDrop}
     >
       <VideoDisplay
-        key={mediaKey}
         stageRef={videoStageRef}
         videoRef={videoRef}
         videoSrc={videoSrc}
+        frameRate={frameRate}
         muted={shouldMuteVideo(playbackMode)}
         zoomLevel={zoomLevel}
         zoomPan={zoomPan}
@@ -1659,7 +1684,7 @@ export function SourceMonitor() {
           onPreviewModeChange={changePreviewMode}
         />
         <TimelineComponent
-          key={`${mediaKey}:${project?.asset.fingerprint ?? ""}:${storyboardVisible && panelActive}`}
+          key={`${mediaKey}:${project?.asset.fingerprint ?? ""}:${storyboardMode}`}
           videoContext={videoContext}
           skippedRanges={skippedRanges}
           frameRate={frameRate}
@@ -1689,6 +1714,11 @@ export function SourceMonitor() {
           timelineStartFrame={timelineStartFrame}
           timelineSpanFrames={timelineSpanFrames}
           cueRange={cueRange}
+          cueRangeEditable={
+            isExportMonitor
+              ? exportClipRangeEditable && Boolean(exportClip)
+              : storyboardMode && cueRangeTargetRef.current?.kind !== "subtitle"
+          }
           onMinTimelineSpanFramesChange={updateMinTimelineSpanFrames}
           onTimelineStartFrameChange={updateTimelineStartFrame}
           onSeekFrame={seekToFrame}

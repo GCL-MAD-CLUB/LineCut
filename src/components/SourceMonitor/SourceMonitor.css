@@ -53,6 +53,22 @@
   outline: none;
 }
 
+.source-video-stage {
+  position: relative;
+  isolation: isolate;
+}
+
+.source-video-stage .source-video-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  transition: none;
+}
+
+.source-video-stage .source-video-layer.visible {
+  z-index: 1;
+}
+
 .source-video-stage video,
 .video-frame video {
   display: block;
@@ -404,6 +420,12 @@
 
 .timeline-cue-move-handle:active {
   cursor: grabbing;
+}
+
+.timeline-cue-range.read-only .timeline-cue-edge,
+.timeline-cue-range.read-only .timeline-cue-move-handle,
+.timeline-cue-range.read-only .timeline-cue-move-handle:active {
+  cursor: default;
 }
 
 .timeline-cue-move-handle::before {

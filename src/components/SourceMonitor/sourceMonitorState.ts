@@ -49,6 +49,8 @@ interface SourceMonitorState {
   mediaKey: string;
   playbackHistoryVideoIds: string[];
   currentFrame: number;
+  playbackPanelId: string | null;
+  restorePanelFrame: (panelId: string, frame: number) => void;
   playbackMode: PlaybackMode;
   isPlaying: boolean;
   zoomLevel: MonitorZoomLevel;
@@ -79,6 +81,8 @@ export const useSourceMonitorState = createPanelState<SourceMonitorState>(() => 
   mediaKey: "",
   playbackHistoryVideoIds: [],
   currentFrame: 0,
+  playbackPanelId: null,
+  restorePanelFrame: (playbackPanelId, currentFrame) => set({ playbackPanelId, currentFrame }),
   playbackMode: 0,
   isPlaying: false,
   zoomLevel: "fit",
@@ -120,6 +124,7 @@ export const useSourceMonitorState = createPanelState<SourceMonitorState>(() => 
         : {
             mediaKey,
             currentFrame: 0,
+            playbackPanelId: null,
             playbackMode: 0,
             isPlaying: false,
             zoomLevel: "fit",
