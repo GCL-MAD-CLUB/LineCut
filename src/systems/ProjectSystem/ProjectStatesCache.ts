@@ -23,6 +23,16 @@ export function readExportState(projectId: string | null): ProjectExportState | 
   return states[projectId]?.exportState ?? null;
 }
 
+export function readProjectPanelState<State>(
+  projectId: string | null,
+  panelId: string,
+): State | null {
+  if (!projectId) {
+    return null;
+  }
+  return (states[projectId]?.panelStates?.[panelId] as State | undefined) ?? null;
+}
+
 /** Persists a project's export settings both locally and to the global store; passing `null` clears the entry so empty state never lingers. */
 export async function persistExportState(
   projectId: string,
@@ -30,12 +40,42 @@ export async function persistExportState(
 ): Promise<void> {
   await invokeCommand("save_project_state", { projectId, exportState });
   if (exportState) {
-    states = { ...states, [projectId]: { exportState } };
+    states = {
+      ...states,
+      [projectId]: { ...(states[projectId] ?? {}), exportState },
+    };
   } else {
     const next = { ...states };
-    delete next[projectId];
+    const current = next[projectId];
+    if (current && Object.keys(current.panelStates ?? {}).length > 0) {
+      next[projectId] = { ...current, exportState: null };
+    } else {
+      delete next[projectId];
+    }
     states = next;
   }
+}
+
+export async function persistProjectPanelState(
+  projectId: string,
+  panelId: string,
+  panelState: unknown | null,
+): Promise<void> {
+  await invokeCommand("save_project_panel_state", { projectId, panelId, panelState });
+  const current = states[projectId] ?? { exportState: null, panelStates: {} };
+  const panelStates = { ...(current.panelStates ?? {}) };
+  if (panelState === null) {
+    delete panelStates[panelId];
+  } else {
+    panelStates[panelId] = panelState;
+  }
+  const next = { ...states };
+  if (!current.exportState && Object.keys(panelStates).length === 0) {
+    delete next[projectId];
+  } else {
+    next[projectId] = { ...current, panelStates };
+  }
+  states = next;
 }
 
 /** Removes every per-project entry whose document id is not on the keep list, derived from the recently-opened projects list. */

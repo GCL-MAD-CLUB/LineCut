@@ -28,6 +28,8 @@ export type OperationKey =
   | "project.launchPath"
   | "project.new"
   | "project.open"
+  | "project.panelState.load"
+  | "project.panelState.save"
   | "project.restoreBackend"
   | "project.save"
   | "project.sync"

@@ -69,6 +69,7 @@ import {
   subtitleTrackLabel,
   usePanelMediaSource,
 } from "../../application/media/panelMediaSources";
+import { usePersistedMediaPanelState } from "../../application/media/panelMediaPersistence";
 import {
   isPopupMenuEventTarget,
   PopupMenu,
@@ -755,6 +756,7 @@ export function SubtitlePanel() {
     selectedSources,
     toggleSource,
     previewSource,
+    selection,
   } = usePanelMediaSource("subtitles");
   const {
     projects,
@@ -860,6 +862,20 @@ export function SubtitlePanel() {
   const multipleSources = sources.length > 1;
   const trackContext = sourceScope(sources.map((source) => source.context));
   const [sourceDirection, setSourceDirection] = useState<SubtitleSortDirection>("ascending");
+  usePersistedMediaPanelState({
+    sources: sources.map(({ videoId, trackId }) => ({ videoId, trackId })),
+    sourceDirection,
+    sourceWidth: subtitleColumnWidths.source,
+    onRestoreSources: (restoredSources) =>
+      selection.setSources(
+        restoredSources.filter((source) =>
+          mediaItems.some((item) => item.id === source.videoId && item.kind === "video"),
+        ),
+      ),
+    onRestoreSourceDirection: setSourceDirection,
+    onRestoreSourceWidth: (width) =>
+      setSubtitleColumnWidths((current) => ({ ...current, source: width })),
+  });
   const allCues = useMemo(
     () =>
       sources.flatMap((source) =>

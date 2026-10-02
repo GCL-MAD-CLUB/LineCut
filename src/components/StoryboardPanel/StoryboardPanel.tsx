@@ -59,6 +59,7 @@ import type { StoryboardShot } from "../../types";
 import { usePanelManagerState } from "../DockLayout";
 import { MediaSourceMenu } from "../MediaSourceMenu";
 import { panelMediaSources, usePanelMediaSource } from "../../application/media/panelMediaSources";
+import { usePersistedMediaPanelState } from "../../application/media/panelMediaPersistence";
 import { canDetectStoryboard, useStoryboardDetection } from "./useStoryboardDetection";
 import { annotationShortcutAction, annotationShortcutAutoAdvances } from "../annotationShortcuts";
 import {
@@ -1092,6 +1093,7 @@ export function StoryboardPanel() {
     selectedSources: sources,
     toggleSource,
     previewSource,
+    selection,
   } = usePanelMediaSource("storyboard");
   const {
     mediaItems,
@@ -1219,6 +1221,20 @@ export function StoryboardPanel() {
   const videoContext = sourceScope(sources.map((source) => source.context));
   const multipleSources = sources.length > 1;
   const [sourceDirection, setSourceDirection] = useState<StoryboardSortDirection>("ascending");
+  usePersistedMediaPanelState({
+    sources: sources.map(({ videoId, trackId }) => ({ videoId, trackId })),
+    sourceDirection,
+    sourceWidth: storyboardColumnWidths.source,
+    onRestoreSources: (restoredSources) =>
+      selection.setSources(
+        restoredSources.filter((source) =>
+          mediaItems.some((item) => item.id === source.videoId && item.kind === "video"),
+        ),
+      ),
+    onRestoreSourceDirection: setSourceDirection,
+    onRestoreSourceWidth: (width) =>
+      setStoryboardColumnWidths((current) => ({ ...current, source: width })),
+  });
   const sourceForShot = (shot: StoryboardShot) =>
     sources.find((source) => source.context === sourceRowParts(shot.id)?.[0]) ?? sources[0];
   function seekToShot(shot: StoryboardShot, _context: string, focusRange = false) {

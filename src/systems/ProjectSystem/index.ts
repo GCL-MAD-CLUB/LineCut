@@ -28,4 +28,6 @@ export {
   projectStatesLoaded,
   pruneProjectStates,
   readExportState,
+  readProjectPanelState,
+  persistProjectPanelState,
 } from "./ProjectStatesCache";

@@ -72,13 +72,14 @@ pub(crate) struct ImportBrowserConfigPatch {
     pub(crate) settings: Option<ImportSettingsConfig>,
 }
 
-/// Fixed template for the state associated with one project id. Only
-/// `export_state` is defined today; future state kinds are added as fields.
+/// Fixed template for the state associated with one project id.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ProjectStateConfig {
     #[serde(default)]
     pub(crate) export_state: Option<ExportOptions>,
+    #[serde(default)]
+    pub(crate) panel_states: HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -838,13 +839,46 @@ pub(crate) fn save_project_state(
     let _guard = workspace_config_guard(&state)?;
     let mut config = read_workspace_config()?;
     if let Some(export_state) = export_state {
-        config.project_states.insert(
-            project_id,
-            ProjectStateConfig {
-                export_state: Some(export_state),
-            },
-        );
+        config
+            .project_states
+            .entry(project_id)
+            .or_default()
+            .export_state = Some(export_state);
     } else {
+        let remove_entry = config
+            .project_states
+            .get_mut(&project_id)
+            .is_some_and(|entry| {
+                entry.export_state = None;
+                entry.panel_states.is_empty()
+            });
+        if remove_entry {
+            config.project_states.remove(&project_id);
+        }
+    }
+    write_workspace_config(&config)
+}
+
+/// Upserts one panel's UI state without disturbing export settings or other panels.
+#[tauri::command]
+pub(crate) fn save_project_panel_state(
+    project_id: String,
+    panel_id: String,
+    panel_state: Option<serde_json::Value>,
+    state: tauri::State<'_, AppState>,
+) -> CommandResult<()> {
+    let _guard = workspace_config_guard(&state)?;
+    let mut config = read_workspace_config()?;
+    let remove_entry = {
+        let entry = config.project_states.entry(project_id.clone()).or_default();
+        if let Some(panel_state) = panel_state {
+            entry.panel_states.insert(panel_id, panel_state);
+        } else {
+            entry.panel_states.remove(&panel_id);
+        }
+        entry.export_state.is_none() && entry.panel_states.is_empty()
+    };
+    if remove_entry {
         config.project_states.remove(&project_id);
     }
     write_workspace_config(&config)
@@ -1033,6 +1067,14 @@ mod tests {
                     output_name: String::new(),
                     existing_file_mode: ExportExistingFileMode::Ask,
                 }),
+                panel_states: HashMap::from([(
+                    "subtitles".to_string(),
+                    serde_json::json!({
+                        "sources": [{ "videoId": "video-1", "trackId": "track-1" }],
+                        "sourceDirection": "descending",
+                        "sourceWidth": 240,
+                    }),
+                )]),
             },
         );
         let xml = quick_xml::se::to_string(&config.clone().into_xml().unwrap()).unwrap();
