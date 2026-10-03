@@ -1,5 +1,8 @@
+import type { MediaBinViewMode } from "./mediaBinState";
+
 export const mediaBinPanelType = "media-bin";
 
 export interface MediaBinPanelParams {
   rootFolderId: string | null;
+  initialViewMode?: MediaBinViewMode;
 }

@@ -298,10 +298,11 @@ export interface RecentProjectEntry {
 
 /**
  * Fixed template for the global state stored under one project document id.
- * Only `exportState` is defined today; future state kinds are added as fields.
  */
 export interface ProjectStateConfig {
   exportState: ProjectExportState | null;
+  /** Per-panel UI state, keyed by dock panel instance id. */
+  panelStates?: Record<string, unknown>;
 }
 
 export interface ProxyResult {

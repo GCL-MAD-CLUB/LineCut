@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { PanelInstanceProvider } from "../../runtime/systems/PanelState";
+import { PanelInstanceProvider, usePublishedPanelTitle } from "../../runtime/systems/PanelState";
 import { clientError } from "../../errors";
 import {
   PopupMenuItem,
@@ -134,7 +134,9 @@ function PanelTitleContent({
   instance: PanelInstance;
   children: (title: string) => ReactNode;
 }) {
-  return children(definition.useTitle(instance.params));
+  const publishedTitle = usePublishedPanelTitle();
+  const fallbackTitle = definition.useTitle(instance.params);
+  return children(publishedTitle ?? fallbackTitle);
 }
 
 export function PanelTitle({

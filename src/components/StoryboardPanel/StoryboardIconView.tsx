@@ -1,4 +1,5 @@
-﻿import { Star } from "lucide-react";
+import type { PanelRowSource } from "../../core/editor/multiSource";
+import { Star } from "lucide-react";
 import {
   useEffect,
   useLayoutEffect,
@@ -64,6 +65,7 @@ const storyboardIconMetadataOptions: Array<
 ];
 
 interface StoryboardIconViewProps {
+  sourceForRow: (row: StoryboardShot) => PanelRowSource;
   searchHighlight?: SearchHighlightOptions;
   shots: StoryboardShot[];
   currentShotId: string | undefined;
@@ -201,6 +203,7 @@ function metadataText(
 }
 
 export function StoryboardIconView({
+  sourceForRow,
   searchHighlight,
   shots,
   currentShotId,
@@ -440,7 +443,7 @@ export function StoryboardIconView({
   );
   const thumbnailWindow = useTimelineThumbnailWindow({
     enabled: Boolean(videoPath),
-    sourceKey: `${assetId}:${fingerprint}:${videoPath}`,
+    sourceKey: [...new Set(shots.map((shot) => sourceForRow(shot)?.context))].join("|"),
     items: shots,
     getItemKey: (shot) => `${shot.id}:${shot.start_us}`,
     visibleRange: thumbnailVisibleRange,
@@ -448,22 +451,22 @@ export function StoryboardIconView({
     requestThumbnail: (shot, _index, resolution, priority) =>
       timelineThumbnails.request({
         kind: "storyboard",
-        assetId,
-        fingerprint,
-        videoPath,
+        assetId: sourceForRow(shot).assetId,
+        fingerprint: sourceForRow(shot).fingerprint,
+        videoPath: sourceForRow(shot).videoPath,
         timeUs: shot.start_us,
-        frameRate,
+        frameRate: sourceForRow(shot).frameRate,
         priority,
         resolution,
       }),
     backfillThumbnail: (shot, _index, resolution, priority) =>
       timelineThumbnails.backfill({
         kind: "storyboard",
-        assetId,
-        fingerprint,
-        videoPath,
+        assetId: sourceForRow(shot).assetId,
+        fingerprint: sourceForRow(shot).fingerprint,
+        videoPath: sourceForRow(shot).videoPath,
         timeUs: shot.start_us,
-        frameRate,
+        frameRate: sourceForRow(shot).frameRate,
         priority,
         resolution,
       }),
@@ -487,6 +490,7 @@ export function StoryboardIconView({
       >
         <div ref={gridRef} className="storyboard-icon-grid" style={gridStyle}>
           {shots.map((shot, index) => {
+            const source = sourceForRow(shot);
             const selected = selectedShotIds.has(shot.id);
             const annotation = shotAnnotations[shot.id];
             const rating = annotation?.rating ?? 0;
@@ -507,7 +511,7 @@ export function StoryboardIconView({
               shot,
               index + 1,
               shotTitle(shot),
-              frameRate,
+              source?.frameRate ?? frameRate,
               label,
             );
             return (
@@ -543,11 +547,11 @@ export function StoryboardIconView({
                     colorLabel={visualLabel}
                     stack={stack}
                     stackIndex={stackIndex}
-                    assetId={assetId}
-                    fingerprint={fingerprint}
-                    videoPath={videoPath}
-                    previewVideoPath={previewVideoPath}
-                    frameRate={frameRate}
+                    assetId={source?.assetId ?? assetId}
+                    fingerprint={source?.fingerprint ?? fingerprint}
+                    videoPath={source?.videoPath ?? videoPath}
+                    previewVideoPath={source?.previewVideoPath ?? previewVideoPath}
+                    frameRate={source?.frameRate ?? frameRate}
                     priority={Math.abs(index - thumbnailWindow.centerIndex)}
                     requestEnabled={timelineThumbnailWindowContains(thumbnailWindow, index)}
                     targetResolution={thumbnailTargetResolution}

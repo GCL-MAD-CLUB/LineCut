@@ -10,6 +10,7 @@ import {
   type SyntheticEvent,
 } from "react";
 import { flushSync } from "react-dom";
+import { useSourcePreviewRequest } from "../../application/media/panelMediaSources";
 import { usePlaybackCapability } from "../../runtime/capabilities/PlaybackCapability";
 import { publishEvent } from "../../runtime/events/react";
 import type { ApplicationEventMap } from "../../runtime/events/contracts";
@@ -33,9 +34,10 @@ import {
 import { MonitorRange } from "./MonitorRange";
 import { crossedStoryboardGap, storyboardGaps } from "../../core/editor/storyboard";
 import { resizeStoryboardShot } from "../../core/editor/storyboardCuts";
+import { storyboardVideoContext } from "../../core/editor/storyboardDetection";
 import { activeMediaDragVideoId, markMediaDragHandled } from "../MediaBin/mediaDrag";
 import { usePanelManagerState } from "../DockLayout";
-import { useExportWorkspaceState } from "../../systems/ExportSystem";
+import { canEditExportClipRange, useExportWorkspaceState } from "../../systems/ExportSystem";
 import "./SourceMonitor.css";
 import { TimelineRuler } from "./TimelineRuler";
 import { StoryboardTimeline } from "./StoryboardTimeline";
@@ -182,6 +184,7 @@ export function SourceMonitor() {
   const panelInstanceId = usePanelInstanceId();
   const isExportMonitor = panelInstanceId === "export-source";
   const exportSource = useExportWorkspaceState((state) => state.source);
+  const exportClipRangeEditable = useExportWorkspaceState(canEditExportClipRange);
   const exportPreviewClipId = useExportWorkspaceState((state) => state.previewClipId);
   const exportPreviewVersion = useExportWorkspaceState((state) => state.previewVersion);
   const updateExportClipRange = useExportWorkspaceState((state) => state.updateClipRange);
@@ -192,12 +195,6 @@ export function SourceMonitor() {
   exportClipRef.current = exportClip;
   const panelActive = usePanelActive();
   const focusedPanelId = usePanelManagerState((state) => state.focusedPanelId);
-  const storyboardVisible = usePanelManagerState((state) =>
-    Object.values(state.layout.areas).some(
-      (area) => area.activePanelId && state.instances[area.activePanelId]?.type === "storyboard",
-    ),
-  );
-  const TimelineComponent = storyboardVisible && panelActive ? StoryboardTimeline : TimelineRuler;
   const identity = useStableIdentity("source-monitor", panelInstanceId);
   const [lastFocusedAt, setLastFocusedAt] = useState(panelInstanceId === "source" ? 1 : 0);
   useEffect(() => {
@@ -220,7 +217,6 @@ export function SourceMonitor() {
     proxyPreviewSelected,
     proxyDialogOpened,
     storyboardUpdated,
-    subtitleCueTimingUpdated,
   } = useProjectPort(
     [
       "project",
@@ -239,7 +235,6 @@ export function SourceMonitor() {
       "proxyPreviewSelected",
       "proxyDialogOpened",
       "storyboardUpdated",
-      "subtitleCueTimingUpdated",
     ],
   );
   const {
@@ -263,7 +258,13 @@ export function SourceMonitor() {
     mediaKey: panelMediaKey,
     playedVideoRecorded,
     syncMedia,
+    playbackPanelId,
+    restorePanelFrame,
   } = useSourceMonitorState((state) => state);
+  const sourceRequest = useSourcePreviewRequest();
+  const sourceMode = sourceRequest?.value.mode ?? "subtitles";
+  const storyboardMode = sourceMode === "storyboard" && panelActive && !isExportMonitor;
+  const TimelineComponent = storyboardMode ? StoryboardTimeline : TimelineRuler;
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const boundAudioRefs = useRef(new Map<string, HTMLAudioElement>());
   const rollingPcmAudioRef = useRef<RollingPcmAudioController | null>(null);
@@ -295,6 +296,14 @@ export function SourceMonitor() {
   const cueRangeDragGroupRef = useRef<string | undefined>(undefined);
   const transientFramePreviewRestoreRef = useRef<number | null>(null);
   const currentFrameRef = useRef(currentFrame);
+  const activeVideoIdRef = useRef(activeVideoId);
+  activeVideoIdRef.current = activeVideoId;
+  // Cross-source row clicks change the active video before its media element is ready.
+  const pendingSourceSeekRef = useRef<ApplicationEventMap["playback.seek.requested"] | null>(null);
+  const applySeekRequestRef = useRef<
+    ((detail: Readonly<ApplicationEventMap["playback.seek.requested"]>) => boolean) | null
+  >(null);
+  const restoredSourceRevisionRef = useRef<number | undefined>(undefined);
   const timelineStartFrameRef = useRef(timelineStartFrame);
   const timelineSpanFramesRef = useRef(timelineSpanFrames);
   const [isVideoDragOver, setIsVideoDragOver] = useState(false);
@@ -421,8 +430,8 @@ export function SourceMonitor() {
   const mediaKey = project
     ? `${activeVideoId}:${project.asset.id}:${durationUs}:${frameRate}`
     : `empty:${frameRate}`;
-  const storyboardVideoContext = `${activeVideoId}:${project?.asset.id ?? ""}:${project?.asset.fingerprint ?? ""}`;
-  const storyboard = storyboards[storyboardVideoContext];
+  const videoContext = storyboardVideoContext(activeVideoId, project);
+  const storyboard = storyboards[videoContext];
   const skippedRanges = useMemo(
     () => (storyboard ? storyboardGaps(storyboard.shots, durationFrames) : []),
     [storyboard, durationFrames],
@@ -530,9 +539,54 @@ export function SourceMonitor() {
     setPlaybackMode(0);
   }, [mediaKey]);
 
+  useLayoutEffect(() => {
+    if (
+      isExportMonitor ||
+      !panelActive ||
+      !hasMedia ||
+      !sourceRequest ||
+      sourceRequest.value.videoId !== activeVideoId ||
+      restoredSourceRevisionRef.current === sourceRequest.revision
+    )
+      return;
+    const sourcePanelId = sourceRequest.owner.instanceId;
+    if (!sourcePanelId) return;
+    restoredSourceRevisionRef.current = sourceRequest.revision;
+    const frame = clampMonitorFrame(sourceRequest.value.frame);
+    pendingPreviewRestoreRef.current = { frame, playbackMode: 0 };
+    applyPlaybackMode(0, false, false);
+    currentFrameRef.current = frame;
+    seekTargetFrameRef.current = frame;
+    restorePanelFrame(sourcePanelId, frame);
+    setCueRange(null);
+    cueRangeTargetRef.current = null;
+    centerTimelineIfFrameHidden(frame);
+    requestVideoSeek(frame);
+    if (videoRef.current && videoRef.current.readyState >= 1) {
+      pendingPreviewRestoreRef.current = null;
+    }
+  }, [
+    activeVideoId,
+    hasMedia,
+    isExportMonitor,
+    mediaKey,
+    panelActive,
+    restorePanelFrame,
+    sourceRequest,
+  ]);
+
   useEffect(() => {
     currentFrameRef.current = currentFrame;
   }, [currentFrame]);
+
+  useEffect(() => {
+    const pendingSeek = pendingSourceSeekRef.current;
+    if (pendingSeek?.videoId !== undefined && pendingSeek.videoId !== activeVideoId) {
+      pendingSourceSeekRef.current = null;
+      return;
+    }
+    flushPendingSourceSeek();
+  }, [activeVideoId, mediaKey]);
 
   useEffect(() => {
     playbackModeRef.current = playbackMode;
@@ -582,58 +636,98 @@ export function SourceMonitor() {
     });
   }, [durationFrames, isExportMonitor, minTimelineSpanFrames]);
 
+  function applySeekRequest(
+    detail: Readonly<ApplicationEventMap["playback.seek.requested"]>,
+  ): boolean {
+    if (!hasMedia) {
+      return false;
+    }
+    if (detail.focusEndUs !== undefined) {
+      const rangeStartFrame = usToMonitorFrame(
+        clamp(Math.min(detail.timeUs, detail.focusEndUs), 0, durationUs),
+      );
+      const rangeEndFrame = usToMonitorFrame(
+        clamp(
+          Math.max(detail.timeUs, detail.focusEndUs),
+          frameToClampedUs(rangeStartFrame),
+          durationUs,
+        ),
+      );
+      const focusedRange =
+        isExportMonitor && exportRange
+          ? {
+              startFrame: exportRange.startFrame,
+              endFrame: Math.max(exportRange.startFrame, exportRange.endFrame),
+            }
+          : { startFrame: rangeStartFrame, endFrame: rangeEndFrame };
+      setCueRange(focusedRange);
+      if (!isExportMonitor) centerTimelineOnFrame(rangeStartFrame);
+      cuePlaybackEndFrameRef.current = focusedRange.endFrame;
+      cueRangeTargetRef.current = detail.focusTarget ?? null;
+    }
+    const video = videoRef.current;
+    seekToFrame(
+      usToMonitorFrame(detail.timeUs),
+      detail.focusEndUs !== undefined,
+      detail.focusEndUs === undefined,
+    );
+    if (detail.focusEndUs !== undefined && video) {
+      startCuePlaybackFrameMonitor(video);
+    }
+    if (detail.play && video) {
+      applyPlaybackMode(1, detail.focusEndUs !== undefined);
+    }
+    return true;
+  }
+  applySeekRequestRef.current = applySeekRequest;
+
+  function videoIsReadyForSeek() {
+    return Boolean(
+      videoRef.current &&
+      videoRef.current.readyState >= 1 &&
+      videoRef.current.getAttribute("src") === videoSrc,
+    );
+  }
+
+  function flushPendingSourceSeek() {
+    const pending = pendingSourceSeekRef.current;
+    if (
+      !pending ||
+      !videoIsReadyForSeek() ||
+      (pending.videoId !== undefined && pending.videoId !== activeVideoIdRef.current)
+    ) {
+      return;
+    }
+    pendingSourceSeekRef.current = null;
+    applySeekRequestRef.current?.(pending);
+  }
+
   const { isAuthority: isPlaybackShortcutAuthority } = usePlaybackCapability({
     identity,
     active: panelActive,
     lastFocusedAt,
     currentFrame,
     isPlaying,
+    videoId: panelMediaKey === mediaKey ? activeVideoId : "",
+    sourcePanelId: isExportMonitor ? null : playbackPanelId,
     fallbackAuthority: identity.instanceId === "source",
     onSeek: (detail) => {
       if (!hasMedia) {
         return false;
       }
-      if (detail.focusEndUs !== undefined) {
-        const rangeStartFrame = usToMonitorFrame(
-          clamp(Math.min(detail.timeUs, detail.focusEndUs), 0, durationUs),
-        );
-        const rangeEndFrame = usToMonitorFrame(
-          clamp(
-            Math.max(detail.timeUs, detail.focusEndUs),
-            frameToClampedUs(rangeStartFrame),
-            durationUs,
-          ),
-        );
-        const focusedRange =
-          isExportMonitor && exportRange
-            ? {
-                startFrame: exportRange.startFrame,
-                endFrame: Math.max(exportRange.startFrame, exportRange.endFrame),
-              }
-            : { startFrame: rangeStartFrame, endFrame: rangeEndFrame };
-        setCueRange(focusedRange);
-        if (!isExportMonitor) centerTimelineOnFrame(rangeStartFrame);
-        cuePlaybackEndFrameRef.current = focusedRange.endFrame;
-        cueRangeTargetRef.current = detail.focusTarget ?? null;
+      if (
+        detail.videoId !== undefined &&
+        (detail.videoId !== activeVideoIdRef.current || !videoIsReadyForSeek())
+      ) {
+        pendingSourceSeekRef.current = detail;
+        return true;
       }
-      const video = videoRef.current;
-      seekToFrame(
-        usToMonitorFrame(detail.timeUs),
-        detail.focusEndUs !== undefined,
-        detail.focusEndUs === undefined,
-      );
-      if (detail.focusEndUs !== undefined && video) {
-        startCuePlaybackFrameMonitor(video);
-      }
-      if (detail.play && video) {
-        applyPlaybackMode(1, detail.focusEndUs !== undefined);
-      }
-      return true;
+      return applySeekRequest(detail);
     },
   });
 
   useEffect(() => {
-    const isShortcutScopeActive = () => {
+    const isShortcutScopeActive = (target?: EventTarget | null) => {
       if (!panelActive || !isPlaybackShortcutAuthority) {
         return false;
       }
@@ -641,12 +735,16 @@ export function SourceMonitor() {
       if (!element) {
         return false;
       }
+      const targetElement = target instanceof Element ? target : null;
+      if (targetElement?.closest(".popup-menu")) {
+        return false;
+      }
       const rect = element.getBoundingClientRect();
       return rect.width > 0 && rect.height > 0;
     };
 
     const suppressSpaceEvent = (event: KeyboardEvent) => {
-      if ((event.code !== "Space" && event.key !== " ") || !isShortcutScopeActive()) {
+      if ((event.code !== "Space" && event.key !== " ") || !isShortcutScopeActive(event.target)) {
         return false;
       }
       event.preventDefault();
@@ -659,7 +757,7 @@ export function SourceMonitor() {
       event.code === "KeyJ" || event.code === "KeyK" || event.code === "KeyL";
 
     const suppressShuttleEvent = (event: KeyboardEvent) => {
-      if (!isShuttleKey(event) || !isShortcutScopeActive()) {
+      if (!isShuttleKey(event) || !isShortcutScopeActive(event.target)) {
         return false;
       }
       event.preventDefault();
@@ -681,8 +779,14 @@ export function SourceMonitor() {
       return lastShuttleDirectionHeldRef.current < 0 ? "slow-reverse" : "slow-forward";
     };
 
+    const sourceIsFocused = (event: KeyboardEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const panel = sourceMonitorRef.current?.closest(".dock-panel-surface");
+      return Boolean(panel && target?.closest(".dock-panel-surface") === panel);
+    };
+
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!isShortcutScopeActive()) {
+      if (event.defaultPrevented || !isShortcutScopeActive(event.target)) {
         return;
       }
       const isFrameStep = event.key === "ArrowLeft" || event.key === "ArrowRight";
@@ -748,11 +852,17 @@ export function SourceMonitor() {
       ) {
         return;
       }
+      event.stopPropagation();
+      event.stopImmediatePropagation();
       event.preventDefault();
       stepFrame(event.key === "ArrowLeft" ? -1 : 1);
     };
 
-    const onKeyUp = (event: KeyboardEvent) => {
+    const onKeyDownCapture = (event: KeyboardEvent) => {
+      if (sourceIsFocused(event)) onKeyDown(event);
+    };
+
+    const onKeyUpCapture = (event: KeyboardEvent) => {
       if (event.code === "KeyK") {
         kKeyHeldRef.current = false;
       } else if (event.code === "KeyJ") {
@@ -763,7 +873,10 @@ export function SourceMonitor() {
       if (isSlowPlaybackMode(playbackModeRef.current)) {
         applyPlaybackMode(heldSlowPlaybackMode() ?? 0);
       }
-      if (!isEditableKeyboardTarget(event.target)) {
+    };
+
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (!event.defaultPrevented && !isEditableKeyboardTarget(event.target)) {
         suppressSpaceEvent(event);
         suppressShuttleEvent(event);
       }
@@ -779,12 +892,16 @@ export function SourceMonitor() {
       }
     };
 
-    window.addEventListener("keydown", onKeyDown, true);
-    window.addEventListener("keyup", onKeyUp, true);
+    window.addEventListener("keydown", onKeyDownCapture, true);
+    window.addEventListener("keyup", onKeyUpCapture, true);
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onWindowBlur);
     return () => {
-      window.removeEventListener("keydown", onKeyDown, true);
-      window.removeEventListener("keyup", onKeyUp, true);
+      window.removeEventListener("keydown", onKeyDownCapture, true);
+      window.removeEventListener("keyup", onKeyUpCapture, true);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onWindowBlur);
     };
   }, [durationFrames, hasMedia, isPlaybackShortcutAuthority, panelActive]);
@@ -901,7 +1018,7 @@ export function SourceMonitor() {
   function flushPendingVideoSeek() {
     const video = videoRef.current;
     const targetFrame = pendingVideoSeekFrameRef.current;
-    if (!video || targetFrame === null || videoSeekInFlightRef.current) {
+    if (!video || video.readyState < 1 || targetFrame === null || videoSeekInFlightRef.current) {
       return;
     }
     if (usToMonitorFrame(video.currentTime * 1_000_000) === targetFrame && !video.seeking) {
@@ -1384,28 +1501,21 @@ export function SourceMonitor() {
     const restore = pendingPreviewRestoreRef.current;
     const restoredFrame = clampMonitorFrame(restore?.frame ?? currentFrame);
     seekTargetFrameRef.current = restoredFrame;
-    const restorePlayback = () => {
-      if (pendingPreviewRestoreRef.current !== restore) {
-        return;
+    const restorePlaybackAndPendingSeek = () => {
+      if (pendingPreviewRestoreRef.current === restore) {
+        pendingPreviewRestoreRef.current = null;
+        if (restore && restore.playbackMode !== 0) {
+          applyPlaybackMode(restore.playbackMode);
+        }
       }
-      pendingPreviewRestoreRef.current = null;
-      if (!restore || restore.playbackMode === 0) {
-        return;
-      }
-      applyPlaybackMode(restore.playbackMode);
+      flushPendingSourceSeek();
     };
-    if (usToMonitorFrame(element.currentTime * 1_000_000) !== restoredFrame) {
-      element.addEventListener("seeked", restorePlayback, { once: true });
-      try {
-        element.currentTime =
-          videoFrameSeekUs(frameToClampedUs(restoredFrame), frameRate) / 1_000_000;
-      } catch {
-        element.removeEventListener("seeked", restorePlayback);
-        restorePlayback();
-      }
+    if (usToMonitorFrame(element.currentTime * 1_000_000) !== restoredFrame || element.seeking) {
+      element.addEventListener("seeked", restorePlaybackAndPendingSeek, { once: true });
+      requestVideoSeek(restoredFrame);
       return;
     }
-    restorePlayback();
+    restorePlaybackAndPendingSeek();
   }
 
   function togglePlayback() {
@@ -1438,6 +1548,12 @@ export function SourceMonitor() {
   }
 
   function changeCueRangeFromTimeline(range: { startFrame: number; endFrame: number } | null) {
+    const target = cueRangeTargetRef.current;
+    if (
+      target?.kind === "subtitle" ||
+      (isExportMonitor ? !exportClipRangeEditable : !storyboardMode)
+    )
+      return;
     cuePlaybackEndFrameRef.current = range?.endFrame ?? null;
     if (isExportMonitor) {
       setCueRange(range);
@@ -1453,24 +1569,10 @@ export function SourceMonitor() {
       }
       return;
     }
-    const target = cueRangeTargetRef.current;
     if (!range || !target) {
       setCueRange(range);
       return;
     }
-    if (target.kind === "subtitle") {
-      setCueRange(range);
-      subtitleCueTimingUpdated(
-        target.videoId,
-        target.trackId,
-        target.cueId,
-        frameToClampedUs(range.startFrame),
-        frameToClampedUs(range.endFrame),
-        cueRangeDragGroupRef.current,
-      );
-      return;
-    }
-
     const currentStoryboard = storyboards[target.videoContext];
     if (!currentStoryboard) {
       setCueRange(range);
@@ -1553,10 +1655,10 @@ export function SourceMonitor() {
       onDrop={handleVideoDrop}
     >
       <VideoDisplay
-        key={mediaKey}
         stageRef={videoStageRef}
         videoRef={videoRef}
         videoSrc={videoSrc}
+        frameRate={frameRate}
         muted={shouldMuteVideo(playbackMode)}
         zoomLevel={zoomLevel}
         zoomPan={zoomPan}
@@ -1658,8 +1760,8 @@ export function SourceMonitor() {
           onPreviewModeChange={changePreviewMode}
         />
         <TimelineComponent
-          key={`${mediaKey}:${project?.asset.fingerprint ?? ""}:${storyboardVisible && panelActive}`}
-          videoContext={storyboardVideoContext}
+          key={`${mediaKey}:${project?.asset.fingerprint ?? ""}:${storyboardMode}`}
+          videoContext={videoContext}
           skippedRanges={skippedRanges}
           frameRate={frameRate}
           durationUs={durationUs}
@@ -1678,7 +1780,7 @@ export function SourceMonitor() {
           onRevealStoryboardShot={(shotId) => {
             void publishEvent(
               "storyboard.reveal-shot.requested",
-              { videoContext: storyboardVideoContext, shotId },
+              { videoContext: videoContext, shotId },
               identity,
             );
           }}
@@ -1688,6 +1790,11 @@ export function SourceMonitor() {
           timelineStartFrame={timelineStartFrame}
           timelineSpanFrames={timelineSpanFrames}
           cueRange={cueRange}
+          cueRangeEditable={
+            isExportMonitor
+              ? exportClipRangeEditable && Boolean(exportClip)
+              : storyboardMode && cueRangeTargetRef.current?.kind !== "subtitle"
+          }
           onMinTimelineSpanFramesChange={updateMinTimelineSpanFrames}
           onTimelineStartFrameChange={updateTimelineStartFrame}
           onSeekFrame={seekToFrame}

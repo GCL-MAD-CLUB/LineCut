@@ -1,3 +1,4 @@
+import { useLayoutEffect } from "react";
 import { useShallow } from "zustand/shallow";
 import { useProjectPort } from "../../systems/ProjectSystem";
 import { definePanel, type PanelMenuEntryDefinition } from "../DockLayout";
@@ -8,6 +9,10 @@ import { mediaBinPanelType, type MediaBinPanelParams } from "./panelTypes";
 export { mediaBinPanelType, type MediaBinPanelParams } from "./panelTypes";
 
 function ManagedMediaBin({ params }: { params: MediaBinPanelParams }) {
+  const initializeViewMode = useMediaBinState((state) => state.initializeViewMode);
+  useLayoutEffect(() => {
+    initializeViewMode(params.initialViewMode ?? "list");
+  }, [initializeViewMode, params.initialViewMode]);
   return <MediaBin rootFolderId={params.rootFolderId} />;
 }
 

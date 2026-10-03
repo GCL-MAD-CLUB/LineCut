@@ -40,12 +40,58 @@
   white-space: nowrap;
 }
 
-.storyboard-video-name {
-  flex: 1 1 auto !important;
+/* Mirrors .subtitle-track-trigger so the two panels' source pickers stay visually identical. */
+.storyboard-video-trigger {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) 12px;
+  align-items: center;
+  align-self: center;
+  flex: 0 1 auto;
   min-width: 0;
+  max-width: min(360px, calc(100% - 64px));
+  height: 22px;
+  gap: 4px;
+  padding: 0 4px 0 0;
+  color: #aaa;
+  font-size: 12px;
+  line-height: 16px;
+  text-align: left;
+  white-space: nowrap;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.storyboard-video-trigger:disabled {
+  cursor: default;
+  opacity: 0.48;
+}
+
+.storyboard-video-name {
   overflow: hidden;
-  color: #d0d0d0;
+  color: #bbb;
   text-overflow: ellipsis;
+}
+
+.storyboard-video-trigger:hover:not(:disabled),
+.storyboard-video-trigger.active {
+  background: transparent;
+}
+
+.storyboard-video-trigger > svg {
+  display: block;
+  align-self: center;
+  width: 12px;
+  height: 12px;
+  color: #777;
+}
+
+.storyboard-video-trigger:hover:not(:disabled) .storyboard-video-name,
+.storyboard-video-trigger.active .storyboard-video-name,
+.storyboard-video-trigger:hover:not(:disabled) > svg,
+.storyboard-video-trigger.active > svg {
+  color: #eee;
 }
 
 .storyboard-detect-button {
@@ -1566,10 +1612,10 @@ body.is-resizing-storyboard-keyword-panel * {
   --storyboard-thumbnail-width: 88px;
   --storyboard-thumbnail-height: 50px;
   --storyboard-row-height: 82px;
-  --storyboard-table-columns: var(--storyboard-col-thumbnail) var(--storyboard-col-title)
-    var(--storyboard-col-media-start) var(--storyboard-col-media-end) var(--storyboard-col-duration)
-    var(--storyboard-col-keywords) var(--storyboard-col-rating) var(--storyboard-col-retained)
-    var(--storyboard-col-label) minmax(0, 1fr);
+  --storyboard-table-columns: var(--storyboard-col-thumbnail) var(--storyboard-col-source,)
+    var(--storyboard-col-title) var(--storyboard-col-media-start) var(--storyboard-col-media-end)
+    var(--storyboard-col-duration) var(--storyboard-col-keywords) var(--storyboard-col-rating)
+    var(--storyboard-col-retained) var(--storyboard-col-label) minmax(0, 1fr);
   --storyboard-table-min-width: 1140px;
 }
 
@@ -2507,6 +2553,7 @@ body.is-resizing-storyboard-keyword-panel * {
 
 .shot-row > .shot-time-cell,
 .shot-row > .shot-duration-cell,
+.shot-row > .shot-source-cell,
 .shot-row > .shot-title-cell,
 .shot-row > .shot-keywords-cell,
 .shot-row > .shot-label-cell,
@@ -2537,6 +2584,10 @@ body.is-resizing-storyboard-keyword-panel * {
   gap: 6px;
 }
 
+.shot-row > .shot-source-cell {
+  align-items: center;
+}
+
 .shot-title-copy,
 .shot-keywords-copy,
 .shot-label-copy {
@@ -2546,6 +2597,21 @@ body.is-resizing-storyboard-keyword-panel * {
   overflow: hidden;
   text-overflow: clip;
   white-space: nowrap;
+}
+
+.shot-source-copy {
+  align-self: center;
+  display: -webkit-box;
+  min-width: 0;
+  overflow: hidden;
+  color: #d0d0d0;
+  font-size: 12px;
+  line-height: 16px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
 }
 
 .shot-title-editor {
@@ -3340,11 +3406,12 @@ body.is-resizing-storyboard-column {
   line-height: 1.45;
 }
 
+/* The title sits in the body rather than the dialog header, so the header stays close-button only. */
 .storyboard-detection-conflict-dialog {
   width: min(440px, 30vw);
 }
 
-.storyboard-detection-conflict-dialog-body {
+.storyboard-detection-conflict-dialog .modal-dialog-body {
   padding: 30px;
 }
 

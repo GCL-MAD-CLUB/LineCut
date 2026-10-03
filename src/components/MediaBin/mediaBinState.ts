@@ -9,6 +9,7 @@ interface MediaBinPanelState {
   selectedIds: Set<string>;
   visibleItemCount: number;
   viewMode: MediaBinViewMode;
+  viewModeInitialized: boolean;
   listSize: number;
   gridSize: number;
   showHidden: boolean;
@@ -21,6 +22,7 @@ interface MediaBinPanelState {
   selectItems: (itemIds: string[]) => void;
   clearSelection: () => void;
   setViewMode: (viewMode: MediaBinViewMode) => void;
+  initializeViewMode: (viewMode: MediaBinViewMode) => void;
   setListSize: (size: number) => void;
   setGridSize: (size: number) => void;
   setShowHidden: (showHidden: boolean) => void;
@@ -33,6 +35,7 @@ export const useMediaBinState = createPanelState<MediaBinPanelState>(() => (set)
   selectedIds: new Set<string>(),
   visibleItemCount: 0,
   viewMode: "list",
+  viewModeInitialized: false,
   listSize: 0,
   gridSize: 0,
   showHidden: false,
@@ -54,6 +57,8 @@ export const useMediaBinState = createPanelState<MediaBinPanelState>(() => (set)
   selectItems: (itemIds) => set({ selectedIds: new Set(itemIds) }),
   clearSelection: () => set({ selectedIds: new Set<string>() }),
   setViewMode: (viewMode) => set({ viewMode }),
+  initializeViewMode: (viewMode) =>
+    set((state) => (state.viewModeInitialized ? state : { viewMode, viewModeInitialized: true })),
   setListSize: (listSize) => set({ listSize }),
   setGridSize: (gridSize) => set({ gridSize }),
   setShowHidden: (showHidden) => set({ showHidden }),

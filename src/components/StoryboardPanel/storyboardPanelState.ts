@@ -1,17 +1,20 @@
-import { useEffect, useMemo, useRef } from "react";
+import {
+  scopedStoryboard,
+  sourceContexts,
+  sourceRowParts,
+  transformStoryboardSources,
+} from "../../core/editor/multiSource";
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { panelSessionForContext } from "../../core/editor/panelSourceSelection";
 import { createPanelState } from "../../runtime/systems/PanelState";
 import {
   canHighlightSearchRule,
   type SearchMode,
   type SearchRule,
 } from "../../core/editor/textSearch";
-import { storyboardShotDefaultTitle } from "../../core/editor/storyboard";
-import {
-  mergeDetectedStoryboardShots,
-  removeStoryboardCuts,
-  storyboardSegments,
-} from "../../core/editor/storyboardCuts";
-import { useProjectPort } from "../../systems/ProjectSystem";
+import { removeStoryboardCuts, storyboardSegments } from "../../core/editor/storyboardCuts";
+import { mediaItemProject, useProjectPort } from "../../systems/ProjectSystem";
+import { storyboardVideoContext } from "../../core/editor/storyboardDetection";
 import type {
   StoryboardKeywordNode,
   StoryboardShot,
@@ -79,7 +82,6 @@ interface StoryboardVideoSessionState {
 interface StoryboardPanelUiState extends StoryboardVideoSessionState {
   videoContext: string;
   sessions: Record<string, StoryboardVideoSessionState>;
-  detectingVideoContext: string | null;
   viewMode: StoryboardViewMode;
   iconMetadataMode: StoryboardIconMetadataMode;
   thumbnailSize: number;
@@ -103,8 +105,6 @@ interface StoryboardPanelUiState extends StoryboardVideoSessionState {
   setThumbnailSize: (size: number) => void;
   setGridSize: (size: number) => void;
   setKeywordEditorMode: (mode: StoryboardKeywordEditorMode) => void;
-  detectionStarted: (videoContext: string) => void;
-  detectionFinished: (videoContext: string) => void;
   shotSelectionCleared: () => void;
   shotSelectionReplaced: (shotIds: string[], primaryShotId?: string | null) => void;
   setExpandedStackIds: (stackIds: Iterable<string>) => void;
@@ -112,6 +112,7 @@ interface StoryboardPanelUiState extends StoryboardVideoSessionState {
 
 interface StoryboardPanelState
   extends Omit<StoryboardPanelUiState, "sessions">, Omit<StoryboardState, "shotStacks"> {
+  libraryKeywordNodes: StoryboardKeywordNode[];
   shotStacks: StoryboardShotStack[];
   setShotTitle: (shotId: string, title: string) => void;
   setShotKeywords: (
@@ -183,12 +184,6 @@ interface StoryboardPanelState
   splitShotStack: (shotId: string) => void;
   setShotStackExpanded: (shotId: string, expanded: boolean) => void;
   setAllShotStacksExpanded: (expanded: boolean) => void;
-  detectionCompleted: (
-    videoContext: string,
-    shots: StoryboardShot[],
-    frameRate: number,
-    mode: "merge" | "overwrite",
-  ) => void;
 }
 
 function defaultVideoSessionState(): StoryboardVideoSessionState {
@@ -254,7 +249,11 @@ function shotsAfterDeletion(
   const remainingShots: StoryboardShot[] = [];
   let rippleStart: Pick<StoryboardShot, "start_frame" | "start_us"> | null = null;
 
+  let previousSource: string | undefined;
   for (const shot of shots) {
+    const source = sourceRowParts(shot.id)?.[0];
+    if (source !== previousSource) rippleStart = null;
+    previousSource = source;
     if (deletedShotIds.has(shot.id)) {
       rippleStart ??= shot;
       continue;
@@ -344,7 +343,6 @@ const useStoryboardPanelUiState = createPanelState<StoryboardPanelUiState>(() =>
   videoContext: "",
   sessions: {},
   ...defaultVideoSessionState(),
-  detectingVideoContext: null,
   viewMode: "list",
   iconMetadataMode: "ratingAndColorLabel",
   thumbnailSize: 0,
@@ -409,11 +407,6 @@ const useStoryboardPanelUiState = createPanelState<StoryboardPanelUiState>(() =>
       gridSize: Number.isFinite(gridSize) ? Math.min(100, Math.max(0, gridSize)) : 0,
     }),
   setKeywordEditorMode: (keywordEditorMode) => set({ keywordEditorMode }),
-  detectionStarted: (detectingVideoContext) => set({ detectingVideoContext }),
-  detectionFinished: (videoContext) =>
-    set((state) =>
-      state.detectingVideoContext === videoContext ? { detectingVideoContext: null } : state,
-    ),
   shotSelectionCleared: () => set({ selectedShotIds: new Set<string>(), activeShotId: null }),
   shotSelectionReplaced: (shotIds, primaryShotId) =>
     set(() => {
@@ -429,29 +422,58 @@ const useStoryboardPanelUiState = createPanelState<StoryboardPanelUiState>(() =>
 
 export function useStoryboardPanelState<Selection>(
   selector: (state: StoryboardPanelState) => Selection,
+  videoContext?: string,
 ) {
-  const uiState = useStoryboardPanelUiState((state) => state);
-  const { storyboards, storyboardUpdated } = useProjectPort(["storyboards"], ["storyboardUpdated"]);
-  const storyboard = storyboards[uiState.videoContext] ?? {
-    shots: [],
-    shotStacks: [],
-    keywordNodes: [],
-    recentKeywordIds: [],
-    keywordUsageCounters: { counts: {}, total: 0 },
-    shotAnnotations: {},
+  const storedUiState = useStoryboardPanelUiState((state) => state);
+  const context = videoContext ?? storedUiState.videoContext;
+  const uiState = {
+    ...storedUiState,
+    ...panelSessionForContext(
+      storedUiState.videoContext,
+      context,
+      videoSessionFromState(storedUiState),
+      storedUiState.sessions,
+      defaultVideoSessionState,
+    ),
+    videoContext: context,
   };
+  useLayoutEffect(() => {
+    if (videoContext !== undefined) storedUiState.syncVideoContext(videoContext);
+  }, [videoContext, storedUiState.syncVideoContext]);
+  const { storyboards, projects, mediaItems, storyboardUpdated } = useProjectPort(
+    ["storyboards", "projects", "mediaItems"],
+    ["storyboardUpdated"],
+  );
+  const storyboard = useMemo(
+    () => scopedStoryboard(storyboards, uiState.videoContext),
+    [storyboards, uiState.videoContext],
+  );
   const previousStoryboardRef = useRef({ videoContext: uiState.videoContext, storyboard });
   useEffect(() => {
     const previous = previousStoryboardRef.current;
     previousStoryboardRef.current = { videoContext: uiState.videoContext, storyboard };
     if (previous.videoContext !== uiState.videoContext) return;
+    // A disappearing source is a scope transition, not a shot merge. Keep its session intact.
+    const availableContexts = new Set(
+      mediaItems
+        .filter((item) => item.kind === "video" && item.enabled !== false)
+        .flatMap((item) => {
+          const project = mediaItemProject(item, projects, mediaItems);
+          return project ? [storyboardVideoContext(item.id, project)] : [];
+        }),
+    );
+    if (sourceContexts(uiState.videoContext).some((context) => !availableContexts.has(context)))
+      return;
     const remainingIds = new Set(storyboard.shots.map((shot) => shot.id));
     const resolveId = (id: string) => {
       if (remainingIds.has(id)) return id;
       const old = previous.storyboard.shots.find((shot) => shot.id === id);
       return old
         ? storyboard.shots.find(
-            (shot) => shot.start_frame <= old.start_frame && shot.end_frame >= old.end_frame,
+            (shot) =>
+              sourceRowParts(shot.id)?.[0] === sourceRowParts(old.id)?.[0] &&
+              shot.start_frame <= old.start_frame &&
+              shot.end_frame >= old.end_frame,
           )?.id
         : undefined;
     };
@@ -467,6 +489,8 @@ export function useStoryboardPanelState<Selection>(
     uiState.selectedShotIds,
     uiState.activeShotId,
     uiState.shotSelectionReplaced,
+    mediaItems,
+    projects,
   ]);
   const shotStacks = useMemo(
     () =>
@@ -938,7 +962,9 @@ export function useStoryboardPanelState<Selection>(
             synonyms,
           );
           const shotAnnotations = { ...current.shotAnnotations };
-          let changed = ensured.keywordNodes !== current.keywordNodes;
+          let changed =
+            ensured.keywordNodes !== current.keywordNodes ||
+            !storyboard.libraryKeywordNodes.some((node) => node.id === ensured.keywordId);
           for (const shotId of uniqueShotIds) {
             const previous = shotAnnotations[shotId];
             const keywordIds = normalizeStoryboardKeywordIds([
@@ -966,6 +992,10 @@ export function useStoryboardPanelState<Selection>(
           return {
             ...current,
             keywordNodes: ensured.keywordNodes,
+            libraryKeywordNodes: [
+              ...storyboard.libraryKeywordNodes,
+              ensured.keywordNodes.find((node) => node.id === ensured.keywordId)!,
+            ],
             recentKeywordIds,
             keywordUsageCounters,
             shotAnnotations,
@@ -1068,20 +1098,28 @@ export function useStoryboardPanelState<Selection>(
       const ids = new Set(shotIds);
       const selected = storyboard.shots.filter((shot) => ids.has(shot.id));
       if (selected.length < 2) return;
-      const start = Math.min(...selected.map((shot) => shot.start_frame));
-      const end = Math.max(...selected.map((shot) => shot.start_frame));
+      const primaryIds: string[] = [];
       commitStoryboard("合并分镜", (current) =>
-        removeStoryboardCuts(
-          current,
-          new Set(
-            storyboardSegments(current)
-              .filter((shot) => shot.start_frame > start && shot.start_frame <= end)
-              .map((shot) => shot.id),
-          ),
-        ),
+        transformStoryboardSources(current, (local) => {
+          const selected = local.shots.filter((shot) => ids.has(shot.id));
+          if (selected.length < 2) {
+            primaryIds.push(...selected.map((shot) => shot.id));
+            return local;
+          }
+          const start = Math.min(...selected.map((shot) => shot.start_frame));
+          const end = Math.max(...selected.map((shot) => shot.start_frame));
+          primaryIds.push(selected.reduce((a, b) => (a.start_frame < b.start_frame ? a : b)).id);
+          return removeStoryboardCuts(
+            local,
+            new Set(
+              storyboardSegments(local)
+                .filter((shot) => shot.start_frame > start && shot.start_frame <= end)
+                .map((shot) => shot.id),
+            ),
+          );
+        }),
       );
-      const first = selected.reduce((a, b) => (a.start_frame < b.start_frame ? a : b));
-      uiState.shotSelectionReplaced([first.id], first.id);
+      uiState.shotSelectionReplaced(primaryIds, primaryIds[0]);
     },
     deleteShots: (shotIds, ripple) => {
       const requestedShotIds = new Set(shotIds);
@@ -1131,6 +1169,7 @@ export function useStoryboardPanelState<Selection>(
                   (deleted) =>
                     !remainingShots.some(
                       (shot) =>
+                        sourceRowParts(shot.id)?.[0] === sourceRowParts(deleted.id)?.[0] &&
                         shot.start_frame <= deleted.start_frame &&
                         shot.end_frame >= deleted.end_frame,
                     ),
@@ -1153,58 +1192,40 @@ export function useStoryboardPanelState<Selection>(
       uiState.setExpandedStackIds(expandedStackIds);
     },
     createShotStack: (shotIds) => {
-      const flattenedShotIds = new Set(shotIds);
-      for (const currentStack of storyboard.shotStacks) {
-        if (currentStack.shotIds.some((shotId) => flattenedShotIds.has(shotId))) {
-          for (const shotId of currentStack.shotIds) {
-            flattenedShotIds.add(shotId);
-          }
-        }
-      }
-      const orderedShotIds = storyboard.shots
-        .filter((shot) => flattenedShotIds.has(shot.id))
-        .map((shot) => shot.id);
-      const nextStack = createStack(orderedShotIds);
-      if (!nextStack) {
-        return;
-      }
-      const replacedStackIds = new Set(
-        storyboard.shotStacks
-          .filter((stack) => stack.shotIds.some((shotId) => flattenedShotIds.has(shotId)))
-          .map((stack) => stack.id),
-      );
-      commitStoryboard("组成分镜堆叠", (current) => {
-        const nextIds = new Set(shotIds);
-        const replacedStackIds = new Set<string>();
-        for (const currentStack of current.shotStacks) {
-          if (currentStack.shotIds.some((shotId) => nextIds.has(shotId))) {
-            replacedStackIds.add(currentStack.id);
-            for (const shotId of currentStack.shotIds) {
-              nextIds.add(shotId);
+      const nextSelectedIds: string[] = [];
+      const expandedStackIds = new Set(uiState.expandedStackIds);
+      commitStoryboard("组成分镜堆叠", (current) =>
+        transformStoryboardSources(current, (local) => {
+          const nextIds = new Set(shotIds);
+          const replacedStackIds = new Set<string>();
+          for (const stack of local.shotStacks) {
+            if (stack.shotIds.some((id) => nextIds.has(id))) {
+              replacedStackIds.add(stack.id);
+              for (const id of stack.shotIds) nextIds.add(id);
             }
           }
-        }
-        const stack = createStack(
-          current.shots.filter((shot) => nextIds.has(shot.id)).map((shot) => shot.id),
-        );
-        if (!stack) {
-          return current;
-        }
-        return {
-          ...current,
-          shotStacks: [
-            ...current.shotStacks.filter((candidate) => !replacedStackIds.has(candidate.id)),
-            stack,
-          ],
-        };
-      });
-      const expandedStackIds = new Set(uiState.expandedStackIds);
-      for (const stackId of replacedStackIds) {
-        expandedStackIds.delete(stackId);
-      }
-      expandedStackIds.delete(nextStack.id);
+          const localIds = local.shots
+            .filter((shot) => nextIds.has(shot.id))
+            .map((shot) => shot.id);
+          const stack = createStack(localIds);
+          if (!stack) {
+            nextSelectedIds.push(...localIds);
+            return local;
+          }
+          nextSelectedIds.push(stack.shotIds[0]);
+          for (const id of replacedStackIds) expandedStackIds.delete(id);
+          expandedStackIds.delete(stack.id);
+          return {
+            ...local,
+            shotStacks: [
+              ...local.shotStacks.filter((stack) => !replacedStackIds.has(stack.id)),
+              stack,
+            ],
+          };
+        }),
+      );
       uiState.setExpandedStackIds(expandedStackIds);
-      uiState.shotSelectionReplaced([nextStack.shotIds[0]], nextStack.shotIds[0]);
+      uiState.shotSelectionReplaced(nextSelectedIds, nextSelectedIds[0]);
     },
     cancelShotStack: (shotId) => {
       const targetStack = shotStacks.find((stack) => stack.shotIds.includes(shotId));
@@ -1337,48 +1358,6 @@ export function useStoryboardPanelState<Selection>(
           ? visibleActiveShotId
           : null,
       );
-    },
-    detectionCompleted: (videoContext, shots, frameRate, mode) => {
-      let completedShots = shots;
-      commitStoryboard(
-        mode === "merge" ? "合并分镜切点" : "生成分镜",
-        (current) => {
-          if (mode === "merge") {
-            const merged = mergeDetectedStoryboardShots(current, shots, frameRate);
-            completedShots = merged.shots;
-            return merged;
-          }
-          completedShots = shots;
-          return {
-            ...current,
-            shots,
-            deletedShots: [],
-            shotStacks: [],
-            shotAnnotations: Object.fromEntries(
-              shots.map((shot) => [
-                shot.id,
-                {
-                  rating: 0,
-                  retained: false,
-                  title: storyboardShotDefaultTitle(shot),
-                },
-              ]),
-            ),
-          };
-        },
-        videoContext,
-      );
-      if (uiState.videoContext === videoContext) {
-        const firstShotId = completedShots[0]?.id;
-        if (firstShotId) {
-          uiState.shotSelectionReplaced([firstShotId], firstShotId);
-        } else {
-          uiState.shotSelectionCleared();
-        }
-        uiState.setShowOnlySelected(false);
-        uiState.setExpandedStackIds([]);
-      }
-      uiState.detectionFinished(videoContext);
     },
   };
 

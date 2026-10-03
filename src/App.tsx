@@ -751,7 +751,14 @@ function AppContent() {
 
     const outcome = await runOperation(
       "project.open",
-      () => invokeCommand<OpenProjectResult>("open_project_file", { path }),
+      async () => {
+        if (!projectStatesLoaded()) {
+          await loadProjectStates().catch((error) =>
+            captureOperationError("project.panelState.load", error),
+          );
+        }
+        return invokeCommand<OpenProjectResult>("open_project_file", { path });
+      },
       { displayName: fileName(path), resourceKind: "project" },
     );
     if (outcome.status === "success") {

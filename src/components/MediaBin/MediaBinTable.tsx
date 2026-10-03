@@ -1,15 +1,6 @@
 ﻿import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { mediaGridLayout } from "../../application/media/mediaGridLayout";
-import {
-  Captions,
-  ChevronRight,
-  Film,
-  Folder,
-  FolderOpen,
-  Link2,
-  Music2,
-  SplitSquareVertical,
-} from "lucide-react";
+import { Captions, ChevronRight, Film, Link2, Music2, SplitSquareVertical } from "lucide-react";
 import {
   useEffect,
   useLayoutEffect,
@@ -38,6 +29,7 @@ import { normalizeFrameRate } from "../../core/editor/timeline";
 import type { MediaBinFolder, MediaBinItem, Project } from "../../types";
 import type { MediaBinViewMode } from "./mediaBinState";
 import { MediaBinVideoThumbnail } from "./MediaBinVideoThumbnail";
+import { MediaBinFolderIcon, OfflineFileIcon } from "./MediaBinFolderIcon";
 
 export type MediaBinTableRow =
   | { type: "folder"; folder: MediaBinFolder; depth: number }
@@ -200,6 +192,16 @@ function isMediaEntryNameTarget(target: EventTarget | null) {
 }
 
 function itemIcon(item: MediaBinItem, project?: Project, isDetachedVideo = false) {
+  if (isMediaItemOffline(item)) {
+    return (
+      <OfflineFileIcon
+        className="media-bin-offline-icon"
+        role="img"
+        aria-hidden={false}
+        aria-label="媒体脱机"
+      />
+    );
+  }
   if (item.kind === "video") {
     if (!isDetachedVideo && project?.asset.audio_stream_index != null) {
       return (
@@ -1555,7 +1557,7 @@ export function MediaBinTable({
                 >
                   <span className="media-bin-card-preview-shell">
                     <span className="media-bin-card-preview folder">
-                      <Folder aria-hidden="true" />
+                      <MediaBinFolderIcon />
                     </span>
                   </span>
                   <span className="media-bin-card-meta">
@@ -1661,9 +1663,9 @@ export function MediaBinTable({
                         : undefined
                     }
                   >
-                    {item.kind === "video" &&
-                    project &&
-                    (!isMediaItemOffline(item) || Boolean(project.proxy_path)) ? (
+                    {isMediaItemOffline(item) ? (
+                      itemIcon(item, project, isDetachedVideo)
+                    ) : item.kind === "video" && project ? (
                       <>
                         <MediaBinVideoThumbnail
                           item={item}
@@ -1695,9 +1697,6 @@ export function MediaBinTable({
                           </span>
                         </span>
                       </>
-                    )}
-                    {isMediaItemOffline(item) && (
-                      <span className="media-bin-card-offline">媒体脱机</span>
                     )}
                   </span>
                   {previewProgress !== null && (
@@ -1920,11 +1919,7 @@ export function MediaBinTable({
                         onClick={(event) => handleTitleCellClick(event, folder, selected)}
                       >
                         <span className="media-bin-kind-icon folder">
-                          {expanded ? (
-                            <FolderOpen aria-hidden="true" />
-                          ) : (
-                            <Folder aria-hidden="true" />
-                          )}
+                          <MediaBinFolderIcon />
                         </span>
                         {editingFolderId === folder.id ? (
                           <input
@@ -2217,7 +2212,7 @@ export function MediaBinTable({
                   isMediaVideoDetached(pointerDragPreview.item, detachedVideoIds),
                 )
               ) : (
-                <Folder aria-hidden="true" />
+                <MediaBinFolderIcon />
               )}
             </span>
             <span>

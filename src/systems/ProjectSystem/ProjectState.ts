@@ -1,3 +1,9 @@
+import {
+  normalizedStoryboardKeywords,
+  sourceContexts,
+  updateScopedStoryboard,
+  updateScopedSubtitles,
+} from "../../core/editor/multiSource";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/shallow";
 import { createStore } from "zustand/vanilla";
@@ -12,6 +18,7 @@ import {
   type ProjectFileState,
   type ProjectHistoryCategory,
   type ProjectHistoryState,
+  type PanelSourceSelectionChange,
 } from "./ProjectHistory";
 import type {
   DemuxMediaResult,
@@ -84,13 +91,16 @@ interface ProjectCommands {
     cues: Record<string, SubtitleCue[]>,
     itemIds: string[],
   ) => void;
-  activeTrackChanged: (trackId: string) => void;
+  activeTrackChanged: (trackId: string, panelSelection?: PanelSourceSelectionChange) => void;
+  previewTrackChanged: (trackId: string) => void;
   subtitleCuesDeleted: (
     videoId: string,
     trackContext: string,
     trackId: string,
     cueIds: Iterable<string>,
     ripple: boolean,
+    historyGroupId?: string,
+    historyLabel?: string,
   ) => void;
   subtitleCueTimingUpdated: (
     videoId: string,
@@ -513,8 +523,10 @@ export function subtitleTrackContext(
     }
   }
 
-  const track = project?.tracks.find((candidate) => candidate.id === trackId);
-  return project && track ? { project, track } : null;
+  const video = mediaItems.find((item) => item.id === videoId && item.kind === "video");
+  const sourceProject = video ? mediaItemProject(video, projects, mediaItems) : project;
+  const track = sourceProject?.tracks.find((candidate) => candidate.id === trackId);
+  return sourceProject && track ? { project: sourceProject, track } : null;
 }
 
 export function subtitleTrackCues(
@@ -716,7 +728,9 @@ function openedProjectState(workspace: ProjectWorkspace, projectId: string) {
         Boolean(activeVideo && isMediaItemOffline(activeVideo))),
     mediaBinReadOnly: false,
     subtitles: workspace.subtitles ?? {},
-    storyboards: workspace.storyboards ?? {},
+    storyboards: Object.keys(workspace.storyboards ?? {}).length
+      ? normalizedStoryboardKeywords(workspace.storyboards ?? {})
+      : {},
     exportState: readExportState(projectId),
   };
 }
@@ -986,6 +1000,7 @@ function commitProjectEvent(
   category: ProjectHistoryCategory,
   recipe: (state: ProjectSystemState) => Partial<ProjectSystemState> | ProjectSystemState,
   historyGroupId?: string,
+  panelSourceSelection?: PanelSourceSelectionChange,
 ) {
   set((state) => {
     const update = recipe(state);
@@ -999,6 +1014,7 @@ function commitProjectEvent(
       projectFileStateFromStore(state),
       projectFileStateFromStore(candidate),
       historyGroupId,
+      panelSourceSelection,
     );
     if (!entry) {
       return candidate;
@@ -1913,19 +1929,39 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
           activeTrackId,
         };
       }),
-    activeTrackChanged: (activeTrackId) =>
-      commitProjectEvent(set, "切换字幕", "subtitle", (state) => ({
-        activeTrackId,
-        projectDirty: true,
-      })),
-    subtitleCuesDeleted: (videoId, trackContext, trackId, cueIds, ripple) => {
+    activeTrackChanged: (activeTrackId, panelSelection) =>
+      commitProjectEvent(
+        set,
+        "切换字幕",
+        "subtitle",
+        (state) => ({
+          activeTrackId:
+            panelSelection && state.activeVideoId !== panelSelection.after.videoId
+              ? state.activeTrackId
+              : activeTrackId,
+          projectDirty: true,
+        }),
+        undefined,
+        panelSelection,
+      ),
+    previewTrackChanged: (activeTrackId) =>
+      set((state) => (state.activeTrackId === activeTrackId ? state : { activeTrackId })),
+    subtitleCuesDeleted: (
+      videoId,
+      trackContext,
+      trackId,
+      cueIds,
+      ripple,
+      historyGroupId,
+      historyLabel,
+    ) => {
       const requestedCueIds = new Set(cueIds);
       if (!videoId || !trackId || requestedCueIds.size === 0) {
         return;
       }
       commitProjectEvent(
         set,
-        `${ripple ? "波纹删除" : "删除"} ${requestedCueIds.size} 条字幕`,
+        historyLabel ?? `${ripple ? "波纹删除" : "删除"} ${requestedCueIds.size} 条字幕`,
         "delete",
         (state) => {
           const context = subtitleTrackContext(
@@ -1971,6 +2007,7 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
             subtitles,
           };
         },
+        historyGroupId,
       );
     },
     subtitleCueTimingUpdated: (
@@ -2068,23 +2105,18 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
         historyLabel,
         "subtitle",
         (state) => {
-          const videoExists = state.mediaItems.some(
-            (item) => item.kind === "video" && trackContext.startsWith(`${item.id}:`),
-          );
-          if (!trackContext || !videoExists) {
+          const contexts = sourceContexts(trackContext);
+          if (
+            !contexts.length ||
+            !contexts.every((context) =>
+              state.mediaItems.some(
+                (item) => item.kind === "video" && context.startsWith(`${item.id}:`),
+              ),
+            )
+          )
             return state;
-          }
-          const currentSubtitle = state.subtitles[trackContext] ?? { cueAnnotations: {} };
-          const subtitle = recipe(currentSubtitle);
-          if (subtitle === currentSubtitle) {
-            return state;
-          }
-          return {
-            subtitles: {
-              ...state.subtitles,
-              [trackContext]: subtitle,
-            },
-          };
+          const subtitles = updateScopedSubtitles(state.subtitles, trackContext, recipe);
+          return subtitles === state.subtitles ? state : { subtitles };
         },
         historyGroupId,
       ),
@@ -2094,30 +2126,18 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
         historyLabel,
         "storyboard",
         (state) => {
-          const videoExists = state.mediaItems.some(
-            (item) => item.kind === "video" && videoContext.startsWith(`${item.id}:`),
-          );
-          if (!videoContext || !videoExists) {
+          const contexts = sourceContexts(videoContext);
+          if (
+            !contexts.length ||
+            !contexts.every((context) =>
+              state.mediaItems.some(
+                (item) => item.kind === "video" && context.startsWith(`${item.id}:`),
+              ),
+            )
+          )
             return state;
-          }
-          const currentStoryboard = state.storyboards[videoContext] ?? {
-            shots: [],
-            shotStacks: [],
-            keywordNodes: [],
-            recentKeywordIds: [],
-            keywordUsageCounters: { counts: {}, total: 0 },
-            shotAnnotations: {},
-          };
-          const storyboard = recipe(currentStoryboard);
-          if (storyboard === currentStoryboard) {
-            return state;
-          }
-          return {
-            storyboards: {
-              ...state.storyboards,
-              [videoContext]: storyboard,
-            },
-          };
+          const storyboards = updateScopedStoryboard(state.storyboards, videoContext, recipe);
+          return storyboards === state.storyboards ? state : { storyboards };
         },
         historyGroupId,
       ),

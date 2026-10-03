@@ -40,12 +40,14 @@ export function usePlaybackCapability(options: PlaybackCapabilityOptions) {
     lastFocusedAt,
     currentFrame,
     isPlaying,
+    videoId,
+    sourcePanelId,
     fallbackAuthority = false,
     onSeek,
   } = options;
   const projection = useMemo<PlaybackStatusProjection>(
-    () => ({ active, lastFocusedAt, currentFrame, isPlaying }),
-    [active, currentFrame, isPlaying, lastFocusedAt],
+    () => ({ active, lastFocusedAt, currentFrame, isPlaying, videoId, sourcePanelId }),
+    [active, currentFrame, isPlaying, lastFocusedAt, sourcePanelId, videoId],
   );
   usePublishProjection(PLAYBACK_STATUS_PROJECTION, identity, projection);
 

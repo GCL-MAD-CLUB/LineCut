@@ -2,6 +2,7 @@ import type { ExportSource } from "../../systems/ExportSystem/exportTypes";
 
 export interface ApplicationEventMap {
   "media.import.requested": { paths?: string[]; folderId?: string };
+  "media.video.opened": { videoId: string };
   "media.replace-selection.requested": Record<string, never>;
   "media.link-selection.requested": Record<string, never>;
   "media.make-selection-offline.requested": Record<string, never>;
@@ -15,6 +16,8 @@ export interface ApplicationEventMap {
   "edit.select-all.requested": Record<string, never>;
   "edit.clear-selection.requested": Record<string, never>;
   "playback.seek.requested": {
+    /** Defers the seek until this media is the loaded source in the active monitor. */
+    videoId?: string;
     timeUs: number;
     focusEndUs?: number;
     play?: boolean;
@@ -23,6 +26,7 @@ export interface ApplicationEventMap {
       | { kind: "storyboard"; videoContext: string; shotId: string };
   };
   "storyboard.reveal-shot.requested": { videoContext: string; shotId: string };
+  "storyboard.detection.completed": { videoContext: string; firstShotId?: string };
 }
 
 export type ApplicationEventType = keyof ApplicationEventMap;

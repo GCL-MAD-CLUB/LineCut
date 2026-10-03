@@ -115,6 +115,40 @@ export interface ProjectHistoryEntry {
   event: ProjectFileEvent;
   inverseEvent: ProjectFileEvent;
   groupId?: string;
+  panelSourceSelection?: PanelSourceSelectionChange;
+}
+
+export interface PanelSourceSelection {
+  videoId: string;
+  trackId: string;
+  sources: { videoId: string; trackId: string }[];
+  frame: number;
+}
+
+export interface PanelSourceSelectionChange {
+  panelId: string;
+  before: PanelSourceSelection;
+  after: PanelSourceSelection;
+}
+
+/** Only history navigation replays panel choices; appending an edit does not. */
+export function replayedPanelSourceSelection(
+  previous: ProjectHistoryState,
+  current: ProjectHistoryState,
+  panelId: string,
+) {
+  if (previous.entries !== current.entries) return undefined;
+  let selection: PanelSourceSelection | undefined;
+  const backwards = current.cursor < previous.cursor;
+  for (
+    let index = backwards ? previous.cursor - 1 : previous.cursor;
+    backwards ? index >= current.cursor : index < current.cursor;
+    index += backwards ? -1 : 1
+  ) {
+    const change = current.entries[index].panelSourceSelection;
+    if (change?.panelId === panelId) selection = backwards ? change.before : change.after;
+  }
+  return selection;
 }
 
 export interface ProjectHistoryState {
@@ -191,6 +225,7 @@ export function createProjectHistoryEntry(
   before: ProjectFileState,
   after: ProjectFileState,
   groupId?: string,
+  panelSourceSelection?: PanelSourceSelectionChange,
 ): ProjectHistoryEntry | null {
   const eventOperations: ProjectFileOperation[] = [];
   const inverseOperations: ProjectFileOperation[] = [];
@@ -332,7 +367,7 @@ export function createProjectHistoryEntry(
       value: previousStoryboard,
     });
   }
-  if (eventOperations.length === 0) {
+  if (eventOperations.length === 0 && !panelSourceSelection) {
     return null;
   }
 
@@ -342,6 +377,7 @@ export function createProjectHistoryEntry(
     label,
     category,
     groupId,
+    panelSourceSelection,
     event: { id, label, category, operations: eventOperations },
     inverseEvent: {
       id: `${id}-inverse`,

@@ -984,6 +984,7 @@ pub fn run() {
             update_import_browser_config,
             load_project_states,
             save_project_state,
+            save_project_panel_state,
             prune_project_states,
             detect_storyboard_shots,
             set_media_import_drop_region,

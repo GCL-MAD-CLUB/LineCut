@@ -1,3 +1,6 @@
+import { useLayoutEffect, useMemo } from "react";
+import { panelSessionForContext } from "../../core/editor/panelSourceSelection";
+import { scopedSubtitles } from "../../core/editor/multiSource";
 import { createPanelState } from "../../runtime/systems/PanelState";
 import {
   canHighlightSearchRule,
@@ -176,10 +179,29 @@ const useSubtitlePanelUiState = createPanelState<SubtitlePanelUiState>(() => (se
 
 export function useSubtitlePanelState<Selection>(
   selector: (state: SubtitlePanelState) => Selection,
+  trackContext?: string,
 ) {
-  const uiState = useSubtitlePanelUiState((state) => state);
+  const storedUiState = useSubtitlePanelUiState((state) => state);
+  const context = trackContext ?? storedUiState.trackContext;
+  const uiState = {
+    ...storedUiState,
+    ...panelSessionForContext(
+      storedUiState.trackContext,
+      context,
+      trackSessionFromState(storedUiState),
+      storedUiState.sessions,
+      defaultTrackSessionState,
+    ),
+    trackContext: context,
+  };
+  useLayoutEffect(() => {
+    if (trackContext !== undefined) storedUiState.syncTrackContext(trackContext);
+  }, [trackContext, storedUiState.syncTrackContext]);
   const { subtitles, subtitleUpdated } = useProjectPort(["subtitles"], ["subtitleUpdated"]);
-  const subtitle = subtitles[uiState.trackContext] ?? { cueAnnotations: {} };
+  const subtitle = useMemo(
+    () => scopedSubtitles(subtitles, uiState.trackContext),
+    [subtitles, uiState.trackContext],
+  );
   const commitSubtitle = (
     historyLabel: string,
     recipe: (current: SubtitleState) => SubtitleState,
