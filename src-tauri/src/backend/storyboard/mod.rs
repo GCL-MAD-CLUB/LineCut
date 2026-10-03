@@ -49,12 +49,99 @@ const STORYBOARD_PROGRESS_MIN_DELTA: f64 = 0.0025;
 const STORYBOARD_PROGRESS_FRAME_REPORT_INTERVAL: usize = 25;
 const DEFAULT_STORYBOARD_FRAME_RATE: f64 = 25.0;
 const MAX_DIRECTML_ADAPTERS_TO_PROBE: i32 = 8;
-const STORYBOARD_EXTRACTION_WORKERS: usize = 3;
+const STORYBOARD_MAX_CONCURRENT_EXTRACTIONS: usize = 3;
+const STORYBOARD_MAX_EXTRACTION_THREADS: usize = 16;
 
 static ORT_INIT_LOCK: StdMutex<()> = StdMutex::new(());
 static ORT_ENV_READY: OnceLock<()> = OnceLock::new();
 static PREFERRED_DIRECTML_ADAPTER: AtomicI32 = AtomicI32::new(-1);
 static STORYBOARD_CONSUMER: OnceLock<Arc<StoryboardConsumer>> = OnceLock::new();
+static STORYBOARD_EXTRACTION_SCHEDULER: OnceLock<StoryboardExtractionScheduler> = OnceLock::new();
+
+fn storyboard_core_limit(physical_cores: Option<usize>, available: usize) -> usize {
+    // A topology-query failure must not fall back to counting SMT siblings as
+    // independent cores. available_parallelism also limits restricted processes.
+    physical_cores.unwrap_or(1).max(1).min(available.max(1))
+}
+
+#[cfg(windows)]
+fn storyboard_physical_cores() -> Option<usize> {
+    use windows::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
+    use windows::Win32::System::SystemInformation::{
+        GetLogicalProcessorInformation, RelationProcessorCore, SYSTEM_LOGICAL_PROCESSOR_INFORMATION,
+    };
+
+    let mut bytes = 0u32;
+    // SAFETY: the first call only writes the required byte count.
+    let error = unsafe { GetLogicalProcessorInformation(None, &mut bytes) }.err()?;
+    if error.code() != windows::core::HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) || bytes == 0
+    {
+        return None;
+    }
+    let record_size = std::mem::size_of::<SYSTEM_LOGICAL_PROCESSOR_INFORMATION>();
+    let mut records = vec![
+        SYSTEM_LOGICAL_PROCESSOR_INFORMATION::default();
+        (bytes as usize).div_ceil(record_size)
+    ];
+    // SAFETY: the aligned records allocation contains at least `bytes` writable
+    // bytes and stays alive throughout the synchronous Windows API call.
+    unsafe { GetLogicalProcessorInformation(Some(records.as_mut_ptr()), &mut bytes) }.ok()?;
+    if bytes as usize % record_size != 0 {
+        return None;
+    }
+    // This API reports the calling processor group. On multi-group machines
+    // that is a conservative bound, never larger than the total physical cores.
+    let cores = records
+        .get(..bytes as usize / record_size)?
+        .iter()
+        .filter(|record| record.Relationship == RelationProcessorCore)
+        .count();
+    (cores > 0).then_some(cores)
+}
+
+#[cfg(not(windows))]
+fn storyboard_physical_cores() -> Option<usize> {
+    None
+}
+
+struct StoryboardExtractionScheduler {
+    threads: usize,
+    slots: tokio::sync::Semaphore,
+}
+
+impl StoryboardExtractionScheduler {
+    fn new(available: usize) -> Self {
+        let available = available.max(1);
+        let workers = available.min(STORYBOARD_MAX_CONCURRENT_EXTRACTIONS);
+        Self {
+            // Round down: rounding up would oversubscribe non-multiples of three.
+            threads: (available / workers).min(STORYBOARD_MAX_EXTRACTION_THREADS),
+            slots: tokio::sync::Semaphore::new(workers),
+        }
+    }
+
+    async fn acquire(&self, cancel: &AtomicBool) -> AppResult<tokio::sync::SemaphorePermit<'_>> {
+        let acquire = self.slots.acquire();
+        tokio::pin!(acquire);
+        loop {
+            ensure_not_cancelled(cancel)?;
+            // Keep the same waiter across cancellation polls to preserve FIFO.
+            match tokio::time::timeout(pipeline::POLL_INTERVAL, &mut acquire).await {
+                Ok(result) => {
+                    let permit = result.map_err(|_| {
+                        app_error(
+                            ErrorCode::TaskStateUnavailable,
+                            "Storyboard extraction scheduler is closed",
+                        )
+                    })?;
+                    ensure_not_cancelled(cancel)?;
+                    return Ok(permit);
+                }
+                Err(_) => continue,
+            }
+        }
+    }
+}
 
 #[derive(Clone)]
 struct StoryboardRuntimePaths {
@@ -300,12 +387,24 @@ async fn run_storyboard_detection(
     let frame_rate = storyboard_frame_rate(project);
     let expected_frames = expected_frame_count(project.asset.duration_us, frame_rate);
     ensure_not_cancelled(&cancel)?;
-    let child = spawn_storyboard_ffmpeg(project, stream_index, preferences)?;
+    let scheduler = STORYBOARD_EXTRACTION_SCHEDULER.get_or_init(|| {
+        let physical_cores = storyboard_physical_cores();
+        let core_limit = storyboard_core_limit(physical_cores, available_cpu_threads());
+        tracing::info!(
+            ?physical_cores,
+            core_limit,
+            "Configured storyboard total FFmpeg thread budget"
+        );
+        StoryboardExtractionScheduler::new(core_limit)
+    });
+    let extraction_slot = scheduler.acquire(&cancel).await?;
+    let child = spawn_storyboard_ffmpeg(project, stream_index, preferences, scheduler.threads)?;
     let process_id = Uuid::new_v4().to_string();
     let consumer = STORYBOARD_CONSUMER.get_or_init(|| Arc::new(StoryboardConsumer::default()));
     let (sender, queue) = consumer.queue();
     let process = Arc::new(StoryboardProcess {
         child: StdMutex::new(child),
+        _slot: extraction_slot,
     });
     let extraction = StoryboardExtractionGuard {
         process: process.clone(),
@@ -508,8 +607,27 @@ fn spawn_storyboard_ffmpeg(
     project: &Project,
     stream_index: i32,
     preferences: &Preferences,
+    threads: usize,
 ) -> AppResult<Child> {
-    let threads = ffmpeg_worker_thread_budget(STORYBOARD_EXTRACTION_WORKERS);
+    let args = storyboard_ffmpeg_args(&project.asset.path, stream_index, threads);
+    tracing::info!(threads, "Configured storyboard FFmpeg extraction threads");
+    let mut command = StdCommand::new(ffmpeg_program(preferences));
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            app_error(
+                ErrorCode::ExternalToolStartFailed,
+                format!("Failed to start FFmpeg storyboard extraction: {error}"),
+            )
+        })
+}
+
+fn storyboard_ffmpeg_args(path: &str, stream_index: i32, threads: usize) -> Vec<String> {
     let mut args = vec![
         "-hide_banner".to_string(),
         "-loglevel".to_string(),
@@ -517,9 +635,13 @@ fn spawn_storyboard_ffmpeg(
     ];
     // Input-scoped -threads must precede -i to limit decoder parallelism.
     append_ffmpeg_processing_thread_args(&mut args, threads);
+    // Leave hardware output format unset so FFmpeg transfers decoded frames
+    // back to system memory for the existing software scale/RGB filter.
+    #[cfg(windows)]
+    args.extend(["-hwaccel".to_string(), "d3d11va".to_string()]);
     args.extend([
         "-i".to_string(),
-        project.asset.path.clone(),
+        path.to_string(),
         "-map".to_string(),
         format!("0:{stream_index}"),
         "-an".to_string(),
@@ -539,20 +661,7 @@ fn spawn_storyboard_ffmpeg(
         "rawvideo".to_string(),
         "pipe:1".to_string(),
     ]);
-    let mut command = StdCommand::new(ffmpeg_program(preferences));
-    #[cfg(windows)]
-    command.creation_flags(CREATE_NO_WINDOW);
-    command
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| {
-            app_error(
-                ErrorCode::ExternalToolStartFailed,
-                format!("Failed to start FFmpeg storyboard extraction: {error}"),
-            )
-        })
+    args
 }
 
 fn read_storyboard_frame<R: Read>(reader: &mut R, frame: &mut [u8]) -> AppResult<bool> {
@@ -641,6 +750,8 @@ fn produce_storyboard_blocks<R: Read>(
 
 struct StoryboardProcess {
     child: StdMutex<Child>,
+    // Release admission only after Drop has killed and reaped the process.
+    _slot: tokio::sync::SemaphorePermit<'static>,
 }
 
 impl Drop for StoryboardProcess {
@@ -1071,6 +1182,122 @@ fn storyboard_cuts_to_shots(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extraction_budget_counts_physical_cores_and_respects_process_limits() {
+        for (physical, available, expected) in [
+            (Some(16), 22, 16),
+            (Some(8), 16, 8),
+            (Some(16), 4, 4),
+            (Some(1), 2, 1),
+            (None, 22, 1),
+            (Some(0), 22, 1),
+            (Some(16), 0, 1),
+        ] {
+            let limit = storyboard_core_limit(physical, available);
+            assert_eq!(limit, expected);
+            let scheduler = StoryboardExtractionScheduler::new(limit);
+            assert!(scheduler.slots.available_permits() * scheduler.threads <= expected);
+        }
+        let scheduler = StoryboardExtractionScheduler::new(storyboard_core_limit(Some(16), 22));
+        assert_eq!(scheduler.threads, 5);
+        assert_eq!(scheduler.slots.available_permits(), 3);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_reports_physical_core_topology() {
+        let cores = storyboard_physical_cores().expect("Windows must report processor cores");
+        assert!(cores > 0);
+        eprintln!("Detected physical CPU cores: {cores}");
+    }
+
+    #[test]
+    fn concurrent_extraction_thread_totals_stay_within_cpu_budget() {
+        for available in 1..=256 {
+            let scheduler = StoryboardExtractionScheduler::new(available);
+            let mut running = Vec::new();
+            while let Ok(permit) = scheduler.slots.try_acquire() {
+                running.push(permit);
+            }
+            assert_eq!(running.len(), available.min(3));
+            assert!(running.len() * scheduler.threads <= available);
+            assert!((1..=16).contains(&scheduler.threads));
+            assert!(scheduler.slots.try_acquire().is_err());
+            running.pop();
+            let replacement = scheduler.slots.try_acquire().unwrap();
+            assert!(scheduler.slots.try_acquire().is_err());
+            drop(replacement);
+        }
+        assert_eq!(StoryboardExtractionScheduler::new(22).threads, 7);
+        assert_eq!(StoryboardExtractionScheduler::new(0).threads, 1);
+    }
+
+    #[test]
+    fn waiting_for_extraction_capacity_can_be_cancelled_and_retried() {
+        let scheduler = StoryboardExtractionScheduler::new(1);
+        let held = scheduler.slots.try_acquire().unwrap();
+        let cancel = AtomicBool::new(false);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let waiting = scheduler.acquire(&cancel);
+            tokio::pin!(waiting);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(10), &mut waiting)
+                    .await
+                    .is_err(),
+                "extraction started without a free slot"
+            );
+            cancel.store(true, Ordering::SeqCst);
+            assert!(tokio::time::timeout(Duration::from_secs(1), &mut waiting)
+                .await
+                .unwrap()
+                .is_err());
+        });
+        assert_eq!(scheduler.slots.available_permits(), 0);
+        drop(held);
+        cancel.store(false, Ordering::SeqCst);
+        let retry = runtime.block_on(scheduler.acquire(&cancel)).unwrap();
+        assert_eq!(scheduler.slots.available_permits(), 0);
+        drop(retry);
+        assert_eq!(scheduler.slots.available_permits(), 1);
+    }
+
+    #[test]
+    fn extraction_args_scope_hardware_decode_and_threads_to_the_input() {
+        let path = "D:\\media files\\input.mp4";
+        let scheduler = StoryboardExtractionScheduler::new(storyboard_core_limit(Some(16), 22));
+        let args = storyboard_ffmpeg_args(path, 2, scheduler.threads);
+        let value = |option: &str| {
+            let index = args.iter().position(|arg| arg == option).unwrap();
+            (index, args[index + 1].as_str())
+        };
+        let (input, input_path) = value("-i");
+        assert_eq!(input_path, path);
+        for option in ["-threads", "-filter_threads", "-filter_complex_threads"] {
+            let (index, threads) = value(option);
+            assert!(index < input);
+            assert_eq!(threads, "5");
+        }
+        #[cfg(windows)]
+        {
+            let (index, accelerator) = value("-hwaccel");
+            assert!(index < input);
+            assert_eq!(accelerator, "d3d11va");
+        }
+        assert!(!args.iter().any(|arg| arg == "-hwaccel_output_format"));
+        let (output, threads) = value("-threads:v");
+        assert!(output > input);
+        assert_eq!(threads, "5");
+        assert_eq!(value("-map").1, "0:2");
+        assert_eq!(value("-vf").1, "scale=48:27:flags=bilinear,format=rgb24");
+        assert_eq!(value("-vsync").1, "0");
+        assert_eq!(value("-f").1, "rawvideo");
+        assert_eq!(args.last().unwrap(), "pipe:1");
+    }
 
     #[test]
     fn packaged_storyboard_event_model_is_valid() {

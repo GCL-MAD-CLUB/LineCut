@@ -36,11 +36,25 @@ pauses refilling so waiting work cannot start during cancellation.
 Each detection task has a dedicated blocking FFmpeg reader. It sends blocks of
 50 RGB frames through its own bounded queue, with at most four blocks waiting.
 A full queue blocks that producer, while other tasks continue independently.
-FFmpeg decoder, filter, and rawvideo encoder thread counts use the existing
-CPU-aware worker budget divided across two concurrent extractions rather than
-three: the extraction slots are rarely all decoding at the same instant, and
-decoding paces the pipeline, so a larger share per extraction keeps it off the
-critical path. The same per-stage ceiling applies as for other media workers.
+On Windows, FFmpeg requests hardware decoding with input-scoped
+`-hwaccel d3d11va`. Hardware output format is left unset so decoded frames can
+feed the software scale/RGB filter in system memory. With a budget of `C` physical
+CPU cores, the backend admits at most `W = min(C, 3)` extractions and assigns
+each `T = min(floor(C / W), 16)` FFmpeg threads. Thus the sum of input `-threads`
+values across active extractions cannot exceed `C`. For example, a CPU with
+16 physical cores and 22 logical processors allows three extractions with five
+threads each, totaling 15. Windows processor topology supplies the physical core
+count; available process parallelism can lower that limit. The topology query
+counts the calling processor group, conservatively underusing multi-group CPUs.
+If physical topology cannot be determined, the budget falls back to one thread.
+Filter and rawvideo output options use the same per-extraction thread setting.
+This bounds configured FFmpeg parallelism, not the total OS thread count across
+FFmpeg, ONNX Runtime, drivers and I/O readers.
+
+A process-wide semaphore enforces admission even for direct backend requests.
+One- and two-core systems admit only one and two extractions respectively.
+Waiting requests remain cancellable. An extraction holds its slot until its
+FFmpeg process has been stopped and reaped, including failure and cancellation.
 
 One process-wide inference thread owns the ONNX Runtime Session. It probes
 DirectML adapters and loads the model once for overlapping tasks, then visits
@@ -52,8 +66,9 @@ fully overwritten before each synchronous inference, so no task can inherit
 another task's frame data. Only the first prediction output is requested, and
 the center probabilities are read directly from that output. The packaged
 model has fixed input dimensions `[1, 100, 27, 48, 3]`; increasing the batch size
-requires a separately validated model. FFmpeg extraction settings and cut
-decision rules are unchanged.
+requires a separately validated model. Extraction keeps every decoded frame
+and outputs 48×27 RGB data with the existing bilinear scaling. Cut decision
+rules are unchanged.
 
 DirectML retains sequential execution and disabled memory patterns. CPU
 fallback uses half the available logical CPU count (rounded down), bounded
@@ -72,9 +87,10 @@ A consumer panic is explicitly logged at error level with its panic payload.
 
 This overlaps decoding and inference, changing their contribution to total
 runtime from their sum toward the slower stage, plus startup and final draining.
-It does not reduce decoding cost. Software decoding of 1080p input can remain
-the bottleneck, so GPU utilization need not rise substantially. Lower-resolution
-proxies or hardware decoding would require a separate change.
+Hardware decoding can reduce CPU decode work; the existing software scaling,
+GPU-to-system-memory transfers and inference still contribute to runtime.
+The requested accelerator depends on the FFmpeg build, GPU/driver and input
+codec. FFmpeg extraction failures continue to fail the task with its diagnostics.
 
 ## Decision-stage performance
 
