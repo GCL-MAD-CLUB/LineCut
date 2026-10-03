@@ -1,11 +1,13 @@
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError};
 use std::sync::Condvar;
 use std::thread;
+use std::time::Instant;
 
 use super::*;
 
 pub(super) const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const PREFETCH_BLOCKS: usize = 4;
+const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(super) struct FrameBlock {
     pub task_id: String,
@@ -40,13 +42,13 @@ impl ConsumerWake {
         self.ready.notify_one();
     }
 
-    fn wait(&self, observed: u64) {
+    fn wait(&self, observed: u64, timeout: Duration) {
         let generation = self
             .generation
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         if *generation == observed {
-            let _ = self.ready.wait_timeout(generation, POLL_INTERVAL);
+            let _ = self.ready.wait_timeout(generation, timeout);
         }
     }
 }
@@ -287,10 +289,20 @@ impl Drop for InferenceTask {
     }
 }
 
-#[derive(Default)]
 pub(super) struct StoryboardConsumer {
     incoming: StdMutex<Option<Sender<InferenceTask>>>,
     wake: Arc<ConsumerWake>,
+    idle_timeout: Duration,
+}
+
+impl Default for StoryboardConsumer {
+    fn default() -> Self {
+        Self {
+            incoming: StdMutex::new(None),
+            wake: Arc::default(),
+            idle_timeout: SESSION_IDLE_TIMEOUT,
+        }
+    }
 }
 
 impl StoryboardConsumer {
@@ -306,8 +318,16 @@ impl StoryboardConsumer {
         self.submit_with(
             task,
             move || {
+                let started = Instant::now();
                 init_storyboard_ort(&runtime)?;
-                create_transnet_session(&runtime.model)
+                let (session, provider) = create_transnet_session(&runtime.model)?;
+                let model = TransnetSession::new(session)?;
+                tracing::info!(
+                    provider,
+                    initialization_ms = started.elapsed().as_millis() as u64,
+                    "Storyboard inference session ready"
+                );
+                Ok((model, provider))
             },
             run_transnet_window,
         )
@@ -348,10 +368,20 @@ impl StoryboardConsumer {
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let mut model = Some(initialize());
                     let mut tasks = VecDeque::<InferenceTask>::new();
+                    let mut idle_since = None;
                     loop {
                         let observed = consumer.wake.generation();
                         tasks.extend(receiver.try_iter());
                         if tasks.is_empty() {
+                            let idle = *idle_since.get_or_insert_with(Instant::now);
+                            let remaining = consumer.idle_timeout.saturating_sub(idle.elapsed());
+                            // Keep a successful session across frontend queue refills
+                            // and nearby user requests. Failed initialization must
+                            // retire immediately so the next request can retry.
+                            if model.as_ref().is_some_and(Result::is_ok) && !remaining.is_zero() {
+                                consumer.wake.wait(observed, remaining);
+                                continue;
+                            }
                             // Admission and retirement share this lock. Drop the
                             // Session before allowing a replacement worker to start.
                             let mut incoming = consumer
@@ -365,6 +395,7 @@ impl StoryboardConsumer {
                                 return;
                             }
                         }
+                        idle_since = None;
                         let mut did_work = false;
                         for _ in 0..tasks.len() {
                             let mut task = tasks.pop_front().expect("round-robin task exists");
@@ -389,7 +420,7 @@ impl StoryboardConsumer {
                         if !tasks.is_empty() && !did_work {
                             // Never wait indefinitely: cancellation also needs to
                             // work when all producers are blocked reading stdout.
-                            consumer.wake.wait(observed);
+                            consumer.wake.wait(observed, POLL_INTERVAL);
                         }
                     }
                 }));
@@ -420,4 +451,5 @@ impl StoryboardConsumer {
 }
 
 #[cfg(test)]
+#[path = "pipeline_tests.rs"]
 mod tests;

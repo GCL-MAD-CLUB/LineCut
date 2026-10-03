@@ -47,15 +47,27 @@ DirectML adapters and loads the model once for overlapping tasks, then visits
 their queues in round-robin order. Predictions, progress, frame windows, and
 padding belong to each task. Window assembly retains the original 100-frame
 inputs, 50-frame stride, 25 copies of the first frame on the left, and last-frame
-padding on the right. FFmpeg extraction settings apart from thread budgets,
-Session options, and cut decisions are unchanged.
+padding on the right. One reusable float32 input tensor serves all tasks; it is
+fully overwritten before each synchronous inference, so no task can inherit
+another task's frame data. Only the first prediction output is requested, and
+the center probabilities are read directly from that output. The packaged
+model has fixed input dimensions `[1, 100, 27, 48, 3]`; increasing the batch size
+requires a separately validated model. FFmpeg extraction settings and cut
+decision rules are unchanged.
+
+DirectML retains sequential execution and disabled memory patterns. CPU
+fallback uses half the available logical CPU count (rounded down), bounded
+to 1–8 intra-op threads, instead of forcing every operator onto one thread.
 
 Cancelling a task closes and discards only its queue and stops its FFmpeg
 process. Extraction or inference errors fail only that task. The consumer uses
 notifications with timed waits so cancellation works even without arriving
-frames. Admission and retirement share a lock: once all admitted tasks and
-their queues have finished, the consumer drops its Session and exits; a later
-task starts a new consumer.
+frames. A successful session stays warm for 30 seconds after its last task,
+covering frontend queue refills and nearby detection requests. An idle session
+waits for a notification instead of polling. After the idle timeout, admission
+and retirement share a lock: the consumer checks for new tasks again, drops
+its Session and exits. Failed initialization retires immediately so later
+requests can retry. Warm sessions retain their model memory during the timeout.
 A consumer panic is explicitly logged at error level with its panic payload.
 
 This overlaps decoding and inference, changing their contribution to total
@@ -63,6 +75,41 @@ runtime from their sum toward the slower stage, plus startup and final draining.
 It does not reduce decoding cost. Software decoding of 1080p input can remain
 the bottleneck, so GPU utilization need not rise substantially. Lower-resolution
 proxies or hardware decoding would require a separate change.
+
+## Decision-stage performance
+
+The local probability/logit medians use a sorted sliding window. The monotonic
+logit transform preserves ordering, so both medians use the same middle
+elements, while retaining the original even-window arithmetic at clip edges.
+MAD uses one reusable scratch buffer instead of allocating for every frame.
+Non-maximum suppression retains the same greedy priority and strict distance
+comparison, but checks an ordered frame index instead of scanning all retained
+events. Its worst-case comparison cost drops from quadratic to `O(E log E)` for
+`E` candidates. Decision work runs on a blocking worker rather than occupying
+the asynchronous command executor.
+
+Tests compare sliding statistics bit for bit against independently sorted
+windows, indexed suppression against the original greedy scan, and reused
+ONNX inputs against fresh tensors with all outputs requested. They cover clip
+edges, non-finite probabilities, duplicate peaks, zero/maximum distances,
+interleaved task windows, cancellation, warm reuse and session retirement.
+
+An optimized Rust microbenchmark on 180,000 in-memory probabilities, using the
+median of five runs and identical cut outputs, measured:
+
+| Probability sequence           | Previous decision stage | Optimized decision stage |
+| ------------------------------ | ----------------------: | -----------------------: |
+| Isolated peak every 100 frames |               116.63 ms |                 42.62 ms |
+| Isolated peak every 5 frames   |              1006.26 ms |                 69.43 ms |
+| Deterministic uniform samples  |               247.02 ms |                 85.31 ms |
+
+These are local decision-stage measurements, not end-to-end video speedups.
+No videos were generated for these checks. Runtime tracing records model
+initialization, frame-stream read time, producer queue wait time, accumulated
+input packing and inference time, and per-task pipeline/decision/total time.
+Frame-stream read time includes waiting for FFmpeg; queue wait time reflects
+backpressure. Overlapping stage times must not be added as wall-clock duration.
+Packing/inference totals are logged when the warm session retires.
 
 ## Training and validation
 

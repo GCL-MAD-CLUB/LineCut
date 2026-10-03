@@ -12,7 +12,6 @@ mod proxy;
 mod rolling_pcm;
 mod storage;
 mod storyboard;
-mod storyboard_decision;
 mod subtitles;
 mod tasks;
 mod thumbnail;

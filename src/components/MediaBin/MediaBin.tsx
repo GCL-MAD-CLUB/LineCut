@@ -1851,7 +1851,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                   }}
                   disabled={isReadOnly || !canDemuxSelectedVideo}
                 >
-                  分解音轨和字幕
+                  分解媒体
                 </PopupMenuItem>
                 <PopupMenuSeparator />
                 <PopupMenuItem
@@ -1948,15 +1948,6 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                 <PopupMenuItem mnemonic="O" disabled>
                   脱机编辑(O)...
                 </PopupMenuItem>
-                <PopupMenuItem
-                  disabled={isReadOnly || !canDetectSelectedVideos}
-                  onSelect={() => {
-                    setContextMenu(null);
-                    requestDetection(selectedVideoIds);
-                  }}
-                >
-                  分镜识别
-                </PopupMenuItem>
                 <PopupMenuSubmenu
                   label="代理"
                   open={contextMenu.proxySubmenuOpen}
@@ -2012,6 +2003,16 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
                     重新连接完整分辨率媒体...
                   </PopupMenuItem>
                 </PopupMenuSubmenu>
+                <PopupMenuSeparator />
+                <PopupMenuItem
+                  disabled={isReadOnly || !canDetectSelectedVideos}
+                  onSelect={() => {
+                    setContextMenu(null);
+                    requestDetection(selectedVideoIds);
+                  }}
+                >
+                  分镜识别
+                </PopupMenuItem>
                 <PopupMenuSeparator />
                 <PopupMenuSubmenu
                   label="导出"

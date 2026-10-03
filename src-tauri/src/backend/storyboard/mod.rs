@@ -11,16 +11,21 @@ use std::{env, fmt};
 
 use ort::{
     execution_providers::DirectMLExecutionProvider,
-    session::{builder::GraphOptimizationLevel, Session},
+    session::{
+        builder::GraphOptimizationLevel,
+        run_options::{HasSelectedOutputs, OutputSelector, RunOptions},
+        Session,
+    },
     value::Tensor,
 };
 use tauri::path::BaseDirectory;
 use uuid::Uuid;
 
-use super::storyboard_decision::{detect_storyboard_cuts, StoryboardCut, StoryboardDecisionConfig};
 use super::*;
 
+mod decision;
 mod pipeline;
+use decision::{detect_storyboard_cuts, StoryboardCut, StoryboardDecisionConfig};
 use pipeline::{
     FrameBlock, FrameQueue, FrameSender, InferenceTask, ProducerMessage, StoryboardConsumer,
 };
@@ -44,12 +49,7 @@ const STORYBOARD_PROGRESS_MIN_DELTA: f64 = 0.0025;
 const STORYBOARD_PROGRESS_FRAME_REPORT_INTERVAL: usize = 25;
 const DEFAULT_STORYBOARD_FRAME_RATE: f64 = 25.0;
 const MAX_DIRECTML_ADAPTERS_TO_PROBE: i32 = 8;
-/// Concurrent extractions the FFmpeg thread budget is divided across. The
-/// frontend can fill three slots, but they are rarely all decoding at the same
-/// instant, and decoding paces the pipeline, so the budget is split two ways:
-/// each extraction gets a larger share than a strict three-way split, which
-/// keeps decode off the critical path without oversubscribing at peak.
-const STORYBOARD_EXTRACTION_WORKERS: usize = 2;
+const STORYBOARD_EXTRACTION_WORKERS: usize = 3;
 
 static ORT_INIT_LOCK: StdMutex<()> = StdMutex::new(());
 static ORT_ENV_READY: OnceLock<()> = OnceLock::new();
@@ -295,6 +295,7 @@ async fn run_storyboard_detection(
         cancel,
     }: StoryboardDetectionRequest<'_>,
 ) -> AppResult<StoryboardDetectionResult> {
+    let started = std::time::Instant::now();
     let decision_config = storyboard_decision_config(runtime.event_model.as_ref())?;
     let frame_rate = storyboard_frame_rate(project);
     let expected_frames = expected_frame_count(project.asset.duration_us, frame_rate);
@@ -379,12 +380,26 @@ async fn run_storyboard_detection(
     ensure_not_cancelled(&cancel)?;
     drop(extraction);
 
-    let cuts = detect_storyboard_cuts(&predictions, &decision_config);
-    let shots = storyboard_cuts_to_shots(
-        predictions.len(),
-        &cuts,
-        frame_rate,
-        project.asset.duration_us,
+    let pipeline_ms = started.elapsed().as_millis() as u64;
+    let duration_us = project.asset.duration_us;
+    let (cuts, shots, decision_ms) =
+        spawn_blocking_cancellable(cancel.clone(), "storyboard decision", move |cancel| {
+            let started = std::time::Instant::now();
+            let cuts = detect_storyboard_cuts(&predictions, &decision_config);
+            ensure_not_cancelled(cancel)?;
+            let shots = storyboard_cuts_to_shots(predictions.len(), &cuts, frame_rate, duration_us);
+            Ok((cuts, shots, started.elapsed().as_millis() as u64))
+        })
+        .await?;
+    ensure_not_cancelled(&cancel)?;
+    tracing::info!(
+        task_id,
+        provider,
+        decoded_frames,
+        pipeline_ms,
+        decision_ms,
+        total_ms = started.elapsed().as_millis() as u64,
+        "Storyboard detection completed"
     );
     Ok(StoryboardDetectionResult {
         asset_id: project.asset.id.clone(),
@@ -476,10 +491,17 @@ fn create_directml_transnet_session(model_path: &PathBuf, adapter: i32) -> ort::
 }
 
 fn create_cpu_transnet_session(model_path: &PathBuf) -> ort::Result<Session> {
+    let threads = storyboard_cpu_thread_budget(available_cpu_threads());
+    tracing::info!(threads, "Configured storyboard CPU inference threads");
     Session::builder()?
         .with_optimization_level(GraphOptimizationLevel::Level3)?
-        .with_intra_threads(1)?
+        .with_intra_threads(threads)?
         .commit_from_file(model_path)
+}
+
+fn storyboard_cpu_thread_budget(available: usize) -> usize {
+    // Reserve CPU capacity for decoding and the UI; one session serves all tasks.
+    (available / 2).clamp(1, 8)
 }
 
 fn spawn_storyboard_ffmpeg(
@@ -569,7 +591,11 @@ fn produce_storyboard_blocks<R: Read>(
     cancel: &AtomicBool,
     stop: &AtomicBool,
 ) -> AppResult<()> {
+    let mut read_time = Duration::ZERO;
+    let mut queue_wait = Duration::ZERO;
+    let mut decoded_frames = 0;
     loop {
+        let read_started = std::time::Instant::now();
         let mut frames = Vec::with_capacity(TRANSNET_STRIDE_FRAMES);
         for _ in 0..TRANSNET_STRIDE_FRAMES {
             ensure_not_cancelled(cancel)?;
@@ -580,10 +606,13 @@ fn produce_storyboard_blocks<R: Read>(
             }
             frames.push(frame);
         }
+        read_time += read_started.elapsed();
+        decoded_frames += frames.len();
         let last_block = frames.len() < TRANSNET_STRIDE_FRAMES;
         if !frames.is_empty() {
             // Blocking send supplies backpressure; closing only this task's
             // receiver wakes it immediately, even while the model is busy.
+            let send_started = std::time::Instant::now();
             sender
                 .send(ProducerMessage::Frames(FrameBlock {
                     task_id: task_id.to_string(),
@@ -595,8 +624,16 @@ fn produce_storyboard_blocks<R: Read>(
                         "Storyboard frame queue was closed",
                     )
                 })?;
+            queue_wait += send_started.elapsed();
         }
         if last_block {
+            tracing::info!(
+                task_id,
+                decoded_frames,
+                read_ms = read_time.as_millis() as u64,
+                queue_wait_ms = queue_wait.as_millis() as u64,
+                "Storyboard frame stream completed"
+            );
             return Ok(());
         }
     }
@@ -740,45 +777,109 @@ fn wait_storyboard_extraction(
     }
 }
 
-fn run_transnet_window(session: &mut Session, window: &VecDeque<Vec<u8>>) -> AppResult<Vec<f32>> {
-    let mut input = Vec::with_capacity(TRANSNET_WINDOW_FRAMES * STORYBOARD_FRAME_BYTES);
-    for frame in window.iter().take(TRANSNET_WINDOW_FRAMES) {
-        input.extend(frame.iter().map(|value| *value as f32));
+struct TransnetSession {
+    session: Session,
+    input: Tensor<f32>,
+    options: RunOptions<HasSelectedOutputs>,
+    windows: usize,
+    packing_time: Duration,
+    inference_time: Duration,
+}
+
+impl TransnetSession {
+    fn new(session: Session) -> AppResult<Self> {
+        let input = Tensor::<f32>::from_array((
+            [
+                1,
+                TRANSNET_WINDOW_FRAMES,
+                STORYBOARD_FRAME_HEIGHT,
+                STORYBOARD_FRAME_WIDTH,
+                STORYBOARD_FRAME_CHANNELS,
+            ],
+            vec![0.0; TRANSNET_WINDOW_FRAMES * STORYBOARD_FRAME_BYTES],
+        ))
+        .map_err(|error| storyboard_ort_error("create TransNetV2 input tensor", error))?;
+        let output = session.outputs.first().ok_or_else(|| {
+            app_error(
+                ErrorCode::StoryboardInferenceFailed,
+                "TransNetV2 has no prediction output",
+            )
+        })?;
+        // The detector consumes only the first head. Do not request the unused
+        // second head, or copy either entire output into an intermediate Vec.
+        let options = RunOptions::new()
+            .map_err(|error| storyboard_ort_error("create TransNetV2 run options", error))?
+            .with_outputs(OutputSelector::no_default().with(&output.name));
+        Ok(Self {
+            session,
+            input,
+            options,
+            windows: 0,
+            packing_time: Duration::ZERO,
+            inference_time: Duration::ZERO,
+        })
     }
-    let tensor = Tensor::<f32>::from_array((
-        vec![
-            1_i64,
-            TRANSNET_WINDOW_FRAMES as i64,
-            STORYBOARD_FRAME_HEIGHT as i64,
-            STORYBOARD_FRAME_WIDTH as i64,
-            STORYBOARD_FRAME_CHANNELS as i64,
-        ],
-        input,
-    ))
-    .map_err(|error| storyboard_ort_error("create TransNetV2 input tensor", error))?;
-    let input_name = session
-        .inputs
-        .first()
-        .map(|input| input.name.clone())
-        .unwrap_or_else(|| "input".to_string());
-    let outputs = session
-        .run(
-            ort::inputs! {
-                input_name => tensor
-            }
-            .map_err(|error| storyboard_ort_error("bind TransNetV2 input", error))?,
-        )
+}
+
+impl Drop for TransnetSession {
+    fn drop(&mut self) {
+        tracing::info!(
+            windows = self.windows,
+            packing_ms = self.packing_time.as_millis() as u64,
+            inference_ms = self.inference_time.as_millis() as u64,
+            "Storyboard inference session retired"
+        );
+    }
+}
+
+fn fill_transnet_input(input: &mut [f32], window: &VecDeque<Vec<u8>>) -> AppResult<()> {
+    if window.len() < TRANSNET_WINDOW_FRAMES
+        || window
+            .iter()
+            .take(TRANSNET_WINDOW_FRAMES)
+            .any(|frame| frame.len() != STORYBOARD_FRAME_BYTES)
+        || input.len() != TRANSNET_WINDOW_FRAMES * STORYBOARD_FRAME_BYTES
+    {
+        return Err(app_error(
+            ErrorCode::StoryboardInferenceFailed,
+            "Invalid TransNetV2 frame window",
+        ));
+    }
+    for (target, frame) in input.chunks_exact_mut(STORYBOARD_FRAME_BYTES).zip(window) {
+        for (target, value) in target.iter_mut().zip(frame) {
+            *target = *value as f32;
+        }
+    }
+    Ok(())
+}
+
+fn run_transnet_window(
+    model: &mut TransnetSession,
+    window: &VecDeque<Vec<u8>>,
+) -> AppResult<Vec<f32>> {
+    let packing_started = std::time::Instant::now();
+    let (_, input) = model
+        .input
+        .try_extract_raw_tensor_mut::<f32>()
+        .map_err(|error| storyboard_ort_error("access TransNetV2 input tensor", error))?;
+    fill_transnet_input(input, window)?;
+    model.packing_time += packing_started.elapsed();
+    let inference_started = std::time::Instant::now();
+    let outputs = model
+        .session
+        .run_with_options([model.input.view().into()], &model.options)
         .map_err(|error| storyboard_ort_error("run TransNetV2 inference", error))?;
+    model.inference_time += inference_started.elapsed();
+    model.windows += 1;
     if outputs.len() == 0 {
         return Err(app_error(
             ErrorCode::StoryboardInferenceFailed,
             "TransNetV2 produced no output tensors",
         ));
     }
-    let output = outputs[0]
-        .try_extract_tensor::<f32>()
+    let (_, values) = outputs[0]
+        .try_extract_raw_tensor::<f32>()
         .map_err(|error| storyboard_ort_error("extract TransNetV2 predictions", error))?;
-    let values = output.iter().copied().collect::<Vec<_>>();
     if values.len() < TRANSNET_CENTER_END {
         return Err(app_error(
             ErrorCode::StoryboardInferenceFailed,
@@ -1001,8 +1102,88 @@ mod tests {
             .commit()
             .expect("packaged ONNX Runtime must initialize");
 
-        create_cpu_transnet_session(&runtime_dir.join(TRANSNET_MODEL_FILE))
+        let session = create_cpu_transnet_session(&runtime_dir.join(TRANSNET_MODEL_FILE))
             .expect("packaged model must load with the CPU provider");
+        assert_transnet_reuse_matches_fresh_tensors(session);
+    }
+
+    fn assert_transnet_reuse_matches_fresh_tensors(session: Session) {
+        let mut model = TransnetSession::new(session).unwrap();
+        let input_address = model.input.extract_raw_tensor().1.as_ptr();
+        // Exercise unrelated windows as the shared session would when tasks
+        // alternate. Compare with the former fresh-tensor, all-output path.
+        for marker in [3usize, 173, 3] {
+            let window = (0..TRANSNET_WINDOW_FRAMES)
+                .map(|frame| {
+                    (0..STORYBOARD_FRAME_BYTES)
+                        .map(|pixel| ((pixel * 7 + frame * 11 + marker) % 256) as u8)
+                        .collect::<Vec<_>>()
+                })
+                .collect::<VecDeque<_>>();
+            let tensor = Tensor::<f32>::from_array((
+                [
+                    1,
+                    TRANSNET_WINDOW_FRAMES,
+                    STORYBOARD_FRAME_HEIGHT,
+                    STORYBOARD_FRAME_WIDTH,
+                    STORYBOARD_FRAME_CHANNELS,
+                ],
+                window
+                    .iter()
+                    .flatten()
+                    .map(|value| *value as f32)
+                    .collect::<Vec<_>>(),
+            ))
+            .unwrap();
+            let expected = {
+                let outputs = model.session.run(ort::inputs![tensor].unwrap()).unwrap();
+                let (_, values) = outputs[0].try_extract_raw_tensor::<f32>().unwrap();
+                let needs_sigmoid = values.iter().any(|value| *value < 0.0 || *value > 1.0);
+                values[TRANSNET_CENTER_START..TRANSNET_CENTER_END]
+                    .iter()
+                    .map(|value| {
+                        if needs_sigmoid {
+                            1.0 / (1.0 + (-*value).exp())
+                        } else {
+                            value.clamp(0.0, 1.0)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(run_transnet_window(&mut model, &window).unwrap(), expected);
+            assert_eq!(model.input.extract_raw_tensor().1.as_ptr(), input_address);
+        }
+    }
+
+    #[test]
+    fn cpu_inference_budget_reserves_capacity_and_has_a_ceiling() {
+        for (available, expected) in [(0, 1), (1, 1), (2, 1), (4, 2), (8, 4), (16, 8), (64, 8)] {
+            assert_eq!(storyboard_cpu_thread_budget(available), expected);
+        }
+    }
+
+    #[test]
+    fn reusable_input_preserves_layout_and_rejects_incomplete_windows() {
+        let mut input = vec![0.0; TRANSNET_WINDOW_FRAMES * STORYBOARD_FRAME_BYTES];
+        let mut window = (0..TRANSNET_WINDOW_FRAMES)
+            .map(|frame| vec![frame as u8; STORYBOARD_FRAME_BYTES])
+            .collect::<VecDeque<_>>();
+        // Wrap the deque so tests also cover discontiguous storage.
+        for _ in 0..37 {
+            let frame = window.pop_front().unwrap();
+            window.push_back(frame);
+        }
+        fill_transnet_input(&mut input, &window).unwrap();
+        assert_eq!(
+            input,
+            window
+                .iter()
+                .flatten()
+                .map(|value| *value as f32)
+                .collect::<Vec<_>>()
+        );
+        window.pop_back();
+        assert!(fill_transnet_input(&mut input, &window).is_err());
     }
 
     #[test]
@@ -1023,8 +1204,9 @@ mod tests {
             .commit()
             .expect("packaged ONNX Runtime must initialize");
 
-        create_directml_transnet_session(&runtime_dir.join(TRANSNET_MODEL_FILE), 0)
+        let session = create_directml_transnet_session(&runtime_dir.join(TRANSNET_MODEL_FILE), 0)
             .expect("packaged model must load with DirectML adapter 0");
+        assert_transnet_reuse_matches_fresh_tensors(session);
     }
 
     #[test]

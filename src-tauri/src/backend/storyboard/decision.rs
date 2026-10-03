@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
 use crate::{app_error, AppResult, ErrorCode};
 
@@ -317,19 +318,51 @@ fn robust_series(predictions: &[f32], config: &StoryboardDecisionConfig) -> Robu
         .collect::<Vec<_>>();
     let mut probability_medians = Vec::with_capacity(predictions.len());
     let mut robust_scores = Vec::with_capacity(predictions.len());
+    // Probabilities and logits have the same ordering. Maintain their exact
+    // middle elements as the window slides, including the even-length edges.
+    // MAD still needs selection, but reuses one allocation for the entire clip.
+    let capacity = config
+        .robust_window_radius
+        .saturating_mul(2)
+        .saturating_add(1)
+        .min(predictions.len());
+    let mut sorted = Vec::<(f64, f64)>::with_capacity(capacity);
+    let mut deviations = Vec::with_capacity(capacity);
+    let mut previous_start = 0;
+    let mut previous_end = 0;
 
     for index in 0..predictions.len() {
         let start = index.saturating_sub(config.robust_window_radius);
         let end = index
             .saturating_add(config.robust_window_radius)
-            .min(predictions.len() - 1);
-        let probability_median = median(probabilities[start..=end].to_vec());
-        let logit_median = median(logits[start..=end].to_vec());
-        let deviations = logits[start..=end]
-            .iter()
-            .map(|value| (value - logit_median).abs())
-            .collect::<Vec<_>>();
-        let scale = 1.4826 * median(deviations) + config.epsilon;
+            .saturating_add(1)
+            .min(predictions.len());
+        for probability in &probabilities[previous_start..start] {
+            let position = sorted
+                .binary_search_by(|entry| entry.0.total_cmp(probability))
+                .expect("departing probability belongs to the rolling window");
+            sorted.remove(position);
+        }
+        for next in previous_end..end {
+            let entry = (probabilities[next], logits[next]);
+            let position = sorted.partition_point(|known| known.0.total_cmp(&entry.0).is_lt());
+            sorted.insert(position, entry);
+        }
+        previous_start = start;
+        previous_end = end;
+        let middle = sorted.len() / 2;
+        let (mut probability_median, mut logit_median) = sorted[middle];
+        if sorted.len() % 2 == 0 {
+            probability_median = (sorted[middle - 1].0 + probability_median) / 2.0;
+            logit_median = (sorted[middle - 1].1 + logit_median) / 2.0;
+        }
+        deviations.clear();
+        deviations.extend(
+            logits[start..end]
+                .iter()
+                .map(|value| (value - logit_median).abs()),
+        );
+        let scale = 1.4826 * median(&mut deviations) + config.epsilon;
 
         probability_medians.push(probability_median);
         robust_scores.push((logits[index] - logit_median) / scale);
@@ -506,11 +539,19 @@ fn non_maximum_suppression(
 ) -> Vec<ScoredEvent> {
     events.sort_by(compare_event_priority);
     let mut retained = Vec::<ScoredEvent>::new();
+    let mut retained_frames = BTreeSet::new();
     for event in events {
-        let conflicts = retained.iter().any(|known| {
-            known.event.peak_frame.abs_diff(event.event.peak_frame) < minimum_distance
-        });
+        let frame = event.event.peak_frame;
+        // Preserve strict distance and greedy priority, without scanning every
+        // previously accepted event (quadratic for long, densely cut videos).
+        let radius = minimum_distance.saturating_sub(1);
+        let conflicts = minimum_distance > 0
+            && retained_frames
+                .range(frame.saturating_sub(radius)..=frame.saturating_add(radius))
+                .next()
+                .is_some();
         if !conflicts {
+            retained_frames.insert(frame);
             retained.push(event);
         }
     }
@@ -606,7 +647,7 @@ fn sigmoid(value: f64) -> f64 {
     }
 }
 
-fn median(mut values: Vec<f64>) -> f64 {
+fn median(values: &mut [f64]) -> f64 {
     if values.is_empty() {
         return 0.0;
     }
@@ -628,6 +669,134 @@ fn median(mut values: Vec<f64>) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn reference_median(mut values: Vec<f64>) -> f64 {
+        values.sort_by(f64::total_cmp);
+        let middle = values.len() / 2;
+        if values.len() % 2 == 0 {
+            (values[middle - 1] + values[middle]) / 2.0
+        } else {
+            values[middle]
+        }
+    }
+
+    #[test]
+    fn rolling_statistics_match_independent_sorted_reference() {
+        let mut seed = 42u32;
+        let mut predictions = (0..4097)
+            .map(|_| {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                (seed % 1024) as f32 / 1023.0
+            })
+            .collect::<Vec<_>>();
+        predictions[..10].copy_from_slice(&[
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            -1.0,
+            -0.0,
+            0.0,
+            1.0,
+            2.0,
+            0.5,
+            0.5,
+        ]);
+        for count in [0, 1, 2, 49, 50, 51, 100, 101, 4097] {
+            for radius in [0, 1, 2, 50, usize::MAX] {
+                if count > 101 && radius == usize::MAX {
+                    // Full-window and saturating arithmetic are covered above;
+                    // keep the independently sorted reference inexpensive.
+                    continue;
+                }
+                for epsilon in [1.0e-6, 0.1] {
+                    let config = StoryboardDecisionConfig {
+                        robust_window_radius: radius,
+                        epsilon,
+                        ..default_config()
+                    };
+                    let series = robust_series(&predictions[..count], &config);
+                    for index in 0..count {
+                        let start = index.saturating_sub(radius);
+                        let end = index.saturating_add(radius).min(count - 1);
+                        let probability_median =
+                            reference_median(series.probabilities[start..=end].to_vec());
+                        let logit_median = reference_median(series.logits[start..=end].to_vec());
+                        let mad = reference_median(
+                            series.logits[start..=end]
+                                .iter()
+                                .map(|value| (value - logit_median).abs())
+                                .collect(),
+                        );
+                        let score =
+                            (series.logits[index] - logit_median) / (1.4826 * mad + epsilon);
+                        assert_eq!(
+                            series.probability_medians[index].to_bits(),
+                            probability_median.to_bits(),
+                            "median count={count} radius={radius} frame={index}"
+                        );
+                        assert_eq!(
+                            series.robust_scores[index].to_bits(),
+                            score.to_bits(),
+                            "score count={count} radius={radius} frame={index}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn indexed_nms_matches_greedy_reference_at_distance_and_integer_edges() {
+        let mut seed = 7u32;
+        let events = (0..2048)
+            .map(|index| {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                let frame = if index % 31 == 0 {
+                    usize::MAX - index
+                } else {
+                    seed as usize % 3000
+                };
+                ScoredEvent {
+                    event: CandidateEvent {
+                        interval: EventInterval {
+                            start: frame,
+                            end: frame,
+                        },
+                        peak_frame: frame,
+                        peak_probability: (index % 7) as f64 / 7.0,
+                        robust_prominence: (index % 3) as f64,
+                        area: 1.0,
+                        width: 1,
+                        features: [0.0; 10],
+                    },
+                    calibrated_probability: (index % 11) as f64 / 11.0,
+                }
+            })
+            .collect::<Vec<_>>();
+        for distance in [0, 1, 2, 3, 50, usize::MAX] {
+            let mut sorted = events.clone();
+            sorted.sort_by(compare_event_priority);
+            let mut expected = Vec::<ScoredEvent>::new();
+            for event in sorted {
+                if !expected
+                    .iter()
+                    .any(|known| known.event.peak_frame.abs_diff(event.event.peak_frame) < distance)
+                {
+                    expected.push(event);
+                }
+            }
+            expected.sort_by_key(|event| event.event.peak_frame);
+            let actual = non_maximum_suppression(events.clone(), distance);
+            assert_eq!(actual.len(), expected.len());
+            for (actual, expected) in actual.iter().zip(&expected) {
+                assert_eq!(actual.event.peak_frame, expected.event.peak_frame);
+                assert_eq!(
+                    compare_event_priority(actual, expected),
+                    std::cmp::Ordering::Equal
+                );
+            }
+        }
+    }
 
     fn default_config() -> StoryboardDecisionConfig {
         let config = StoryboardDecisionConfig::default();

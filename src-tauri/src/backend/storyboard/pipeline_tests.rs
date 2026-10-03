@@ -18,6 +18,13 @@ impl PublicErrorCode for AppError {
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
+fn test_consumer() -> Arc<StoryboardConsumer> {
+    Arc::new(StoryboardConsumer {
+        idle_timeout: Duration::from_millis(50),
+        ..StoryboardConsumer::default()
+    })
+}
+
 fn frames(marker: u8, count: usize) -> Vec<Vec<u8>> {
     (0..count)
         .map(|index| vec![marker, (index % 256) as u8, (index / 256) as u8])
@@ -193,7 +200,7 @@ fn decoding_prefetches_during_inference_and_cancellation_unblocks_full_queue() {
             Ok(count)
         }
     }
-    let consumer = Arc::new(StoryboardConsumer::default());
+    let consumer = test_consumer();
     let (sender, queue, cancel, task, completion) = task(&consumer, "prefetch");
     let (started_tx, started) = mpsc::channel();
     let (release, gate) = mpsc::channel();
@@ -263,7 +270,10 @@ fn concurrent_admission_and_retirement_never_overlap_sessions() {
             assert_eq!(self.0.fetch_sub(1, Ordering::SeqCst), 1);
         }
     }
-    let consumer = Arc::new(StoryboardConsumer::default());
+    let consumer = Arc::new(StoryboardConsumer {
+        idle_timeout: Duration::ZERO,
+        ..StoryboardConsumer::default()
+    });
     let active = Arc::new(AtomicUsize::new(0));
     let mut submitters = Vec::new();
     for index in 0..4 {
@@ -298,7 +308,7 @@ fn concurrent_admission_and_retirement_never_overlap_sessions() {
 
 #[test]
 fn stalled_queue_does_not_delay_another_task() {
-    let consumer = Arc::new(StoryboardConsumer::default());
+    let consumer = test_consumer();
     let (_stalled_sender, _, cancel, stalled, stalled_result) = task(&consumer, "stalled");
     consumer
         .submit_with(
@@ -331,7 +341,7 @@ fn stalled_queue_does_not_delay_another_task() {
 
 #[test]
 fn one_session_round_robin_isolation_retirement_and_restart() {
-    let consumer = Arc::new(StoryboardConsumer::default());
+    let consumer = test_consumer();
     let initialized = Arc::new(AtomicUsize::new(0));
     let dropped = Arc::new(AtomicUsize::new(0));
     let order = Arc::new(StdMutex::new(Vec::new()));
@@ -471,7 +481,7 @@ fn four_block_backpressure_and_close_unblock_only_own_producer() {
 
 #[test]
 fn cancellation_while_all_queues_are_empty_finishes_without_producer_message() {
-    let consumer = Arc::new(StoryboardConsumer::default());
+    let consumer = test_consumer();
     let (_sender, _, cancel, task, completion) = task(&consumer, "waiting");
     let (ready_tx, ready) = mpsc::channel();
     consumer
@@ -492,7 +502,7 @@ fn cancellation_while_all_queues_are_empty_finishes_without_producer_message() {
 
 #[test]
 fn model_initialization_failure_fails_admitted_tasks_and_releases_queues() {
-    let consumer = Arc::new(StoryboardConsumer::default());
+    let consumer = test_consumer();
     let (sender, queue, _, task, completion) = task(&consumer, "bad-model");
     consumer
         .submit_with(
@@ -549,4 +559,42 @@ fn producer_assembles_fifty_frame_blocks_and_rejects_partial_frame() {
             .code(),
         "STORYBOARD_FRAME_DECODE_FAILED"
     );
+}
+
+#[test]
+fn completed_tasks_reuse_warm_session_before_idle_retirement() {
+    let consumer = Arc::new(StoryboardConsumer {
+        idle_timeout: Duration::from_secs(1),
+        ..StoryboardConsumer::default()
+    });
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let model_dropped = dropped.clone();
+    let (sender, _, _, first, result) = task(&consumer, "first");
+    consumer
+        .submit_with(
+            first,
+            move || Ok((ModelLifetime(model_dropped), "warm".into())),
+            |_, window| predict(window),
+        )
+        .unwrap();
+    feed(&sender, "first", 1, 1);
+    assert_eq!(receive(result).unwrap().2, "warm");
+    thread::sleep(Duration::from_millis(100));
+    assert_eq!(dropped.load(Ordering::SeqCst), 0);
+
+    let (sender, _, _, second, result) = task(&consumer, "second");
+    consumer
+        .submit_with(
+            second,
+            || -> AppResult<((), String)> { panic!("idle session must be reused") },
+            |_, window| predict(window),
+        )
+        .unwrap();
+    feed(&sender, "second", 2, 51);
+    assert_eq!(
+        receive(result).unwrap().1,
+        serial_reference(&frames(2, 51)).1
+    );
+    wait_idle(&consumer);
+    assert_eq!(dropped.load(Ordering::SeqCst), 1);
 }
