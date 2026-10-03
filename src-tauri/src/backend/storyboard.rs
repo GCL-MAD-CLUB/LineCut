@@ -1,7 +1,8 @@
 use std::collections::VecDeque;
 use std::fs;
+use std::io::{BufReader, Read};
 use std::path::PathBuf;
-use std::process::Stdio;
+use std::process::{Child, Stdio};
 use std::sync::{
     atomic::{AtomicBool, AtomicI32, Ordering},
     Arc, Mutex as StdMutex, OnceLock,
@@ -14,12 +15,15 @@ use ort::{
     value::Tensor,
 };
 use tauri::path::BaseDirectory;
-use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
-use tokio::process::Child;
 use uuid::Uuid;
 
 use super::storyboard_decision::{detect_storyboard_cuts, StoryboardCut, StoryboardDecisionConfig};
 use super::*;
+
+mod pipeline;
+use pipeline::{
+    FrameBlock, FrameQueue, FrameSender, InferenceTask, ProducerMessage, StoryboardConsumer,
+};
 
 const TRANSNET_RESOURCE_DIR: &str = "transnetv2";
 const TRANSNET_MODEL_FILE: &str = "transnetv2.onnx";
@@ -40,10 +44,17 @@ const STORYBOARD_PROGRESS_MIN_DELTA: f64 = 0.0025;
 const STORYBOARD_PROGRESS_FRAME_REPORT_INTERVAL: usize = 25;
 const DEFAULT_STORYBOARD_FRAME_RATE: f64 = 25.0;
 const MAX_DIRECTML_ADAPTERS_TO_PROBE: i32 = 8;
+/// Concurrent extractions the FFmpeg thread budget is divided across. The
+/// frontend can fill three slots, but they are rarely all decoding at the same
+/// instant, and decoding paces the pipeline, so the budget is split two ways:
+/// each extraction gets a larger share than a strict three-way split, which
+/// keeps decode off the critical path without oversubscribing at peak.
+const STORYBOARD_EXTRACTION_WORKERS: usize = 2;
 
 static ORT_INIT_LOCK: StdMutex<()> = StdMutex::new(());
 static ORT_ENV_READY: OnceLock<()> = OnceLock::new();
 static PREFERRED_DIRECTML_ADAPTER: AtomicI32 = AtomicI32::new(-1);
+static STORYBOARD_CONSUMER: OnceLock<Arc<StoryboardConsumer>> = OnceLock::new();
 
 #[derive(Clone)]
 struct StoryboardRuntimePaths {
@@ -104,7 +115,6 @@ pub(crate) async fn detect_storyboard_shots(
     })?;
     let preferences = preferences_clone(&state)?;
     let runtime = storyboard_runtime_paths(&app)?;
-    init_storyboard_ort(&runtime)?;
     task.check_cancelled()?;
 
     let result = run_storyboard_detection(StoryboardDetectionRequest {
@@ -288,132 +298,86 @@ async fn run_storyboard_detection(
     let decision_config = storyboard_decision_config(runtime.event_model.as_ref())?;
     let frame_rate = storyboard_frame_rate(project);
     let expected_frames = expected_frame_count(project.asset.duration_us, frame_rate);
-    let mut progress = StoryboardProgressReporter::new(app, task_id, expected_frames);
-    let (mut session, provider) = create_transnet_session(&runtime.model)?;
-    let mut child = spawn_storyboard_ffmpeg(project, stream_index, preferences)?;
+    ensure_not_cancelled(&cancel)?;
+    let child = spawn_storyboard_ffmpeg(project, stream_index, preferences)?;
     let process_id = Uuid::new_v4().to_string();
-    let pid = child.id();
-    if let Err(error) = register_running_ffmpeg(
+    let consumer = STORYBOARD_CONSUMER.get_or_init(|| Arc::new(StoryboardConsumer::default()));
+    let (sender, queue) = consumer.queue();
+    let process = Arc::new(StoryboardProcess {
+        child: StdMutex::new(child),
+    });
+    let extraction = StoryboardExtractionGuard {
+        process: process.clone(),
+        queue: queue.clone(),
+        stop: Arc::new(AtomicBool::new(false)),
+        state,
+        process_id: process_id.clone(),
+    };
+    let (stdout, stderr, pid) = {
+        let mut child = process
+            .child
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let stdout = child.stdout.take().ok_or_else(|| {
+            app_error(
+                ErrorCode::ExternalToolOutputUnavailable,
+                "FFmpeg did not expose a storyboard frame stream",
+            )
+        })?;
+        let stderr = child.stderr.take().ok_or_else(|| {
+            app_error(
+                ErrorCode::ExternalToolOutputUnavailable,
+                "FFmpeg did not expose storyboard diagnostics",
+            )
+        })?;
+        (stdout, stderr, child.id())
+    };
+    register_running_ffmpeg(
         state,
         process_id.clone(),
         task_id.to_string(),
         cancel.clone(),
-        pid,
+        Some(pid),
         Vec::new(),
-    ) {
-        let _ = child.start_kill();
-        return Err(error);
-    }
+    )?;
+    let progress = StoryboardProgressReporter::new(app, task_id, expected_frames);
+    let (inference, mut completion) =
+        InferenceTask::new(task_id.to_string(), queue, cancel.clone(), Some(progress));
+    let producer = StoryboardProducer {
+        app: app.clone(),
+        process,
+        process_id,
+        task_id: task_id.to_string(),
+        cancel: cancel.clone(),
+        stop: extraction.stop.clone(),
+        sender,
+    };
+    std::thread::Builder::new()
+        .name(format!("storyboard-decode-{task_id}"))
+        .spawn(move || producer.run(stdout, stderr))
+        .map_err(|error| {
+            app_error(
+                ErrorCode::BlockingTaskFailed,
+                format!("Failed to start storyboard producer: {error}"),
+            )
+        })?;
+    consumer.submit(inference, runtime.clone())?;
 
-    let stdout = child.stdout.take().ok_or_else(|| {
-        app_error(
-            ErrorCode::ExternalToolOutputUnavailable,
-            "FFmpeg did not expose a storyboard frame stream",
-        )
-    })?;
-    let stderr = child.stderr.take().ok_or_else(|| {
-        app_error(
-            ErrorCode::ExternalToolOutputUnavailable,
-            "FFmpeg did not expose storyboard diagnostics",
-        )
-    })?;
-    let stderr_task = tokio::spawn(async move {
-        let mut body = String::new();
-        let _ = BufReader::new(stderr).read_to_string(&mut body).await;
-        body
-    });
-
-    let prediction_result = async {
-        let mut reader = BufReader::new(stdout);
-        let mut saw_first_frame = false;
-        let mut last_frame: Option<Vec<u8>> = None;
-        let mut window = VecDeque::<Vec<u8>>::with_capacity(TRANSNET_WINDOW_FRAMES);
-        let mut predictions = Vec::<f32>::new();
-        let mut decoded_frames = 0usize;
-        let mut frame = vec![0u8; STORYBOARD_FRAME_BYTES];
-
-        loop {
-            ensure_not_cancelled(&cancel)?;
-            let has_frame = read_storyboard_frame(&mut reader, &mut frame).await?;
-            if !has_frame {
-                break;
+    let (decoded_frames, predictions, provider) = loop {
+        match tokio::time::timeout(pipeline::POLL_INTERVAL, &mut completion).await {
+            Ok(result) => {
+                break result.map_err(|_| {
+                    app_error(
+                        ErrorCode::BlockingTaskFailed,
+                        "Storyboard consumer stopped before completing the task",
+                    )
+                })??;
             }
-            if !saw_first_frame {
-                saw_first_frame = true;
-                for _ in 0..TRANSNET_CENTER_START {
-                    window.push_back(frame.clone());
-                }
-            }
-            decoded_frames += 1;
-            last_frame = Some(frame.clone());
-            window.push_back(frame.clone());
-            run_ready_storyboard_windows(
-                &mut session,
-                &mut window,
-                &mut predictions,
-                &mut progress,
-                decoded_frames,
-                &cancel,
-            )?;
-        }
-
-        if decoded_frames == 0 {
-            return Err(app_error(
-                ErrorCode::StoryboardFrameDecodeFailed,
-                "FFmpeg decoded no frames for storyboard detection",
-            ));
-        }
-
-        let end_frame = last_frame.expect("decoded frame count is non-zero");
-        while predictions.len() < decoded_frames {
-            ensure_not_cancelled(&cancel)?;
-            while window.len() < TRANSNET_WINDOW_FRAMES {
-                window.push_back(end_frame.clone());
-            }
-            run_ready_storyboard_windows(
-                &mut session,
-                &mut window,
-                &mut predictions,
-                &mut progress,
-                decoded_frames,
-                &cancel,
-            )?;
-        }
-        predictions.truncate(decoded_frames);
-        progress.report_prediction_complete();
-        Ok::<_, AppError>((decoded_frames, predictions))
-    }
-    .await;
-
-    let (decoded_frames, predictions) = match prediction_result {
-        Ok(result) => result,
-        Err(error) => {
-            kill_storyboard_ffmpeg(child, state, &process_id).await;
-            let _ = stderr_task.await;
-            return Err(error);
+            Err(_) => ensure_not_cancelled(&cancel)?,
         }
     };
-
-    let status = child.wait().await.map_err(|error| {
-        app_error(
-            ErrorCode::ExternalToolWaitFailed,
-            format!("Failed to wait for FFmpeg storyboard extraction: {error}"),
-        )
-    })?;
-    clear_running_ffmpeg(state, &process_id);
-    let stderr = stderr_task.await.map_err(|error| {
-        app_error(
-            ErrorCode::BlockingTaskFailed,
-            format!("Storyboard diagnostic reader failed to join: {error}"),
-        )
-    })?;
     ensure_not_cancelled(&cancel)?;
-    if !status.success() {
-        return Err(app_error(
-            ErrorCode::ExternalToolExecutionFailed,
-            format!("FFmpeg storyboard extraction exited unsuccessfully; stderr={stderr}"),
-        ));
-    }
+    drop(extraction);
 
     let cuts = detect_storyboard_cuts(&predictions, &decision_config);
     let shots = storyboard_cuts_to_shots(
@@ -523,10 +487,15 @@ fn spawn_storyboard_ffmpeg(
     stream_index: i32,
     preferences: &Preferences,
 ) -> AppResult<Child> {
-    let args = vec![
+    let threads = ffmpeg_worker_thread_budget(STORYBOARD_EXTRACTION_WORKERS);
+    let mut args = vec![
         "-hide_banner".to_string(),
         "-loglevel".to_string(),
         "error".to_string(),
+    ];
+    // Input-scoped -threads must precede -i to limit decoder parallelism.
+    append_ffmpeg_processing_thread_args(&mut args, threads);
+    args.extend([
         "-i".to_string(),
         project.asset.path.clone(),
         "-map".to_string(),
@@ -540,11 +509,18 @@ fn spawn_storyboard_ffmpeg(
         ),
         "-vsync".to_string(),
         "0".to_string(),
+    ]);
+    // rawvideo supports frame threading, so bound its output workers too.
+    append_ffmpeg_video_output_thread_args(&mut args, threads);
+    args.extend([
         "-f".to_string(),
         "rawvideo".to_string(),
         "pipe:1".to_string(),
-    ];
-    hidden_command(&ffmpeg_program(preferences))
+    ]);
+    let mut command = StdCommand::new(ffmpeg_program(preferences));
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -557,18 +533,18 @@ fn spawn_storyboard_ffmpeg(
         })
 }
 
-async fn read_storyboard_frame<R>(reader: &mut R, frame: &mut [u8]) -> AppResult<bool>
-where
-    R: AsyncRead + Unpin,
-{
+fn read_storyboard_frame<R: Read>(reader: &mut R, frame: &mut [u8]) -> AppResult<bool> {
     let mut filled = 0usize;
     while filled < frame.len() {
-        let read = reader.read(&mut frame[filled..]).await.map_err(|error| {
-            app_error(
-                ErrorCode::StoryboardFrameDecodeFailed,
-                format!("Failed to read storyboard frame bytes: {error}"),
-            )
-        })?;
+        let read = match reader.read(&mut frame[filled..]) {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => result.map_err(|error| {
+                app_error(
+                    ErrorCode::StoryboardFrameDecodeFailed,
+                    format!("Failed to read storyboard frame bytes: {error}"),
+                )
+            })?,
+        };
         if read == 0 {
             if filled == 0 {
                 return Ok(false);
@@ -586,24 +562,182 @@ where
     Ok(true)
 }
 
-fn run_ready_storyboard_windows(
-    session: &mut Session,
-    window: &mut VecDeque<Vec<u8>>,
-    predictions: &mut Vec<f32>,
-    progress: &mut StoryboardProgressReporter<'_>,
-    known_frames: usize,
+fn produce_storyboard_blocks<R: Read>(
+    mut reader: R,
+    sender: &FrameSender,
+    task_id: &str,
     cancel: &AtomicBool,
+    stop: &AtomicBool,
 ) -> AppResult<()> {
-    while window.len() >= TRANSNET_WINDOW_FRAMES {
-        ensure_not_cancelled(cancel)?;
-        let next = run_transnet_window(session, window)?;
-        predictions.extend(next);
+    loop {
+        let mut frames = Vec::with_capacity(TRANSNET_STRIDE_FRAMES);
         for _ in 0..TRANSNET_STRIDE_FRAMES {
-            window.pop_front();
+            ensure_not_cancelled(cancel)?;
+            ensure_not_cancelled(stop)?;
+            let mut frame = vec![0; STORYBOARD_FRAME_BYTES];
+            if !read_storyboard_frame(&mut reader, &mut frame)? {
+                break;
+            }
+            frames.push(frame);
         }
-        progress.report_predicted(predictions.len(), known_frames);
+        let last_block = frames.len() < TRANSNET_STRIDE_FRAMES;
+        if !frames.is_empty() {
+            // Blocking send supplies backpressure; closing only this task's
+            // receiver wakes it immediately, even while the model is busy.
+            sender
+                .send(ProducerMessage::Frames(FrameBlock {
+                    task_id: task_id.to_string(),
+                    frames,
+                }))
+                .map_err(|_| {
+                    app_error(
+                        ErrorCode::TaskCancelled,
+                        "Storyboard frame queue was closed",
+                    )
+                })?;
+        }
+        if last_block {
+            return Ok(());
+        }
     }
-    Ok(())
+}
+
+struct StoryboardProcess {
+    child: StdMutex<Child>,
+}
+
+impl Drop for StoryboardProcess {
+    fn drop(&mut self) {
+        // std::process::Child has no kill-on-drop behavior. This also covers
+        // failed thread creation and a producer panic before normal cleanup.
+        let child = self
+            .child
+            .get_mut()
+            .unwrap_or_else(|error| error.into_inner());
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+struct StoryboardProducer {
+    app: tauri::AppHandle,
+    process: Arc<StoryboardProcess>,
+    process_id: String,
+    task_id: String,
+    cancel: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
+    sender: FrameSender,
+}
+
+impl StoryboardProducer {
+    fn run(self, stdout: std::process::ChildStdout, stderr: std::process::ChildStderr) {
+        let result = self.extract(stdout, stderr);
+        clear_running_ffmpeg(self.app.state::<AppState>().inner(), &self.process_id);
+        let _ = self.sender.send(ProducerMessage::Finished(result));
+    }
+
+    fn extract(
+        &self,
+        stdout: std::process::ChildStdout,
+        stderr: std::process::ChildStderr,
+    ) -> AppResult<()> {
+        let diagnostics = std::thread::Builder::new()
+            .name("storyboard-diagnostics".into())
+            .spawn(move || {
+                let mut body = String::new();
+                let _ = BufReader::new(stderr).read_to_string(&mut body);
+                body
+            })
+            .map_err(|error| {
+                app_error(
+                    ErrorCode::BlockingTaskFailed,
+                    format!("Failed to start storyboard diagnostic reader: {error}"),
+                )
+            })?;
+        let decoded = produce_storyboard_blocks(
+            BufReader::new(stdout),
+            &self.sender,
+            &self.task_id,
+            &self.cancel,
+            &self.stop,
+        );
+        let status =
+            wait_storyboard_extraction(&self.process, &self.cancel, &self.stop, decoded.is_err());
+        let stderr = diagnostics.join().map_err(|_| {
+            app_error(
+                ErrorCode::BlockingTaskFailed,
+                "Storyboard diagnostic reader panicked",
+            )
+        });
+        ensure_not_cancelled(&self.cancel)?;
+        decoded?;
+        let status = status?;
+        let stderr = stderr?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(app_error(
+                ErrorCode::ExternalToolExecutionFailed,
+                format!("FFmpeg storyboard extraction exited unsuccessfully; stderr={stderr}"),
+            ))
+        }
+    }
+}
+
+struct StoryboardExtractionGuard<'a> {
+    process: Arc<StoryboardProcess>,
+    queue: Arc<FrameQueue>,
+    stop: Arc<AtomicBool>,
+    state: &'a AppState,
+    process_id: String,
+}
+
+impl Drop for StoryboardExtractionGuard<'_> {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        self.queue.close();
+        let _ = self
+            .process
+            .child
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .kill();
+        clear_running_ffmpeg(self.state, &self.process_id);
+    }
+}
+
+fn wait_storyboard_extraction(
+    process: &StoryboardProcess,
+    cancel: &AtomicBool,
+    stop: &AtomicBool,
+    failed: bool,
+) -> AppResult<std::process::ExitStatus> {
+    loop {
+        {
+            let mut child = process
+                .child
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if failed || cancel.load(Ordering::SeqCst) || stop.load(Ordering::SeqCst) {
+                let _ = child.kill();
+            }
+            match child.try_wait() {
+                Ok(Some(status)) => return Ok(status),
+                Ok(None) => {}
+                Err(error) => {
+                    // Do not leave the diagnostic reader waiting on a child
+                    // after an error querying its exit status.
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(app_error(
+                        ErrorCode::ExternalToolWaitFailed,
+                        format!("Failed to wait for FFmpeg storyboard extraction: {error}"),
+                    ));
+                }
+            }
+        }
+        std::thread::sleep(pipeline::POLL_INTERVAL);
+    }
 }
 
 fn run_transnet_window(session: &mut Session, window: &VecDeque<Vec<u8>>) -> AppResult<Vec<f32>> {
@@ -667,19 +801,19 @@ fn run_transnet_window(session: &mut Session, window: &VecDeque<Vec<u8>>) -> App
         .collect())
 }
 
-struct StoryboardProgressReporter<'a> {
-    app: &'a tauri::AppHandle,
-    task_id: &'a str,
+struct StoryboardProgressReporter {
+    app: tauri::AppHandle,
+    task_id: String,
     expected_frames: usize,
     last_progress: f64,
     last_predicted_frames: usize,
 }
 
-impl<'a> StoryboardProgressReporter<'a> {
-    fn new(app: &'a tauri::AppHandle, task_id: &'a str, expected_frames: usize) -> Self {
+impl StoryboardProgressReporter {
+    fn new(app: &tauri::AppHandle, task_id: &str, expected_frames: usize) -> Self {
         Self {
-            app,
-            task_id,
+            app: app.clone(),
+            task_id: task_id.to_string(),
             expected_frames,
             last_progress: 0.0,
             last_predicted_frames: 0,
@@ -724,15 +858,9 @@ impl<'a> StoryboardProgressReporter<'a> {
         }
         if force || progress - self.last_progress >= STORYBOARD_PROGRESS_MIN_DELTA {
             self.last_progress = progress;
-            emit_ffmpeg_progress(self.app, self.task_id, progress);
+            emit_ffmpeg_progress(&self.app, &self.task_id, progress);
         }
     }
-}
-
-async fn kill_storyboard_ffmpeg(mut child: Child, state: &AppState, process_id: &str) {
-    let _ = child.start_kill();
-    let _ = child.wait().await;
-    clear_running_ffmpeg(state, process_id);
 }
 
 fn storyboard_frame_rate(project: &Project) -> f64 {

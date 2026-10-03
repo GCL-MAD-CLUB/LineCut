@@ -70,7 +70,7 @@ interface StoryboardDetectionOptions {
   ) => Promise<StoryboardDetectionMode | null>;
 }
 
-/** Submit every entry point to the existing task queue, independently of panel lifetime. */
+/** Submit through the shared three-slot storyboard scheduler, independently of panel lifetime. */
 export async function detectStoryboardVideo({
   item,
   project,

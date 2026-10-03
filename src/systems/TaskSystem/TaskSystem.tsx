@@ -78,7 +78,9 @@ interface TaskProgressProps {
 }
 
 const listeners = new Set<() => void>();
+const TASK_PROGRESS_SLOTS = 3;
 let nextTaskId = 1;
+let schedulingPaused = 0;
 let snapshot: TaskProgressSnapshot = {
   tasks: [],
 };
@@ -133,16 +135,27 @@ function getTaskProgressSnapshot() {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
-function startNextTask() {
-  if (snapshot.tasks.some((task) => task.state === "running")) return;
-  const next = snapshot.tasks[0];
-  if (!next) return;
+function startNextTasks() {
+  if (schedulingPaused) return;
+  const running = snapshot.tasks.filter((task) => task.state === "running");
+  if (running.some((task) => task.operation !== "storyboard.detect")) return;
+  const starting: TaskProgressRecord[] = [];
+  for (const task of snapshot.tasks) {
+    if (task.state !== "queued") continue;
+    if (running.length + starting.length >= TASK_PROGRESS_SLOTS) break;
+    // Other operations retain their exclusive slot and FIFO ordering.
+    if (task.operation !== "storyboard.detect") {
+      if (!running.length && !starting.length) starting.push(task);
+      break;
+    }
+    starting.push(task);
+  }
+  if (!starting.length) return;
+  const ids = new Set(starting.map((task) => task.id));
   setSnapshot({
-    tasks: snapshot.tasks.map((task) =>
-      task.id === next.id ? { ...task, state: "running" } : task,
-    ),
+    tasks: snapshot.tasks.map((task) => (ids.has(task.id) ? { ...task, state: "running" } : task)),
   });
-  next.control.start();
+  for (const task of starting) task.control.start();
 }
 
 function removeTask(id: string) {
@@ -156,7 +169,7 @@ function removeTask(id: string) {
     tasks: snapshot.tasks.filter((task) => task.id !== id),
   });
   task.control.finish();
-  startNextTask();
+  startNextTasks();
 }
 
 async function stopTaskListener(task: TaskProgressRecord) {
@@ -197,7 +210,7 @@ async function runTaskCancel(task: TaskProgressRecord) {
   try {
     await task.on_cancel?.();
     task.control.cancelled = true;
-    // The owner releases the serial slot only after backend work has settled.
+    // The owner releases its slot only after backend work has settled.
   } catch (error) {
     if ((error as { code?: string } | null)?.code === "TASK_NOT_RUNNING") {
       task.control.cancelled = true;
@@ -216,7 +229,7 @@ async function runTaskCancel(task: TaskProgressRecord) {
   }
 }
 
-/** Registers immediately and resolves when the task owns the serial slot.
+/** Registers immediately and resolves when the task owns an execution slot.
  * Check cancelled before starting work; remove/fail only after work settles.
  */
 export async function createTaskProgress({
@@ -285,7 +298,7 @@ export async function createTaskProgress({
   };
 
   setSnapshot({ tasks: [...snapshot.tasks, task] });
-  startNextTask();
+  startNextTasks();
   await ready;
   if (control.cancelled) {
     removeTask(id);
@@ -315,10 +328,16 @@ export async function cancelAllTaskProgress() {
     return;
   }
 
-  // Remove queued work first so cancelling the active task cannot start it.
-  await Promise.all(tasks.filter((task) => task.state === "queued").map(runTaskCancel));
-  await Promise.all(tasks.filter((task) => task.state === "running").map(runTaskCancel));
-  await Promise.all(tasks.map((task) => task.control.done));
+  schedulingPaused += 1;
+  try {
+    // Suppress refilling until cancellation settles, including newly submitted work.
+    await Promise.all(tasks.filter((task) => task.state === "queued").map(runTaskCancel));
+    await Promise.all(tasks.filter((task) => task.state === "running").map(runTaskCancel));
+    await Promise.all(tasks.map((task) => task.control.done));
+  } finally {
+    schedulingPaused -= 1;
+    startNextTasks();
+  }
 }
 
 export function useTaskProgressStatus(operation?: OperationKey): TaskProgressStatus {
@@ -377,15 +396,19 @@ export function TaskProgress({ children }: TaskProgressProps) {
     );
   }
 
+  const running = tasks.filter((task) => task.state === "running");
+  const queued = tasks.filter((task) => task.state === "queued");
+  const visibleTasks = [...running, ...queued].slice(0, TASK_PROGRESS_SLOTS);
+
   return (
     <>
       <div className="topbar-progress topbar-progress-multi">
-        <span>{`正在执行 ${tasks.length}  项操作...`}</span>
+        <span>{`正在执行 ${running.length} 项操作${queued.length ? `，${queued.length} 项排队中` : ""}...`}</span>
         <div
           className="topbar-progress-stack"
-          style={{ gridTemplateRows: `repeat(${Math.min(tasks.length, 3)}, minmax(0, 1fr))` }}
+          style={{ gridTemplateRows: `repeat(${visibleTasks.length}, minmax(0, 1fr))` }}
         >
-          {tasks.slice(0, 3).map((task) => {
+          {visibleTasks.map((task) => {
             const fillPercent = taskPercent(task);
             const percent = Math.round(fillPercent);
             return (
