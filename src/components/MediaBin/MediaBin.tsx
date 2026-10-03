@@ -1463,7 +1463,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
             onOpenFolder={(folderId) =>
               openPanel({
                 type: mediaBinPanelType,
-                params: { rootFolderId: folderId },
+                params: { rootFolderId: folderId, initialViewMode: viewMode },
                 placement: { sourcePanelId: panelInstanceId },
               })
             }
