@@ -11,7 +11,24 @@ fn main() {
     println!("cargo:rerun-if-env-changed=LINECUT_PROJECT_BUILD_SECRET_V1");
     println!("cargo:rerun-if-changed={LOCAL_RELEASE_SECRET_FILE}");
     generate_project_key_material();
-    tauri_build::build()
+    let mut attributes = tauri_build::Attributes::new();
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
+    {
+        let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap())
+            .join("windows")
+            .join("app.manifest");
+        println!("cargo:rerun-if-changed={}", manifest.display());
+        // Link the manifest into every target, including the lib unit-test EXE.
+        // Tauri's normal application resources do not reach that test harness.
+        println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+        println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
+        // The linker supplies the manifest; keep Tauri's icon/version resources
+        // without embedding a second manifest through the resource compiler.
+        attributes = attributes
+            .windows_attributes(tauri_build::WindowsAttributes::new_without_app_manifest());
+    }
+    tauri_build::try_build(attributes).expect("failed to build Tauri resources");
 }
 
 fn generate_project_key_material() {
