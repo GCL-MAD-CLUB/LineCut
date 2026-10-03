@@ -12,3 +12,4 @@
   reformatting unrelated files.
 - Do not manually reformat unrelated files or overwrite unrelated working-tree changes.
 - VS Code is configured in `.vscode/settings.json` to format supported files on save.
+- Conduct reviews primarily at the code level; generating videos and then using software to perform complex tests is prohibited.

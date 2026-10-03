@@ -40,12 +40,7 @@ import { eventSource } from "../../runtime/events/EventHub";
 import { publishEvent } from "../../runtime/events/react";
 import { useStableIdentity } from "../../runtime/state/react";
 import { usePanelActive, usePanelInstanceId } from "../../runtime/systems/PanelState";
-import {
-  mediaDisplayName,
-  subtitleTrackCues,
-  useProjectPort,
-  visibleSubtitleTracks,
-} from "../../systems/ProjectSystem";
+import { mediaDisplayName, subtitleTrackCues, useProjectPort } from "../../systems/ProjectSystem";
 import {
   buildSubtitleExportSource,
   enqueueQuickExport,
@@ -750,6 +745,7 @@ export function SubtitlePanel() {
   const identity = useStableIdentity("subtitle-panel", panelInstanceId);
   const {
     project,
+    activeSource,
     activeVideoId,
     activeTrackId,
     previewVideoId,
@@ -758,6 +754,16 @@ export function SubtitlePanel() {
     previewSource,
     selection,
   } = usePanelMediaSource("subtitles");
+  const sources = useMemo(
+    () =>
+      selectedSources
+        .filter((source) => source.trackId)
+        .map((source) => ({ ...source, context: `${source.context}:${source.trackId}` })),
+    [selectedSources],
+  );
+  const multipleSources = selectedSources.length > 1;
+  const multipleSubtitleSources = sources.length > 1;
+  const trackContext = sourceScope(sources.map((source) => source.context));
   const {
     projects,
     mediaItems,
@@ -802,7 +808,7 @@ export function SubtitlePanel() {
     setCueColorLabels,
     cueSelectionCleared,
     cueSelectionReplaced,
-  } = useSubtitlePanelState((state) => state);
+  } = useSubtitlePanelState((state) => state, trackContext);
   const playbackStatus = usePlaybackStatus();
   const playback = previewVideoId === activeVideoId ? playbackStatus : undefined;
   const panelRef = useRef<HTMLElement | null>(null);
@@ -839,39 +845,21 @@ export function SubtitlePanel() {
     pointerId: number;
   } | null>(null);
 
-  const visibleTracks = useMemo(
-    () => visibleSubtitleTracks(project, mediaItems, activeVideoId, projects),
-    [activeVideoId, mediaItems, project, projects],
-  );
   const subtitleSources = useMemo(
-    () => panelMediaSources(projects, mediaItems).filter((source) => source.tracks.length > 0),
+    () => panelMediaSources(projects, mediaItems),
     [projects, mediaItems],
   );
   const subtitleVideos = useMemo(
     () => subtitleSources.map((source) => source.item),
     [subtitleSources],
   );
-  const activeTrack = visibleTracks.find((track) => track.id === activeTrackId);
-  const sources = useMemo(
-    () =>
-      selectedSources
-        .filter((source) => source.trackId)
-        .map((source) => ({ ...source, context: `${source.context}:${source.trackId}` })),
-    [selectedSources],
-  );
-  const multipleSources = sources.length > 1;
-  const trackContext = sourceScope(sources.map((source) => source.context));
+  const activeTrack = activeSource?.tracks.find((track) => track.id === activeTrackId);
   const [sourceDirection, setSourceDirection] = useState<SubtitleSortDirection>("ascending");
   usePersistedMediaPanelState({
-    sources: sources.map(({ videoId, trackId }) => ({ videoId, trackId })),
+    sources: selection.sources,
     sourceDirection,
     sourceWidth: subtitleColumnWidths.source,
-    onRestoreSources: (restoredSources) =>
-      selection.setSources(
-        restoredSources.filter((source) =>
-          mediaItems.some((item) => item.id === source.videoId && item.kind === "video"),
-        ),
-      ),
+    onRestoreSources: selection.setSources,
     onRestoreSourceDirection: setSourceDirection,
     onRestoreSourceWidth: (width) =>
       setSubtitleColumnWidths((current) => ({ ...current, source: width })),
@@ -880,10 +868,11 @@ export function SubtitlePanel() {
     () =>
       sources.flatMap((source) =>
         subtitleTrackCues(source.project, projects, mediaItems, source.videoId, source.trackId).map(
-          (cue) => (multipleSources ? { ...cue, id: sourceRowId(source.context, cue.id) } : cue),
+          (cue) =>
+            multipleSubtitleSources ? { ...cue, id: sourceRowId(source.context, cue.id) } : cue,
         ),
       ),
-    [sources, projects, mediaItems, multipleSources],
+    [sources, projects, mediaItems, multipleSubtitleSources],
   );
   const sourceForCue = (cue: SubtitleCue) =>
     sources.find((source) => source.context === sourceRowParts(cue.id)?.[0]) ?? sources[0];
@@ -1245,7 +1234,7 @@ export function SubtitlePanel() {
   );
   const videoLabel = mediaDisplayName(project, mediaItems, activeVideoId);
   const activeTrackLabel = multipleSources
-    ? `${sources.length} 个来源`
+    ? `${selectedSources.length} 个来源`
     : activeTrack
       ? `${videoLabel} ${subtitleTrackLabel(mediaItems, activeVideoId, activeTrack)}`
       : project
@@ -1603,7 +1592,7 @@ export function SubtitlePanel() {
   }
 
   function deleteSelectedCues(ripple: boolean) {
-    if (!activeTrack || selectedCueIds.size === 0) {
+    if (sources.length === 0 || selectedCueIds.size === 0) {
       return;
     }
     const historyGroupId = `subtitle-delete:${crypto.randomUUID()}`;
@@ -2306,7 +2295,7 @@ export function SubtitlePanel() {
         query={query}
         mode={searchMode}
         rule={searchRule}
-        disabled={!activeTrack}
+        disabled={sources.length === 0}
         canNavigate={matchingCueIndices.length > 0}
         matchCount={matchingCueIndices.length}
         activeMatchNumber={activeSearchMatchNumber}
@@ -2881,24 +2870,36 @@ export function SubtitlePanel() {
             <MediaSourceMenu
               folders={mediaFolders}
               videos={subtitleVideos}
-              selectedVideoIds={sources.map((source) => source.videoId)}
-              renderVideo={(video, open, onOpenChange) => (
-                <PopupMenuSubmenu
-                  label={video.file_name}
-                  title={video.file_name}
-                  checked={sources.some((source) => source.videoId === video.id)}
-                  indicator="dot"
-                  menuClassName="media-source-menu"
-                  open={open}
-                  onOpenChange={onOpenChange}
-                >
-                  {subtitleSources
-                    .find((source) => source.item.id === video.id)
-                    ?.tracks.map((track) => (
+              selectedVideoIds={selectedSources.map((source) => source.videoId)}
+              renderVideo={(video, open, onOpenChange) => {
+                const tracks =
+                  subtitleSources.find((source) => source.item.id === video.id)?.tracks ?? [];
+                const checked = selectedSources.some((source) => source.videoId === video.id);
+                if (!tracks.length)
+                  return (
+                    <PopupMenuItem
+                      title={video.file_name}
+                      checked={checked}
+                      onSelect={() => toggleSource(video.id)}
+                    >
+                      {video.file_name}
+                    </PopupMenuItem>
+                  );
+                return (
+                  <PopupMenuSubmenu
+                    label={video.file_name}
+                    title={video.file_name}
+                    checked={checked}
+                    indicator="dot"
+                    menuClassName="media-source-menu"
+                    open={open}
+                    onOpenChange={onOpenChange}
+                  >
+                    {tracks.map((track) => (
                       <PopupMenuItem
                         key={track.id}
                         title={subtitleTrackLabel(mediaItems, video.id, track)}
-                        checked={sources.some(
+                        checked={selectedSources.some(
                           (source) => source.videoId === video.id && source.trackId === track.id,
                         )}
                         onSelect={() => {
@@ -2908,8 +2909,9 @@ export function SubtitlePanel() {
                         {subtitleTrackLabel(mediaItems, video.id, track)}
                       </PopupMenuItem>
                     ))}
-                </PopupMenuSubmenu>
-              )}
+                  </PopupMenuSubmenu>
+                );
+              }}
             />
           </PopupMenu>,
           document.body,

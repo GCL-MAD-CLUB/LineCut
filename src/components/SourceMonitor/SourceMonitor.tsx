@@ -298,7 +298,6 @@ export function SourceMonitor() {
   const currentFrameRef = useRef(currentFrame);
   const activeVideoIdRef = useRef(activeVideoId);
   activeVideoIdRef.current = activeVideoId;
-  const loadedVideoIdRef = useRef<string | null>(null);
   // Cross-source row clicks change the active video before its media element is ready.
   const pendingSourceSeekRef = useRef<ApplicationEventMap["playback.seek.requested"] | null>(null);
   const applySeekRequestRef = useRef<
@@ -686,7 +685,7 @@ export function SourceMonitor() {
     return Boolean(
       videoRef.current &&
       videoRef.current.readyState >= 1 &&
-      loadedVideoIdRef.current === activeVideoIdRef.current,
+      videoRef.current.getAttribute("src") === videoSrc,
     );
   }
 
@@ -740,11 +739,6 @@ export function SourceMonitor() {
       if (targetElement?.closest(".popup-menu")) {
         return false;
       }
-      // A focused subtitle/storyboard panel owns arrow-key navigation.
-      const targetPanel = targetElement?.closest(".dock-panel-surface");
-      if (targetPanel && targetPanel !== element.closest(".dock-panel-surface")) {
-        return false;
-      }
       const rect = element.getBoundingClientRect();
       return rect.width > 0 && rect.height > 0;
     };
@@ -785,8 +779,14 @@ export function SourceMonitor() {
       return lastShuttleDirectionHeldRef.current < 0 ? "slow-reverse" : "slow-forward";
     };
 
+    const sourceIsFocused = (event: KeyboardEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const panel = sourceMonitorRef.current?.closest(".dock-panel-surface");
+      return Boolean(panel && target?.closest(".dock-panel-surface") === panel);
+    };
+
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!isShortcutScopeActive(event.target)) {
+      if (event.defaultPrevented || !isShortcutScopeActive(event.target)) {
         return;
       }
       const isFrameStep = event.key === "ArrowLeft" || event.key === "ArrowRight";
@@ -858,7 +858,11 @@ export function SourceMonitor() {
       stepFrame(event.key === "ArrowLeft" ? -1 : 1);
     };
 
-    const onKeyUp = (event: KeyboardEvent) => {
+    const onKeyDownCapture = (event: KeyboardEvent) => {
+      if (sourceIsFocused(event)) onKeyDown(event);
+    };
+
+    const onKeyUpCapture = (event: KeyboardEvent) => {
       if (event.code === "KeyK") {
         kKeyHeldRef.current = false;
       } else if (event.code === "KeyJ") {
@@ -869,7 +873,10 @@ export function SourceMonitor() {
       if (isSlowPlaybackMode(playbackModeRef.current)) {
         applyPlaybackMode(heldSlowPlaybackMode() ?? 0);
       }
-      if (!isEditableKeyboardTarget(event.target)) {
+    };
+
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (!event.defaultPrevented && !isEditableKeyboardTarget(event.target)) {
         suppressSpaceEvent(event);
         suppressShuttleEvent(event);
       }
@@ -885,12 +892,16 @@ export function SourceMonitor() {
       }
     };
 
-    window.addEventListener("keydown", onKeyDown, true);
-    window.addEventListener("keyup", onKeyUp, true);
+    window.addEventListener("keydown", onKeyDownCapture, true);
+    window.addEventListener("keyup", onKeyUpCapture, true);
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onWindowBlur);
     return () => {
-      window.removeEventListener("keydown", onKeyDown, true);
-      window.removeEventListener("keyup", onKeyUp, true);
+      window.removeEventListener("keydown", onKeyDownCapture, true);
+      window.removeEventListener("keyup", onKeyUpCapture, true);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onWindowBlur);
     };
   }, [durationFrames, hasMedia, isPlaybackShortcutAuthority, panelActive]);
@@ -1485,7 +1496,6 @@ export function SourceMonitor() {
   }
 
   function handleLoadedMetadata(element: HTMLVideoElement) {
-    loadedVideoIdRef.current = activeVideoIdRef.current;
     element.preservesPitch = true;
     element.muted = shouldMuteVideo(playbackModeRef.current);
     const restore = pendingPreviewRestoreRef.current;

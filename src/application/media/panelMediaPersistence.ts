@@ -55,7 +55,7 @@ function persistedSources(value: unknown): MediaPanelSourceSelection[] | null {
     seenVideoIds.add(videoId);
     sources.push({ videoId, trackId: (entry as MediaPanelSourceSelection).trackId });
   }
-  return sources.length ? sources : null;
+  return value.length === 0 ? [] : sources.length ? sources : null;
 }
 
 export function usePersistedMediaPanelState({
@@ -103,7 +103,7 @@ export function usePersistedMediaPanelState({
       return;
     }
     const savedSources = persistedSources(saved.sources);
-    if (savedSources) {
+    if (savedSources !== null) {
       onRestoreSources(savedSources);
     }
     if (saved.sourceDirection === "ascending" || saved.sourceDirection === "descending") {

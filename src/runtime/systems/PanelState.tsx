@@ -1,7 +1,10 @@
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, useMemo, type ReactNode } from "react";
 import { useStore } from "zustand";
 import { createStore, type StateCreator, type StoreApi } from "zustand/vanilla";
 import { clientError } from "../../errors";
+import { useProjections } from "../state/StateHub";
+import { PANEL_TITLE_PROJECTION, type PanelTitleProjection } from "../state/contracts";
+import { usePublishProjection, useStableIdentity } from "../state/react";
 
 const PanelInstanceContext = createContext<string | null>(null);
 const PanelActiveContext = createContext(true);
@@ -49,6 +52,20 @@ export function usePanelInstanceId() {
 
 export function usePanelActive() {
   return useContext(PanelActiveContext);
+}
+
+/** The mounted panel owns its title, including when its tab is inactive. */
+export function usePublishPanelTitle(title: string) {
+  const instanceId = usePanelInstanceId();
+  const identity = useStableIdentity("panel-title", instanceId);
+  const value = useMemo(() => ({ title }), [title]);
+  usePublishProjection(PANEL_TITLE_PROJECTION, identity, value);
+}
+
+export function usePublishedPanelTitle() {
+  const instanceId = usePanelInstanceId();
+  const titles = useProjections<PanelTitleProjection>(PANEL_TITLE_PROJECTION);
+  return titles.find((projection) => projection.owner.instanceId === instanceId)?.value.title;
 }
 
 export function createPanelState<State extends object>(

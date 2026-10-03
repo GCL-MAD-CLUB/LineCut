@@ -18,6 +18,7 @@ import {
   type ProjectFileState,
   type ProjectHistoryCategory,
   type ProjectHistoryState,
+  type PanelSourceSelectionChange,
 } from "./ProjectHistory";
 import type {
   DemuxMediaResult,
@@ -90,7 +91,8 @@ interface ProjectCommands {
     cues: Record<string, SubtitleCue[]>,
     itemIds: string[],
   ) => void;
-  activeTrackChanged: (trackId: string) => void;
+  activeTrackChanged: (trackId: string, panelSelection?: PanelSourceSelectionChange) => void;
+  previewTrackChanged: (trackId: string) => void;
   subtitleCuesDeleted: (
     videoId: string,
     trackContext: string,
@@ -998,6 +1000,7 @@ function commitProjectEvent(
   category: ProjectHistoryCategory,
   recipe: (state: ProjectSystemState) => Partial<ProjectSystemState> | ProjectSystemState,
   historyGroupId?: string,
+  panelSourceSelection?: PanelSourceSelectionChange,
 ) {
   set((state) => {
     const update = recipe(state);
@@ -1011,6 +1014,7 @@ function commitProjectEvent(
       projectFileStateFromStore(state),
       projectFileStateFromStore(candidate),
       historyGroupId,
+      panelSourceSelection,
     );
     if (!entry) {
       return candidate;
@@ -1925,11 +1929,23 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
           activeTrackId,
         };
       }),
-    activeTrackChanged: (activeTrackId) =>
-      commitProjectEvent(set, "切换字幕", "subtitle", (state) => ({
-        activeTrackId,
-        projectDirty: true,
-      })),
+    activeTrackChanged: (activeTrackId, panelSelection) =>
+      commitProjectEvent(
+        set,
+        "切换字幕",
+        "subtitle",
+        (state) => ({
+          activeTrackId:
+            panelSelection && state.activeVideoId !== panelSelection.after.videoId
+              ? state.activeTrackId
+              : activeTrackId,
+          projectDirty: true,
+        }),
+        undefined,
+        panelSelection,
+      ),
+    previewTrackChanged: (activeTrackId) =>
+      set((state) => (state.activeTrackId === activeTrackId ? state : { activeTrackId })),
     subtitleCuesDeleted: (
       videoId,
       trackContext,

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { invokeCommand, runOperation } from "../../errors";
 import {
@@ -22,6 +22,7 @@ import {
   detectedStoryboard,
   hasStoryboardShots,
   storyboardVideoContext,
+  storyboardDetectionEditSignature,
   type StoryboardDetectionMode,
 } from "../../core/editor/storyboardDetection";
 import type {
@@ -63,6 +64,10 @@ interface StoryboardDetectionOptions {
     recipe: (current: StoryboardState) => StoryboardState,
   ) => void;
   onlyMissing?: boolean;
+  confirmConflict?: (
+    videoId: string,
+    signal: AbortSignal,
+  ) => Promise<StoryboardDetectionMode | null>;
 }
 
 /** Submit every entry point to the existing task queue, independently of panel lifetime. */
@@ -72,6 +77,7 @@ export async function detectStoryboardVideo({
   mode,
   updateStoryboard,
   onlyMissing = false,
+  confirmConflict,
 }: StoryboardDetectionOptions) {
   if (!canDetectStoryboard(item, project)) return;
   const projectId = getProjectExportContext().projectId;
@@ -80,6 +86,10 @@ export async function detectStoryboardVideo({
   if (pending.has(key)) return;
   pending.add(key);
   const taskId = createFfmpegTaskId("storyboard-detect");
+  const controller = new AbortController();
+  const storyboardAtStart = storyboardDetectionEditSignature(
+    getProjectWorkspaceSnapshot().storyboards?.[context],
+  );
   let cancelled = false;
   const currentTarget = () => {
     if (getProjectExportContext().projectId !== projectId) return false;
@@ -107,6 +117,7 @@ export async function detectStoryboardVideo({
       listener: listenToFfmpegTaskProgress(taskId),
       on_cancel: async () => {
         cancelled = true;
+        controller.abort();
         await cancelFfmpegTask(taskId);
       },
     });
@@ -125,6 +136,19 @@ export async function detectStoryboardVideo({
         taskId,
       });
       if (!cancelled && !task.cancelled && currentTarget()) {
+        if (
+          storyboardDetectionEditSignature(getProjectWorkspaceSnapshot().storyboards?.[context]) !==
+          storyboardAtStart
+        ) {
+          // Native work has finished. A confirmation must not hold up the global task queue.
+          task.remove();
+          const confirmedMode = await confirmConflict?.(item.id, controller.signal);
+          if (!confirmedMode || cancelled || task.cancelled || !currentTarget()) {
+            task.remove();
+            return;
+          }
+          mode = confirmedMode;
+        }
         let firstShotId: string | undefined;
         updateStoryboard(context, mode === "merge" ? "合并分镜切点" : "生成分镜", (current) => {
           const next = detectedStoryboard(current, result, mode);
@@ -153,8 +177,55 @@ export function useStoryboardDetection() {
     ["storyboardUpdated"],
   );
   const { tasks } = useTaskProgressStatus("storyboard.detect");
-  const [conflictVideoIds, setConflictVideoIds] = useState<string[]>([]);
-  useEffect(() => setConflictVideoIds([]), [projectId]);
+  const [conflicts, setConflicts] = useState<
+    {
+      videoIds: string[];
+      confirm: (mode: StoryboardDetectionMode | null) => void;
+    }[]
+  >([]);
+  const conflictResolversRef = useRef(new Set<(mode: StoryboardDetectionMode | null) => void>());
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    setConflicts([]);
+    return () => {
+      mountedRef.current = false;
+      for (const resolve of conflictResolversRef.current) resolve(null);
+      conflictResolversRef.current.clear();
+    };
+  }, [projectId]);
+  const confirmConflict = useCallback((videoId: string, signal: AbortSignal) => {
+    if (!mountedRef.current || signal.aborted) return Promise.resolve(null);
+    return new Promise<StoryboardDetectionMode | null>((resolve) => {
+      const confirm = (mode: StoryboardDetectionMode | null) => {
+        conflictResolversRef.current.delete(confirm);
+        signal.removeEventListener("abort", cancel);
+        resolve(mode);
+      };
+      const cancel = () => {
+        confirm(null);
+        setConflicts((current) => current.filter((conflict) => conflict.confirm !== confirm));
+      };
+      signal.addEventListener("abort", cancel, { once: true });
+      conflictResolversRef.current.add(confirm);
+      setConflicts((current) => [...current, { videoIds: [videoId], confirm }]);
+    });
+  }, []);
+  useEffect(() => {
+    const expired = new Set(
+      conflicts.filter(
+        (conflict) =>
+          !conflict.videoIds.some((videoId) => {
+            const item = mediaItems.find((candidate) => candidate.id === videoId);
+            const project = item && mediaItemProject(item, projects, mediaItems);
+            return item && canDetectStoryboard(item, project);
+          }),
+      ),
+    );
+    if (!expired.size) return;
+    for (const conflict of expired) conflict.confirm(null);
+    setConflicts((current) => current.filter((conflict) => !expired.has(conflict)));
+  }, [conflicts, mediaItems, projects]);
   const eligibleVideos = useCallback(
     (videoIds: string[]) =>
       videoIds.flatMap((videoId) => {
@@ -163,11 +234,12 @@ export function useStoryboardDetection() {
         const project = mediaItemProject(item, projects, mediaItems);
         if (!project || !canDetectStoryboard(item, project)) return [];
         const context = storyboardVideoContext(item.id, project);
-        return tasks.some((task) => task.resourceKey === context)
+        return pending.has(JSON.stringify([projectId, context])) ||
+          tasks.some((task) => task.resourceKey === context)
           ? []
           : [{ item, project, context }];
       }),
-    [mediaItems, projects, tasks],
+    [mediaItems, projects, projectId, tasks],
   );
   const start = useCallback(
     (videoIds: string[], mode: StoryboardDetectionMode, onlyMissing = false) => {
@@ -179,13 +251,14 @@ export function useStoryboardDetection() {
               ...video,
               mode,
               onlyMissing,
+              confirmConflict,
               updateStoryboard: storyboardUpdated,
             }),
           { displayName: video.item.file_name, resourceKind: "media" },
         );
       }
     },
-    [eligibleVideos, storyboardUpdated],
+    [eligibleVideos, storyboardUpdated, confirmConflict],
   );
   const requestDetection = useCallback(
     (videoIds: string[], onlyMissing = false) => {
@@ -196,7 +269,15 @@ export function useStoryboardDetection() {
       const ids = videos.map((video) => video.item.id);
       // Any existing shot is at risk: overwriting resets annotations and drops deleted shots.
       if (!onlyMissing && videos.some((video) => hasStoryboardShots(storyboards[video.context]))) {
-        setConflictVideoIds(ids);
+        setConflicts((current) => [
+          ...current,
+          {
+            videoIds: ids,
+            confirm: (mode) => {
+              if (mode) start(ids, mode);
+            },
+          },
+        ]);
         return;
       }
       start(ids, "overwrite", onlyMissing);
@@ -207,9 +288,11 @@ export function useStoryboardDetection() {
     (videoIds: string[]) => eligibleVideos(videoIds).length > 0,
     [eligibleVideos],
   );
-  function confirm(mode: StoryboardDetectionMode) {
-    setConflictVideoIds([]);
-    start(conflictVideoIds, mode);
+  const conflictVideoIds = conflicts[0]?.videoIds ?? [];
+  function confirm(mode: StoryboardDetectionMode | null) {
+    const conflict = conflicts[0];
+    setConflicts((current) => current.slice(1));
+    conflict?.confirm(mode);
   }
   const detectionDialog =
     conflictVideoIds.length > 0 &&
@@ -217,7 +300,7 @@ export function useStoryboardDetection() {
       <ModalDialog
         title=""
         className="storyboard-detection-conflict-dialog"
-        onCancel={() => setConflictVideoIds([])}
+        onCancel={() => confirm(null)}
         onConfirm={() => confirm("merge")}
         actions={
           <>
@@ -236,11 +319,7 @@ export function useStoryboardDetection() {
             >
               覆盖
             </button>
-            <button
-              type="button"
-              className="modal-dialog-cancel"
-              onClick={() => setConflictVideoIds([])}
-            >
+            <button type="button" className="modal-dialog-cancel" onClick={() => confirm(null)}>
               取消
             </button>
           </>

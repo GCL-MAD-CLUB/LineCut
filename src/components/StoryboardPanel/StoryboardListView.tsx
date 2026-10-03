@@ -397,6 +397,7 @@ export function StoryboardListView({
           >
             {virtualRows.map((virtualRow) => {
               const shot = shots[virtualRow.index];
+              if (!shot) return null;
               const source = sourceForRow(shot);
               const rowFrameRate = source?.frameRate ?? frameRate;
               const selected = selectedShotIds.has(shot.id);

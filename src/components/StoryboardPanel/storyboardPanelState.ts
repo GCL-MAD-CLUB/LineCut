@@ -1,9 +1,11 @@
 import {
   scopedStoryboard,
+  sourceContexts,
   sourceRowParts,
   transformStoryboardSources,
 } from "../../core/editor/multiSource";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { panelSessionForContext } from "../../core/editor/panelSourceSelection";
 import { createPanelState } from "../../runtime/systems/PanelState";
 import {
   canHighlightSearchRule,
@@ -11,7 +13,8 @@ import {
   type SearchRule,
 } from "../../core/editor/textSearch";
 import { removeStoryboardCuts, storyboardSegments } from "../../core/editor/storyboardCuts";
-import { useProjectPort } from "../../systems/ProjectSystem";
+import { mediaItemProject, useProjectPort } from "../../systems/ProjectSystem";
+import { storyboardVideoContext } from "../../core/editor/storyboardDetection";
 import type {
   StoryboardKeywordNode,
   StoryboardShot,
@@ -419,9 +422,28 @@ const useStoryboardPanelUiState = createPanelState<StoryboardPanelUiState>(() =>
 
 export function useStoryboardPanelState<Selection>(
   selector: (state: StoryboardPanelState) => Selection,
+  videoContext?: string,
 ) {
-  const uiState = useStoryboardPanelUiState((state) => state);
-  const { storyboards, storyboardUpdated } = useProjectPort(["storyboards"], ["storyboardUpdated"]);
+  const storedUiState = useStoryboardPanelUiState((state) => state);
+  const context = videoContext ?? storedUiState.videoContext;
+  const uiState = {
+    ...storedUiState,
+    ...panelSessionForContext(
+      storedUiState.videoContext,
+      context,
+      videoSessionFromState(storedUiState),
+      storedUiState.sessions,
+      defaultVideoSessionState,
+    ),
+    videoContext: context,
+  };
+  useLayoutEffect(() => {
+    if (videoContext !== undefined) storedUiState.syncVideoContext(videoContext);
+  }, [videoContext, storedUiState.syncVideoContext]);
+  const { storyboards, projects, mediaItems, storyboardUpdated } = useProjectPort(
+    ["storyboards", "projects", "mediaItems"],
+    ["storyboardUpdated"],
+  );
   const storyboard = useMemo(
     () => scopedStoryboard(storyboards, uiState.videoContext),
     [storyboards, uiState.videoContext],
@@ -431,6 +453,17 @@ export function useStoryboardPanelState<Selection>(
     const previous = previousStoryboardRef.current;
     previousStoryboardRef.current = { videoContext: uiState.videoContext, storyboard };
     if (previous.videoContext !== uiState.videoContext) return;
+    // A disappearing source is a scope transition, not a shot merge. Keep its session intact.
+    const availableContexts = new Set(
+      mediaItems
+        .filter((item) => item.kind === "video" && item.enabled !== false)
+        .flatMap((item) => {
+          const project = mediaItemProject(item, projects, mediaItems);
+          return project ? [storyboardVideoContext(item.id, project)] : [];
+        }),
+    );
+    if (sourceContexts(uiState.videoContext).some((context) => !availableContexts.has(context)))
+      return;
     const remainingIds = new Set(storyboard.shots.map((shot) => shot.id));
     const resolveId = (id: string) => {
       if (remainingIds.has(id)) return id;
@@ -456,6 +489,8 @@ export function useStoryboardPanelState<Selection>(
     uiState.selectedShotIds,
     uiState.activeShotId,
     uiState.shotSelectionReplaced,
+    mediaItems,
+    projects,
   ]);
   const shotStacks = useMemo(
     () =>

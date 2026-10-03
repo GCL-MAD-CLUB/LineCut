@@ -1095,6 +1095,7 @@ export function StoryboardPanel() {
     previewSource,
     selection,
   } = usePanelMediaSource("storyboard");
+  const videoContext = sourceScope(sources.map((source) => source.context));
   const {
     mediaItems,
     mediaFolders,
@@ -1162,7 +1163,7 @@ export function StoryboardPanel() {
     setExpandedStackIds,
     shotSelectionCleared,
     shotSelectionReplaced,
-  } = useStoryboardPanelState((state) => state);
+  } = useStoryboardPanelState((state) => state, videoContext);
   const { requestDetection, canRequestDetection, detectionDialog, detectionTasks } =
     useStoryboardDetection();
   const playbackStatus = usePlaybackStatus();
@@ -1218,19 +1219,13 @@ export function StoryboardPanel() {
     startWidth: number;
     pointerId: number;
   } | null>(null);
-  const videoContext = sourceScope(sources.map((source) => source.context));
   const multipleSources = sources.length > 1;
   const [sourceDirection, setSourceDirection] = useState<StoryboardSortDirection>("ascending");
   usePersistedMediaPanelState({
-    sources: sources.map(({ videoId, trackId }) => ({ videoId, trackId })),
+    sources: selection.sources,
     sourceDirection,
     sourceWidth: storyboardColumnWidths.source,
-    onRestoreSources: (restoredSources) =>
-      selection.setSources(
-        restoredSources.filter((source) =>
-          mediaItems.some((item) => item.id === source.videoId && item.kind === "video"),
-        ),
-      ),
+    onRestoreSources: selection.setSources,
     onRestoreSourceDirection: setSourceDirection,
     onRestoreSourceWidth: (width) =>
       setStoryboardColumnWidths((current) => ({ ...current, source: width })),

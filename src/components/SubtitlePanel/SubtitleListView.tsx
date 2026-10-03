@@ -220,6 +220,7 @@ export function SubtitleListView({
           >
             {virtualRows.map((virtualRow) => {
               const cue = cues[virtualRow.index];
+              if (!cue) return null;
               const source = sourceForRow(cue);
               const rowFrameRate = source?.frameRate ?? frameRate;
               const selected = selectedCueIds.has(cue.id);

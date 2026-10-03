@@ -18,6 +18,24 @@ export function hasStoryboardShots(storyboard: StoryboardState | undefined) {
   return Boolean(storyboard && (storyboard.shots.length || storyboard.deletedShots?.length));
 }
 
+/** Only edits that detection can replace require renewed consent, not shared catalog updates. */
+export function storyboardDetectionEditSignature(storyboard: StoryboardState | undefined) {
+  return JSON.stringify(
+    {
+      shots: storyboard?.shots ?? [],
+      deletedShots: storyboard?.deletedShots ?? [],
+      shotStacks: storyboard?.shotStacks ?? [],
+      shotAnnotations: storyboard?.shotAnnotations ?? {},
+    },
+    (_, value: unknown) =>
+      value && typeof value === "object" && !Array.isArray(value)
+        ? Object.fromEntries(
+            Object.entries(value).sort(([left], [right]) => left.localeCompare(right)),
+          )
+        : value,
+  );
+}
+
 export function detectedStoryboard(
   current: StoryboardState,
   result: StoryboardDetectionResult,
