@@ -1,5 +1,5 @@
 /**
- * User-visible operation inventory for the v0.3.2 guide.
+ * User-visible operation inventory for the v0.3.3 guide.
  *
  * Keep operations grouped by a stable feature page instead of creating one
  * page per control. `evidence` is text that must remain in the guide page; the
@@ -86,7 +86,7 @@ export const userGuideOperationGroups = [
       ["read-multiple-tasks", "查看多任务汇总", "正在执行 N 项操作"],
       ["cancel-task", "取消单个可取消任务", "取消任务"],
       ["wait-task-cancellation", "识别正在取消状态", "正在取消任务"],
-      ["handle-blocking-task", "在阻塞性任务中安全等待", "阻塞性任务"],
+      ["handle-nonblocking-task", "在非阻塞队列中继续浏览", "非阻塞任务与安全操作"],
     ],
   },
   {
@@ -380,7 +380,7 @@ export const userGuideOperationGroups = [
       ["scrub-timecode", "长按并拖动时间码逐帧擦洗", "#### 拖动时间码逐帧擦洗"],
       ["resize-cue-start", "拖动范围左边界修改入点", "### 更改入点或出点"],
       ["resize-cue-end", "拖动范围右边界修改出点", "拖动右边界以更改出点"],
-      ["move-cue-range", "整体移动字幕或分镜范围", "### 移动整个范围"],
+      ["move-cue-range", "整体移动可编辑分镜范围", "### 移动整个范围"],
     ],
   },
   {
@@ -709,6 +709,136 @@ export const userGuideOperationGroups = [
       ["enqueue-export", "把导出加入串行队列", "加入串行队列"],
       ["reuse-export-settings", "记录并复用成功导出设置", "供“使用上次设置导出”"],
       ["cancel-export-task", "取消导出任务", "取消队列任务"],
+    ],
+  },
+  {
+    id: "panel-source-workspaces",
+    area: "来源工作区与历史",
+    guide: "workspace/workspace.md",
+    heading: "## 来源工作区与导航历史",
+    sources: [
+      "src/application/media/panelMediaSources.ts",
+      "src/core/editor/panelSourceSelection.ts",
+      "src/application/media/panelMediaPersistence.ts",
+    ],
+    operations: [
+      ["open-source-workspace", "打开新来源工作区", "建立新的来源工作区"],
+      ["restore-source-workspace", "恢复来源工作区", "来源工作区条目"],
+      ["close-source-workspace", "关闭当前来源工作区", "**关闭**"],
+      ["close-all-source-workspaces", "关闭全部来源工作区", "**关闭全部**"],
+      ["previous-source-choice", "回到上一个来源选择", "上一个来源选择"],
+      ["next-source-choice", "前进到下一个来源选择", "下一个来源选择"],
+    ],
+  },
+  {
+    id: "subtitle-search-navigation",
+    area: "字幕搜索高亮与导航",
+    guide: "subtitles/subtitles.md",
+    heading: "## 搜索、过滤和排序字幕",
+    sources: [
+      "src/components/PanelSearch/PanelSearch.tsx",
+      "src/core/editor/textSearch.ts",
+      "src/components/SubtitlePanel/SubtitlePanel.tsx",
+    ],
+    operations: [
+      ["subtitle-search-mode", "切换过滤与高亮模式", "过滤 |"],
+      ["subtitle-search-rule", "选择字幕搜索规则", "### 搜索规则"],
+      ["subtitle-previous-match", "上一个字幕匹配项", "上一个搜索项"],
+      ["subtitle-next-match", "下一个字幕匹配项", "下一个搜索项"],
+      ["subtitle-search-keyboard", "方向键导航字幕匹配", "左/右方向键"],
+      ["subtitle-jump-match", "按序号跳转字幕结果", "序号输入目标数字"],
+      ["subtitle-cancel-match-draft", "取消跳转序号草稿", "按 Esc 取消"],
+    ],
+  },
+  {
+    id: "storyboard-search-navigation",
+    area: "分镜搜索高亮与导航",
+    guide: "storyboard/storyboards.md",
+    heading: "## 多来源分镜与合并操作",
+    sources: [
+      "src/components/PanelSearch/PanelSearch.tsx",
+      "src/components/StoryboardPanel/StoryboardPanel.tsx",
+    ],
+    operations: [
+      ["storyboard-search-mode", "切换分镜过滤与高亮", "过滤 / 高亮"],
+      ["storyboard-previous-match", "上一个分镜匹配项", "循环前后导航"],
+      ["storyboard-next-match", "下一个分镜匹配项", "循环前后导航"],
+      ["storyboard-jump-match", "按序号跳转分镜结果", "序号输入"],
+      ["storyboard-cancel-match-draft", "取消分镜跳转序号草稿", "按 Esc 取消草稿"],
+      ["storyboard-search-keyboard", "方向键导航分镜匹配", "左右方向键"],
+    ],
+  },
+  {
+    id: "subtitle-multiple-sources",
+    area: "字幕多来源",
+    guide: "subtitles/subtitles.md",
+    heading: "## 字幕轨与字幕显示",
+    sources: [
+      "src/components/SubtitlePanel/SubtitlePanel.tsx",
+      "src/components/MediaSourceMenu/MediaSourceMenu.tsx",
+      "src/core/editor/panelSourceSelection.ts",
+    ],
+    operations: [
+      ["subtitle-add-source", "增加字幕来源", "勾选其他视频"],
+      ["subtitle-remove-last-source", "取消最后一个字幕来源", "包括最后一个来源"],
+      ["subtitle-replace-source-track", "替换同视频字幕轨", "替换旧轨道"],
+      ["subtitle-sort-source", "切换来源排序方向", "来源的升序或降序"],
+      ["subtitle-resize-source", "调整来源列宽", "来源列可像其他列一样拖动列宽"],
+      ["subtitle-reset-source-width", "恢复来源列默认宽度", "双击分隔线恢复默认宽度"],
+    ],
+  },
+  {
+    id: "storyboard-multiple-sources",
+    area: "分镜多来源与合并",
+    guide: "storyboard/storyboards.md",
+    heading: "## 多来源分镜与合并操作",
+    sources: [
+      "src/components/StoryboardPanel/StoryboardPanel.tsx",
+      "src/core/editor/multiSource.ts",
+    ],
+    operations: [
+      ["storyboard-add-source", "增加分镜来源", "勾选视频"],
+      ["storyboard-remove-last-source", "取消最后一个分镜来源", "包括最后一个来源"],
+      ["storyboard-sort-source", "切换分镜来源排序方向", "单击来源表头"],
+      ["storyboard-resize-source", "调整分镜来源列宽", "来源列可像其他列一样拖动列宽"],
+      ["storyboard-reset-source-width", "恢复分镜来源列宽", "双击分隔线恢复默认宽度"],
+      ["merge-storyboard-shots", "按视频分别合并镜头", "**合并(M)**"],
+    ],
+  },
+  {
+    id: "storyboard-detection-policy",
+    area: "分镜识别与结果策略",
+    guide: "storyboard/storyboards.md",
+    heading: "## 检测镜头切点",
+    sources: [
+      "src/components/StoryboardPanel/useStoryboardDetection.tsx",
+      "src/components/MediaBin/MediaBin.tsx",
+      "src/core/editor/storyboardDetection.ts",
+    ],
+    operations: [
+      ["detect-storyboard-from-bin", "从媒体箱批量识别分镜", "分镜识别"],
+      ["detect-missing-storyboard-source", "新增来源自动检测缺失分镜", "自动提交检测"],
+      ["merge-detection-result", "合并自动检测切点", "| 合并 |"],
+      ["overwrite-detection-result", "覆盖分镜检测结果", "| 覆盖 |"],
+      ["cancel-detection-conflict", "取消检测或编辑冲突确认", "| 取消 |"],
+    ],
+  },
+  {
+    id: "export-storyboard-ranges",
+    area: "分镜导出范围",
+    guide: "export/exporting.md",
+    heading: "## 调整分镜的导出范围",
+    sources: [
+      "src/systems/ExportSystem/exportWorkspaceState.ts",
+      "src/components/SourceMonitor/SourceMonitor.tsx",
+      "src/App.tsx",
+    ],
+    operations: [
+      ["export-range-start", "调整分镜导出入点", "拖动左边界更改入点"],
+      ["export-range-end", "调整分镜导出出点", "右边界更改出点"],
+      ["export-range-move", "移动整个分镜导出范围", "中间手柄整体移动范围"],
+      ["export-range-undo", "撤销分镜导出范围", "Ctrl + Z"],
+      ["export-range-redo", "重做分镜导出范围", "Ctrl + Shift + Z"],
     ],
   },
 ];

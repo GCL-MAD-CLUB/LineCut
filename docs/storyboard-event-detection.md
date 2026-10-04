@@ -1,5 +1,9 @@
 # Storyboard event detection
 
+Scope: LineCut 0.3.3 (`release/0.3.3`). The implementation is split across
+`backend/storyboard/mod.rs`, `pipeline.rs`, and `decision.rs`; the application
+integration is described in [media processing](./media-processing.md).
+
 The storyboard detector uses only the frame-level probability sequence produced
 by TransNetV2. It does not use histograms, optical flow, color differences, or
 other image statistics.

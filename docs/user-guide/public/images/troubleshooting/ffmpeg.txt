@@ -1,5 +1,7 @@
 目标图片路径：/images/troubleshooting/ffmpeg.png
 
+适用版本：LineCut 0.3.3；以当前源码和专题页为准，使用虚构示例数据。
+
 截图占位：首选项中的 FFmpeg / ffprobe 设置
 
 请展示两个路径输入框、浏览按钮、保存按钮以及“重置工具路径”按钮。

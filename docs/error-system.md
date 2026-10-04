@@ -131,3 +131,19 @@ TypeScript additionally requires complete operation policy and category-template
    text; reuse the category template.
 5. Pass only safe public context such as a basename.
 6. Run `npm run check:errors`, `npm run build`, Rust tests, and formatting checks.
+
+## 0.3.3 media and panel-state operations
+
+The operation catalog includes `project.panelState.save` and `project.panelState.load`
+for the new application media workflow. Panel state is
+local configuration keyed by project and panel, not part of the `.lcp` payload.
+Persistence failures go through the same typed incident path; they must not be
+reported as successful document saves or reclassified by diagnostic text.
+
+The task scheduler registers queued work before execution. Cancellation is a
+normal outcome: an already-finished native task returning `TASK_NOT_RUNNING`
+during cancellation is handled at the cancellation boundary, rather than shown
+as a new user failure. An extraction/inference failure belongs to that detection
+task, and must not cause unrelated queued videos to fail. Stale project or media
+results are checked before mutation. See [media processing](./media-processing.md)
+for ownership and release ordering.
