@@ -847,8 +847,22 @@ export function DockLayout() {
               <div
                 key={panelId}
                 className={`dock-panel-surface ${panelId === area.activePanelId ? "active" : ""}`}
-                onPointerDownCapture={() => focusPanel(panelId)}
-                onFocusCapture={() => focusPanel(panelId)}
+                onPointerDownCapture={(event) => {
+                  if (
+                    event.target instanceof Element &&
+                    event.target.closest("[data-preserve-panel-focus]")
+                  )
+                    return;
+                  focusPanel(panelId);
+                }}
+                onFocusCapture={(event) => {
+                  if (
+                    event.target instanceof Element &&
+                    event.target.closest("[data-preserve-panel-focus]")
+                  )
+                    return;
+                  focusPanel(panelId);
+                }}
               >
                 <PanelHost instanceId={panelId} active={panelId === area.activePanelId} />
               </div>

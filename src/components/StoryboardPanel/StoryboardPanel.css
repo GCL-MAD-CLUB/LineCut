@@ -699,7 +699,11 @@ body.is-resizing-storyboard-keyword-panel * {
 
 .frame-trace-area {
   fill: var(--frame-trace-color);
-  fill-opacity: 1;
+  fill-opacity: 0.35;
+}
+
+.histogram-area {
+  fill-opacity: 0.35;
 }
 
 .frame-trace-line {

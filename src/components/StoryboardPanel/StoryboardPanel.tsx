@@ -89,6 +89,7 @@ import {
 import { StoryboardIconView } from "./StoryboardIconView";
 import { StoryboardKeywordPanel } from "./StoryboardKeywordPanel";
 import { StoryboardMotionPanel } from "./StoryboardMotionPanel";
+import { StoryboardHistogramPanel } from "./StoryboardHistogramPanel";
 import {
   existingStoryboardKeywordIdsForPaths,
   formatStoryboardKeywordPath,
@@ -3721,29 +3722,32 @@ export function StoryboardPanel() {
         )}
         <StoryboardKeywordPanel
           topContent={
-            <StoryboardMotionPanel
-              visible={keywordPanelOpen}
-              shot={motionShot}
-              assetId={motionSource?.assetId}
-              fingerprint={motionSource?.fingerprint}
-              playbackFrame={
-                motionSource && playbackStatus?.videoId === motionSource.videoId
-                  ? playbackStatus.currentFrame
-                  : undefined
-              }
-              onSeekFrame={(frame) => {
-                if (!motionSource) return;
-                previewSource(motionSource.videoId, motionSource.trackId, frame);
-                publishEvent(
-                  "playback.seek.requested",
-                  {
-                    videoId: motionSource.videoId,
-                    timeUs: frameToTimeUs(frame, motionSource.frameRate),
-                  },
-                  storyboardEventSource,
-                );
-              }}
-            />
+            <>
+              <StoryboardHistogramPanel visible={keywordPanelOpen && panelActive} />
+              <StoryboardMotionPanel
+                visible={keywordPanelOpen}
+                shot={motionShot}
+                assetId={motionSource?.assetId}
+                fingerprint={motionSource?.fingerprint}
+                playbackFrame={
+                  motionSource && playbackStatus?.videoId === motionSource.videoId
+                    ? playbackStatus.currentFrame
+                    : undefined
+                }
+                onSeekFrame={(frame) => {
+                  if (!motionSource) return;
+                  previewSource(motionSource.videoId, motionSource.trackId, frame);
+                  publishEvent(
+                    "playback.seek.requested",
+                    {
+                      videoId: motionSource.videoId,
+                      timeUs: frameToTimeUs(frame, motionSource.frameRate),
+                    },
+                    storyboardEventSource,
+                  );
+                }}
+              />
+            </>
           }
           active={isEditAuthority && keywordPanelOpen && !sprayActive}
           draggedKeywordHoverId={shotKeywordDragPreview?.hoveredKeywordId ?? null}

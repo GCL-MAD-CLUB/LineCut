@@ -12,7 +12,10 @@ import {
 import { flushSync } from "react-dom";
 import { useSourcePreviewRequest } from "../../application/media/panelMediaSources";
 import { usePersistedProjectPanelState } from "../../application/media/projectPanelPersistence";
-import { usePlaybackCapability } from "../../runtime/capabilities/PlaybackCapability";
+import {
+  usePlaybackCapability,
+  usePlaybackHistogramRequested,
+} from "../../runtime/capabilities/PlaybackCapability";
 import { publishEvent, useBroadcastEvent } from "../../runtime/events/react";
 import type { ApplicationEventMap } from "../../runtime/events/contracts";
 import { runBackgroundOperation, runOperation } from "../../errors";
@@ -44,6 +47,7 @@ import { TimelineRuler } from "./TimelineRuler";
 import { StoryboardTimeline } from "./StoryboardTimeline";
 import { VideoControls } from "./VideoControls";
 import { VideoDisplay } from "./VideoDisplay";
+import type { FrameHistogram } from "../../core/editor/frameHistogram";
 import type { TransientVideoFrame } from "./TransientVideoPreview";
 import { RollingPcmAudioController, type RollingPcmAudioSource } from "./rollingPcmAudio";
 import {
@@ -285,6 +289,11 @@ export function SourceMonitor() {
   const storyboardMode = sourceMode === "storyboard" && panelActive && !isExportMonitor;
   const TimelineComponent = storyboardMode ? StoryboardTimeline : TimelineRuler;
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const histogramRequested = usePlaybackHistogramRequested();
+  const [histogramFrame, setHistogramFrame] = useState<{
+    source: string | null;
+    bins: FrameHistogram | null;
+  } | null>(null);
   const boundAudioRefs = useRef(new Map<string, HTMLAudioElement>());
   const rollingPcmAudioRef = useRef<RollingPcmAudioController | null>(null);
   const sourceMonitorRef = useRef<HTMLDivElement | null>(null);
@@ -794,6 +803,7 @@ export function SourceMonitor() {
   }
 
   const { isAuthority: isPlaybackShortcutAuthority } = usePlaybackCapability({
+    histogram: histogramFrame?.source === videoSrc ? histogramFrame.bins : null,
     identity,
     active: panelActive,
     lastFocusedAt,
@@ -1750,6 +1760,8 @@ export function SourceMonitor() {
         videoRef={videoRef}
         videoSrc={videoSrc}
         transientPreview={hoverPreview}
+        histogramEnabled={histogramRequested && isPlaybackShortcutAuthority}
+        onHistogram={(source, bins) => setHistogramFrame({ source, bins })}
         frameRate={frameRate}
         muted={shouldMuteVideo(playbackMode)}
         zoomLevel={zoomLevel}

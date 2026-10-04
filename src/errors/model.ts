@@ -16,6 +16,7 @@ export type OperationKey =
   | "media.scan"
   | "media.link"
   | "media.playback"
+  | "media.histogram"
   | "media.relink"
   | "media.replace"
   | "media.revealProxy"

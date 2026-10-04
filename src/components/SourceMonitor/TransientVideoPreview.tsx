@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
+import type { FrameHistogram } from "../../core/editor/frameHistogram";
+import { useVideoHistogram } from "./useVideoHistogram";
 
 export interface TransientVideoFrame {
   sessionId: string;
@@ -11,14 +13,19 @@ export interface TransientVideoFrame {
 export function TransientVideoPreview({
   preview,
   style,
+  onHistogram,
+  histogramEnabled,
 }: {
   preview: TransientVideoFrame;
   style: CSSProperties;
+  onHistogram: (histogram: FrameHistogram | null) => void;
+  histogramEnabled: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [ready, setReady] = useState(false);
   const targetRef = useRef(0);
   targetRef.current = (preview.frame + 0.125) / preview.frameRate;
+  useVideoHistogram(videoRef, preview.src, ready && histogramEnabled, onHistogram);
 
   function seek(video: HTMLVideoElement) {
     if (video.readyState < 1 || video.seeking) return;
@@ -43,6 +50,7 @@ export function TransientVideoPreview({
   return (
     <video
       ref={videoRef}
+      crossOrigin="anonymous"
       src={preview.src}
       className={`source-transient-preview ${ready ? "is-ready" : ""}`}
       style={style}

@@ -10,6 +10,8 @@ import {
 } from "react";
 import { useSourceMonitorState, type MonitorZoomLevel, type ZoomPan } from "./sourceMonitorState";
 import { TransientVideoPreview, type TransientVideoFrame } from "./TransientVideoPreview";
+import type { FrameHistogram } from "../../core/editor/frameHistogram";
+import { useVideoHistogram } from "./useVideoHistogram";
 
 interface VideoDisplayProps {
   stageRef: RefObject<HTMLDivElement | null>;
@@ -25,6 +27,8 @@ interface VideoDisplayProps {
   onSyncCurrentTime: (video: HTMLVideoElement) => void;
   onPlay: (video: HTMLVideoElement) => void;
   onPause: (video: HTMLVideoElement) => void;
+  onHistogram: (source: string | null, histogram: FrameHistogram | null) => void;
+  histogramEnabled: boolean;
 }
 
 interface VideoLayer {
@@ -69,6 +73,8 @@ export function VideoDisplay({
   onSyncCurrentTime,
   onPlay,
   onPause,
+  onHistogram,
+  histogramEnabled,
 }: VideoDisplayProps) {
   const setZoomLevel = useSourceMonitorState((state) => state.setZoomLevel);
   const setZoomPan = useSourceMonitorState((state) => state.setZoomPan);
@@ -111,6 +117,16 @@ export function VideoDisplay({
   const frameRateRef = useRef(frameRate);
   frameRateRef.current = frameRate;
   const videosRef = useRef(new Map<number, HTMLVideoElement>());
+  const histogramVideoRef = useRef<HTMLVideoElement | null>(null);
+  histogramVideoRef.current = layers.displayed
+    ? (videosRef.current.get(layers.displayed.id) ?? null)
+    : null;
+  useVideoHistogram(
+    histogramVideoRef,
+    layers.displayed?.id ?? null,
+    histogramEnabled && !transientPreview,
+    (histogram) => onHistogram(layers.displayed?.source ?? null, histogram),
+  );
   const bindingsRef = useRef(new Map<number, (video: HTMLVideoElement | null) => void>());
   const pendingFrameRef = useRef<{ video: HTMLVideoElement; id: number } | null>(null);
   const pendingRevealRef = useRef<number | null>(null);
@@ -333,6 +349,7 @@ export function VideoDisplay({
         <video
           key={layer.id}
           ref={layerBinding(layer.id)}
+          crossOrigin="anonymous"
           src={layer.source}
           className={`source-video-layer ${layer.id === layers.displayed?.id ? "visible" : "loading"}`}
           muted={layer.id !== layers.current?.id || muted}
@@ -368,6 +385,8 @@ export function VideoDisplay({
         <TransientVideoPreview
           key={`${transientPreview.sessionId}:${transientPreview.src}`}
           preview={transientPreview}
+          histogramEnabled={histogramEnabled}
+          onHistogram={(histogram) => onHistogram(requestedSource, histogram)}
           style={{ transform, transformOrigin: "50% 50%" }}
         />
       )}

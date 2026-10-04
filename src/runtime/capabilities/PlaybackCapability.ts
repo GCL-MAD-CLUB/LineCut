@@ -2,7 +2,12 @@ import { useMemo } from "react";
 import type { ApplicationEventMap } from "../events/contracts";
 import { useBroadcastEvent } from "../events/react";
 import { useProjections } from "../state/StateHub";
-import { PLAYBACK_STATUS_PROJECTION, type PlaybackStatusProjection } from "../state/contracts";
+import {
+  PLAYBACK_STATUS_PROJECTION,
+  PLAYBACK_HISTOGRAM_DEMAND_PROJECTION,
+  type PlaybackHistogramDemandProjection,
+  type PlaybackStatusProjection,
+} from "../state/contracts";
 import { usePublishProjection } from "../state/react";
 import type { SystemIdentity } from "../systems/identity";
 import { systemIdentityKey } from "../systems/identity";
@@ -25,6 +30,12 @@ export function usePlaybackStatus() {
   return useActivePlaybackProjection()?.value;
 }
 
+export function usePlaybackHistogramRequested() {
+  return useProjections<PlaybackHistogramDemandProjection>(
+    PLAYBACK_HISTOGRAM_DEMAND_PROJECTION,
+  ).some(({ value }) => value.enabled);
+}
+
 export interface PlaybackCapabilityOptions extends PlaybackStatusProjection {
   identity: SystemIdentity;
   fallbackAuthority?: boolean;
@@ -42,12 +53,13 @@ export function usePlaybackCapability(options: PlaybackCapabilityOptions) {
     isPlaying,
     videoId,
     sourcePanelId,
+    histogram,
     fallbackAuthority = false,
     onSeek,
   } = options;
   const projection = useMemo<PlaybackStatusProjection>(
-    () => ({ active, lastFocusedAt, currentFrame, isPlaying, videoId, sourcePanelId }),
-    [active, currentFrame, isPlaying, lastFocusedAt, sourcePanelId, videoId],
+    () => ({ active, lastFocusedAt, currentFrame, isPlaying, videoId, sourcePanelId, histogram }),
+    [active, currentFrame, isPlaying, lastFocusedAt, sourcePanelId, videoId, histogram],
   );
   usePublishProjection(PLAYBACK_STATUS_PROJECTION, identity, projection);
 
