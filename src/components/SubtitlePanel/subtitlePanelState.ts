@@ -33,10 +33,11 @@ interface SubtitleTrackSessionState {
 }
 
 interface SubtitlePanelUiState extends SubtitleTrackSessionState {
+  workspaceId: number | null;
   trackContext: string;
   sessions: Record<string, SubtitleTrackSessionState>;
   thumbnailSize: number;
-  syncTrackContext: (trackContext: string) => void;
+  syncTrackContext: (trackContext: string, workspaceId?: number | null) => void;
   setQuery: (query: string) => void;
   setSearchMode: (mode: SearchMode) => void;
   setSearchRule: (rule: SearchRule) => void;
@@ -119,22 +120,29 @@ function annotationWithDefaults(
 }
 
 const useSubtitlePanelUiState = createPanelState<SubtitlePanelUiState>(() => (set) => ({
+  workspaceId: null,
   trackContext: "",
   sessions: {},
   thumbnailSize: 0,
   ...defaultTrackSessionState(),
-  syncTrackContext: (trackContext) =>
+  syncTrackContext: (trackContext, workspaceId) =>
     set((state) => {
-      if (state.trackContext === trackContext) {
+      const nextWorkspaceId = workspaceId === undefined ? state.workspaceId : workspaceId;
+      if (state.trackContext === trackContext && state.workspaceId === nextWorkspaceId) {
         return state;
       }
       const sessions = state.trackContext
-        ? { ...state.sessions, [state.trackContext]: trackSessionFromState(state) }
+        ? {
+            ...state.sessions,
+            [JSON.stringify([state.workspaceId, state.trackContext])]: trackSessionFromState(state),
+          }
         : state.sessions;
       return {
         trackContext,
+        workspaceId: nextWorkspaceId,
         sessions,
-        ...(sessions[trackContext] ?? defaultTrackSessionState()),
+        ...(sessions[JSON.stringify([nextWorkspaceId, trackContext])] ??
+          defaultTrackSessionState()),
       };
     }),
   setQuery: (query) => set({ query }),
@@ -180,23 +188,26 @@ const useSubtitlePanelUiState = createPanelState<SubtitlePanelUiState>(() => (se
 export function useSubtitlePanelState<Selection>(
   selector: (state: SubtitlePanelState) => Selection,
   trackContext?: string,
+  workspaceId?: number | null,
 ) {
   const storedUiState = useSubtitlePanelUiState((state) => state);
   const context = trackContext ?? storedUiState.trackContext;
+  const nextWorkspaceId = workspaceId === undefined ? storedUiState.workspaceId : workspaceId;
   const uiState = {
     ...storedUiState,
     ...panelSessionForContext(
-      storedUiState.trackContext,
-      context,
+      JSON.stringify([storedUiState.workspaceId, storedUiState.trackContext]),
+      JSON.stringify([nextWorkspaceId, context]),
       trackSessionFromState(storedUiState),
       storedUiState.sessions,
       defaultTrackSessionState,
     ),
     trackContext: context,
+    workspaceId: nextWorkspaceId,
   };
   useLayoutEffect(() => {
-    if (trackContext !== undefined) storedUiState.syncTrackContext(trackContext);
-  }, [trackContext, storedUiState.syncTrackContext]);
+    if (trackContext !== undefined) storedUiState.syncTrackContext(trackContext, nextWorkspaceId);
+  }, [trackContext, nextWorkspaceId, storedUiState.syncTrackContext]);
   const { subtitles, subtitleUpdated } = useProjectPort(["subtitles"], ["subtitleUpdated"]);
   const subtitle = useMemo(
     () => scopedSubtitles(subtitles, uiState.trackContext),

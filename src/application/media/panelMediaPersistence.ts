@@ -1,13 +1,11 @@
-import { useEffect, useRef, useState } from "react";
-import { captureOperationError } from "../../errors";
-import { isTauriRuntime } from "../../platform/tauri/runtime";
-import { usePanelInstanceId } from "../../runtime/systems/PanelState";
 import {
-  persistProjectPanelState,
-  projectStatesLoaded,
-  readProjectPanelState,
-  useProjectPort,
-} from "../../systems/ProjectSystem";
+  panelMediaWorkspaces,
+  readPanelMediaWorkspaces,
+  type PanelMediaWorkspaceState,
+  type PersistedPanelMediaWorkspaces,
+} from "../../core/editor/panelSourceSelection";
+import { useProjectPort } from "../../systems/ProjectSystem";
+import { usePersistedProjectPanelState } from "./projectPanelPersistence";
 
 export interface MediaPanelSourceSelection {
   videoId: string;
@@ -16,95 +14,72 @@ export interface MediaPanelSourceSelection {
 
 interface PersistedMediaPanelState {
   sources?: MediaPanelSourceSelection[];
+  workspaceState?: PersistedPanelMediaWorkspaces;
   sourceDirection?: "ascending" | "descending";
   sourceWidth?: number;
 }
 
 interface PersistedMediaPanelStateOptions {
-  sources: readonly MediaPanelSourceSelection[];
+  selection: PanelMediaWorkspaceState & { projectId: string | null | undefined };
   sourceDirection: "ascending" | "descending";
   sourceWidth: number;
+  onRestoreWorkspaces: (projectId: string, saved: PersistedPanelMediaWorkspaces) => void;
   onRestoreSources: (sources: MediaPanelSourceSelection[]) => void;
   onRestoreSourceDirection: (direction: "ascending" | "descending") => void;
   onRestoreSourceWidth: (width: number) => void;
 }
 
-const persistenceDelayMs = 250;
 const minimumSourceWidth = 38;
 const maximumSourceWidth = 720;
 
 function persistedSources(value: unknown): MediaPanelSourceSelection[] | null {
-  if (!Array.isArray(value)) {
-    return null;
-  }
+  if (!Array.isArray(value)) return null;
   const sources: MediaPanelSourceSelection[] = [];
   const seenVideoIds = new Set<string>();
   for (const entry of value) {
     if (
       !entry ||
       typeof entry !== "object" ||
-      typeof (entry as MediaPanelSourceSelection).videoId !== "string" ||
-      typeof (entry as MediaPanelSourceSelection).trackId !== "string"
-    ) {
+      typeof entry.videoId !== "string" ||
+      typeof entry.trackId !== "string"
+    )
       continue;
-    }
-    const videoId = (entry as MediaPanelSourceSelection).videoId;
-    if (seenVideoIds.has(videoId)) {
-      continue;
-    }
-    seenVideoIds.add(videoId);
-    sources.push({ videoId, trackId: (entry as MediaPanelSourceSelection).trackId });
+    if (seenVideoIds.has(entry.videoId)) continue;
+    seenVideoIds.add(entry.videoId);
+    sources.push({ videoId: entry.videoId, trackId: entry.trackId });
   }
   return value.length === 0 ? [] : sources.length ? sources : null;
 }
 
 export function usePersistedMediaPanelState({
-  sources,
+  selection,
   sourceDirection,
   sourceWidth,
+  onRestoreWorkspaces,
   onRestoreSources,
   onRestoreSourceDirection,
   onRestoreSourceWidth,
 }: PersistedMediaPanelStateOptions) {
   const { projectId } = useProjectPort(["projectId"], []);
-  const panelId = usePanelInstanceId();
-  const [projectStatesReady, setProjectStatesReady] = useState(projectStatesLoaded);
-  const restoredKeyRef = useRef<string | null>(null);
-  const stateKey = projectId ? `${projectId}\u0000${panelId}` : null;
-  const sourcesSignature = JSON.stringify(
-    sources.map((source) => [source.videoId, source.trackId] as const),
-  );
-
-  useEffect(() => {
-    if (projectStatesReady) {
-      return;
-    }
-    const timer = window.setInterval(() => {
-      if (projectStatesLoaded()) {
-        setProjectStatesReady(true);
-      }
-    }, 100);
-    return () => window.clearInterval(timer);
-  }, [projectStatesReady]);
-
-  useEffect(() => {
-    if (!projectId) {
-      restoredKeyRef.current = null;
-    }
-  }, [projectId]);
-
-  useEffect(() => {
-    if (!projectStatesReady || !stateKey || !projectId || restoredKeyRef.current === stateKey) {
-      return;
-    }
-    restoredKeyRef.current = stateKey;
-    const saved = readProjectPanelState<PersistedMediaPanelState>(projectId, panelId);
-    if (!saved) {
-      return;
-    }
-    const savedSources = persistedSources(saved.sources);
-    if (savedSources !== null) {
-      onRestoreSources(savedSources);
+  const snapshot: PersistedMediaPanelState | null =
+    selection.projectId === projectId
+      ? {
+          sources: selection.sources.map((source) => ({ ...source })),
+          workspaceState: {
+            workspaceId: selection.workspaceId,
+            workspaces: panelMediaWorkspaces(selection),
+          },
+          sourceDirection,
+          sourceWidth,
+        }
+      : null;
+  usePersistedProjectPanelState(snapshot, (saved, restoredProjectId) => {
+    if (!saved || typeof saved !== "object") return;
+    const workspaceState = readPanelMediaWorkspaces(saved.workspaceState);
+    if (workspaceState) onRestoreWorkspaces(restoredProjectId, workspaceState);
+    else {
+      const sources = persistedSources(saved.sources);
+      if (sources !== null) onRestoreSources(sources);
     }
     if (saved.sourceDirection === "ascending" || saved.sourceDirection === "descending") {
       onRestoreSourceDirection(saved.sourceDirection);
@@ -114,44 +89,5 @@ export function usePersistedMediaPanelState({
         Math.min(maximumSourceWidth, Math.max(minimumSourceWidth, Math.round(saved.sourceWidth!))),
       );
     }
-  }, [
-    onRestoreSourceDirection,
-    onRestoreSourceWidth,
-    onRestoreSources,
-    panelId,
-    projectId,
-    projectStatesReady,
-    stateKey,
-  ]);
-
-  useEffect(() => {
-    if (
-      !projectStatesReady ||
-      !isTauriRuntime() ||
-      !stateKey ||
-      !projectId ||
-      restoredKeyRef.current !== stateKey
-    ) {
-      return;
-    }
-    const snapshot: PersistedMediaPanelState = {
-      sources: sources.map((source) => ({ videoId: source.videoId, trackId: source.trackId })),
-      sourceDirection,
-      sourceWidth,
-    };
-    const timer = window.setTimeout(() => {
-      void persistProjectPanelState(projectId, panelId, snapshot).catch((error) =>
-        captureOperationError("project.panelState.save", error),
-      );
-    }, persistenceDelayMs);
-    return () => window.clearTimeout(timer);
-  }, [
-    panelId,
-    projectId,
-    projectStatesReady,
-    sourceDirection,
-    sourceWidth,
-    sourcesSignature,
-    stateKey,
-  ]);
+  });
 }

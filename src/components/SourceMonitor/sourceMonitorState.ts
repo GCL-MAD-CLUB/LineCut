@@ -48,6 +48,8 @@ function resolveUpdate<Value>(current: Value, update: StateUpdate<Value>) {
 interface SourceMonitorState {
   mediaKey: string;
   playbackHistoryVideoIds: string[];
+  playbackHistoryProjectId: string | null;
+  restorePlaybackHistory: (projectId: string, videoIds: string[]) => void;
   currentFrame: number;
   playbackPanelId: string | null;
   restorePanelFrame: (panelId: string, frame: number) => void;
@@ -80,6 +82,9 @@ const DEFAULT_TIMELINE_SPAN_FRAMES = DEFAULT_FRAME_RATE * 60;
 export const useSourceMonitorState = createPanelState<SourceMonitorState>(() => (set) => ({
   mediaKey: "",
   playbackHistoryVideoIds: [],
+  playbackHistoryProjectId: null,
+  restorePlaybackHistory: (playbackHistoryProjectId, playbackHistoryVideoIds) =>
+    set({ playbackHistoryProjectId, playbackHistoryVideoIds }),
   currentFrame: 0,
   playbackPanelId: null,
   restorePanelFrame: (playbackPanelId, currentFrame) => set({ playbackPanelId, currentFrame }),

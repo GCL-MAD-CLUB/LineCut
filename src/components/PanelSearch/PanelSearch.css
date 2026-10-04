@@ -96,7 +96,8 @@
   height: 12px;
 }
 
-.panel-search-navigation {
+.panel-search-navigation,
+.panel-source-navigation {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
@@ -105,7 +106,8 @@
   margin: 0 -10px;
 }
 
-.panel-search-navigation button {
+.panel-search-navigation button,
+.panel-source-navigation button {
   display: grid;
   place-items: center;
   width: 16px;
@@ -117,9 +119,23 @@
   border-radius: 4px;
 }
 
-.panel-search-navigation svg {
+.panel-search-navigation svg,
+.panel-source-navigation svg {
   width: 14px;
   height: 14px;
+}
+
+.panel-source-navigation {
+  margin: 0;
+}
+
+.panel-source-navigation button:hover:not(:disabled) {
+  color: #eee;
+}
+
+.panel-source-navigation button:disabled {
+  color: #555;
+  cursor: default;
 }
 
 .panel-search-count {

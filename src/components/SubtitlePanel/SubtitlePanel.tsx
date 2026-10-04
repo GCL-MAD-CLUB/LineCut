@@ -1,3 +1,4 @@
+import { panelSourceTitle } from "../../core/editor/panelSourceSelection";
 import {
   sourceScope,
   sourceRowId,
@@ -10,6 +11,7 @@ import {
   type SearchRule,
 } from "../../core/editor/textSearch";
 import { PanelSearch, useSearchNavigation } from "../PanelSearch/PanelSearch";
+import { SourceSelectionNavigation } from "../PanelSearch/SourceSelectionNavigation";
 import { playbackFollowScrollDuration } from "../playbackFollowScroll";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
@@ -808,7 +810,7 @@ export function SubtitlePanel() {
     setCueColorLabels,
     cueSelectionCleared,
     cueSelectionReplaced,
-  } = useSubtitlePanelState((state) => state, trackContext);
+  } = useSubtitlePanelState((state) => state, trackContext, selection.workspaceId);
   const playbackStatus = usePlaybackStatus();
   const playback = previewVideoId === activeVideoId ? playbackStatus : undefined;
   const panelRef = useRef<HTMLElement | null>(null);
@@ -856,7 +858,8 @@ export function SubtitlePanel() {
   const activeTrack = activeSource?.tracks.find((track) => track.id === activeTrackId);
   const [sourceDirection, setSourceDirection] = useState<SubtitleSortDirection>("ascending");
   usePersistedMediaPanelState({
-    sources: selection.sources,
+    selection,
+    onRestoreWorkspaces: selection.hydrateWorkspaces,
     sourceDirection,
     sourceWidth: subtitleColumnWidths.source,
     onRestoreSources: selection.setSources,
@@ -2264,7 +2267,7 @@ export function SubtitlePanel() {
           type="button"
           className={`subtitle-track-trigger ${trackMenu ? "active" : ""}`}
           disabled={subtitleSources.length === 0}
-          title={activeTrackLabel}
+          title={panelSourceTitle(activeTrackLabel, selectedSources)}
           aria-label={`选择字幕，当前为${activeTrackLabel}`}
           aria-haspopup="menu"
           aria-expanded={Boolean(trackMenu)}
@@ -2288,6 +2291,11 @@ export function SubtitlePanel() {
           <span className="subtitle-track-name">{activeTrackLabel}</span>
           <ChevronsUpDown aria-hidden="true" />
         </button>
+        <SourceSelectionNavigation
+          canGoBack={selection.sourceHistoryIndex > 0}
+          canGoForward={selection.sourceHistoryIndex < selection.sourceHistory.length - 1}
+          onNavigate={selection.navigateSources}
+        />
       </div>
 
       <PanelSearch

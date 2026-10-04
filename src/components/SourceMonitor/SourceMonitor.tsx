@@ -11,6 +11,7 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import { useSourcePreviewRequest } from "../../application/media/panelMediaSources";
+import { usePersistedProjectPanelState } from "../../application/media/projectPanelPersistence";
 import { usePlaybackCapability } from "../../runtime/capabilities/PlaybackCapability";
 import { publishEvent } from "../../runtime/events/react";
 import type { ApplicationEventMap } from "../../runtime/events/contracts";
@@ -204,6 +205,7 @@ export function SourceMonitor() {
   }, [focusedPanelId, panelInstanceId]);
   const {
     project,
+    projectId,
     projects,
     storyboards,
     mediaItems,
@@ -220,6 +222,7 @@ export function SourceMonitor() {
   } = useProjectPort(
     [
       "project",
+      "projectId",
       "projects",
       "storyboards",
       "mediaItems",
@@ -257,10 +260,25 @@ export function SourceMonitor() {
     setShowTimelineTimecodes,
     mediaKey: panelMediaKey,
     playedVideoRecorded,
+    playbackHistoryVideoIds,
+    playbackHistoryProjectId,
+    restorePlaybackHistory,
     syncMedia,
     playbackPanelId,
     restorePanelFrame,
   } = useSourceMonitorState((state) => state);
+  const playbackHistoryReady = usePersistedProjectPanelState<{ playbackHistoryVideoIds: string[] }>(
+    playbackHistoryProjectId === projectId ? { playbackHistoryVideoIds } : null,
+    (saved, restoredProjectId) => {
+      const ids = Array.isArray(saved?.playbackHistoryVideoIds)
+        ? saved.playbackHistoryVideoIds.filter(
+            (id): id is string => typeof id === "string" && Boolean(id),
+          )
+        : [];
+      restorePlaybackHistory(restoredProjectId, [...new Set(ids)]);
+    },
+    !isExportMonitor,
+  );
   const sourceRequest = useSourcePreviewRequest();
   const sourceMode = sourceRequest?.value.mode ?? "subtitles";
   const storyboardMode = sourceMode === "storyboard" && panelActive && !isExportMonitor;
@@ -345,10 +363,21 @@ export function SourceMonitor() {
     : false;
 
   useEffect(() => {
-    if (activeVideoItem?.kind === "video" && isMediaItemEnabled(activeVideoItem)) {
+    if (
+      playbackHistoryReady &&
+      playbackHistoryProjectId === projectId &&
+      activeVideoItem?.kind === "video" &&
+      isMediaItemEnabled(activeVideoItem)
+    ) {
       playedVideoRecorded(activeVideoItem.id);
     }
-  }, [activeVideoItem, playedVideoRecorded]);
+  }, [
+    activeVideoItem,
+    playedVideoRecorded,
+    playbackHistoryReady,
+    playbackHistoryProjectId,
+    projectId,
+  ]);
   const resolvedAudioSources = useMemo(
     () =>
       project

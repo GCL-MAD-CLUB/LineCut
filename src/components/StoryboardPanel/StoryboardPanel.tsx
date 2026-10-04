@@ -1,3 +1,4 @@
+import { panelSourceTitle } from "../../core/editor/panelSourceSelection";
 import {
   sourceScope,
   sourceRowId,
@@ -6,6 +7,7 @@ import {
 } from "../../core/editor/multiSource";
 import { matchesTextSearch, nextSearchMatchIndex } from "../../core/editor/textSearch";
 import { PanelSearch, useSearchNavigation } from "../PanelSearch/PanelSearch";
+import { SourceSelectionNavigation } from "../PanelSearch/SourceSelectionNavigation";
 import { playbackFollowScrollDuration } from "../playbackFollowScroll";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
@@ -1163,7 +1165,7 @@ export function StoryboardPanel() {
     setExpandedStackIds,
     shotSelectionCleared,
     shotSelectionReplaced,
-  } = useStoryboardPanelState((state) => state, videoContext);
+  } = useStoryboardPanelState((state) => state, videoContext, selection.workspaceId);
   const { requestDetection, canRequestDetection, detectionDialog, detectionTasks } =
     useStoryboardDetection();
   const playbackStatus = usePlaybackStatus();
@@ -1222,7 +1224,8 @@ export function StoryboardPanel() {
   const multipleSources = sources.length > 1;
   const [sourceDirection, setSourceDirection] = useState<StoryboardSortDirection>("ascending");
   usePersistedMediaPanelState({
-    sources: selection.sources,
+    selection,
+    onRestoreWorkspaces: selection.hydrateWorkspaces,
     sourceDirection,
     sourceWidth: storyboardColumnWidths.source,
     onRestoreSources: selection.setSources,
@@ -3424,7 +3427,7 @@ export function StoryboardPanel() {
         <button
           type="button"
           className={`storyboard-video-trigger ${videoMenu ? "active" : ""}`}
-          title={videoLabel}
+          title={panelSourceTitle(videoLabel, sources)}
           aria-label={`选择分镜视频，当前为${videoLabel}`}
           aria-haspopup="menu"
           aria-expanded={Boolean(videoMenu)}
@@ -3448,6 +3451,11 @@ export function StoryboardPanel() {
           <span className="storyboard-video-name">{videoLabel}</span>
           <ChevronsUpDown aria-hidden="true" />
         </button>
+        <SourceSelectionNavigation
+          canGoBack={selection.sourceHistoryIndex > 0}
+          canGoForward={selection.sourceHistoryIndex < selection.sourceHistory.length - 1}
+          onNavigate={selection.navigateSources}
+        />
         <button
           type="button"
           className={`storyboard-detect-button ${isDetecting ? "is-detecting" : ""}`}
