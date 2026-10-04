@@ -39,6 +39,7 @@ export type OperationKey =
   | "runtime.unhandled"
   | "storage.recentPaths"
   | "storyboard.detect"
+  | "storyboard.motion"
   | "task.cancel"
   | "task.listener"
   | "thumbnail.subtitle.cache.read"

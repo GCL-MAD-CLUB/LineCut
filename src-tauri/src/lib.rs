@@ -959,6 +959,7 @@ pub fn run() {
             cache_storyboard_thumbnail,
             get_cached_storyboard_thumbnails,
             generate_storyboard_thumbnails,
+            storyboard_motion,
             demux_media_streams,
             decode_audio_pcm_window,
             generate_proxy,

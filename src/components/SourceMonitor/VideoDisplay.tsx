@@ -9,11 +9,13 @@ import {
   type SyntheticEvent,
 } from "react";
 import { useSourceMonitorState, type MonitorZoomLevel, type ZoomPan } from "./sourceMonitorState";
+import { TransientVideoPreview, type TransientVideoFrame } from "./TransientVideoPreview";
 
 interface VideoDisplayProps {
   stageRef: RefObject<HTMLDivElement | null>;
   videoRef: RefObject<HTMLVideoElement | null>;
   videoSrc: string | null;
+  transientPreview?: TransientVideoFrame | null;
   frameRate: number;
   muted: boolean;
   zoomLevel: MonitorZoomLevel;
@@ -57,6 +59,7 @@ export function VideoDisplay({
   stageRef,
   videoRef,
   videoSrc,
+  transientPreview,
   frameRate,
   muted,
   zoomLevel,
@@ -361,6 +364,13 @@ export function VideoDisplay({
           }
         />
       ))}
+      {transientPreview && (
+        <TransientVideoPreview
+          key={`${transientPreview.sessionId}:${transientPreview.src}`}
+          preview={transientPreview}
+          style={{ transform, transformOrigin: "50% 50%" }}
+        />
+      )}
     </div>
   );
 }

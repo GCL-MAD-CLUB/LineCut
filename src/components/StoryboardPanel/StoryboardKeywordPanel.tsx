@@ -43,6 +43,7 @@ interface StoryboardKeywordPanelProps {
   resetKey: string;
   onSetQuickKeyword?: (keywordLabel: string) => void;
   quickKeywordLabel?: string;
+  topContent?: ReactNode;
 }
 
 const keywordModeMenuWidth = 176;
@@ -131,6 +132,7 @@ export function StoryboardKeywordPanel({
   resetKey,
   onSetQuickKeyword,
   quickKeywordLabel = "",
+  topContent,
 }: StoryboardKeywordPanelProps) {
   const {
     keywordNodes,
@@ -1121,6 +1123,7 @@ export function StoryboardKeywordPanel({
         }`.trim()}
         data-storyboard-keyword-scroll-container=""
       >
+        {topContent}
         <header
           className={`storyboard-keyword-panel-heading ${panelOpen ? "" : "is-collapsed"}`.trim()}
         >

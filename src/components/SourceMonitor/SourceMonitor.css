@@ -69,6 +69,18 @@
   z-index: 1;
 }
 
+.source-video-stage .source-transient-preview {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  visibility: hidden;
+  transition: none;
+}
+
+.source-video-stage .source-transient-preview.is-ready {
+  visibility: visible;
+}
+
 .source-video-stage video,
 .video-frame video {
   display: block;

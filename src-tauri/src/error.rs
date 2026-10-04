@@ -124,6 +124,7 @@ define_error_codes! {
     ThumbnailCacheWriteFailed => ("THUMBNAIL_CACHE_WRITE_FAILED", Io, true),
     ProxyWriteFailed => ("PROXY_WRITE_FAILED", Io, true),
     PcmWindowInvalid => ("PCM_WINDOW_INVALID", Validation, false),
+    StoryboardMotionRangeInvalid => ("STORYBOARD_MOTION_RANGE_INVALID", Validation, false),
     TaskCleanupFailed => ("TASK_CLEANUP_FAILED", Io, true),
     ProjectFormatInvalid => ("PROJECT_FORMAT_INVALID", Format, false),
     ProjectVersionUnsupported => ("PROJECT_VERSION_UNSUPPORTED", Unsupported, false),

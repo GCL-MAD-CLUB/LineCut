@@ -267,6 +267,7 @@ const operationPolicies = {
   "runtime.unhandled": modal("应用发生未处理错误"),
   "storage.recentPaths": silent("最近记录更新失败"),
   "storyboard.detect": modal("分镜切分失败"),
+  "storyboard.motion": silent("计算动势图失败"),
   "task.cancel": modal("取消任务失败"),
   "task.listener": modal("任务监听失败"),
   "thumbnail.subtitle.cache.read": silent("读取字幕缩略图缓存失败"),

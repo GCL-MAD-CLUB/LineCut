@@ -88,6 +88,7 @@ import {
 } from "./StoryboardColorLabelButtons";
 import { StoryboardIconView } from "./StoryboardIconView";
 import { StoryboardKeywordPanel } from "./StoryboardKeywordPanel";
+import { StoryboardMotionPanel } from "./StoryboardMotionPanel";
 import {
   existingStoryboardKeywordIdsForPaths,
   formatStoryboardKeywordPath,
@@ -1235,6 +1236,8 @@ export function StoryboardPanel() {
   });
   const sourceForShot = (shot: StoryboardShot) =>
     sources.find((source) => source.context === sourceRowParts(shot.id)?.[0]) ?? sources[0];
+  const motionShot = shots.find((shot) => shot.id === activeShotId && selectedShotIds.has(shot.id));
+  const motionSource = motionShot ? sourceForShot(motionShot) : undefined;
   function seekToShot(shot: StoryboardShot, _context: string, focusRange = false) {
     const source = sourceForShot(shot);
     if (!source) return;
@@ -3717,6 +3720,14 @@ export function StoryboardPanel() {
           />
         )}
         <StoryboardKeywordPanel
+          topContent={
+            <StoryboardMotionPanel
+              visible={keywordPanelOpen}
+              shot={motionShot}
+              assetId={motionSource?.assetId}
+              fingerprint={motionSource?.fingerprint}
+            />
+          }
           active={isEditAuthority && keywordPanelOpen && !sprayActive}
           draggedKeywordHoverId={shotKeywordDragPreview?.hoveredKeywordId ?? null}
           shotIds={keywordPanelShotIds}

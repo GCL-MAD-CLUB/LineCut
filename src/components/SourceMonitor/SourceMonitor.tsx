@@ -13,7 +13,7 @@ import { flushSync } from "react-dom";
 import { useSourcePreviewRequest } from "../../application/media/panelMediaSources";
 import { usePersistedProjectPanelState } from "../../application/media/projectPanelPersistence";
 import { usePlaybackCapability } from "../../runtime/capabilities/PlaybackCapability";
-import { publishEvent } from "../../runtime/events/react";
+import { publishEvent, useBroadcastEvent } from "../../runtime/events/react";
 import type { ApplicationEventMap } from "../../runtime/events/contracts";
 import { runBackgroundOperation, runOperation } from "../../errors";
 import { useStableIdentity } from "../../runtime/state/react";
@@ -44,6 +44,7 @@ import { TimelineRuler } from "./TimelineRuler";
 import { StoryboardTimeline } from "./StoryboardTimeline";
 import { VideoControls } from "./VideoControls";
 import { VideoDisplay } from "./VideoDisplay";
+import type { TransientVideoFrame } from "./TransientVideoPreview";
 import { RollingPcmAudioController, type RollingPcmAudioSource } from "./rollingPcmAudio";
 import {
   isSlowPlaybackMode,
@@ -313,6 +314,12 @@ export function SourceMonitor() {
   > | null>(null);
   const cueRangeDragGroupRef = useRef<string | undefined>(undefined);
   const transientFramePreviewRestoreRef = useRef<number | null>(null);
+  const [hoverPreview, setHoverPreview] = useState<TransientVideoFrame | null>(null);
+  const hoverPreviewRestoreRef = useRef<{
+    sessionId: string;
+    mediaKey: string;
+    playbackMode: PlaybackMode;
+  } | null>(null);
   const currentFrameRef = useRef(currentFrame);
   const activeVideoIdRef = useRef(activeVideoId);
   activeVideoIdRef.current = activeVideoId;
@@ -459,6 +466,61 @@ export function SourceMonitor() {
   const mediaKey = project
     ? `${activeVideoId}:${project.asset.id}:${durationUs}:${frameRate}`
     : `empty:${frameRate}`;
+  function finishHoverPreview() {
+    const restore = hoverPreviewRestoreRef.current;
+    hoverPreviewRestoreRef.current = null;
+    setHoverPreview(null);
+    if (
+      restore?.mediaKey === mediaKey &&
+      playbackModeRef.current === 0 &&
+      restore.playbackMode !== 0
+    ) {
+      applyPlaybackMode(restore.playbackMode, true, false);
+    }
+  }
+
+  useBroadcastEvent(identity, "playback.frame-preview.requested", ({ payload }) => {
+    if (payload.frame === null) {
+      if (hoverPreviewRestoreRef.current?.sessionId !== payload.sessionId) return "ignored";
+      finishHoverPreview();
+      return "handled";
+    }
+    if (isExportMonitor || !panelActive) return "ignored";
+    const previewProject = Object.values(projects).find(
+      (candidate) => candidate.asset.id === payload.assetId,
+    );
+    if (!previewProject || previewProject.asset.video_stream_index === null) return "ignored";
+    if (!hoverPreviewRestoreRef.current) {
+      hoverPreviewRestoreRef.current = {
+        sessionId: payload.sessionId,
+        mediaKey,
+        playbackMode: playbackModeRef.current,
+      };
+      applyPlaybackMode(0, true, false);
+    } else if (hoverPreviewRestoreRef.current.sessionId !== payload.sessionId) {
+      return "ignored";
+    }
+    const stream = previewProject.streams.find(
+      (candidate) => candidate.index === previewProject.asset.video_stream_index,
+    );
+    setHoverPreview({
+      sessionId: payload.sessionId,
+      src: convertFileSrc(previewProject.proxy_path || previewProject.asset.path),
+      frame: payload.frame,
+      frameRate: normalizeFrameRate(stream?.avg_frame_rate, stream?.r_frame_rate),
+    });
+    return "handled";
+  });
+
+  useLayoutEffect(() => {
+    // Source changes invalidate the snapshot; a later hover-end must not resume another source.
+    hoverPreviewRestoreRef.current = null;
+    setHoverPreview(null);
+  }, [mediaKey]);
+
+  useLayoutEffect(() => {
+    if (!panelActive) finishHoverPreview();
+  }, [panelActive]);
   const videoContext = storyboardVideoContext(activeVideoId, project);
   const storyboard = storyboards[videoContext];
   const skippedRanges = useMemo(
@@ -1687,6 +1749,7 @@ export function SourceMonitor() {
         stageRef={videoStageRef}
         videoRef={videoRef}
         videoSrc={videoSrc}
+        transientPreview={hoverPreview}
         frameRate={frameRate}
         muted={shouldMuteVideo(playbackMode)}
         zoomLevel={zoomLevel}
@@ -1722,6 +1785,7 @@ export function SourceMonitor() {
           startCuePlaybackFrameMonitor(video);
         }}
         onPause={(video) => {
+          if (!video.paused || hoverPreviewRestoreRef.current) return;
           const cuePauseFrame = cuePlaybackPauseFrameRef.current;
           cuePlaybackPauseFrameRef.current = null;
           stopCuePlaybackFrameMonitor();
