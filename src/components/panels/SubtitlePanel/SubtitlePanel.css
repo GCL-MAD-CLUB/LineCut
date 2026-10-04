@@ -408,6 +408,7 @@
 }
 
 .subtitle-list-frame {
+  position: relative;
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -438,6 +439,18 @@
     var(--subtitle-col-duration) var(--subtitle-col-rating) var(--subtitle-col-retained)
     var(--subtitle-col-label) minmax(0, 1fr);
   --subtitle-table-min-width: 1012px;
+}
+
+.subtitle-list-frame::after {
+  position: absolute;
+  top: 24px;
+  bottom: 0;
+  left: 0;
+  z-index: 6;
+  width: 1px;
+  background: #292929;
+  content: "";
+  pointer-events: none;
 }
 
 .subtitle-list-header-viewport {
