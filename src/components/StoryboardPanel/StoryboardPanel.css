@@ -717,6 +717,13 @@ body.is-resizing-storyboard-keyword-panel * {
   pointer-events: none;
 }
 
+.frame-trace-playback-line {
+  stroke: #4096f3;
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
 .storyboard-motion-status {
   position: absolute;
   inset: 2px;

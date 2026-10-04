@@ -48,7 +48,7 @@ import {
   enqueueQuickExport,
   requestExport,
 } from "../../systems/ExportSystem";
-import { normalizeFrameRate } from "../../core/editor/timeline";
+import { frameToTimeUs, normalizeFrameRate } from "../../core/editor/timeline";
 import { storyboardShotDefaultTitle } from "../../core/editor/storyboard";
 import {
   timelineThumbnails,
@@ -3726,6 +3726,23 @@ export function StoryboardPanel() {
               shot={motionShot}
               assetId={motionSource?.assetId}
               fingerprint={motionSource?.fingerprint}
+              playbackFrame={
+                motionSource && playbackStatus?.videoId === motionSource.videoId
+                  ? playbackStatus.currentFrame
+                  : undefined
+              }
+              onSeekFrame={(frame) => {
+                if (!motionSource) return;
+                previewSource(motionSource.videoId, motionSource.trackId, frame);
+                publishEvent(
+                  "playback.seek.requested",
+                  {
+                    videoId: motionSource.videoId,
+                    timeUs: frameToTimeUs(frame, motionSource.frameRate),
+                  },
+                  storyboardEventSource,
+                );
+              }}
             />
           }
           active={isEditAuthority && keywordPanelOpen && !sprayActive}

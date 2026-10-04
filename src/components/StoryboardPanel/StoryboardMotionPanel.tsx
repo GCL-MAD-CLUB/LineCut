@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronsUpDown, RotateCw } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { invokeCommand, runOperation } from "../../errors";
 import type { StoryboardShot } from "../../types";
@@ -15,6 +15,8 @@ interface Props {
   shot?: StoryboardShot;
   assetId?: string;
   fingerprint?: string;
+  playbackFrame?: number;
+  onSeekFrame: (frame: number) => void;
 }
 
 type TraceMode = "motion" | "colors";
@@ -38,7 +40,14 @@ interface TraceResult {
   failed: boolean;
 }
 
-export function StoryboardMotionPanel({ visible, shot, assetId, fingerprint }: Props) {
+export function StoryboardMotionPanel({
+  visible,
+  shot,
+  assetId,
+  fingerprint,
+  playbackFrame,
+  onSeekFrame,
+}: Props) {
   const [open, setOpen] = useState(true);
   const [mode, setMode] = useState<TraceMode>("motion");
   const [modeMenu, setModeMenu] = useState<{ x: number; y: number } | null>(null);
@@ -77,6 +86,23 @@ export function StoryboardMotionPanel({ visible, shot, assetId, fingerprint }: P
     };
   }, [key, open, visible]);
 
+  function chartProgress(event: { currentTarget: SVGSVGElement; clientX: number }) {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    return Math.max(
+      0,
+      Math.min(1, (event.clientX - bounds.left - 1) / Math.max(1, bounds.width - 2)),
+    );
+  }
+
+  function seekFromChart(event: MouseEvent<SVGSVGElement>) {
+    if (!visible || !open || !shot || !assetId || event.button !== 0) return;
+    event.stopPropagation();
+    const progress = chartProgress(event);
+    finishHover();
+    setHover({ key, progress });
+    onSeekFrame(motionHoverFrame(shot.start_frame, shot.end_frame, progress));
+  }
+
   function updateHover(event: PointerEvent<SVGSVGElement>) {
     if (
       !visible ||
@@ -87,11 +113,7 @@ export function StoryboardMotionPanel({ visible, shot, assetId, fingerprint }: P
       event.pointerType === "touch"
     )
       return;
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const progress = Math.max(
-      0,
-      Math.min(1, (event.clientX - bounds.left - 1) / Math.max(1, bounds.width - 2)),
-    );
+    const progress = chartProgress(event);
     setHover({ key, progress });
     const frame = motionHoverFrame(shot.start_frame, shot.end_frame, progress);
     if (!hoverSession.current) {
@@ -179,6 +201,13 @@ export function StoryboardMotionPanel({ visible, shot, assetId, fingerprint }: P
     [data],
   );
   const hoverProgress = hover?.key === key ? hover.progress : null;
+  const playbackProgress =
+    shot &&
+    playbackFrame !== undefined &&
+    playbackFrame >= shot.start_frame &&
+    playbackFrame <= shot.end_frame
+      ? (playbackFrame - shot.start_frame) / Math.max(1, shot.end_frame - shot.start_frame)
+      : null;
   const status =
     !shot || !assetId
       ? ""
@@ -242,6 +271,7 @@ export function StoryboardMotionPanel({ visible, shot, assetId, fingerprint }: P
             onPointerMove={updateHover}
             onPointerLeave={finishHover}
             onPointerCancel={finishHover}
+            onClick={seekFromChart}
           >
             {data?.mode === "motion" && data.values.length > 0 && (
               <>
@@ -283,6 +313,15 @@ export function StoryboardMotionPanel({ visible, shot, assetId, fingerprint }: P
                 className="motion-hover-line"
                 x1={hoverProgress}
                 x2={hoverProgress}
+                y1="0"
+                y2="2"
+              />
+            )}
+            {playbackProgress !== null && (
+              <line
+                className="frame-trace-playback-line"
+                x1={playbackProgress}
+                x2={playbackProgress}
                 y1="0"
                 y2="2"
               />
