@@ -26,7 +26,7 @@ export default defineConfig({
   themeConfig: {
     siteTitle: "LineCut 帮助中心",
     nav: [
-      { text: "新增功能", link: "/release-notes/v0.3.2" },
+      { text: "新增功能", link: "/release-notes/v0.3.3" },
       { text: "开始使用", link: "/getting-started/first-project" },
       { text: "学习与支持", link: "/workflows/find-dialogue" },
       { text: "项目主页", link: `https://github.com/${repository}` },
@@ -37,6 +37,7 @@ export default defineConfig({
         text: "新增功能",
         collapsed: false,
         items: [
+          { text: "0.3.3 新增功能", link: "/release-notes/v0.3.3" },
           { text: "0.3.2 新增功能", link: "/release-notes/v0.3.2" },
           { text: "0.3.1 更新说明", link: "/release-notes/v0.3.1" },
         ],
