@@ -11,7 +11,7 @@ export const userGuideOperationGroups = [
     area: "工作区与面板",
     guide: "workspace/workspace.md",
     heading: "## 面板、停靠与工作区布局",
-    sources: ["src/components/DockLayout/DockLayout.tsx"],
+    sources: ["src/components/common/DockLayout/DockLayout.tsx"],
     operations: [
       ["switch-workspace", "切换导入、编辑、导出工作区", "导入 / 编辑 / 导出"],
       ["activate-panel-tab", "切换面板标签", "单击标签切换"],
@@ -34,7 +34,7 @@ export const userGuideOperationGroups = [
     guide: "workspace/workspace.md",
     heading: "## 应用菜单参考",
     sources: [
-      "src/components/ApplicationMenu/ApplicationMenu.tsx",
+      "src/components/common/ApplicationMenu/ApplicationMenu.tsx",
       "src/App.tsx",
       "src-tauri/src/backend/commands.rs",
     ],
@@ -95,7 +95,7 @@ export const userGuideOperationGroups = [
     guide: "projects/projects.md",
     heading: "## 新建、打开、保存和关闭项目",
     sources: [
-      "src/components/ProjectSaveDialog/ProjectSaveDialog.tsx",
+      "src/components/common/ProjectSaveDialog/ProjectSaveDialog.tsx",
       "src/systems/ProjectSystem",
     ],
     operations: [
@@ -118,7 +118,7 @@ export const userGuideOperationGroups = [
     area: "项目恢复与历史",
     guide: "projects/projects.md",
     heading: "## 最近项目、还原与自动备份",
-    sources: ["src/components/HistoryPanel/HistoryPanel.tsx", "src/systems/ProjectSystem"],
+    sources: ["src/components/panels/HistoryPanel/HistoryPanel.tsx", "src/systems/ProjectSystem"],
     operations: [
       ["recover-auto-save", "从自动备份快照恢复", "### 从快照恢复时的原则"],
       ["undo", "撤销项目操作", "### 撤销与重做"],
@@ -135,7 +135,7 @@ export const userGuideOperationGroups = [
     area: "首选项",
     guide: "projects/preferences.md",
     heading: "## 设置说明",
-    sources: ["src/components/PreferencesDialog/PreferencesDialog.tsx"],
+    sources: ["src/components/common/PreferencesDialog/PreferencesDialog.tsx"],
     operations: [
       ["edit-cache-path", "输入或浏览缓存路径", "更改缓存路径"],
       ["set-auto-save-interval", "设置自动备份检测间隔", "自动备份检测间隔"],
@@ -153,11 +153,11 @@ export const userGuideOperationGroups = [
     guide: "media/import-organize.md",
     heading: "## 导入媒体",
     sources: [
-      "src/components/ImportWorkspace/ImportWorkspace.tsx",
-      "src/components/ImportWorkspace/ImportSidebar.tsx",
-      "src/components/ImportWorkspace/ImportToolbar.tsx",
-      "src/components/ImportWorkspace/ImportFileView.tsx",
-      "src/components/ImportWorkspace/ImportSelectionBar.tsx",
+      "src/components/panels/ImportWorkspace/ImportWorkspace.tsx",
+      "src/components/panels/ImportWorkspace/controls/ImportSidebar.tsx",
+      "src/components/panels/ImportWorkspace/controls/ImportToolbar.tsx",
+      "src/components/panels/ImportWorkspace/browser/ImportFileView.tsx",
+      "src/components/panels/ImportWorkspace/selection/ImportSelectionBar.tsx",
     ],
     operations: [
       ["navigate-import-location", "从常用位置或设备进入文件夹", "左侧**本地**或**设备**"],
@@ -193,7 +193,7 @@ export const userGuideOperationGroups = [
     guide: "media/import-organize.md",
     heading: "## 导入媒体",
     sources: [
-      "src/components/ImportWorkspace/ImportSettingsPanel.tsx",
+      "src/components/panels/ImportWorkspace/controls/ImportSettingsPanel.tsx",
       "src/application/media/mediaAutoBinding.ts",
     ],
     operations: [
@@ -213,7 +213,10 @@ export const userGuideOperationGroups = [
     area: "媒体箱浏览",
     guide: "media/import-organize.md",
     heading: "## 媒体箱、文件夹与视图",
-    sources: ["src/components/MediaBin/MediaBin.tsx", "src/components/MediaBin/MediaBinTable.tsx"],
+    sources: [
+      "src/components/panels/MediaBin/MediaBin.tsx",
+      "src/components/panels/MediaBin/views/MediaBinTable.tsx",
+    ],
     operations: [
       ["create-bin", "新建素材箱", "新建素材箱"],
       ["create-bin-from-selection", "通过选择项新建素材箱", "通过选择项新建素材箱"],
@@ -237,7 +240,7 @@ export const userGuideOperationGroups = [
     area: "媒体箱选择与编辑",
     guide: "media/import-organize.md",
     heading: "### 选择、复制、粘贴和重复",
-    sources: ["src/components/MediaBin/MediaBinTable.tsx"],
+    sources: ["src/components/panels/MediaBin/views/MediaBinTable.tsx"],
     operations: [
       ["select-media", "单选媒体条目", "单击只选择一个条目"],
       ["toggle-media-selection", "不连续多选", "Ctrl</kbd>/Command + 单击"],
@@ -255,7 +258,10 @@ export const userGuideOperationGroups = [
     area: "媒体条目管理",
     guide: "media/import-organize.md",
     heading: "## 管理媒体条目",
-    sources: ["src/components/MediaBin/MediaBin.tsx", "src/components/MediaBin/MediaBinTable.tsx"],
+    sources: [
+      "src/components/panels/MediaBin/MediaBin.tsx",
+      "src/components/panels/MediaBin/views/MediaBinTable.tsx",
+    ],
     operations: [
       ["rename-media", "重命名媒体显示名称", "重命名项目中的显示名称"],
       ["enable-media", "启用或禁用所选媒体", "启用与禁用"],
@@ -275,7 +281,7 @@ export const userGuideOperationGroups = [
     area: "媒体轨道绑定",
     guide: "media/tracks-binding.md",
     heading: "## 绑定音频和字幕到视频",
-    sources: ["src/components/MediaBin/MediaBin.tsx"],
+    sources: ["src/components/panels/MediaBin/MediaBin.tsx"],
     operations: [
       ["bind-dialog", "用绑定对话框绑定媒体", "### 使用绑定对话框"],
       ["bind-menu", "从右键子菜单选择目标视频", "目标下拉框"],
@@ -290,8 +296,8 @@ export const userGuideOperationGroups = [
     guide: "media/offline-proxies.md",
     heading: "## 脱机、替换和重新链接",
     sources: [
-      "src/components/MediaLinkDialog/MediaLinkDialog.tsx",
-      "src/components/MediaBrowserDialog/MediaBrowserDialog.tsx",
+      "src/components/common/MediaLinkDialog/MediaLinkDialog.tsx",
+      "src/components/common/MediaBrowserDialog/MediaBrowserDialog.tsx",
     ],
     operations: [
       ["make-offline", "手动设为脱机", "### 手动设为脱机"],
@@ -315,8 +321,8 @@ export const userGuideOperationGroups = [
     guide: "media/offline-proxies.md",
     heading: "## 创建、连接和分离代理",
     sources: [
-      "src/components/ProxyCreationDialog/ProxyCreationDialog.tsx",
-      "src/components/MediaLinkDialog/MediaLinkDialog.tsx",
+      "src/components/common/ProxyCreationDialog/ProxyCreationDialog.tsx",
+      "src/components/common/MediaLinkDialog/MediaLinkDialog.tsx",
     ],
     operations: [
       ["create-proxy", "创建代理", "### 创建代理"],
@@ -336,9 +342,9 @@ export const userGuideOperationGroups = [
     guide: "source/source-monitor.md",
     heading: "## 预览、播放与逐帧控制",
     sources: [
-      "src/components/SourceMonitor/SourceMonitor.tsx",
-      "src/components/SourceMonitor/VideoControls.tsx",
-      "src/components/SourceMonitor/VideoDisplay.tsx",
+      "src/components/panels/SourceMonitor/SourceMonitor.tsx",
+      "src/components/panels/SourceMonitor/video/VideoControls.tsx",
+      "src/components/panels/SourceMonitor/video/VideoDisplay.tsx",
     ],
     operations: [
       ["play-pause", "播放或暂停", "播放 / 暂停按钮"],
@@ -362,9 +368,9 @@ export const userGuideOperationGroups = [
     guide: "source/source-monitor.md",
     heading: "## 时间线、缩放与时间码",
     sources: [
-      "src/components/SourceMonitor/TimelineRuler.tsx",
-      "src/components/SourceMonitor/MonitorRange.tsx",
-      "src/components/SourceMonitor/VideoControls.tsx",
+      "src/components/panels/SourceMonitor/timeline/TimelineRuler.tsx",
+      "src/components/panels/SourceMonitor/timeline/MonitorRange.tsx",
+      "src/components/panels/SourceMonitor/video/VideoControls.tsx",
     ],
     operations: [
       ["timeline-seek", "单击时间线定位", "单击时间线位置"],
@@ -389,7 +395,7 @@ export const userGuideOperationGroups = [
     guide: "source/source-monitor.md",
     heading: "## 调整分镜切点",
     sources: [
-      "src/components/SourceMonitor/StoryboardTimeline.tsx",
+      "src/components/panels/SourceMonitor/timeline/StoryboardTimeline.tsx",
       "src/core/editor/storyboardCuts.ts",
     ],
     operations: [
@@ -414,7 +420,7 @@ export const userGuideOperationGroups = [
     area: "字幕浏览",
     guide: "subtitles/subtitles.md",
     heading: "## 搜索、过滤和排序字幕",
-    sources: ["src/components/SubtitlePanel/SubtitlePanel.tsx"],
+    sources: ["src/components/panels/SubtitlePanel/SubtitlePanel.tsx"],
     operations: [
       ["select-subtitle-track", "切换字幕轨", "### 选择字幕轨"],
       ["search-subtitles", "搜索字幕、说话人、样式和标签", "搜索范围包含字幕纯文本"],
@@ -436,7 +442,7 @@ export const userGuideOperationGroups = [
     area: "字幕选择与标注",
     guide: "subtitles/subtitles.md",
     heading: "## 星级、旗标和色标",
-    sources: ["src/components/SubtitlePanel/SubtitlePanel.tsx"],
+    sources: ["src/components/panels/SubtitlePanel/SubtitlePanel.tsx"],
     operations: [
       ["select-subtitle", "选择单条字幕", "在列表或缩略图中选择字幕"],
       ["range-select-subtitle", "范围选择字幕", "Shift</kbd> 选择范围"],
@@ -458,7 +464,7 @@ export const userGuideOperationGroups = [
     area: "字幕批量操作",
     guide: "subtitles/subtitles.md",
     heading: "## 使用喷涂工具批量标注",
-    sources: ["src/components/SubtitlePanel/SubtitlePanel.tsx"],
+    sources: ["src/components/panels/SubtitlePanel/SubtitlePanel.tsx"],
     operations: [
       ["spray-subtitle-color", "喷涂字幕色标或自定义标签", "色标/自定义标签"],
       ["spray-subtitle-flag", "喷涂字幕旗标", "旗标"],
@@ -479,9 +485,9 @@ export const userGuideOperationGroups = [
     guide: "storyboard/storyboards.md",
     heading: "## 浏览、搜索和选择分镜",
     sources: [
-      "src/components/StoryboardPanel/StoryboardPanel.tsx",
-      "src/components/StoryboardPanel/StoryboardIconView.tsx",
-      "src/components/StoryboardPanel/StoryboardListView.tsx",
+      "src/components/panels/StoryboardPanel/StoryboardPanel.tsx",
+      "src/components/panels/StoryboardPanel/views/StoryboardIconView.tsx",
+      "src/components/panels/StoryboardPanel/views/StoryboardListView.tsx",
     ],
     operations: [
       ["detect-storyboard", "切分并检测镜头", "### 开始检测"],
@@ -513,7 +519,7 @@ export const userGuideOperationGroups = [
     area: "分镜标注",
     guide: "storyboard/storyboards.md",
     heading: "## 标记分镜",
-    sources: ["src/components/StoryboardPanel/StoryboardPanel.tsx"],
+    sources: ["src/components/panels/StoryboardPanel/StoryboardPanel.tsx"],
     operations: [
       ["edit-storyboard-title", "编辑分镜标题", "标题输入非空文字"],
       ["edit-storyboard-keywords", "在列表编辑分镜关键字", "关键字按"],
@@ -537,7 +543,7 @@ export const userGuideOperationGroups = [
     area: "分镜堆叠与输出",
     guide: "storyboard/storyboards.md",
     heading: "## 堆叠、展开和拆分分镜",
-    sources: ["src/components/StoryboardPanel/StoryboardPanel.tsx"],
+    sources: ["src/components/panels/StoryboardPanel/StoryboardPanel.tsx"],
     operations: [
       ["create-stack", "组成堆叠", "组成堆叠(G)"],
       ["cancel-stack", "取消堆叠", "取消堆叠(U)"],
@@ -558,7 +564,7 @@ export const userGuideOperationGroups = [
     area: "关键字赋值",
     guide: "storyboard/use-keywords.md",
     heading: "## 将关键字添加到分镜",
-    sources: ["src/components/StoryboardPanel/StoryboardKeywordPanel.tsx"],
+    sources: ["src/components/panels/StoryboardPanel/annotations/StoryboardKeywordPanel.tsx"],
     operations: [
       ["toggle-keyword-panel", "展开或关闭关键字面板", "关键字面板已经展开"],
       ["resize-keyword-panel", "调整分镜与关键字面板宽度", "竖向分隔线"],
@@ -585,7 +591,7 @@ export const userGuideOperationGroups = [
     area: "关键字管理",
     guide: "storyboard/use-keywords.md",
     heading: "## 创建关键字标记",
-    sources: ["src/components/StoryboardPanel/StoryboardKeywordPanel.tsx"],
+    sources: ["src/components/panels/StoryboardPanel/annotations/StoryboardKeywordPanel.tsx"],
     operations: [
       ["create-root-keyword", "创建顶级关键字", "### 创建顶级关键字"],
       ["create-child-keyword", "在父级中创建关键字", "### 创建子关键字"],
@@ -607,8 +613,8 @@ export const userGuideOperationGroups = [
     guide: "storyboard/use-keywords.md",
     heading: "## 使用快捷关键字和喷涂工具",
     sources: [
-      "src/components/StoryboardPanel/StoryboardKeywordPanel.tsx",
-      "src/components/StoryboardPanel/StoryboardPanel.tsx",
+      "src/components/panels/StoryboardPanel/annotations/StoryboardKeywordPanel.tsx",
+      "src/components/panels/StoryboardPanel/StoryboardPanel.tsx",
     ],
     operations: [
       ["set-quick-keyword", "设置或取消快捷关键字", "### 设置快捷关键字"],
@@ -628,9 +634,9 @@ export const userGuideOperationGroups = [
     guide: "export/exporting.md",
     heading: "## 导出工作区概览",
     sources: [
-      "src/components/ExportWorkspace/ExportWorkspace.tsx",
-      "src/components/ExportWorkspace/ExportSourceList.tsx",
-      "src/components/ExportWorkspace/ExportMediaInfo.tsx",
+      "src/components/panels/ExportWorkspace/ExportWorkspace.tsx",
+      "src/components/panels/ExportWorkspace/views/ExportSourceList.tsx",
+      "src/components/panels/ExportWorkspace/views/ExportMediaInfo.tsx",
     ],
     operations: [
       ["toggle-export-clip", "勾选或取消单个导出片段", "复选框决定该片段是否参与导出"],
@@ -648,7 +654,7 @@ export const userGuideOperationGroups = [
     guide: "export/exporting.md",
     heading: "## 输出位置、子文件夹与现有文件",
     sources: [
-      "src/components/ExportWorkspace/ExportSettingsSection.tsx",
+      "src/components/panels/ExportWorkspace/controls/ExportSettingsSection.tsx",
       "src/systems/ExportSystem/exportRename.ts",
     ],
     operations: [
@@ -670,7 +676,7 @@ export const userGuideOperationGroups = [
     guide: "export/exporting.md",
     heading: "## 视频导出设置",
     sources: [
-      "src/components/ExportWorkspace/ExportSettingsSection.tsx",
+      "src/components/panels/ExportWorkspace/controls/ExportSettingsSection.tsx",
       "src/systems/ExportSystem/exportTypes.ts",
     ],
     operations: [
@@ -698,8 +704,8 @@ export const userGuideOperationGroups = [
     guide: "export/exporting.md",
     heading: "## 导出冲突与失败处理",
     sources: [
-      "src/components/ExportConflictDialog/ExportConflictDialog.tsx",
-      "src/components/ExportWorkspace/ExportActionBar.tsx",
+      "src/components/common/ExportConflictDialog/ExportConflictDialog.tsx",
+      "src/components/panels/ExportWorkspace/controls/ExportActionBar.tsx",
     ],
     operations: [
       ["cancel-export-conflict", "取消冲突导出", "取消这次导出"],
@@ -736,9 +742,9 @@ export const userGuideOperationGroups = [
     guide: "subtitles/subtitles.md",
     heading: "## 搜索、过滤和排序字幕",
     sources: [
-      "src/components/PanelSearch/PanelSearch.tsx",
+      "src/components/common/PanelSearch/PanelSearch.tsx",
       "src/core/editor/textSearch.ts",
-      "src/components/SubtitlePanel/SubtitlePanel.tsx",
+      "src/components/panels/SubtitlePanel/SubtitlePanel.tsx",
     ],
     operations: [
       ["subtitle-search-mode", "切换过滤与高亮模式", "过滤 |"],
@@ -756,8 +762,8 @@ export const userGuideOperationGroups = [
     guide: "storyboard/storyboards.md",
     heading: "## 多来源分镜与合并操作",
     sources: [
-      "src/components/PanelSearch/PanelSearch.tsx",
-      "src/components/StoryboardPanel/StoryboardPanel.tsx",
+      "src/components/common/PanelSearch/PanelSearch.tsx",
+      "src/components/panels/StoryboardPanel/StoryboardPanel.tsx",
     ],
     operations: [
       ["storyboard-search-mode", "切换分镜过滤与高亮", "过滤 / 高亮"],
@@ -774,8 +780,8 @@ export const userGuideOperationGroups = [
     guide: "subtitles/subtitles.md",
     heading: "## 字幕轨与字幕显示",
     sources: [
-      "src/components/SubtitlePanel/SubtitlePanel.tsx",
-      "src/components/MediaSourceMenu/MediaSourceMenu.tsx",
+      "src/components/panels/SubtitlePanel/SubtitlePanel.tsx",
+      "src/components/common/MediaSourceMenu/MediaSourceMenu.tsx",
       "src/core/editor/panelSourceSelection.ts",
     ],
     operations: [
@@ -793,7 +799,7 @@ export const userGuideOperationGroups = [
     guide: "storyboard/storyboards.md",
     heading: "## 多来源分镜与合并操作",
     sources: [
-      "src/components/StoryboardPanel/StoryboardPanel.tsx",
+      "src/components/panels/StoryboardPanel/StoryboardPanel.tsx",
       "src/core/editor/multiSource.ts",
     ],
     operations: [
@@ -811,8 +817,8 @@ export const userGuideOperationGroups = [
     guide: "storyboard/storyboards.md",
     heading: "## 检测镜头切点",
     sources: [
-      "src/components/StoryboardPanel/useStoryboardDetection.tsx",
-      "src/components/MediaBin/MediaBin.tsx",
+      "src/components/panels/StoryboardPanel/hooks/useStoryboardDetection.tsx",
+      "src/components/panels/MediaBin/MediaBin.tsx",
       "src/core/editor/storyboardDetection.ts",
     ],
     operations: [
@@ -830,7 +836,7 @@ export const userGuideOperationGroups = [
     heading: "## 调整分镜的导出范围",
     sources: [
       "src/systems/ExportSystem/exportWorkspaceState.ts",
-      "src/components/SourceMonitor/SourceMonitor.tsx",
+      "src/components/panels/SourceMonitor/SourceMonitor.tsx",
       "src/App.tsx",
     ],
     operations: [

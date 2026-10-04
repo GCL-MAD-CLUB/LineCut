@@ -17,7 +17,7 @@ import {
   useTaskProgressStatus,
 } from "../src/systems/TaskSystem/index.ts";
 import { useProjectPort, getProjectWorkspaceSnapshot } from "../src/systems/ProjectSystem/index.ts";
-import { useStoryboardDetection } from "../src/components/StoryboardPanel/useStoryboardDetection.tsx";
+import { useStoryboardDetection } from "../src/components/panels/StoryboardPanel/hooks/useStoryboardDetection.tsx";
 import { emptyStoryboard } from "../src/core/editor/multiSource.ts";
 
 const h = React.createElement;

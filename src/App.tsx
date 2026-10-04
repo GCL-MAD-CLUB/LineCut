@@ -19,7 +19,7 @@ import {
   type MediaSelectionCapabilityProjection,
 } from "./runtime/state/contracts";
 import { useStableIdentity } from "./runtime/state/react";
-import { ApplicationMenu, type ApplicationMenuModel } from "./components/ApplicationMenu";
+import { ApplicationMenu, type ApplicationMenuModel } from "./components/common/ApplicationMenu";
 import {
   DockLayout,
   PanelManagerProvider,
@@ -28,20 +28,20 @@ import {
   type DockAreaId,
   type OpenPanelRequest,
   type PanelManagerInitialState,
-} from "./components/DockLayout";
-import { ExportWorkspace } from "./components/ExportWorkspace";
-import { HistoryPanelServicesProvider, historyPanelType } from "./components/HistoryPanel";
+} from "./components/common/DockLayout";
+import { ExportWorkspace } from "./components/panels/ExportWorkspace";
+import { HistoryPanelServicesProvider, historyPanelType } from "./components/panels/HistoryPanel";
 import { exportWorkspaceStore, useExportWorkspaceState } from "./systems/ExportSystem";
-import { ImportWorkspace } from "./components/ImportWorkspace";
-import { mediaBinPanelType, type MediaBinPanelParams } from "./components/MediaBin";
-import { ProjectDiscardDialog, ProjectSaveDialog } from "./components/ProjectSaveDialog";
-import { ExportConflictDialog } from "./components/ExportConflictDialog";
-import { PreferencesDialog } from "./components/PreferencesDialog";
-import { ProxyCreationDialog } from "./components/ProxyCreationDialog";
-import { SecondaryTopbar } from "./components/SecondaryTopbar";
-import { sourcePanelType } from "./components/SourceMonitor";
-import { storyboardPanelType } from "./components/StoryboardPanel";
-import { subtitlePanelType } from "./components/SubtitlePanel";
+import { ImportWorkspace } from "./components/panels/ImportWorkspace";
+import { mediaBinPanelType, type MediaBinPanelParams } from "./components/panels/MediaBin";
+import { ProjectDiscardDialog, ProjectSaveDialog } from "./components/common/ProjectSaveDialog";
+import { ExportConflictDialog } from "./components/common/ExportConflictDialog";
+import { PreferencesDialog } from "./components/common/PreferencesDialog";
+import { ProxyCreationDialog } from "./components/common/ProxyCreationDialog";
+import { SecondaryTopbar } from "./components/common/SecondaryTopbar";
+import { sourcePanelType } from "./components/panels/SourceMonitor";
+import { storyboardPanelType } from "./components/panels/StoryboardPanel";
+import { subtitlePanelType } from "./components/panels/SubtitlePanel";
 import { cancelAllTaskProgress, useTaskProgressStatus } from "./systems/TaskSystem";
 import { runMediaImportBatchTask } from "./application/media/mediaImportTask";
 import {
