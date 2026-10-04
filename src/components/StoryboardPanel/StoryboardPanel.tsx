@@ -1,3 +1,4 @@
+import { panelSourceTitle } from "../../core/editor/panelSourceSelection";
 import {
   sourceScope,
   sourceRowId,
@@ -1163,7 +1164,7 @@ export function StoryboardPanel() {
     setExpandedStackIds,
     shotSelectionCleared,
     shotSelectionReplaced,
-  } = useStoryboardPanelState((state) => state, videoContext);
+  } = useStoryboardPanelState((state) => state, videoContext, selection.workspaceId);
   const { requestDetection, canRequestDetection, detectionDialog, detectionTasks } =
     useStoryboardDetection();
   const playbackStatus = usePlaybackStatus();
@@ -3424,7 +3425,7 @@ export function StoryboardPanel() {
         <button
           type="button"
           className={`storyboard-video-trigger ${videoMenu ? "active" : ""}`}
-          title={videoLabel}
+          title={panelSourceTitle(videoLabel, sources)}
           aria-label={`选择分镜视频，当前为${videoLabel}`}
           aria-haspopup="menu"
           aria-expanded={Boolean(videoMenu)}

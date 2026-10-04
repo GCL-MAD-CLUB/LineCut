@@ -3,6 +3,43 @@ export interface PanelSourceChoice {
   trackId: string;
 }
 
+export interface PanelMediaWorkspace {
+  id: number;
+  sources: PanelSourceChoice[];
+  videoId: string;
+  trackId: string;
+  frame: number;
+}
+
+export interface PanelMediaWorkspaceState {
+  workspaceId: number | null;
+  nextWorkspaceId: number;
+  workspaces: PanelMediaWorkspace[];
+  sources: PanelSourceChoice[];
+  videoId: string | null;
+  trackId: string;
+  frame: number;
+}
+
+/** The current entry always reflects manual source changes and the latest playhead. */
+export function panelMediaWorkspaces(state: PanelMediaWorkspaceState): PanelMediaWorkspace[] {
+  if (state.workspaceId === null) return state.workspaces;
+  const current = {
+    id: state.workspaceId,
+    sources: state.sources,
+    videoId: state.videoId ?? "",
+    trackId: state.trackId,
+    frame: state.frame,
+  };
+  return [...state.workspaces.filter((workspace) => workspace.id !== current.id), current];
+}
+
+export function panelSourceTitle(label: string, sources: readonly { name: string }[]) {
+  return sources.length > 1
+    ? `${label}\n\n${sources.map((source) => source.name).join("\n")}`
+    : label;
+}
+
 interface AvailablePanelSource {
   videoId: string;
   tracks: readonly { id: string }[];

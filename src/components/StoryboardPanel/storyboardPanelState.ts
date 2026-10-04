@@ -80,6 +80,7 @@ interface StoryboardVideoSessionState {
 }
 
 interface StoryboardPanelUiState extends StoryboardVideoSessionState {
+  workspaceId: number | null;
   videoContext: string;
   sessions: Record<string, StoryboardVideoSessionState>;
   viewMode: StoryboardViewMode;
@@ -87,7 +88,7 @@ interface StoryboardPanelUiState extends StoryboardVideoSessionState {
   thumbnailSize: number;
   gridSize: number;
   keywordEditorMode: StoryboardKeywordEditorMode;
-  syncVideoContext: (videoContext: string) => void;
+  syncVideoContext: (videoContext: string, workspaceId?: number | null) => void;
   setQuery: (query: string) => void;
   setSearchMode: (mode: SearchMode) => void;
   setSearchScope: (scope: StoryboardSearchScope) => void;
@@ -340,6 +341,7 @@ function annotationWithDefaults(
 }
 
 const useStoryboardPanelUiState = createPanelState<StoryboardPanelUiState>(() => (set) => ({
+  workspaceId: null,
   videoContext: "",
   sessions: {},
   ...defaultVideoSessionState(),
@@ -348,21 +350,24 @@ const useStoryboardPanelUiState = createPanelState<StoryboardPanelUiState>(() =>
   thumbnailSize: 0,
   gridSize: 0,
   keywordEditorMode: "plain",
-  syncVideoContext: (videoContext) =>
+  syncVideoContext: (videoContext, workspaceId) =>
     set((state) => {
-      if (state.videoContext === videoContext) {
+      const nextWorkspaceId = workspaceId === undefined ? state.workspaceId : workspaceId;
+      if (state.videoContext === videoContext && state.workspaceId === nextWorkspaceId) {
         return state;
       }
       const sessions = state.videoContext
         ? {
             ...state.sessions,
-            [state.videoContext]: videoSessionFromState(state),
+            [JSON.stringify([state.workspaceId, state.videoContext])]: videoSessionFromState(state),
           }
         : state.sessions;
       return {
         videoContext,
+        workspaceId: nextWorkspaceId,
         sessions,
-        ...(sessions[videoContext] ?? defaultVideoSessionState()),
+        ...(sessions[JSON.stringify([nextWorkspaceId, videoContext])] ??
+          defaultVideoSessionState()),
       };
     }),
   setQuery: (query) => set({ query }),
@@ -423,23 +428,26 @@ const useStoryboardPanelUiState = createPanelState<StoryboardPanelUiState>(() =>
 export function useStoryboardPanelState<Selection>(
   selector: (state: StoryboardPanelState) => Selection,
   videoContext?: string,
+  workspaceId?: number | null,
 ) {
   const storedUiState = useStoryboardPanelUiState((state) => state);
   const context = videoContext ?? storedUiState.videoContext;
+  const nextWorkspaceId = workspaceId === undefined ? storedUiState.workspaceId : workspaceId;
   const uiState = {
     ...storedUiState,
     ...panelSessionForContext(
-      storedUiState.videoContext,
-      context,
+      JSON.stringify([storedUiState.workspaceId, storedUiState.videoContext]),
+      JSON.stringify([nextWorkspaceId, context]),
       videoSessionFromState(storedUiState),
       storedUiState.sessions,
       defaultVideoSessionState,
     ),
     videoContext: context,
+    workspaceId: nextWorkspaceId,
   };
   useLayoutEffect(() => {
-    if (videoContext !== undefined) storedUiState.syncVideoContext(videoContext);
-  }, [videoContext, storedUiState.syncVideoContext]);
+    if (videoContext !== undefined) storedUiState.syncVideoContext(videoContext, nextWorkspaceId);
+  }, [videoContext, nextWorkspaceId, storedUiState.syncVideoContext]);
   const { storyboards, projects, mediaItems, storyboardUpdated } = useProjectPort(
     ["storyboards", "projects", "mediaItems"],
     ["storyboardUpdated"],

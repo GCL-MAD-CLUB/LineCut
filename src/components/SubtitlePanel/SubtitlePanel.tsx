@@ -1,3 +1,4 @@
+import { panelSourceTitle } from "../../core/editor/panelSourceSelection";
 import {
   sourceScope,
   sourceRowId,
@@ -808,7 +809,7 @@ export function SubtitlePanel() {
     setCueColorLabels,
     cueSelectionCleared,
     cueSelectionReplaced,
-  } = useSubtitlePanelState((state) => state, trackContext);
+  } = useSubtitlePanelState((state) => state, trackContext, selection.workspaceId);
   const playbackStatus = usePlaybackStatus();
   const playback = previewVideoId === activeVideoId ? playbackStatus : undefined;
   const panelRef = useRef<HTMLElement | null>(null);
@@ -2264,7 +2265,7 @@ export function SubtitlePanel() {
           type="button"
           className={`subtitle-track-trigger ${trackMenu ? "active" : ""}`}
           disabled={subtitleSources.length === 0}
-          title={activeTrackLabel}
+          title={panelSourceTitle(activeTrackLabel, selectedSources)}
           aria-label={`选择字幕，当前为${activeTrackLabel}`}
           aria-haspopup="menu"
           aria-expanded={Boolean(trackMenu)}

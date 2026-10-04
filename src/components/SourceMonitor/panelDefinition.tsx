@@ -82,6 +82,7 @@ export const sourcePanelDefinition = definePanel({
             ? historyItems.map((item) => ({
                 id: item.id,
                 label: `源：${item.file_name}`,
+                title: `源：${item.file_name}`,
                 onSelect: () => activeVideoChanged(item.id),
               }))
             : [

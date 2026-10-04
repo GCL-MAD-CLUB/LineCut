@@ -2,11 +2,18 @@ import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import { normalizeFrameRate } from "../../core/editor/timeline";
 import {
   mediaPanelTitle,
+  panelMediaWorkspaces,
+  panelSourceTitle,
   resolvePanelSourceChoices,
   togglePanelSourceChoice,
+  type PanelMediaWorkspace,
 } from "../../core/editor/panelSourceSelection";
 import { usePlaybackStatus } from "../../runtime/capabilities/PlaybackCapability";
-import { usePanelManagerState, type PanelManagerState } from "../../components/DockLayout";
+import {
+  usePanelManagerState,
+  type PanelManagerState,
+  type PanelMenuEntryDefinition,
+} from "../../components/DockLayout";
 import { useBroadcastEvent } from "../../runtime/events/react";
 import { stateHub, useProjections } from "../../runtime/state/StateHub";
 import {
@@ -41,6 +48,12 @@ export interface PanelMediaSource {
 }
 
 interface PanelMediaSelection {
+  workspaceId: number | null;
+  nextWorkspaceId: number;
+  workspaces: PanelMediaWorkspace[];
+  openWorkspace: (projectId: string | null, source: PanelSourceSelection) => void;
+  restoreWorkspace: (id: number) => void;
+  closeWorkspace: (all?: boolean) => void;
   sources: { videoId: string; trackId: string }[];
   setSources: (sources: { videoId: string; trackId: string }[]) => void;
   projectId: string | null | undefined;
@@ -61,9 +74,57 @@ interface PanelMediaSelection {
 }
 
 const usePanelMediaSelection = createPanelState<PanelMediaSelection>(() => (set, get) => ({
+  workspaceId: null,
+  nextWorkspaceId: 1,
+  workspaces: [],
+  openWorkspace: (projectId, source) =>
+    set((current) => ({
+      ...source,
+      projectId,
+      workspaces: current.projectId === projectId ? panelMediaWorkspaces(current) : [],
+      workspaceId: current.nextWorkspaceId,
+      nextWorkspaceId: current.nextWorkspaceId + 1,
+      openVersion: current.openVersion + 1,
+    })),
+  restoreWorkspace: (id) =>
+    set((current) => {
+      if (id === current.workspaceId) return current;
+      const workspaces = panelMediaWorkspaces(current);
+      const workspace = workspaces.find((candidate) => candidate.id === id);
+      if (!workspace) return current;
+      return {
+        sources: workspace.sources,
+        videoId: workspace.videoId,
+        trackId: workspace.trackId,
+        frame: workspace.frame,
+        workspaceId: id,
+        workspaces: workspaces.filter((candidate) => candidate.id !== id),
+        openVersion: current.openVersion + 1,
+      };
+    }),
+  closeWorkspace: (all = false) =>
+    set((current) => {
+      const workspaces = all
+        ? []
+        : panelMediaWorkspaces(current).filter((workspace) => workspace.id !== current.workspaceId);
+      const previous = workspaces.at(-1);
+      return {
+        workspaces: workspaces.filter((workspace) => workspace.id !== previous?.id),
+        workspaceId: previous?.id ?? null,
+        sources: previous?.sources ?? [],
+        videoId: previous?.videoId ?? "",
+        trackId: previous?.trackId ?? "",
+        frame: previous?.frame ?? 0,
+        openVersion: current.openVersion + 1,
+      };
+    }),
   sources: [],
   setSources: (sources) =>
     set((current) => {
+      const workspace =
+        current.workspaceId === null && sources.length
+          ? { workspaceId: current.nextWorkspaceId, nextWorkspaceId: current.nextWorkspaceId + 1 }
+          : {};
       if (!sources.length) {
         return {
           sources,
@@ -78,8 +139,9 @@ const usePanelMediaSelection = createPanelState<PanelMediaSelection>(() => (set,
           (source) => source.videoId === current.videoId && source.trackId === current.trackId,
         )
       )
-        return { sources };
+        return { sources, ...workspace };
       return {
+        ...workspace,
         sources,
         videoId: sources[0].videoId,
         trackId: sources[0].trackId,
@@ -99,8 +161,11 @@ const usePanelMediaSelection = createPanelState<PanelMediaSelection>(() => (set,
   savedFrame: () => get().frame,
   openVideo: (projectId, videoId, trackId) =>
     set((current) => ({
+      workspaces: [],
+      workspaceId: videoId ? current.nextWorkspaceId : null,
+      nextWorkspaceId: current.nextWorkspaceId + 1,
       projectId,
-      videoId: videoId || null,
+      videoId: videoId || "",
       trackId,
       sources: videoId ? [{ videoId, trackId }] : [],
       openVersion: current.openVersion + 1,
@@ -108,6 +173,9 @@ const usePanelMediaSelection = createPanelState<PanelMediaSelection>(() => (set,
     })),
   previewVideo: (projectId, videoId, trackId, sources, frame) =>
     set((current) => ({
+      ...(current.workspaceId === null && sources.length
+        ? { workspaceId: current.nextWorkspaceId, nextWorkspaceId: current.nextWorkspaceId + 1 }
+        : {}),
       projectId,
       videoId,
       trackId,
@@ -227,7 +295,7 @@ export function usePanelMediaSourceSelection(kind?: "subtitles" | "storyboard") 
     [activeTrackChanged, activeVideoId, kind, panelId, projectId, selection],
   );
   const selectVideo = useCallback(
-    (videoId: string, trackId?: string) => {
+    (videoId: string, trackId?: string, newWorkspace = false) => {
       const nextVideo = mediaItems.find(
         (item) => item.id === videoId && item.kind === "video" && isMediaItemEnabled(item),
       );
@@ -237,15 +305,17 @@ export function usePanelMediaSourceSelection(kind?: "subtitles" | "storyboard") 
       const requestedTrack = trackId ?? (videoId === activeVideoId ? activeTrackId : "");
       const nextTrackId =
         nextTracks.find((track) => track.id === requestedTrack)?.id ?? nextTracks[0]?.id ?? "";
-      changeSources({
+      const next = {
         videoId,
         trackId: nextTrackId,
         sources: [{ videoId, trackId: nextTrackId }],
         frame: videoId === selection.videoId ? selection.savedFrame() : 0,
-      });
+      };
+      if (newWorkspace) selection.openWorkspace(projectId, next);
+      else changeSources(next);
       return true;
     },
-    [activeTrackId, activeVideoId, mediaItems, projects, changeSources, selection],
+    [activeTrackId, activeVideoId, mediaItems, projects, changeSources, selection, projectId],
   );
   const toggleSource = (videoId: string, trackId?: string) => {
     const item = mediaItems.find(
@@ -323,7 +393,7 @@ export function usePanelMediaSource(kind: "subtitles" | "storyboard") {
     }
   }, [activeTrackId, activeVideoId, previewVideoId, projectId, selection]);
   useBroadcastEvent(identity, "media.video.opened", ({ payload }) =>
-    source.selectVideo(payload.videoId) ? "handled" : "ignored",
+    source.selectVideo(payload.videoId, undefined, true) ? "handled" : "ignored",
   );
   const hasProject = Boolean(project);
   const selectionInitialized = selection.projectId === projectId && selection.videoId !== null;
@@ -379,6 +449,63 @@ export function usePanelMediaSource(kind: "subtitles" | "storyboard") {
       openSource();
   }, [canOpenSource, openSource, panelActive, panelFocused]);
   return source;
+}
+
+/** Workspace history belongs to the panel instance, rather than individual media IDs. */
+export function usePanelMediaWorkspaceMenu(
+  kind: "subtitles" | "storyboard",
+): PanelMenuEntryDefinition[] {
+  const { selection, projectId } = usePanelMediaSourceSelection();
+  const { projects, mediaItems } = useProjectPort(["projects", "mediaItems"], []);
+  const available = panelMediaSources(projects, mediaItems);
+  const workspaces = selection.projectId === projectId ? panelMediaWorkspaces(selection) : [];
+  const hasWorkspaces = workspaces.length > 0;
+  return [
+    {
+      id: `${kind}-close-workspace`,
+      label: "关闭",
+      disabled: selection.workspaceId === null || !hasWorkspaces,
+      onSelect: () => selection.closeWorkspace(),
+    },
+    {
+      id: `${kind}-close-all-workspaces`,
+      label: "关闭全部",
+      disabled: !hasWorkspaces,
+      onSelect: () => selection.closeWorkspace(true),
+    },
+    { type: "separator", id: `${kind}-workspace-history-separator` },
+    {
+      type: "selection",
+      id: `${kind}-workspace-history`,
+      defaultValue: selection.workspaceId?.toString() ?? `${kind}-empty`,
+      items: hasWorkspaces
+        ? workspaces.map((workspace) => {
+            const choices = resolvePanelSourceChoices(
+              workspace.sources,
+              available.map((source) => ({ videoId: source.item.id, tracks: source.tracks })),
+            );
+            const sources = choices.map((choice) => ({
+              name: available.find((source) => source.item.id === choice.videoId)!.item.file_name,
+              trackId: choice.trackId,
+            }));
+            const label = mediaPanelTitle(kind, sources);
+            return {
+              id: workspace.id.toString(),
+              label,
+              title: panelSourceTitle(label, sources),
+              onSelect: () => selection.restoreWorkspace(workspace.id),
+            };
+          })
+        : [
+            {
+              id: `${kind}-empty`,
+              label: mediaPanelTitle(kind, []),
+              title: mediaPanelTitle(kind, []),
+              onSelect: () => undefined,
+            },
+          ],
+    },
+  ];
 }
 
 /**
