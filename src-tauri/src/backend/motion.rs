@@ -1,22 +1,28 @@
 use super::*;
 
-#[tauri::command]
-pub(crate) async fn storyboard_motion(
-    asset_id: String,
+const COLOR_FRAME_BYTES: usize = 96 * 54 * 3;
+
+struct FrameTraceSource {
+    path: String,
+    stream_index: i32,
+    frame_count: i64,
+    frame_rate: f64,
+}
+
+fn frame_trace_source(
+    asset_id: &str,
     start_frame: i64,
     end_frame: i64,
-    task_id: String,
-    state: tauri::State<'_, AppState>,
-) -> CommandResult<Vec<f64>> {
+    state: &AppState,
+) -> AppResult<FrameTraceSource> {
     let frame_count = end_frame
         .checked_sub(start_frame)
-        .and_then(|n| n.checked_add(1));
-    let frame_count = frame_count
+        .and_then(|n| n.checked_add(1))
         .filter(|n| start_frame >= 0 && *n > 0)
         .ok_or_else(|| {
             app_error(
                 ErrorCode::StoryboardMotionRangeInvalid,
-                "Invalid motion frame range",
+                "Invalid frame trace range",
             )
         })?;
     let project = state
@@ -28,7 +34,7 @@ pub(crate) async fn storyboard_motion(
                 "Project state lock is poisoned",
             )
         })?
-        .get(&asset_id)
+        .get(asset_id)
         .cloned()
         .ok_or_else(|| {
             app_error(
@@ -42,9 +48,6 @@ pub(crate) async fn storyboard_motion(
             "Media asset has no video stream",
         )
     })?;
-    if frame_count == 1 {
-        return Ok(Vec::new());
-    }
     let frame_rate = project
         .streams
         .iter()
@@ -54,6 +57,32 @@ pub(crate) async fn storyboard_motion(
                 .or_else(|| parse_frame_rate(stream.r_frame_rate.as_deref()))
         })
         .unwrap_or(25.0);
+    Ok(FrameTraceSource {
+        path: project.asset.path,
+        stream_index,
+        frame_count,
+        frame_rate,
+    })
+}
+
+#[tauri::command]
+pub(crate) async fn storyboard_motion(
+    asset_id: String,
+    start_frame: i64,
+    end_frame: i64,
+    task_id: String,
+    state: tauri::State<'_, AppState>,
+) -> CommandResult<Vec<f64>> {
+    let source = frame_trace_source(&asset_id, start_frame, end_frame, &state)?;
+    let FrameTraceSource {
+        frame_count,
+        stream_index,
+        frame_rate,
+        ..
+    } = source;
+    if frame_count == 1 {
+        return Ok(Vec::new());
+    }
     let preferences = preferences_clone(&state)?;
     let task = register_task(&task_id, &state)?;
     // Match by frame number after shifting one branch, independent of source timestamps.
@@ -70,7 +99,7 @@ pub(crate) async fn storyboard_motion(
         "-ss".into(),
         format!("{:.9}", start_frame as f64 / frame_rate),
         "-i".into(),
-        project.asset.path.clone(),
+        source.path,
         "-filter_complex".into(),
         filter,
         "-map".into(),
@@ -104,6 +133,124 @@ pub(crate) async fn storyboard_motion(
         ));
     }
     Ok(values)
+}
+
+#[tauri::command]
+pub(crate) async fn storyboard_frame_colors(
+    asset_id: String,
+    start_frame: i64,
+    end_frame: i64,
+    task_id: String,
+    state: tauri::State<'_, AppState>,
+) -> CommandResult<Vec<[f64; 4]>> {
+    let source = frame_trace_source(&asset_id, start_frame, end_frame, &state)?;
+    let preferences = preferences_clone(&state)?;
+    let task = register_task(&task_id, &state)?;
+    let mut args = vec!["-v".into(), "error".into(), "-nostdin".into()];
+    append_ffmpeg_processing_thread_args(&mut args, 2);
+    args.extend([
+        "-ss".into(),
+        format!("{:.9}", start_frame as f64 / source.frame_rate),
+        "-i".into(),
+        source.path,
+        "-map".into(),
+        format!("0:{}", source.stream_index),
+        "-vf".into(),
+        "scale=96:54:flags=area,format=rgb24".into(),
+        "-frames:v".into(),
+        source.frame_count.to_string(),
+        "-fps_mode".into(),
+        "passthrough".into(),
+        "-c:v".into(),
+        "rawvideo".into(),
+        "-f".into(),
+        "rawvideo".into(),
+        "pipe:1".into(),
+    ]);
+    let mut child = hidden_command(&ffmpeg_program(&preferences))
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| app_error(ErrorCode::ExternalToolStartFailed, error.to_string()))?;
+    let mut stdout = child.stdout.take().ok_or_else(|| {
+        app_error(
+            ErrorCode::ExternalToolOutputUnavailable,
+            "Missing color frame output",
+        )
+    })?;
+    let mut stderr = child.stderr.take().ok_or_else(|| {
+        app_error(
+            ErrorCode::ExternalToolOutputUnavailable,
+            "Missing color frame diagnostics",
+        )
+    })?;
+    let process_id = Uuid::new_v4().to_string();
+    register_running_ffmpeg(
+        &state,
+        process_id.clone(),
+        task_id,
+        task.cancel.clone(),
+        child.id(),
+        Vec::new(),
+    )?;
+    let decoded = tokio::time::timeout(Duration::from_secs(180), async {
+        futures::try_join!(
+            read_frame_colors(&mut stdout, source.frame_count),
+            async {
+                let mut diagnostics = Vec::new();
+                stderr.read_to_end(&mut diagnostics).await?;
+                Ok::<_, std::io::Error>(diagnostics)
+            },
+            child.wait(),
+        )
+    })
+    .await;
+    clear_running_ffmpeg(&state, &process_id);
+    task.check_cancelled()?;
+    let (values, diagnostics, status) = decoded
+        .map_err(|_| {
+            app_error(
+                ErrorCode::ExternalToolExecutionFailed,
+                "Color frame extraction timed out",
+            )
+        })?
+        .map_err(|error| app_error(ErrorCode::StoryboardFrameDecodeFailed, error.to_string()))?;
+    if !status.success() {
+        return Err(app_error(
+            ErrorCode::ExternalToolExecutionFailed,
+            format!(
+                "Color frame extraction failed: {}",
+                String::from_utf8_lossy(&diagnostics)
+            ),
+        ));
+    }
+    Ok(values)
+}
+
+async fn read_frame_colors(
+    reader: &mut (impl AsyncReadExt + Unpin),
+    frame_count: i64,
+) -> std::io::Result<Vec<[f64; 4]>> {
+    let mut frame = vec![0; COLOR_FRAME_BYTES];
+    let mut values = Vec::new();
+    for _ in 0..frame_count {
+        reader.read_exact(&mut frame).await?;
+        values.push(mean_frame_colors(&frame));
+    }
+    Ok(values)
+}
+
+fn mean_frame_colors(frame: &[u8]) -> [f64; 4] {
+    let mut sums = [0_u64; 3];
+    for pixel in frame.chunks_exact(3) {
+        for channel in 0..3 {
+            sums[channel] += u64::from(pixel[channel]);
+        }
+    }
+    let divisor = (frame.len() / 3) as f64 * 255.0;
+    let [red, green, blue] = sums.map(|sum| sum as f64 / divisor);
+    [red, green, blue, 0.30 * red + 0.59 * green + 0.11 * blue]
 }
 
 fn parse_motion_stats(output: &str) -> AppResult<Vec<f64>> {
@@ -145,5 +292,30 @@ mod tests {
         for output in ["n:1", "n:1 All:NaN", "n:1 All:inf", "n:1 All:1.1"] {
             assert!(parse_motion_stats(output).is_err());
         }
+    }
+
+    #[test]
+    fn frame_colors_average_channels_and_use_305911_gray() {
+        let [red, green, blue, gray] = mean_frame_colors(&[255, 0, 0, 0, 255, 0]);
+        assert_eq!([red, green, blue], [0.5, 0.5, 0.0]);
+        assert!((gray - 0.445).abs() < 1e-12);
+        assert_eq!(mean_frame_colors(&[0, 0, 0]), [0.0; 4]);
+        for value in mean_frame_colors(&[255, 255, 255]) {
+            assert!((value - 1.0).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn color_stream_keeps_each_frame_and_rejects_truncation() {
+        futures::executor::block_on(async {
+            let mut frames = vec![0; COLOR_FRAME_BYTES];
+            frames.extend(vec![255; COLOR_FRAME_BYTES]);
+            let values = read_frame_colors(&mut frames.as_slice(), 2).await.unwrap();
+            assert_eq!(values[0], [0.0; 4]);
+            assert_eq!(&values[1][..3], &[1.0; 3]);
+            assert!(read_frame_colors(&mut &frames[..frames.len() - 1], 2)
+                .await
+                .is_err());
+        });
     }
 }

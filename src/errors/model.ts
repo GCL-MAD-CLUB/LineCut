@@ -40,6 +40,7 @@ export type OperationKey =
   | "storage.recentPaths"
   | "storyboard.detect"
   | "storyboard.motion"
+  | "storyboard.colors"
   | "task.cancel"
   | "task.listener"
   | "thumbnail.subtitle.cache.read"

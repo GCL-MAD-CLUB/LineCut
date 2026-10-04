@@ -32,3 +32,14 @@ export function motionCurvePath(values: readonly number[]): string {
 export function motionHoverFrame(startFrame: number, endFrame: number, progress: number): number {
   return Math.round(startFrame + Math.max(0, Math.min(1, progress)) * (endFrame - startFrame));
 }
+
+export function frameColorCurvePath(values: readonly number[]): string {
+  if (values.length === 0) return "";
+  if (values.length === 1) return `M0,${2 * (1 - values[0])} L1,${2 * (1 - values[0])}`;
+  return values
+    .map(
+      (value, index) =>
+        `${index === 0 ? "M" : "L"}${index / (values.length - 1)},${2 * (1 - value)}`,
+    )
+    .join(" ");
+}

@@ -960,6 +960,7 @@ pub fn run() {
             get_cached_storyboard_thumbnails,
             generate_storyboard_thumbnails,
             storyboard_motion,
+            storyboard_frame_colors,
             demux_media_streams,
             decode_audio_pcm_window,
             generate_proxy,
