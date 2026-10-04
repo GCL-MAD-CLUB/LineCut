@@ -4,6 +4,7 @@ import type { ProjectExportState, ProjectStateConfig } from "../../types";
 /** In-memory mirror of the per-project state persisted in WorkspaceConfig.xml, keyed by project document id, so the project open flow can read recorded export settings synchronously. */
 let states: Record<string, ProjectStateConfig> = {};
 let loaded = false;
+const panelStateWrites = new Map<string, Promise<void>>();
 
 export function projectStatesLoaded() {
   return loaded;
@@ -61,7 +62,6 @@ export async function persistProjectPanelState(
   panelId: string,
   panelState: unknown | null,
 ): Promise<void> {
-  await invokeCommand("save_project_panel_state", { projectId, panelId, panelState });
   const current = states[projectId] ?? { exportState: null, panelStates: {} };
   const panelStates = { ...(current.panelStates ?? {}) };
   if (panelState === null) {
@@ -76,6 +76,20 @@ export async function persistProjectPanelState(
     next[projectId] = { ...current, panelStates };
   }
   states = next;
+  // Keep the latest UI state available during rapid project switches, and preserve write order.
+  const key = JSON.stringify([projectId, panelId]);
+  const previous = panelStateWrites.get(key) ?? Promise.resolve();
+  const write = previous
+    .catch(() => undefined)
+    .then(async () => {
+      await invokeCommand("save_project_panel_state", { projectId, panelId, panelState });
+    });
+  panelStateWrites.set(key, write);
+  try {
+    await write;
+  } finally {
+    if (panelStateWrites.get(key) === write) panelStateWrites.delete(key);
+  }
 }
 
 /** Removes every per-project entry whose document id is not on the keep list, derived from the recently-opened projects list. */

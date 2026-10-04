@@ -11,6 +11,7 @@ import {
   type SearchRule,
 } from "../../core/editor/textSearch";
 import { PanelSearch, useSearchNavigation } from "../PanelSearch/PanelSearch";
+import { SourceSelectionNavigation } from "../PanelSearch/SourceSelectionNavigation";
 import { playbackFollowScrollDuration } from "../playbackFollowScroll";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
@@ -857,7 +858,8 @@ export function SubtitlePanel() {
   const activeTrack = activeSource?.tracks.find((track) => track.id === activeTrackId);
   const [sourceDirection, setSourceDirection] = useState<SubtitleSortDirection>("ascending");
   usePersistedMediaPanelState({
-    sources: selection.sources,
+    selection,
+    onRestoreWorkspaces: selection.hydrateWorkspaces,
     sourceDirection,
     sourceWidth: subtitleColumnWidths.source,
     onRestoreSources: selection.setSources,
@@ -2289,6 +2291,11 @@ export function SubtitlePanel() {
           <span className="subtitle-track-name">{activeTrackLabel}</span>
           <ChevronsUpDown aria-hidden="true" />
         </button>
+        <SourceSelectionNavigation
+          canGoBack={selection.sourceHistoryIndex > 0}
+          canGoForward={selection.sourceHistoryIndex < selection.sourceHistory.length - 1}
+          onNavigate={selection.navigateSources}
+        />
       </div>
 
       <PanelSearch

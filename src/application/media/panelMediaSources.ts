@@ -4,9 +4,13 @@ import {
   mediaPanelTitle,
   panelMediaWorkspaces,
   panelSourceTitle,
+  panelSourceSnapshot,
+  recordPanelSourceHistory,
   resolvePanelSourceChoices,
   togglePanelSourceChoice,
   type PanelMediaWorkspace,
+  type PanelSourceSnapshot,
+  type PersistedPanelMediaWorkspaces,
 } from "../../core/editor/panelSourceSelection";
 import { usePlaybackStatus } from "../../runtime/capabilities/PlaybackCapability";
 import {
@@ -48,6 +52,10 @@ export interface PanelMediaSource {
 }
 
 interface PanelMediaSelection {
+  sourceHistory: PanelSourceSnapshot[];
+  sourceHistoryIndex: number;
+  navigateSources: (direction: -1 | 1) => void;
+  hydrateWorkspaces: (projectId: string, saved: PersistedPanelMediaWorkspaces) => void;
   workspaceId: number | null;
   nextWorkspaceId: number;
   workspaces: PanelMediaWorkspace[];
@@ -70,16 +78,55 @@ interface PanelMediaSelection {
     trackId: string,
     sources: { videoId: string; trackId: string }[],
     frame: number,
+    recordHistory?: boolean,
   ) => void;
 }
 
 const usePanelMediaSelection = createPanelState<PanelMediaSelection>(() => (set, get) => ({
+  sourceHistory: [],
+  sourceHistoryIndex: 0,
+  navigateSources: (direction) =>
+    set((current) => {
+      const index = current.sourceHistoryIndex + direction;
+      const next = current.sourceHistory[index];
+      if (!next) return current;
+      const sourceHistory = [...current.sourceHistory];
+      sourceHistory[current.sourceHistoryIndex] = panelSourceSnapshot(current);
+      return {
+        ...next,
+        sourceHistory,
+        sourceHistoryIndex: index,
+        openVersion: current.openVersion + 1,
+      };
+    }),
+  hydrateWorkspaces: (projectId, saved) =>
+    set((current) => {
+      const active = saved.workspaces.find((workspace) => workspace.id === saved.workspaceId);
+      return {
+        projectId,
+        workspaceId: active?.id ?? null,
+        nextWorkspaceId: Math.max(
+          current.nextWorkspaceId,
+          ...saved.workspaces.map((workspace) => workspace.id + 1),
+        ),
+        workspaces: saved.workspaces.filter((workspace) => workspace.id !== active?.id),
+        sources: active?.sources ?? [],
+        videoId: active?.videoId ?? "",
+        trackId: active?.trackId ?? "",
+        frame: active?.frame ?? 0,
+        sourceHistory: active?.sourceHistory ?? [],
+        sourceHistoryIndex: active?.sourceHistoryIndex ?? 0,
+        openVersion: current.openVersion + 1,
+      };
+    }),
   workspaceId: null,
   nextWorkspaceId: 1,
   workspaces: [],
   openWorkspace: (projectId, source) =>
     set((current) => ({
       ...source,
+      sourceHistory: [panelSourceSnapshot(source)],
+      sourceHistoryIndex: 0,
       projectId,
       workspaces: current.projectId === projectId ? panelMediaWorkspaces(current) : [],
       workspaceId: current.nextWorkspaceId,
@@ -97,6 +144,8 @@ const usePanelMediaSelection = createPanelState<PanelMediaSelection>(() => (set,
         videoId: workspace.videoId,
         trackId: workspace.trackId,
         frame: workspace.frame,
+        sourceHistory: workspace.sourceHistory,
+        sourceHistoryIndex: workspace.sourceHistoryIndex,
         workspaceId: id,
         workspaces: workspaces.filter((candidate) => candidate.id !== id),
         openVersion: current.openVersion + 1,
@@ -115,6 +164,8 @@ const usePanelMediaSelection = createPanelState<PanelMediaSelection>(() => (set,
         videoId: previous?.videoId ?? "",
         trackId: previous?.trackId ?? "",
         frame: previous?.frame ?? 0,
+        sourceHistory: previous?.sourceHistory ?? [],
+        sourceHistoryIndex: previous?.sourceHistoryIndex ?? 0,
         openVersion: current.openVersion + 1,
       };
     }),
@@ -126,11 +177,10 @@ const usePanelMediaSelection = createPanelState<PanelMediaSelection>(() => (set,
           ? { workspaceId: current.nextWorkspaceId, nextWorkspaceId: current.nextWorkspaceId + 1 }
           : {};
       if (!sources.length) {
+        const next = { sources, videoId: "", trackId: "", frame: 0 };
         return {
-          sources,
-          videoId: "",
-          trackId: "",
-          frame: 0,
+          ...next,
+          ...recordPanelSourceHistory(current, next),
           openVersion: current.openVersion + 1,
         };
       }
@@ -139,13 +189,21 @@ const usePanelMediaSelection = createPanelState<PanelMediaSelection>(() => (set,
           (source) => source.videoId === current.videoId && source.trackId === current.trackId,
         )
       )
-        return { sources, ...workspace };
-      return {
-        ...workspace,
+        return {
+          sources,
+          ...workspace,
+          ...recordPanelSourceHistory(current, panelSourceSnapshot({ ...current, sources })),
+        };
+      const next = {
         sources,
         videoId: sources[0].videoId,
         trackId: sources[0].trackId,
         frame: 0,
+      };
+      return {
+        ...workspace,
+        ...next,
+        ...recordPanelSourceHistory(current, next),
         openVersion: current.openVersion + 1,
       };
     }),
@@ -168,11 +226,18 @@ const usePanelMediaSelection = createPanelState<PanelMediaSelection>(() => (set,
       videoId: videoId || "",
       trackId,
       sources: videoId ? [{ videoId, trackId }] : [],
+      sourceHistory: videoId
+        ? [{ videoId, trackId, sources: [{ videoId, trackId }], frame: 0 }]
+        : [],
+      sourceHistoryIndex: 0,
       openVersion: current.openVersion + 1,
       frame: current.projectId === projectId && current.videoId === videoId ? current.frame : 0,
     })),
-  previewVideo: (projectId, videoId, trackId, sources, frame) =>
+  previewVideo: (projectId, videoId, trackId, sources, frame, recordHistory = false) =>
     set((current) => ({
+      ...(recordHistory
+        ? recordPanelSourceHistory(current, { videoId, trackId, sources, frame })
+        : {}),
       ...(current.workspaceId === null && sources.length
         ? { workspaceId: current.nextWorkspaceId, nextWorkspaceId: current.nextWorkspaceId + 1 }
         : {}),
@@ -290,7 +355,7 @@ export function usePanelMediaSourceSelection(kind?: "subtitles" | "storyboard") 
           activeTrackChanged(next.trackId, { panelId, before, after: next });
         }
       }
-      selection.previewVideo(projectId, next.videoId, next.trackId, next.sources, next.frame);
+      selection.previewVideo(projectId, next.videoId, next.trackId, next.sources, next.frame, true);
     },
     [activeTrackChanged, activeVideoId, kind, panelId, projectId, selection],
   );

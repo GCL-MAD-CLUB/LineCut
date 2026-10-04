@@ -7,6 +7,7 @@ import {
 } from "../../core/editor/multiSource";
 import { matchesTextSearch, nextSearchMatchIndex } from "../../core/editor/textSearch";
 import { PanelSearch, useSearchNavigation } from "../PanelSearch/PanelSearch";
+import { SourceSelectionNavigation } from "../PanelSearch/SourceSelectionNavigation";
 import { playbackFollowScrollDuration } from "../playbackFollowScroll";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
@@ -1223,7 +1224,8 @@ export function StoryboardPanel() {
   const multipleSources = sources.length > 1;
   const [sourceDirection, setSourceDirection] = useState<StoryboardSortDirection>("ascending");
   usePersistedMediaPanelState({
-    sources: selection.sources,
+    selection,
+    onRestoreWorkspaces: selection.hydrateWorkspaces,
     sourceDirection,
     sourceWidth: storyboardColumnWidths.source,
     onRestoreSources: selection.setSources,
@@ -3449,6 +3451,11 @@ export function StoryboardPanel() {
           <span className="storyboard-video-name">{videoLabel}</span>
           <ChevronsUpDown aria-hidden="true" />
         </button>
+        <SourceSelectionNavigation
+          canGoBack={selection.sourceHistoryIndex > 0}
+          canGoForward={selection.sourceHistoryIndex < selection.sourceHistory.length - 1}
+          onNavigate={selection.navigateSources}
+        />
         <button
           type="button"
           className={`storyboard-detect-button ${isDetecting ? "is-detecting" : ""}`}
