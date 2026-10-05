@@ -250,6 +250,7 @@ export function StoryboardMotionPanel({
     );
   }, [data, pixelWidth]);
   const modeLabel = traceModes.find((option) => option.mode === mode)!.label;
+  const chartMaximum = mode === "motion" ? 1 : 2;
   const hoverProgress = hover?.key === key ? hover.progress : null;
   const playbackProgress =
     shot &&
@@ -312,7 +313,7 @@ export function StoryboardMotionPanel({
         >
           <svg
             ref={chartRef}
-            viewBox="0 0 1 2"
+            viewBox={`0 0 1 ${chartMaximum}`}
             preserveAspectRatio="none"
             role="img"
             aria-label={`当前主选中分镜的${modeLabel}帧迹图`}
@@ -324,7 +325,7 @@ export function StoryboardMotionPanel({
           >
             {data?.mode === "motion" && data.values.length > 0 && (
               <>
-                <path className="motion-area" d={`${curvePath} L1,2 L0,2 Z`} />
+                <path className="motion-area" d={`${curvePath} L1,1 L0,1 Z`} />
                 <path className="motion-line" d={curvePath} />
               </>
             )}
@@ -372,7 +373,7 @@ export function StoryboardMotionPanel({
                 x1={hoverProgress}
                 x2={hoverProgress}
                 y1="0"
-                y2="2"
+                y2={chartMaximum}
               />
             )}
             {playbackProgress !== null && (
@@ -381,7 +382,7 @@ export function StoryboardMotionPanel({
                 x1={playbackProgress}
                 x2={playbackProgress}
                 y1="0"
-                y2="2"
+                y2={chartMaximum}
               />
             )}
           </svg>

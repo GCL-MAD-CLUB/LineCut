@@ -617,7 +617,7 @@ body.is-resizing-storyboard-keyword-panel * {
   display: grid;
   grid-template-columns: minmax(0, 1fr) max-content;
   align-items: center;
-  column-gap: 32px;
+  column-gap: 44px;
   padding-left: 8px;
 }
 
