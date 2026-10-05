@@ -1,3 +1,4 @@
+use super::motion_cache::FrameTraceCache;
 use super::*;
 
 const TRACE_WIDTH: usize = 96;
@@ -6,6 +7,7 @@ const COLOR_FRAME_BYTES: usize = TRACE_WIDTH * TRACE_HEIGHT * 3;
 
 struct FrameTraceSource {
     path: String,
+    fingerprint: String,
     stream_index: i32,
     frame_count: i64,
     frame_rate: f64,
@@ -27,23 +29,18 @@ fn frame_trace_source(
                 "Invalid frame trace range",
             )
         })?;
-    let project = state
-        .projects
-        .lock()
-        .map_err(|_| {
-            app_error(
-                ErrorCode::ProjectStateUnavailable,
-                "Project state lock is poisoned",
-            )
-        })?
-        .get(asset_id)
-        .cloned()
-        .ok_or_else(|| {
-            app_error(
-                ErrorCode::MediaNotFound,
-                format!("Media asset was not found: {asset_id}"),
-            )
-        })?;
+    let projects = state.projects.lock().map_err(|_| {
+        app_error(
+            ErrorCode::ProjectStateUnavailable,
+            "Project state lock is poisoned",
+        )
+    })?;
+    let project = projects.get(asset_id).ok_or_else(|| {
+        app_error(
+            ErrorCode::MediaNotFound,
+            format!("Media asset was not found: {asset_id}"),
+        )
+    })?;
     let stream_index = project.asset.video_stream_index.ok_or_else(|| {
         app_error(
             ErrorCode::VideoStreamMissing,
@@ -60,146 +57,213 @@ fn frame_trace_source(
         })
         .unwrap_or(25.0);
     Ok(FrameTraceSource {
-        path: project.asset.path,
+        path: project.asset.path.clone(),
+        fingerprint: project.asset.fingerprint.clone(),
         stream_index,
         frame_count,
         frame_rate,
     })
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct FrameTraceData {
+    pub(super) motion: Vec<f64>,
+    pub(super) colors: Vec<[f64; 4]>,
+    pub(super) sharpness: Vec<f64>,
+}
+
+impl FrameTraceData {
+    pub(super) fn is_valid(&self, frame_count: usize) -> bool {
+        self.motion.len() == frame_count.saturating_sub(1)
+            && self.colors.len() == frame_count
+            && self.sharpness.len() == frame_count
+            && self
+                .motion
+                .iter()
+                .all(|value| value.is_finite() && (0.0..=2.0).contains(value))
+            && self
+                .colors
+                .iter()
+                .flatten()
+                .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
+            && self
+                .sharpness
+                .iter()
+                .all(|value| value.is_finite() && *value >= 0.0)
+    }
+}
+
 #[tauri::command]
-pub(crate) async fn storyboard_motion(
+pub(crate) async fn storyboard_frame_trace(
     asset_id: String,
     start_frame: i64,
     end_frame: i64,
     task_id: String,
     state: tauri::State<'_, AppState>,
-) -> CommandResult<Vec<f64>> {
+) -> CommandResult<FrameTraceData> {
     let source = frame_trace_source(&asset_id, start_frame, end_frame, &state)?;
-    let FrameTraceSource {
-        frame_count,
-        stream_index,
-        frame_rate,
-        ..
-    } = source;
-    if frame_count == 1 {
-        return Ok(Vec::new());
-    }
     let preferences = preferences_clone(&state)?;
     let task = register_task(&task_id, &state)?;
-    // Match by frame number after shifting one branch, independent of source timestamps.
-    let filter = format!(
-        "[0:{stream_index}]trim=end_frame={frame_count},scale=96:54:flags=area,format=gbrp,split=2[a][b];\
-         [a]trim=start_frame=1,setpts=N/TB[current];\
-         [b]trim=end_frame={},setpts=N/TB[previous];\
-         [current][previous]ssim=stats_file=-:shortest=1[out]",
-        frame_count - 1
-    );
-    let mut args = vec!["-v".into(), "error".into(), "-nostdin".into()];
-    append_ffmpeg_processing_thread_args(&mut args, 2);
-    args.extend([
-        "-ss".into(),
-        format!("{:.9}", start_frame as f64 / frame_rate),
-        "-i".into(),
-        source.path,
-        "-filter_complex".into(),
-        filter,
-        "-map".into(),
-        "[out]".into(),
-        "-frames:v".into(),
-        (frame_count - 1).to_string(),
-        "-fps_mode".into(),
-        "passthrough".into(),
-        "-f".into(),
-        "null".into(),
-        "-".into(),
-    ]);
-    let output = run_output_with_timeout(
-        &ffmpeg_program(&preferences),
-        &args,
-        &state,
-        &task_id,
-        task.cancel.clone(),
-        Duration::from_secs(180),
-    )
-    .await?;
-    let values = parse_motion_stats(&output)?;
-    if values.len() as i64 != frame_count - 1 {
-        return Err(app_error(
-            ErrorCode::StoryboardFrameDecodeFailed,
-            format!(
-                "Expected {} motion samples, received {}",
-                frame_count - 1,
-                values.len()
-            ),
-        ));
-    }
-    Ok(values)
-}
-
-#[tauri::command]
-pub(crate) async fn storyboard_frame_colors(
-    asset_id: String,
-    start_frame: i64,
-    end_frame: i64,
-    task_id: String,
-    state: tauri::State<'_, AppState>,
-) -> CommandResult<Vec<[f64; 4]>> {
-    let source = frame_trace_source(&asset_id, start_frame, end_frame, &state)?;
-    decode_frame_trace_rgb(source, start_frame, task_id, &state, mean_frame_colors).await
-}
-
-#[tauri::command]
-pub(crate) async fn storyboard_frame_sharpness(
-    asset_id: String,
-    start_frame: i64,
-    end_frame: i64,
-    task_id: String,
-    state: tauri::State<'_, AppState>,
-) -> CommandResult<Vec<f64>> {
-    let source = frame_trace_source(&asset_id, start_frame, end_frame, &state)?;
-    decode_frame_trace_rgb(
-        source,
+    let cache = FrameTraceCache::new(
+        &preferences,
+        &source.fingerprint,
+        source.stream_index,
+        source.frame_rate,
         start_frame,
-        task_id,
-        &state,
-        normalized_frame_sharpness,
-    )
+        end_frame,
+    );
+    let lock = cache.generation_lock();
+    let mut acquisition = Box::pin(lock.lock());
+    let _guard = loop {
+        match tokio::time::timeout(Duration::from_millis(120), acquisition.as_mut()).await {
+            Ok(guard) => break guard,
+            Err(_) => task.check_cancelled()?,
+        }
+    };
+    task.check_cancelled()?;
+    let lookup = cache.clone();
+    let cached = tokio::task::spawn_blocking(move || lookup.read())
+        .await
+        .map_err(|error| {
+            app_error(
+                ErrorCode::BlockingTaskFailed,
+                format!("Frame trace cache read failed: {error}"),
+            )
+        })?;
+    task.check_cancelled()?;
+    if let Some(data) = cached {
+        return Ok(data);
+    }
+    let data = decode_frame_trace(source, start_frame, &task, &state, &preferences).await?;
+    task.check_cancelled()?;
+    // A full cache file is published before releasing the per-range generation lock.
+    let (data, write_result) = tokio::task::spawn_blocking(move || {
+        let written = cache.write(&data);
+        (data, written)
+    })
     .await
+    .map_err(|error| {
+        app_error(
+            ErrorCode::BlockingTaskFailed,
+            format!("Frame trace cache write task failed: {error}"),
+        )
+    })?;
+    if let Err(error) = write_result {
+        tracing::warn!(detail = %error, "frame trace cache write failed");
+    }
+    task.check_cancelled()?;
+    Ok(data)
 }
 
-async fn decode_frame_trace_rgb<T: Send>(
-    source: FrameTraceSource,
-    start_frame: i64,
-    task_id: String,
-    state: &tauri::State<'_, AppState>,
-    analyze: fn(&[u8]) -> T,
-) -> AppResult<Vec<T>> {
-    let preferences = preferences_clone(state)?;
-    let task = register_task(&task_id, state)?;
+struct TraceTemporaryDirectory(PathBuf);
+
+impl TraceTemporaryDirectory {
+    fn new() -> AppResult<Self> {
+        let path = std::env::temp_dir().join(format!("linecut-frame-trace-{}", Uuid::new_v4()));
+        fs::create_dir(&path).map_err(|error| {
+            app_error(
+                ErrorCode::FrameTraceCacheWriteFailed,
+                format!("Failed to create frame trace workspace: {error}"),
+            )
+        })?;
+        Ok(Self(path))
+    }
+}
+
+impl Drop for TraceTemporaryDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn frame_trace_args(source: &FrameTraceSource, start_frame: i64) -> Vec<String> {
+    let base = format!(
+        "[0:{}]trim=end_frame={},scale=96:54:flags=area,format=gbrp",
+        source.stream_index, source.frame_count
+    );
+    // Keep FFmpeg's RGB SSIM algorithm; both outputs share the same decoder and scaling.
+    let filter = if source.frame_count > 1 {
+        format!(
+            "{base},split=3[rgb][a][b];[rgb]format=rgb24,setpts=N/TB[rgbout];\
+            [a]trim=start_frame=1,setpts=N/TB[current];\
+            [b]trim=end_frame={},setpts=N/TB[previous];\
+            [current][previous]ssim=stats_file=motion.stats:shortest=1[out]",
+            source.frame_count - 1
+        )
+    } else {
+        format!("{base},format=rgb24[rgbout]")
+    };
     let mut args = vec!["-v".into(), "error".into(), "-nostdin".into()];
     append_ffmpeg_processing_thread_args(&mut args, 2);
     args.extend([
         "-ss".into(),
         format!("{:.9}", start_frame as f64 / source.frame_rate),
         "-i".into(),
-        source.path,
+        source.path.clone(),
+        "-filter_complex".into(),
+        filter,
         "-map".into(),
-        format!("0:{}", source.stream_index),
-        "-vf".into(),
-        "scale=96:54:flags=area,format=rgb24".into(),
+        "[rgbout]".into(),
         "-frames:v".into(),
         source.frame_count.to_string(),
         "-fps_mode".into(),
         "passthrough".into(),
         "-c:v".into(),
         "rawvideo".into(),
+        "-threads:v".into(),
+        "1".into(),
         "-f".into(),
         "rawvideo".into(),
         "pipe:1".into(),
     ]);
-    let mut child = hidden_command(&ffmpeg_program(&preferences))
-        .args(args)
+    if source.frame_count > 1 {
+        args.extend([
+            "-map".into(),
+            "[out]".into(),
+            "-frames:v".into(),
+            (source.frame_count - 1).to_string(),
+            "-fps_mode".into(),
+            "passthrough".into(),
+            "-f".into(),
+            "null".into(),
+            "-".into(),
+        ]);
+    }
+    args
+}
+
+async fn decode_frame_trace(
+    mut source: FrameTraceSource,
+    start_frame: i64,
+    task: &TaskGuard<'_>,
+    state: &tauri::State<'_, AppState>,
+    preferences: &Preferences,
+) -> AppResult<FrameTraceData> {
+    // The child uses a temporary working directory for its small SSIM statistics file.
+    source.path = std::path::absolute(&source.path)
+        .map_err(|error| {
+            app_error(
+                ErrorCode::FileNotFound,
+                format!("Frame trace source is unavailable: {error}"),
+            )
+        })?
+        .to_string_lossy()
+        .into_owned();
+    let temporary = TraceTemporaryDirectory::new()?;
+    let program = ffmpeg_program(preferences);
+    let program_path = Path::new(&program);
+    let program = if program_path.is_relative() && program_path.components().count() > 1 {
+        std::path::absolute(program_path)
+            .map_err(|error| app_error(ErrorCode::ExternalToolStartFailed, error.to_string()))?
+            .to_string_lossy()
+            .into_owned()
+    } else {
+        program
+    };
+    task.check_cancelled()?;
+    let mut child = hidden_command(&program)
+        .current_dir(&temporary.0)
+        .args(frame_trace_args(&source, start_frame))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -217,17 +281,21 @@ async fn decode_frame_trace_rgb<T: Send>(
         )
     })?;
     let process_id = Uuid::new_v4().to_string();
-    register_running_ffmpeg(
+    if let Err(error) = register_running_ffmpeg(
         state,
         process_id.clone(),
-        task_id,
+        task.task_id.clone(),
         task.cancel.clone(),
         child.id(),
         Vec::new(),
-    )?;
+    ) {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+        return Err(error);
+    }
     let decoded = tokio::time::timeout(Duration::from_secs(180), async {
         futures::try_join!(
-            read_frame_trace(&mut stdout, source.frame_count, analyze),
+            read_frame_trace(&mut stdout, source.frame_count),
             async {
                 let mut diagnostics = Vec::new();
                 stderr.read_to_end(&mut diagnostics).await?;
@@ -237,9 +305,13 @@ async fn decode_frame_trace_rgb<T: Send>(
         )
     })
     .await;
+    if !matches!(&decoded, Ok(Ok(_))) {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+    }
     clear_running_ffmpeg(state, &process_id);
     task.check_cancelled()?;
-    let (values, diagnostics, status) = decoded
+    let (mut values, diagnostics, status) = decoded
         .map_err(|_| {
             app_error(
                 ErrorCode::ExternalToolExecutionFailed,
@@ -256,19 +328,44 @@ async fn decode_frame_trace_rgb<T: Send>(
             ),
         ));
     }
+    if source.frame_count > 1 {
+        let stats_path = temporary.0.join("motion.stats");
+        values.motion = tokio::task::spawn_blocking(move || {
+            let stats = fs::read_to_string(stats_path).map_err(|error| {
+                app_error(
+                    ErrorCode::ExternalToolOutputInvalid,
+                    format!("Missing SSIM statistics: {error}"),
+                )
+            })?;
+            parse_motion_stats(&stats)
+        })
+        .await
+        .map_err(|error| app_error(ErrorCode::BlockingTaskFailed, error.to_string()))??;
+    }
+    if !values.is_valid(source.frame_count as usize) {
+        return Err(app_error(
+            ErrorCode::StoryboardFrameDecodeFailed,
+            "Incomplete frame trace output",
+        ));
+    }
     Ok(values)
 }
 
-async fn read_frame_trace<T>(
+async fn read_frame_trace(
     reader: &mut (impl AsyncReadExt + Unpin),
     frame_count: i64,
-    analyze: fn(&[u8]) -> T,
-) -> std::io::Result<Vec<T>> {
+) -> std::io::Result<FrameTraceData> {
     let mut frame = vec![0; COLOR_FRAME_BYTES];
-    let mut values = Vec::new();
+    let mut gray = Vec::with_capacity(TRACE_WIDTH * TRACE_HEIGHT);
+    let mut values = FrameTraceData {
+        motion: Vec::new(),
+        colors: Vec::new(),
+        sharpness: Vec::new(),
+    };
     for _ in 0..frame_count {
         reader.read_exact(&mut frame).await?;
-        values.push(analyze(&frame));
+        values.colors.push(mean_frame_colors(&frame));
+        values.sharpness.push(frame_sharpness(&frame, &mut gray));
     }
     Ok(values)
 }
@@ -285,13 +382,16 @@ fn mean_frame_colors(frame: &[u8]) -> [f64; 4] {
     [red, green, blue, 0.30 * red + 0.59 * green + 0.11 * blue]
 }
 
+#[cfg(test)]
 fn normalized_frame_sharpness(frame: &[u8]) -> f64 {
-    let gray: Vec<f64> = frame
-        .chunks_exact(3)
-        .map(|pixel| {
-            0.30 * f64::from(pixel[0]) + 0.59 * f64::from(pixel[1]) + 0.11 * f64::from(pixel[2])
-        })
-        .collect();
+    frame_sharpness(frame, &mut Vec::new())
+}
+
+fn frame_sharpness(frame: &[u8], gray: &mut Vec<f64>) -> f64 {
+    gray.clear();
+    gray.extend(frame.chunks_exact(3).map(|pixel| {
+        0.30 * f64::from(pixel[0]) + 0.59 * f64::from(pixel[1]) + 0.11 * f64::from(pixel[2])
+    }));
     let mean_gray = gray.iter().sum::<f64>() / gray.len() as f64;
     if mean_gray == 0.0 {
         return 0.0;
@@ -374,16 +474,13 @@ mod tests {
         futures::executor::block_on(async {
             let mut frames = vec![0; COLOR_FRAME_BYTES];
             frames.extend(vec![255; COLOR_FRAME_BYTES]);
-            let values = read_frame_trace(&mut frames.as_slice(), 2, mean_frame_colors)
+            let values = read_frame_trace(&mut frames.as_slice(), 2).await.unwrap();
+            assert_eq!(values.colors[0], [0.0; 4]);
+            assert_eq!(&values.colors[1][..3], &[1.0; 3]);
+            assert_eq!(values.sharpness, vec![0.0; 2]);
+            assert!(read_frame_trace(&mut &frames[..frames.len() - 1], 2)
                 .await
-                .unwrap();
-            assert_eq!(values[0], [0.0; 4]);
-            assert_eq!(&values[1][..3], &[1.0; 3]);
-            assert!(
-                read_frame_trace(&mut &frames[..frames.len() - 1], 2, mean_frame_colors)
-                    .await
-                    .is_err()
-            );
+                .is_err());
         });
     }
 
@@ -411,17 +508,12 @@ mod tests {
     fn sharpness_stream_returns_a_sample_for_single_frame() {
         futures::executor::block_on(async {
             let frame = vec![0; COLOR_FRAME_BYTES];
-            let values = read_frame_trace(&mut frame.as_slice(), 1, normalized_frame_sharpness)
+            let values = read_frame_trace(&mut frame.as_slice(), 1).await.unwrap();
+            assert_eq!(values.sharpness, vec![0.0]);
+            assert!(values.is_valid(1));
+            assert!(read_frame_trace(&mut &frame[..frame.len() - 1], 1)
                 .await
-                .unwrap();
-            assert_eq!(values, vec![0.0]);
-            assert!(read_frame_trace(
-                &mut &frame[..frame.len() - 1],
-                1,
-                normalized_frame_sharpness
-            )
-            .await
-            .is_err());
+                .is_err());
         });
     }
 }

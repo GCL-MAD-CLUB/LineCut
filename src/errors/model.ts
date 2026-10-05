@@ -41,6 +41,7 @@ export type OperationKey =
   | "storage.recentPaths"
   | "storyboard.detect"
   | "storyboard.motion"
+  | "storyboard.trace"
   | "storyboard.colors"
   | "storyboard.sharpness"
   | "task.cancel"

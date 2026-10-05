@@ -1608,7 +1608,7 @@ fn write_media_thumbnail_cache(
     write_private_cache(&layout.cache_path, fingerprint, CACHE_KEY_CONTEXT, cached)
 }
 
-fn read_private_cache<Value>(path: &Path, key: &str, context: &[u8]) -> Option<Value>
+pub(super) fn read_private_cache<Value>(path: &Path, key: &str, context: &[u8]) -> Option<Value>
 where
     Value: for<'de> Deserialize<'de>,
 {
@@ -1668,7 +1668,7 @@ where
     }
 }
 
-fn write_private_cache<Value>(
+pub(super) fn write_private_cache<Value>(
     path: &Path,
     key: &str,
     context: &[u8],
@@ -1739,7 +1739,7 @@ fn transform_private_payload(bytes: &[u8], key: &str, context: &[u8]) -> Vec<u8>
     transformed
 }
 
-fn hash_name(context: &[u8], value: &[u8]) -> String {
+pub(super) fn hash_name(context: &[u8], value: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(context);
     hasher.update(value);

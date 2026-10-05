@@ -8,6 +8,7 @@ mod import_copy;
 mod media;
 mod media_ingest;
 mod motion;
+mod motion_cache;
 mod native_drag_drop;
 mod proxy;
 mod rolling_pcm;

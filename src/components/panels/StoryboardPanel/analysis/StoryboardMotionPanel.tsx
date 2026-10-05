@@ -1,5 +1,13 @@
 import { ChevronDown, ChevronsUpDown, RotateCw } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+  type PointerEvent,
+} from "react";
 import { createPortal } from "react-dom";
 import { invokeCommand, runOperation } from "../../../../errors";
 import type { StoryboardShot } from "../../../../types";
@@ -24,6 +32,12 @@ type FrameColors = [number, number, number, number];
 type TraceData =
   { mode: "motion" | "sharpness"; values: number[] } | { mode: "colors"; values: FrameColors[] };
 
+interface FrameTraceData {
+  motion: number[];
+  colors: FrameColors[];
+  sharpness: number[];
+}
+
 const traceModes = [
   { mode: "motion", label: "动势" },
   { mode: "colors", label: "四色" },
@@ -38,7 +52,7 @@ const colorLayers = [
 
 interface TraceResult {
   key: string;
-  data: TraceData | null;
+  data: FrameTraceData | null;
   failed: boolean;
 }
 
@@ -55,10 +69,12 @@ export function StoryboardMotionPanel({
   const [modeMenu, setModeMenu] = useState<{ x: number; y: number } | null>(null);
   const [retry, setRetry] = useState(0);
   const [result, setResult] = useState<TraceResult | null>(null);
-  const cache = useRef(new Map<string, TraceData>());
+  const cache = useRef(new Map<string, FrameTraceData>());
+  const chartRef = useRef<SVGSVGElement | null>(null);
+  const [pixelWidth, setPixelWidth] = useState(1);
   const startFrame = shot?.start_frame;
   const endFrame = shot?.end_frame;
-  const key = JSON.stringify([assetId, fingerprint, startFrame, endFrame, mode]);
+  const key = JSON.stringify([assetId, fingerprint, startFrame, endFrame]);
   const [hover, setHover] = useState<{ key: string; progress: number } | null>(null);
   const hoverSession = useRef<{ sessionId: string; assetId: string; frame: number } | null>(null);
   useCloseOnOutsidePointer(Boolean(modeMenu), () => setModeMenu(null));
@@ -86,7 +102,24 @@ export function StoryboardMotionPanel({
       window.removeEventListener("blur", finishHover);
       finishHover();
     };
-  }, [key, open, visible]);
+  }, [key, mode, open, visible]);
+
+  useLayoutEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !visible || !open) return;
+    const measure = () =>
+      setPixelWidth(
+        Math.max(1, Math.ceil((chart.getBoundingClientRect().width - 2) * window.devicePixelRatio)),
+      );
+    const observer = new ResizeObserver(measure);
+    observer.observe(chart);
+    window.addEventListener("resize", measure);
+    measure();
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [visible, open]);
 
   function chartProgress(event: { currentTarget: SVGSVGElement; clientX: number }) {
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -135,6 +168,8 @@ export function StoryboardMotionPanel({
     if (!visible || !open || !assetId || startFrame === undefined || endFrame === undefined) return;
     const cached = cache.current.get(key);
     if (cached) {
+      cache.current.delete(key);
+      cache.current.set(key, cached);
       setResult({ key, data: cached, failed: false });
       return;
     }
@@ -144,40 +179,28 @@ export function StoryboardMotionPanel({
     setResult({ key, data: null, failed: false });
     const timer = window.setTimeout(() => {
       started = true;
-      void runOperation<TraceData>(
-        mode === "motion"
-          ? "storyboard.motion"
-          : mode === "sharpness"
-            ? "storyboard.sharpness"
-            : "storyboard.colors",
-        async () =>
-          mode !== "colors"
-            ? {
-                mode,
-                values: await invokeCommand<number[]>(
-                  mode === "motion" ? "storyboard_motion" : "storyboard_frame_sharpness",
-                  {
-                    assetId,
-                    startFrame,
-                    endFrame,
-                    taskId,
-                  },
-                ),
-              }
-            : {
-                mode,
-                values: await invokeCommand<FrameColors[]>("storyboard_frame_colors", {
-                  assetId,
-                  startFrame,
-                  endFrame,
-                  taskId,
-                }),
-              },
+      void runOperation<FrameTraceData>("storyboard.trace", () =>
+        invokeCommand<FrameTraceData>("storyboard_frame_trace", {
+          assetId,
+          startFrame,
+          endFrame,
+          taskId,
+        }),
       ).then((outcome) => {
         if (disposed) return;
         if (outcome.status === "success") {
           cache.current.set(key, outcome.value);
-          if (cache.current.size > 8) cache.current.delete(cache.current.keys().next().value!);
+          let bytes = Array.from(cache.current.values()).reduce(
+            (total, entry) =>
+              total + (entry.motion.length + entry.colors.length * 4 + entry.sharpness.length) * 8,
+            0,
+          );
+          while (cache.current.size > 8 || bytes > 8 * 1024 * 1024) {
+            const oldest = cache.current.keys().next().value!;
+            const entry = cache.current.get(oldest)!;
+            bytes -= (entry.motion.length + entry.colors.length * 4 + entry.sharpness.length) * 8;
+            cache.current.delete(oldest);
+          }
           setResult({ key, data: outcome.value, failed: false });
         } else {
           setResult({ key, data: null, failed: true });
@@ -191,30 +214,41 @@ export function StoryboardMotionPanel({
         void runOperation("task.cancel", () => invokeCommand("cancel_task", { taskId }));
       }
     };
-  }, [visible, open, assetId, startFrame, endFrame, key, retry, mode]);
+  }, [visible, open, assetId, startFrame, endFrame, key, retry]);
 
   const current = result?.key === key ? result : null;
-  const data = current?.data;
+  const data = useMemo<TraceData | null>(() => {
+    if (!current?.data) return null;
+    return mode === "colors"
+      ? { mode, values: current.data.colors }
+      : { mode, values: current.data[mode] };
+  }, [current?.data, mode]);
   const curvePath = useMemo(
-    () => motionCurvePath(data?.mode === "motion" ? data.values : []),
-    [data],
+    () => motionCurvePath(data?.mode === "motion" ? data.values : [], pixelWidth),
+    [data, pixelWidth],
   );
   const colorPaths = useMemo(
     () =>
       data?.mode === "colors"
         ? colorLayers.map(({ channel, name }) => ({
             name,
-            path: frameColorCurvePath(data.values.map((frame) => frame[channel])),
+            path: frameColorCurvePath(
+              data.values.map((frame) => frame[channel]),
+              pixelWidth,
+            ),
           }))
         : [],
-    [data],
+    [data, pixelWidth],
   );
   const sharpnessPath = useMemo(() => {
     if (data?.mode !== "sharpness") return "";
     // Fit the unbounded score to the chart; cached values keep their original units.
     const maximum = data.values.reduce((max, value) => Math.max(max, value), 0) || 1;
-    return frameColorCurvePath(data.values.map((value) => value / maximum));
-  }, [data]);
+    return frameColorCurvePath(
+      data.values.map((value) => value / maximum),
+      pixelWidth,
+    );
+  }, [data, pixelWidth]);
   const modeLabel = traceModes.find((option) => option.mode === mode)!.label;
   const hoverProgress = hover?.key === key ? hover.progress : null;
   const playbackProgress =
@@ -277,6 +311,7 @@ export function StoryboardMotionPanel({
           aria-busy={Boolean(shot && assetId && !current?.failed && !data)}
         >
           <svg
+            ref={chartRef}
             viewBox="0 0 1 2"
             preserveAspectRatio="none"
             role="img"

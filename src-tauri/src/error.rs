@@ -122,6 +122,7 @@ define_error_codes! {
     SubtitleReadFailed => ("SUBTITLE_READ_FAILED", Io, true),
     ThumbnailCacheReadFailed => ("THUMBNAIL_CACHE_READ_FAILED", Io, true),
     ThumbnailCacheWriteFailed => ("THUMBNAIL_CACHE_WRITE_FAILED", Io, true),
+    FrameTraceCacheWriteFailed => ("FRAME_TRACE_CACHE_WRITE_FAILED", Io, true),
     ProxyWriteFailed => ("PROXY_WRITE_FAILED", Io, true),
     PcmWindowInvalid => ("PCM_WINDOW_INVALID", Validation, false),
     StoryboardMotionRangeInvalid => ("STORYBOARD_MOTION_RANGE_INVALID", Validation, false),
