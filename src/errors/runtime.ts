@@ -270,6 +270,7 @@ const operationPolicies = {
   "storyboard.motion": silent("计算动势图失败"),
   "media.histogram": silent("读取当前帧直方图失败"),
   "storyboard.colors": silent("计算四色帧迹图失败"),
+  "storyboard.sharpness": silent("计算清晰度帧迹图失败"),
   "task.cancel": modal("取消任务失败"),
   "task.listener": modal("任务监听失败"),
   "thumbnail.subtitle.cache.read": silent("读取字幕缩略图缓存失败"),

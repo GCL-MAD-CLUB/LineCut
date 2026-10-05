@@ -42,6 +42,7 @@ export type OperationKey =
   | "storyboard.detect"
   | "storyboard.motion"
   | "storyboard.colors"
+  | "storyboard.sharpness"
   | "task.cancel"
   | "task.listener"
   | "thumbnail.subtitle.cache.read"

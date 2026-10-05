@@ -1,6 +1,8 @@
 use super::*;
 
-const COLOR_FRAME_BYTES: usize = 96 * 54 * 3;
+const TRACE_WIDTH: usize = 96;
+const TRACE_HEIGHT: usize = 54;
+const COLOR_FRAME_BYTES: usize = TRACE_WIDTH * TRACE_HEIGHT * 3;
 
 struct FrameTraceSource {
     path: String,
@@ -144,8 +146,37 @@ pub(crate) async fn storyboard_frame_colors(
     state: tauri::State<'_, AppState>,
 ) -> CommandResult<Vec<[f64; 4]>> {
     let source = frame_trace_source(&asset_id, start_frame, end_frame, &state)?;
-    let preferences = preferences_clone(&state)?;
-    let task = register_task(&task_id, &state)?;
+    decode_frame_trace_rgb(source, start_frame, task_id, &state, mean_frame_colors).await
+}
+
+#[tauri::command]
+pub(crate) async fn storyboard_frame_sharpness(
+    asset_id: String,
+    start_frame: i64,
+    end_frame: i64,
+    task_id: String,
+    state: tauri::State<'_, AppState>,
+) -> CommandResult<Vec<f64>> {
+    let source = frame_trace_source(&asset_id, start_frame, end_frame, &state)?;
+    decode_frame_trace_rgb(
+        source,
+        start_frame,
+        task_id,
+        &state,
+        normalized_frame_sharpness,
+    )
+    .await
+}
+
+async fn decode_frame_trace_rgb<T: Send>(
+    source: FrameTraceSource,
+    start_frame: i64,
+    task_id: String,
+    state: &tauri::State<'_, AppState>,
+    analyze: fn(&[u8]) -> T,
+) -> AppResult<Vec<T>> {
+    let preferences = preferences_clone(state)?;
+    let task = register_task(&task_id, state)?;
     let mut args = vec!["-v".into(), "error".into(), "-nostdin".into()];
     append_ffmpeg_processing_thread_args(&mut args, 2);
     args.extend([
@@ -176,18 +207,18 @@ pub(crate) async fn storyboard_frame_colors(
     let mut stdout = child.stdout.take().ok_or_else(|| {
         app_error(
             ErrorCode::ExternalToolOutputUnavailable,
-            "Missing color frame output",
+            "Missing frame trace output",
         )
     })?;
     let mut stderr = child.stderr.take().ok_or_else(|| {
         app_error(
             ErrorCode::ExternalToolOutputUnavailable,
-            "Missing color frame diagnostics",
+            "Missing frame trace diagnostics",
         )
     })?;
     let process_id = Uuid::new_v4().to_string();
     register_running_ffmpeg(
-        &state,
+        state,
         process_id.clone(),
         task_id,
         task.cancel.clone(),
@@ -196,7 +227,7 @@ pub(crate) async fn storyboard_frame_colors(
     )?;
     let decoded = tokio::time::timeout(Duration::from_secs(180), async {
         futures::try_join!(
-            read_frame_colors(&mut stdout, source.frame_count),
+            read_frame_trace(&mut stdout, source.frame_count, analyze),
             async {
                 let mut diagnostics = Vec::new();
                 stderr.read_to_end(&mut diagnostics).await?;
@@ -206,13 +237,13 @@ pub(crate) async fn storyboard_frame_colors(
         )
     })
     .await;
-    clear_running_ffmpeg(&state, &process_id);
+    clear_running_ffmpeg(state, &process_id);
     task.check_cancelled()?;
     let (values, diagnostics, status) = decoded
         .map_err(|_| {
             app_error(
                 ErrorCode::ExternalToolExecutionFailed,
-                "Color frame extraction timed out",
+                "Frame trace extraction timed out",
             )
         })?
         .map_err(|error| app_error(ErrorCode::StoryboardFrameDecodeFailed, error.to_string()))?;
@@ -220,7 +251,7 @@ pub(crate) async fn storyboard_frame_colors(
         return Err(app_error(
             ErrorCode::ExternalToolExecutionFailed,
             format!(
-                "Color frame extraction failed: {}",
+                "Frame trace extraction failed: {}",
                 String::from_utf8_lossy(&diagnostics)
             ),
         ));
@@ -228,15 +259,16 @@ pub(crate) async fn storyboard_frame_colors(
     Ok(values)
 }
 
-async fn read_frame_colors(
+async fn read_frame_trace<T>(
     reader: &mut (impl AsyncReadExt + Unpin),
     frame_count: i64,
-) -> std::io::Result<Vec<[f64; 4]>> {
+    analyze: fn(&[u8]) -> T,
+) -> std::io::Result<Vec<T>> {
     let mut frame = vec![0; COLOR_FRAME_BYTES];
     let mut values = Vec::new();
     for _ in 0..frame_count {
         reader.read_exact(&mut frame).await?;
-        values.push(mean_frame_colors(&frame));
+        values.push(analyze(&frame));
     }
     Ok(values)
 }
@@ -251,6 +283,38 @@ fn mean_frame_colors(frame: &[u8]) -> [f64; 4] {
     let divisor = (frame.len() / 3) as f64 * 255.0;
     let [red, green, blue] = sums.map(|sum| sum as f64 / divisor);
     [red, green, blue, 0.30 * red + 0.59 * green + 0.11 * blue]
+}
+
+fn normalized_frame_sharpness(frame: &[u8]) -> f64 {
+    let gray: Vec<f64> = frame
+        .chunks_exact(3)
+        .map(|pixel| {
+            0.30 * f64::from(pixel[0]) + 0.59 * f64::from(pixel[1]) + 0.11 * f64::from(pixel[2])
+        })
+        .collect();
+    let mean_gray = gray.iter().sum::<f64>() / gray.len() as f64;
+    if mean_gray == 0.0 {
+        return 0.0;
+    }
+    let mut sum = 0.0;
+    let mut square_sum = 0.0;
+    // Use only interior pixels so artificial image borders do not add sharpness.
+    for y in 1..TRACE_HEIGHT - 1 {
+        for x in 1..TRACE_WIDTH - 1 {
+            let index = y * TRACE_WIDTH + x;
+            let laplacian = gray[index - TRACE_WIDTH]
+                + gray[index + TRACE_WIDTH]
+                + gray[index - 1]
+                + gray[index + 1]
+                - 4.0 * gray[index];
+            sum += laplacian;
+            square_sum += laplacian * laplacian;
+        }
+    }
+    let count = ((TRACE_WIDTH - 2) * (TRACE_HEIGHT - 2)) as f64;
+    let mean_laplacian = sum / count;
+    let variance = (square_sum / count - mean_laplacian * mean_laplacian).max(0.0);
+    variance / (mean_gray * mean_gray)
 }
 
 fn parse_motion_stats(output: &str) -> AppResult<Vec<f64>> {
@@ -310,12 +374,54 @@ mod tests {
         futures::executor::block_on(async {
             let mut frames = vec![0; COLOR_FRAME_BYTES];
             frames.extend(vec![255; COLOR_FRAME_BYTES]);
-            let values = read_frame_colors(&mut frames.as_slice(), 2).await.unwrap();
+            let values = read_frame_trace(&mut frames.as_slice(), 2, mean_frame_colors)
+                .await
+                .unwrap();
             assert_eq!(values[0], [0.0; 4]);
             assert_eq!(&values[1][..3], &[1.0; 3]);
-            assert!(read_frame_colors(&mut &frames[..frames.len() - 1], 2)
+            assert!(
+                read_frame_trace(&mut &frames[..frames.len() - 1], 2, mean_frame_colors)
+                    .await
+                    .is_err()
+            );
+        });
+    }
+
+    #[test]
+    fn sharpness_of_uniform_frames_is_zero_including_black() {
+        for brightness in [0, 1, 64, 255] {
+            assert!(normalized_frame_sharpness(&vec![brightness; COLOR_FRAME_BYTES]).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn sharpness_uses_brightness_squared_without_clamping() {
+        let mut frame = vec![0; COLOR_FRAME_BYTES];
+        let center = (TRACE_HEIGHT / 2 * TRACE_WIDTH + TRACE_WIDTH / 2) * 3;
+        frame[center..center + 3].fill(60);
+        let score = normalized_frame_sharpness(&frame);
+        let expected = 20.0 * (TRACE_WIDTH * TRACE_HEIGHT).pow(2) as f64
+            / ((TRACE_WIDTH - 2) * (TRACE_HEIGHT - 2)) as f64;
+        assert!((score - expected).abs() < 1e-8);
+        frame[center..center + 3].fill(120);
+        assert!((normalized_frame_sharpness(&frame) - score).abs() < 1e-8);
+    }
+
+    #[test]
+    fn sharpness_stream_returns_a_sample_for_single_frame() {
+        futures::executor::block_on(async {
+            let frame = vec![0; COLOR_FRAME_BYTES];
+            let values = read_frame_trace(&mut frame.as_slice(), 1, normalized_frame_sharpness)
                 .await
-                .is_err());
+                .unwrap();
+            assert_eq!(values, vec![0.0]);
+            assert!(read_frame_trace(
+                &mut &frame[..frame.len() - 1],
+                1,
+                normalized_frame_sharpness
+            )
+            .await
+            .is_err());
         });
     }
 }

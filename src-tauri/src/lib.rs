@@ -961,6 +961,7 @@ pub fn run() {
             generate_storyboard_thumbnails,
             storyboard_motion,
             storyboard_frame_colors,
+            storyboard_frame_sharpness,
             demux_media_streams,
             decode_audio_pcm_window,
             generate_proxy,

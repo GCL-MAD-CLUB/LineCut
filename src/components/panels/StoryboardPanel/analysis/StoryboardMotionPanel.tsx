@@ -19,13 +19,15 @@ interface Props {
   onSeekFrame: (frame: number) => void;
 }
 
-type TraceMode = "motion" | "colors";
+type TraceMode = "motion" | "colors" | "sharpness";
 type FrameColors = [number, number, number, number];
-type TraceData = { mode: "motion"; values: number[] } | { mode: "colors"; values: FrameColors[] };
+type TraceData =
+  { mode: "motion" | "sharpness"; values: number[] } | { mode: "colors"; values: FrameColors[] };
 
 const traceModes = [
   { mode: "motion", label: "动势" },
   { mode: "colors", label: "四色" },
+  { mode: "sharpness", label: "清晰度" },
 ] as const;
 const colorLayers = [
   { channel: 2, name: "blue" },
@@ -143,17 +145,24 @@ export function StoryboardMotionPanel({
     const timer = window.setTimeout(() => {
       started = true;
       void runOperation<TraceData>(
-        mode === "motion" ? "storyboard.motion" : "storyboard.colors",
+        mode === "motion"
+          ? "storyboard.motion"
+          : mode === "sharpness"
+            ? "storyboard.sharpness"
+            : "storyboard.colors",
         async () =>
-          mode === "motion"
+          mode !== "colors"
             ? {
                 mode,
-                values: await invokeCommand<number[]>("storyboard_motion", {
-                  assetId,
-                  startFrame,
-                  endFrame,
-                  taskId,
-                }),
+                values: await invokeCommand<number[]>(
+                  mode === "motion" ? "storyboard_motion" : "storyboard_frame_sharpness",
+                  {
+                    assetId,
+                    startFrame,
+                    endFrame,
+                    taskId,
+                  },
+                ),
               }
             : {
                 mode,
@@ -200,6 +209,13 @@ export function StoryboardMotionPanel({
         : [],
     [data],
   );
+  const sharpnessPath = useMemo(() => {
+    if (data?.mode !== "sharpness") return "";
+    // Fit the unbounded score to the chart; cached values keep their original units.
+    const maximum = data.values.reduce((max, value) => Math.max(max, value), 0) || 1;
+    return frameColorCurvePath(data.values.map((value) => value / maximum));
+  }, [data]);
+  const modeLabel = traceModes.find((option) => option.mode === mode)!.label;
   const hoverProgress = hover?.key === key ? hover.progress : null;
   const playbackProgress =
     shot &&
@@ -240,9 +256,7 @@ export function StoryboardMotionPanel({
             setModeMenu({ x: bounds.left, y: bounds.bottom });
           }}
         >
-          <span className="storyboard-keyword-dropdown-value">
-            {mode === "motion" ? "动势" : "四色"}
-          </span>
+          <span className="storyboard-keyword-dropdown-value">{modeLabel}</span>
           <span className="storyboard-keyword-dropdown-arrows" aria-hidden="true">
             <ChevronsUpDown />
           </span>
@@ -266,7 +280,7 @@ export function StoryboardMotionPanel({
             viewBox="0 0 1 2"
             preserveAspectRatio="none"
             role="img"
-            aria-label={`当前主选中分镜的${mode === "motion" ? "动势" : "四色"}帧迹图`}
+            aria-label={`当前主选中分镜的${modeLabel}帧迹图`}
             onPointerEnter={updateHover}
             onPointerMove={updateHover}
             onPointerLeave={finishHover}
@@ -277,6 +291,15 @@ export function StoryboardMotionPanel({
               <>
                 <path className="motion-area" d={`${curvePath} L1,2 L0,2 Z`} />
                 <path className="motion-line" d={curvePath} />
+              </>
+            )}
+            {data?.mode === "sharpness" && data.values.length > 0 && (
+              <>
+                <path
+                  className="frame-trace-area frame-trace-sharpness"
+                  d={`${sharpnessPath} L1,2 L0,2 Z`}
+                />
+                <path className="frame-trace-line frame-trace-sharpness" d={sharpnessPath} />
               </>
             )}
             {data?.mode === "colors" && data.values.length > 0 && (

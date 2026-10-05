@@ -703,6 +703,10 @@ body.is-resizing-storyboard-keyword-panel * {
   --frame-trace-color: #bebebe;
 }
 
+.frame-trace-sharpness {
+  --frame-trace-color: #d4bc6b;
+}
+
 .frame-trace-area {
   fill: var(--frame-trace-color);
   fill-opacity: 0.35;
