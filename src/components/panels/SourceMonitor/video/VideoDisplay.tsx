@@ -12,6 +12,8 @@ import { useSourceMonitorState, type MonitorZoomLevel, type ZoomPan } from "../s
 import { TransientVideoPreview, type TransientVideoFrame } from "./TransientVideoPreview";
 import type { FrameHistogram } from "../../../../core/editor/frameHistogram";
 import { useVideoHistogram } from "../histogram/useVideoHistogram";
+import { useVideoFrameTrace } from "../histogram/useVideoFrameTrace";
+import { frameTraceCacheKey } from "../../../../application/media/frameTraceCache";
 
 interface VideoDisplayProps {
   stageRef: RefObject<HTMLDivElement | null>;
@@ -29,6 +31,9 @@ interface VideoDisplayProps {
   onPause: (video: HTMLVideoElement) => void;
   onHistogram: (source: string | null, histogram: FrameHistogram | null) => void;
   histogramEnabled: boolean;
+  traceEnabled: boolean;
+  traceFingerprint?: string;
+  traceAssetId?: string;
 }
 
 interface VideoLayer {
@@ -75,6 +80,9 @@ export function VideoDisplay({
   onPause,
   onHistogram,
   histogramEnabled,
+  traceEnabled,
+  traceFingerprint,
+  traceAssetId,
 }: VideoDisplayProps) {
   const setZoomLevel = useSourceMonitorState((state) => state.setZoomLevel);
   const setZoomPan = useSourceMonitorState((state) => state.setZoomPan);
@@ -128,6 +136,14 @@ export function VideoDisplay({
     (histogram) => onHistogram(layers.displayed?.source ?? null, histogram),
   );
   const bindingsRef = useRef(new Map<number, (video: HTMLVideoElement | null) => void>());
+  useVideoFrameTrace(
+    histogramVideoRef,
+    layers.displayed?.id ?? null,
+    frameRate,
+    traceEnabled && !transientPreview && layers.displayed?.source === requestedSource,
+    () => {},
+    frameTraceCacheKey(layers.displayed?.source ?? "", frameRate, traceFingerprint, traceAssetId),
+  );
   const pendingFrameRef = useRef<{ video: HTMLVideoElement; id: number } | null>(null);
   const pendingRevealRef = useRef<number | null>(null);
   const presentedFrameRef = useRef<{ video: HTMLVideoElement; time: number } | null>(null);

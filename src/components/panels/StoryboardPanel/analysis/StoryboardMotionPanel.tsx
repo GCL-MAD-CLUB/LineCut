@@ -5,16 +5,31 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type MouseEvent,
   type PointerEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import { invokeCommand, runOperation } from "../../../../errors";
+import { runOperation } from "../../../../errors";
+import {
+  decodeBrowserFrameTrace,
+  type FrameTraceData,
+} from "../../../../application/media/browserFrameTrace";
+import {
+  frameTraceCacheKey,
+  getFrameTraceCache,
+} from "../../../../application/media/frameTraceCache";
+import { NativeFrameTraceSession } from "../../../../application/media/nativeFrameTrace";
+import { isTauriRuntime } from "../../../../platform/tauri/runtime";
 import type { StoryboardShot } from "../../../../types";
 import { eventSource } from "../../../../runtime/events/EventHub";
 import { publishEvent } from "../../../../runtime/events/react";
-import { frameColorCurvePath, motionCurvePath, motionHoverFrame } from "./motionCurve";
+import { motionHoverFrame } from "./motionCurve";
 import { PopupMenu, PopupMenuItem, useCloseOnOutsidePointer } from "../../../common/PopupMenu";
+import { usePublishProjection, useStableIdentity } from "../../../../runtime/state/react";
+import { PLAYBACK_TRACE_DEMAND_PROJECTION } from "../../../../runtime/state/contracts";
+import { usePanelInstanceId } from "../../../../runtime/systems/PanelState";
+import { completeTraceSamples, playbackTracePaths } from "./playbackTraceCurve";
 
 const motionEventSource = eventSource("storyboard-motion");
 
@@ -23,20 +38,17 @@ interface Props {
   shot?: StoryboardShot;
   assetId?: string;
   fingerprint?: string;
+  videoSource?: string;
+  frameRate?: number;
   playbackFrame?: number;
+  isPlaying: boolean;
   onSeekFrame: (frame: number) => void;
 }
 
 type TraceMode = "motion" | "colors" | "sharpness";
-type FrameColors = [number, number, number, number];
+type FrameColors = number[];
 type TraceData =
   { mode: "motion" | "sharpness"; values: number[] } | { mode: "colors"; values: FrameColors[] };
-
-interface FrameTraceData {
-  motion: number[];
-  colors: FrameColors[];
-  sharpness: number[];
-}
 
 const traceModes = [
   { mode: "motion", label: "动势" },
@@ -56,12 +68,31 @@ interface TraceResult {
   failed: boolean;
 }
 
+const noTraceSubscription = () => () => {};
+const noTraceRevision = () => 0;
+
+function rememberTrace(cache: Map<string, FrameTraceData>, key: string, data: FrameTraceData) {
+  cache.delete(key);
+  cache.set(key, data);
+  // Include the nested JS color arrays and references, not just their f64 values.
+  let bytes = 0;
+  for (const entry of cache.values()) bytes += entry.colors.length * 96;
+  while (cache.size > 8 || bytes > 8 * 1024 * 1024) {
+    const oldest = cache.keys().next().value!;
+    bytes -= cache.get(oldest)!.colors.length * 96;
+    cache.delete(oldest);
+  }
+}
+
 export function StoryboardMotionPanel({
   visible,
   shot,
   assetId,
   fingerprint,
+  videoSource,
+  frameRate = 25,
   playbackFrame,
+  isPlaying,
   onSeekFrame,
 }: Props) {
   const [open, setOpen] = useState(true);
@@ -70,11 +101,34 @@ export function StoryboardMotionPanel({
   const [retry, setRetry] = useState(0);
   const [result, setResult] = useState<TraceResult | null>(null);
   const cache = useRef(new Map<string, FrameTraceData>());
+  const native = isTauriRuntime();
+  const nativeSession = useRef<NativeFrameTraceSession | null>(null);
+  const sourceCache = useMemo(
+    () =>
+      getFrameTraceCache(frameTraceCacheKey(videoSource ?? "", frameRate, fingerprint, assetId)),
+    [assetId, videoSource, frameRate, fingerprint],
+  );
+  const identity = useStableIdentity("playback-trace", usePanelInstanceId());
   const chartRef = useRef<SVGSVGElement | null>(null);
   const [pixelWidth, setPixelWidth] = useState(1);
   const startFrame = shot?.start_frame;
   const endFrame = shot?.end_frame;
-  const key = JSON.stringify([assetId, fingerprint, startFrame, endFrame]);
+  const key = JSON.stringify([assetId, fingerprint, startFrame, endFrame, videoSource, frameRate]);
+  const knownCompleteData =
+    (result?.key === key ? result.data : null) ?? cache.current.get(key) ?? null;
+  const observeLive = visible && open && !knownCompleteData;
+  const liveVersion = useSyncExternalStore(
+    observeLive ? sourceCache.subscribe : noTraceSubscription,
+    observeLive ? sourceCache.getSnapshot : noTraceRevision,
+  );
+  const hasPlaybackFrame =
+    playbackFrame !== undefined &&
+    startFrame !== undefined &&
+    endFrame !== undefined &&
+    playbackFrame >= startFrame &&
+    playbackFrame <= endFrame;
+  const demand = useMemo(() => ({ enabled: visible && open }), [visible, open]);
+  usePublishProjection(PLAYBACK_TRACE_DEMAND_PROJECTION, identity, demand);
   const [hover, setHover] = useState<{ key: string; progress: number } | null>(null);
   const hoverSession = useRef<{ sessionId: string; assetId: string; frame: number } | null>(null);
   useCloseOnOutsidePointer(Boolean(modeMenu), () => setModeMenu(null));
@@ -103,6 +157,10 @@ export function StoryboardMotionPanel({
       finishHover();
     };
   }, [key, mode, open, visible]);
+
+  useLayoutEffect(() => {
+    if (isPlaying) finishHover();
+  }, [isPlaying]);
 
   useLayoutEffect(() => {
     const chart = chartRef.current;
@@ -134,16 +192,18 @@ export function StoryboardMotionPanel({
     event.stopPropagation();
     const progress = chartProgress(event);
     finishHover();
-    setHover({ key, progress });
+    if (!isPlaying) setHover({ key, progress });
     onSeekFrame(motionHoverFrame(shot.start_frame, shot.end_frame, progress));
   }
 
   function updateHover(event: PointerEvent<SVGSVGElement>) {
     if (
       !visible ||
+      isPlaying ||
       !open ||
       !shot ||
       !assetId ||
+      !videoSource ||
       event.buttons !== 0 ||
       event.pointerType === "touch"
     )
@@ -165,42 +225,92 @@ export function StoryboardMotionPanel({
   }
 
   useEffect(() => {
-    if (!visible || !open || !assetId || startFrame === undefined || endFrame === undefined) return;
+    if (
+      !native ||
+      !visible ||
+      !open ||
+      !assetId ||
+      startFrame === undefined ||
+      endFrame === undefined
+    )
+      return;
     const cached = cache.current.get(key);
     if (cached) {
-      cache.current.delete(key);
-      cache.current.set(key, cached);
+      setResult({ key, data: cached, failed: false });
+      return;
+    }
+    const session = new NativeFrameTraceSession(
+      assetId,
+      startFrame,
+      endFrame,
+      frameRate,
+      sourceCache,
+      (data) => {
+        rememberTrace(cache.current, key, data);
+        setResult({ key, data, failed: false });
+      },
+      () => setResult({ key, data: null, failed: true }),
+    );
+    nativeSession.current = session;
+    setResult({ key, data: cache.current.get(key) ?? null, failed: false });
+    return () => {
+      session.dispose();
+      if (nativeSession.current === session) nativeSession.current = null;
+    };
+  }, [native, visible, open, assetId, startFrame, endFrame, frameRate, sourceCache, key, retry]);
+
+  useEffect(() => {
+    nativeSession.current?.update(playbackFrame, isPlaying);
+  }, [
+    native,
+    visible,
+    open,
+    assetId,
+    startFrame,
+    endFrame,
+    frameRate,
+    sourceCache,
+    key,
+    retry,
+    playbackFrame,
+    isPlaying,
+  ]);
+
+  useEffect(() => {
+    if (
+      native ||
+      isPlaying ||
+      !visible ||
+      !open ||
+      !assetId ||
+      !videoSource ||
+      startFrame === undefined ||
+      endFrame === undefined
+    )
+      return;
+    const cached = cache.current.get(key) ?? sourceCache.complete(startFrame, endFrame);
+    if (cached) {
+      rememberTrace(cache.current, key, cached);
       setResult({ key, data: cached, failed: false });
       return;
     }
     let disposed = false;
-    let started = false;
-    const taskId = `storyboard-frame-trace-${crypto.randomUUID()}`;
+    const controller = new AbortController();
     setResult({ key, data: null, failed: false });
     const timer = window.setTimeout(() => {
-      started = true;
       void runOperation<FrameTraceData>("storyboard.trace", () =>
-        invokeCommand<FrameTraceData>("storyboard_frame_trace", {
-          assetId,
+        decodeBrowserFrameTrace(
+          videoSource!,
+          frameRate,
           startFrame,
           endFrame,
-          taskId,
-        }),
+          controller.signal,
+          sourceCache,
+        ),
       ).then((outcome) => {
         if (disposed) return;
         if (outcome.status === "success") {
-          cache.current.set(key, outcome.value);
-          let bytes = Array.from(cache.current.values()).reduce(
-            (total, entry) =>
-              total + (entry.motion.length + entry.colors.length * 4 + entry.sharpness.length) * 8,
-            0,
-          );
-          while (cache.current.size > 8 || bytes > 8 * 1024 * 1024) {
-            const oldest = cache.current.keys().next().value!;
-            const entry = cache.current.get(oldest)!;
-            bytes -= (entry.motion.length + entry.colors.length * 4 + entry.sharpness.length) * 8;
-            cache.current.delete(oldest);
-          }
+          rememberTrace(cache.current, key, outcome.value);
           setResult({ key, data: outcome.value, failed: false });
         } else {
           setResult({ key, data: null, failed: true });
@@ -210,48 +320,70 @@ export function StoryboardMotionPanel({
     return () => {
       disposed = true;
       window.clearTimeout(timer);
-      if (started) {
-        void runOperation("task.cancel", () => invokeCommand("cancel_task", { taskId }));
-      }
+      controller.abort();
     };
-  }, [visible, open, assetId, startFrame, endFrame, key, retry]);
+  }, [
+    native,
+    isPlaying,
+    visible,
+    open,
+    assetId,
+    videoSource,
+    frameRate,
+    startFrame,
+    endFrame,
+    key,
+    retry,
+    sourceCache,
+  ]);
 
   const current = result?.key === key ? result : null;
-  const data = useMemo<TraceData | null>(() => {
-    if (!current?.data) return null;
-    return mode === "colors"
-      ? { mode, values: current.data.colors }
-      : { mode, values: current.data[mode] };
-  }, [current?.data, mode]);
-  const curvePath = useMemo(
-    () => motionCurvePath(data?.mode === "motion" ? data.values : [], pixelWidth),
-    [data, pixelWidth],
+  const completeData = knownCompleteData;
+  const useLiveTrace = !completeData;
+  const fullSamples = useMemo(
+    () => (completeData ? completeTraceSamples(completeData, startFrame ?? 0) : null),
+    [completeData, startFrame],
   );
-  const colorPaths = useMemo(
+  const plotEndFrame = fullSamples || !isPlaying ? (endFrame ?? 0) : (playbackFrame ?? -1);
+  const liveSamples = useMemo(
     () =>
-      data?.mode === "colors"
-        ? colorLayers.map(({ channel, name }) => ({
-            name,
-            path: frameColorCurvePath(
-              data.values.map((frame) => frame[channel]),
-              pixelWidth,
-            ),
-          }))
-        : [],
-    [data, pixelWidth],
+      fullSamples ??
+      (observeLive
+        ? sourceCache.samples(startFrame ?? 0, Math.min(endFrame ?? -1, plotEndFrame))
+        : []),
+    [fullSamples, sourceCache, startFrame, endFrame, plotEndFrame, liveVersion, observeLive],
   );
-  const sharpnessPath = useMemo(() => {
-    if (data?.mode !== "sharpness") return "";
-    // Fit the unbounded score to the chart; cached values keep their original units.
-    const maximum = data.values.reduce((max, value) => Math.max(max, value), 0) || 1;
-    return frameColorCurvePath(
-      data.values.map((value) => value / maximum),
-      pixelWidth,
-    );
-  }, [data, pixelWidth]);
+  const livePaths = useMemo(
+    () =>
+      playbackTracePaths(
+        liveSamples,
+        startFrame ?? 0,
+        endFrame ?? 0,
+        plotEndFrame,
+        pixelWidth,
+        mode,
+        true,
+      ),
+    [liveSamples, startFrame, endFrame, plotEndFrame, pixelWidth, mode],
+  );
+  const hasLiveSamples = (!isPlaying || hasPlaybackFrame) && liveSamples.length > 0;
+  const hasTrace = useLiveTrace ? hasLiveSamples : Boolean(completeData);
+  const data = useMemo<TraceData | null>(() => {
+    if (!completeData) return null;
+    return mode === "colors"
+      ? { mode, values: completeData.colors }
+      : { mode, values: completeData[mode] };
+  }, [completeData, mode]);
+  const curvePath = livePaths.motion.line;
+  const colorPaths = colorLayers.map(({ channel, name }) => ({
+    name,
+    path: livePaths.colors[channel].line,
+    area: livePaths.colors[channel].area,
+  }));
+  const sharpnessPath = livePaths.sharpness.line;
   const modeLabel = traceModes.find((option) => option.mode === mode)!.label;
   const chartMaximum = mode === "motion" ? 1 : 2;
-  const hoverProgress = hover?.key === key ? hover.progress : null;
+  const hoverProgress = !isPlaying && hover?.key === key ? hover.progress : null;
   const playbackProgress =
     shot &&
     playbackFrame !== undefined &&
@@ -262,13 +394,15 @@ export function StoryboardMotionPanel({
   const status =
     !shot || !assetId
       ? ""
-      : current?.failed
-        ? "计算失败"
-        : !data
-          ? "计算中…"
-          : data.values.length === 0
-            ? "无相邻帧"
-            : null;
+      : isPlaying
+        ? null
+        : current?.failed
+          ? "计算失败"
+          : !data
+            ? ""
+            : data.values.length === 0
+              ? "无相邻帧"
+              : null;
 
   return (
     <section className={`storyboard-motion-section ${open ? "" : "is-collapsed"}`.trim()}>
@@ -309,42 +443,42 @@ export function StoryboardMotionPanel({
       {open && (
         <div
           className="storyboard-motion-chart"
-          aria-busy={Boolean(shot && assetId && !current?.failed && !data)}
+          aria-busy={Boolean(!isPlaying && shot && assetId && !current?.failed && !data)}
         >
           <svg
             ref={chartRef}
             viewBox={`0 0 1 ${chartMaximum}`}
             preserveAspectRatio="none"
             role="img"
-            aria-label={`当前主选中分镜的${modeLabel}帧迹图`}
+            aria-label={`当前分镜的${modeLabel}帧迹图`}
             onPointerEnter={updateHover}
             onPointerMove={updateHover}
             onPointerLeave={finishHover}
             onPointerCancel={finishHover}
             onClick={seekFromChart}
           >
-            {data?.mode === "motion" && data.values.length > 0 && (
+            {mode === "motion" && hasTrace && curvePath && (
               <>
-                <path className="motion-area" d={`${curvePath} L1,1 L0,1 Z`} />
+                <path className="motion-area" d={livePaths.motion.area} />
                 <path className="motion-line" d={curvePath} />
               </>
             )}
-            {data?.mode === "sharpness" && data.values.length > 0 && (
+            {mode === "sharpness" && hasTrace && sharpnessPath && (
               <>
                 <path
                   className="frame-trace-area frame-trace-sharpness"
-                  d={`${sharpnessPath} L1,2 L0,2 Z`}
+                  d={livePaths.sharpness.area}
                 />
                 <path className="frame-trace-line frame-trace-sharpness" d={sharpnessPath} />
               </>
             )}
-            {data?.mode === "colors" && data.values.length > 0 && (
+            {mode === "colors" && hasTrace && (
               <>
-                {colorPaths.map(({ name, path }) => (
+                {colorPaths.map(({ name, path, area }) => (
                   <path
                     key={`fill-${name}`}
                     className={`frame-trace-area frame-trace-${name}`}
-                    d={`${path} L1,2 L0,2 Z`}
+                    d={area ?? `${path} L1,2 L0,2 Z`}
                   />
                 ))}
                 {colorPaths

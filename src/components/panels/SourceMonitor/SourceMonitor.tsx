@@ -15,6 +15,7 @@ import { usePersistedProjectPanelState } from "../../../application/media/projec
 import {
   usePlaybackCapability,
   usePlaybackHistogramRequested,
+  usePlaybackTraceRequested,
 } from "../../../runtime/capabilities/PlaybackCapability";
 import { publishEvent, useBroadcastEvent } from "../../../runtime/events/react";
 import type { ApplicationEventMap } from "../../../runtime/events/contracts";
@@ -290,6 +291,7 @@ export function SourceMonitor() {
   const TimelineComponent = storyboardMode ? StoryboardTimeline : TimelineRuler;
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const histogramRequested = usePlaybackHistogramRequested();
+  const traceRequested = usePlaybackTraceRequested();
   const [histogramFrame, setHistogramFrame] = useState<{
     source: string | null;
     bins: FrameHistogram | null;
@@ -494,7 +496,14 @@ export function SourceMonitor() {
       finishHoverPreview();
       return "handled";
     }
-    if (isExportMonitor || !panelActive) return "ignored";
+    if (
+      isExportMonitor ||
+      !panelActive ||
+      isPlaying ||
+      playbackModeRef.current !== 0 ||
+      (videoRef.current && !videoRef.current.paused)
+    )
+      return "ignored";
     const previewProject = Object.values(projects).find(
       (candidate) => candidate.asset.id === payload.assetId,
     );
@@ -530,6 +539,12 @@ export function SourceMonitor() {
   useLayoutEffect(() => {
     if (!panelActive) finishHoverPreview();
   }, [panelActive]);
+  useLayoutEffect(() => {
+    if (isPlaying) {
+      hoverPreviewRestoreRef.current = null;
+      setHoverPreview(null);
+    }
+  }, [isPlaying]);
   const videoContext = storyboardVideoContext(activeVideoId, project);
   const storyboard = storyboards[videoContext];
   const skippedRanges = useMemo(
@@ -803,6 +818,7 @@ export function SourceMonitor() {
   }
 
   const { isAuthority: isPlaybackShortcutAuthority } = usePlaybackCapability({
+    videoSource: videoSrc,
     histogram: histogramFrame?.source === videoSrc ? histogramFrame.bins : null,
     identity,
     active: panelActive,
@@ -1761,6 +1777,9 @@ export function SourceMonitor() {
         videoSrc={videoSrc}
         transientPreview={hoverPreview}
         histogramEnabled={histogramRequested && isPlaybackShortcutAuthority}
+        traceEnabled={traceRequested && isPlaying}
+        traceFingerprint={project?.asset.fingerprint}
+        traceAssetId={project?.asset.id}
         onHistogram={(source, bins) => setHistogramFrame({ source, bins })}
         frameRate={frameRate}
         muted={shouldMuteVideo(playbackMode)}

@@ -3,7 +3,7 @@ use super::thumbnail::{hash_name, read_private_cache, write_private_cache};
 use super::*;
 
 // Bump the context when scaling, color conversion, seek policy or any metric changes.
-const CACHE_CONTEXT: &[u8] = b"linecut-frame-trace-rgb96x54-area-ssim-rgb-laplacian305911-v1";
+const CACHE_CONTEXT: &[u8] = b"linecut-frame-trace-rgb96x54-area-weber11-laplacian305911-v2";
 const CACHE_FOLDER: &str = "Frame Trace Cache";
 const CACHE_BUDGET_BYTES: u64 = 256 * 1024 * 1024;
 static MAINTENANCE: Mutex<Option<std::time::Instant>> = Mutex::new(None);
@@ -102,12 +102,23 @@ impl FrameTraceCache {
             let _ = fs::remove_file(&temporary);
         }
         result?;
-        let mut last = MAINTENANCE
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if last.is_none_or(|time| time.elapsed() >= Duration::from_secs(60)) {
-            prune_cache(&self.root, CACHE_BUDGET_BYTES);
-            *last = Some(std::time::Instant::now());
+        let maintenance_due = {
+            let mut last = MAINTENANCE
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let due = last.is_none_or(|time| time.elapsed() >= Duration::from_secs(60));
+            if due {
+                *last = Some(std::time::Instant::now());
+            }
+            due
+        };
+        if maintenance_due {
+            let root = self.root.clone();
+            // Directory scans must not delay the next playback decode chunk or
+            // hold the global maintenance lock across filesystem operations.
+            let _ = std::thread::Builder::new()
+                .name("trace-cache-prune".into())
+                .spawn(move || prune_cache(&root, CACHE_BUDGET_BYTES));
         }
         Ok(())
     }

@@ -38,21 +38,39 @@ function linePath(samples: readonly CurveSample[], frameCount: number, yMaximum 
     .join(" ");
 }
 
+export function normalizeMotion(value: number): number {
+  return value - (value * value) / 4;
+}
+
+export function smoothMotionValues(
+  values: readonly number[],
+  pixelWidth: number,
+  frameAt: (index: number) => number = (index) => index,
+): readonly number[] {
+  if (values.length < 2 || !Number.isFinite(pixelWidth)) return values;
+  // Average within a three-pixel window using frame positions, including irregular sampling.
+  const radius = (1.5 * (frameAt(values.length - 1) - frameAt(0))) / Math.max(1, pixelWidth);
+  if (radius <= 0) return values;
+  const smoothed = new Array<number>(values.length);
+  let left = 0;
+  let right = 0;
+  let sum = 0;
+  for (let index = 0; index < values.length; index++) {
+    const frame = frameAt(index);
+    while (right < values.length && frameAt(right) <= frame + radius) sum += values[right++];
+    while (left < right && frameAt(left) < frame - radius) sum -= values[left++];
+    smoothed[index] = Math.max(0, Math.min(1, sum / (right - left)));
+  }
+  return smoothed;
+}
+
 export function motionCurvePath(values: readonly number[], pixelWidth = Infinity): string {
   if (values.length === 0) return "";
-  const cumulative = [0];
-  let total = 0;
-  for (const value of values) {
-    total += value;
-    cumulative.push(total);
-  }
-  // Scale the entire cumulative curve uniformly; tanh applies only to its final value.
-  const endpoint = Math.tanh(total / 2);
-  const samples = pixelEnvelope(cumulative, pixelWidth).map(({ index, value }) => ({
-    index,
-    value: total > 0 ? (value / total) * endpoint : 0,
-  }));
-  return linePath(samples, cumulative.length, 1);
+  return linePath(
+    pixelEnvelope(smoothMotionValues([0, ...values.map(normalizeMotion)], pixelWidth), pixelWidth),
+    values.length + 1,
+    1,
+  );
 }
 
 export function motionHoverFrame(startFrame: number, endFrame: number, progress: number): number {

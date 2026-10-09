@@ -37,7 +37,10 @@ import {
 import { createPortal } from "react-dom";
 import { useEditCapability } from "../../../runtime/capabilities/EditCapability";
 import { useExportCapability } from "../../../runtime/capabilities/ExportCapability";
-import { usePlaybackStatus } from "../../../runtime/capabilities/PlaybackCapability";
+import {
+  usePlaybackStatus,
+  usePlaybackTraceStatus,
+} from "../../../runtime/capabilities/PlaybackCapability";
 import { eventSource } from "../../../runtime/events/EventHub";
 import { publishEvent, useBroadcastEvent } from "../../../runtime/events/react";
 import { useStableIdentity } from "../../../runtime/state/react";
@@ -95,6 +98,7 @@ import {
 import { StoryboardIconView } from "./views/StoryboardIconView";
 import { StoryboardKeywordPanel } from "./annotations/StoryboardKeywordPanel";
 import { StoryboardMotionPanel } from "./analysis/StoryboardMotionPanel";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { StoryboardHistogramPanel } from "./analysis/StoryboardHistogramPanel";
 import {
   existingStoryboardKeywordIdsForPaths,
@@ -1177,6 +1181,7 @@ export function StoryboardPanel() {
   const { requestDetection, canRequestDetection, detectionDialog, detectionTasks } =
     useStoryboardDetection();
   const playbackStatus = usePlaybackStatus();
+  const tracePlaybackStatus = usePlaybackTraceStatus();
   const playback = previewVideoId === activeVideoId ? playbackStatus : undefined;
   const panelRef = useRef<HTMLElement | null>(null);
   const contentLayoutRef = useRef<HTMLDivElement | null>(null);
@@ -1243,8 +1248,9 @@ export function StoryboardPanel() {
   });
   const sourceForShot = (shot: StoryboardShot) =>
     sources.find((source) => source.context === sourceRowParts(shot.id)?.[0]) ?? sources[0];
-  const motionShot = shots.find((shot) => shot.id === activeShotId && selectedShotIds.has(shot.id));
-  const motionSource = motionShot ? sourceForShot(motionShot) : undefined;
+  const selectedMotionShot =
+    shots.find((shot) => shot.id === activeShotId && selectedShotIds.has(shot.id)) ??
+    shots.find((shot) => selectedShotIds.has(shot.id));
   function seekToShot(shot: StoryboardShot, _context: string, focusRange = false) {
     const source = sourceForShot(shot);
     if (!source) return;
@@ -1349,6 +1355,18 @@ export function StoryboardPanel() {
     ],
   );
   const activeShotSort = viewMode === "grid" ? gridShotSort : shotSort;
+  const playbackTraceShot = tracePlaybackStatus?.videoId
+    ? filteredShots.find(
+        (shot) =>
+          sourceForShot(shot)?.videoId === tracePlaybackStatus.videoId &&
+          tracePlaybackStatus.currentFrame >= shot.start_frame &&
+          tracePlaybackStatus.currentFrame <= shot.end_frame,
+      )
+    : undefined;
+  const traceShot = tracePlaybackStatus?.isPlaying
+    ? (playbackTraceShot ?? selectedMotionShot)
+    : (selectedMotionShot ?? playbackTraceShot);
+  const traceSource = traceShot ? sourceForShot(traceShot) : undefined;
   const setActiveShotSort = viewMode === "grid" ? setGridShotSort : setShotSort;
   const sortedShots = useMemo(
     () =>
@@ -3732,22 +3750,31 @@ export function StoryboardPanel() {
               <StoryboardHistogramPanel visible={keywordPanelOpen && panelActive} />
               <StoryboardMotionPanel
                 visible={keywordPanelOpen}
-                shot={motionShot}
-                assetId={motionSource?.assetId}
-                fingerprint={motionSource?.fingerprint}
+                shot={traceShot}
+                assetId={traceSource?.assetId}
+                fingerprint={traceSource?.fingerprint}
+                videoSource={
+                  traceSource
+                    ? traceSource.videoId === tracePlaybackStatus?.videoId
+                      ? (tracePlaybackStatus.videoSource ?? convertFileSrc(traceSource.videoPath))
+                      : convertFileSrc(traceSource.videoPath)
+                    : undefined
+                }
+                frameRate={traceSource?.frameRate}
+                isPlaying={tracePlaybackStatus?.isPlaying ?? false}
                 playbackFrame={
-                  motionSource && playbackStatus?.videoId === motionSource.videoId
-                    ? playbackStatus.currentFrame
+                  traceSource && tracePlaybackStatus?.videoId === traceSource.videoId
+                    ? tracePlaybackStatus.currentFrame
                     : undefined
                 }
                 onSeekFrame={(frame) => {
-                  if (!motionSource) return;
-                  previewSource(motionSource.videoId, motionSource.trackId, frame);
+                  if (!traceSource) return;
+                  previewSource(traceSource.videoId, traceSource.trackId, frame);
                   publishEvent(
                     "playback.seek.requested",
                     {
-                      videoId: motionSource.videoId,
-                      timeUs: frameToTimeUs(frame, motionSource.frameRate),
+                      videoId: traceSource.videoId,
+                      timeUs: frameToTimeUs(frame, traceSource.frameRate),
                     },
                     storyboardEventSource,
                   );

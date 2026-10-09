@@ -5,6 +5,8 @@ import { useProjections } from "../state/StateHub";
 import {
   PLAYBACK_STATUS_PROJECTION,
   PLAYBACK_HISTOGRAM_DEMAND_PROJECTION,
+  PLAYBACK_TRACE_DEMAND_PROJECTION,
+  type PlaybackTraceDemandProjection,
   type PlaybackHistogramDemandProjection,
   type PlaybackStatusProjection,
 } from "../state/contracts";
@@ -30,10 +32,25 @@ export function usePlaybackStatus() {
   return useActivePlaybackProjection()?.value;
 }
 
+export function usePlaybackTraceStatus() {
+  const projections = useProjections<PlaybackStatusProjection>(PLAYBACK_STATUS_PROJECTION);
+  const playing = [...projections]
+    .filter(({ value }) => value.isPlaying && Boolean(value.videoId))
+    .sort((left, right) => right.value.lastFocusedAt - left.value.lastFocusedAt)[0];
+  const active = useActivePlaybackProjection();
+  return playing?.value ?? active?.value;
+}
+
 export function usePlaybackHistogramRequested() {
   return useProjections<PlaybackHistogramDemandProjection>(
     PLAYBACK_HISTOGRAM_DEMAND_PROJECTION,
   ).some(({ value }) => value.enabled);
+}
+
+export function usePlaybackTraceRequested() {
+  return useProjections<PlaybackTraceDemandProjection>(PLAYBACK_TRACE_DEMAND_PROJECTION).some(
+    ({ value }) => value.enabled,
+  );
 }
 
 export interface PlaybackCapabilityOptions extends PlaybackStatusProjection {
@@ -54,12 +71,31 @@ export function usePlaybackCapability(options: PlaybackCapabilityOptions) {
     videoId,
     sourcePanelId,
     histogram,
+    videoSource,
     fallbackAuthority = false,
     onSeek,
   } = options;
   const projection = useMemo<PlaybackStatusProjection>(
-    () => ({ active, lastFocusedAt, currentFrame, isPlaying, videoId, sourcePanelId, histogram }),
-    [active, currentFrame, isPlaying, lastFocusedAt, sourcePanelId, videoId, histogram],
+    () => ({
+      active,
+      lastFocusedAt,
+      currentFrame,
+      isPlaying,
+      videoId,
+      sourcePanelId,
+      histogram,
+      videoSource,
+    }),
+    [
+      active,
+      currentFrame,
+      isPlaying,
+      lastFocusedAt,
+      sourcePanelId,
+      videoId,
+      histogram,
+      videoSource,
+    ],
   );
   usePublishProjection(PLAYBACK_STATUS_PROJECTION, identity, projection);
 

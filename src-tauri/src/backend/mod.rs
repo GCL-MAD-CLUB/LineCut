@@ -9,6 +9,7 @@ mod media;
 mod media_ingest;
 mod motion;
 mod motion_cache;
+mod motion_ssim;
 mod native_drag_drop;
 mod proxy;
 mod rolling_pcm;
