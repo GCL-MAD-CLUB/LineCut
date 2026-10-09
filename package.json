@@ -43,18 +43,18 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "@tanstack/react-virtual": "^3.14.10",
-    "@tauri-apps/api": "^2.11.1",
-    "@tauri-apps/plugin-dialog": "^2.7.2",
-    "lucide-react": "^1.33.0",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
+    "@tanstack/react-virtual": "^3.14.13",
+    "@tauri-apps/api": "^2.12.1",
+    "@tauri-apps/plugin-dialog": "^2.8.1",
+    "lucide-react": "^1.52.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
-    "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.4",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.0",
     "prettier": "^3.9.6",
     "ssim.js": "^3.5.0",
