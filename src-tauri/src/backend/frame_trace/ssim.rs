@@ -1,8 +1,7 @@
 // Streaming counterpart of core/editor/frameTrace.ts: RGB Weber SSIM, 11x11
 // windows, population moments truncated to 1/1024. No frame-sized allocations
 // occur after construction, and each frame's moments are computed only once.
-const WIDTH: usize = 96;
-const HEIGHT: usize = 54;
+use super::{TRACE_HEIGHT as HEIGHT, TRACE_WIDTH as WIDTH};
 const STRIDE: usize = WIDTH + 1;
 const WINDOW: usize = 11;
 const WINDOWS: usize = (WIDTH - WINDOW + 1) * (HEIGHT - WINDOW + 1);

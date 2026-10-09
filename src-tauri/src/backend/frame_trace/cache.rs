@@ -1,6 +1,14 @@
-use super::motion::FrameTraceData;
-use super::thumbnail::{hash_name, read_private_cache, write_private_cache};
-use super::*;
+use super::types::FrameTraceData;
+use crate::backend::cache::{hash_name, read_private_cache, write_private_cache};
+use crate::backend::configured_cache_root;
+use crate::{app_error, AppResult, ErrorCode, Preferences};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+use uuid::Uuid;
 
 // Bump the context when scaling, color conversion, seek policy or any metric changes.
 const CACHE_CONTEXT: &[u8] = b"linecut-frame-trace-rgb96x54-area-weber11-laplacian305911-v2";
