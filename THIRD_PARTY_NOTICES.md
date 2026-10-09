@@ -33,7 +33,22 @@ files beside those binaries when preparing the bundle resources.
 - <https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime.DirectML>
 - <https://www.nuget.org/packages/Microsoft.AI.DirectML>
 
+## Jina subtitle semantic search assets
+
+The bundled `semantic-search/model_quantized.onnx`, its external weight file,
+and tokenizer come from `jinaai/jina-embeddings-v5-text-nano-retrieval`, revision
+`ac5d898c8d382b17167c33e5c8af644a3519b47d`. These Jina AI model assets are licensed
+under **CC BY-NC 4.0**, including the noncommercial restriction. The original
+license is included at `semantic-search/LICENSE.txt`. Commercial use requires a
+separate license from Jina AI. The model is used without weight modifications.
+
+- <https://huggingface.co/jinaai/jina-embeddings-v5-text-nano-retrieval>
+- <https://creativecommons.org/licenses/by-nc/4.0/>
+
+Semantic search shares the bundled ONNX Runtime and DirectML binaries described
+above. `npm run prepare:semantic` downloads the pinned INT8 model and tokenizer.
+
 The application code in this repository, excluding those optional FFmpeg and
-FFprobe executables, optional TransNetV2/ONNX Runtime assets, and their
+FFprobe executables, optional TransNetV2/ONNX Runtime assets, Jina model assets, and their
 respective notices, is licensed under Apache License 2.0; see
 [LICENSE](LICENSE).

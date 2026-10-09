@@ -39,6 +39,7 @@ export type OperationKey =
   | "runtime.resizeObserver"
   | "runtime.unhandled"
   | "storage.recentPaths"
+  | "subtitle.semanticSearch"
   | "storyboard.detect"
   | "storyboard.motion"
   | "storyboard.trace"

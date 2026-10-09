@@ -95,6 +95,7 @@ pub fn run() {
             save_project_panel_state,
             prune_project_states,
             detect_storyboard_shots,
+            search_subtitles_semantic,
             set_media_import_drop_region,
             reveal_in_file_manager,
             open_user_guide,

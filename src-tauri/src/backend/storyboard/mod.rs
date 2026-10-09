@@ -221,6 +221,13 @@ pub(crate) async fn detect_storyboard_shots(
 }
 
 fn storyboard_runtime_paths(app: &tauri::AppHandle) -> AppResult<StoryboardRuntimePaths> {
+    resolve_runtime_paths(app, true)
+}
+
+fn resolve_runtime_paths(
+    app: &tauri::AppHandle,
+    require_transnet: bool,
+) -> AppResult<StoryboardRuntimePaths> {
     let mut candidates = Vec::new();
     if let Ok(path) = app
         .path()
@@ -253,7 +260,7 @@ fn storyboard_runtime_paths(app: &tauri::AppHandle) -> AppResult<StoryboardRunti
         let onnxruntime = dir.join(ONNXRUNTIME_DLL_FILE);
         let directml = dir.join(DIRECTML_DLL_FILE);
         let model = dir.join(TRANSNET_MODEL_FILE);
-        if onnxruntime.is_file() && directml.is_file() && model.is_file() {
+        if onnxruntime.is_file() && directml.is_file() && (!require_transnet || model.is_file()) {
             let event_model_path = dir.join(STORYBOARD_EVENT_MODEL_FILE);
             return Ok(StoryboardRuntimePaths {
                 runtime_dir: dir,
@@ -284,6 +291,10 @@ fn storyboard_runtime_paths(app: &tauri::AppHandle) -> AppResult<StoryboardRunti
     } else {
         Err(app_error(ErrorCode::StoryboardModelMissing, resource_hint))
     }
+}
+
+pub(super) fn init_shared_ort(app: &tauri::AppHandle) -> AppResult<()> {
+    init_storyboard_ort(&resolve_runtime_paths(app, false)?)
 }
 
 fn init_storyboard_ort(runtime: &StoryboardRuntimePaths) -> AppResult<()> {
@@ -511,7 +522,7 @@ async fn run_storyboard_detection(
     })
 }
 
-fn create_transnet_session(model_path: &PathBuf) -> AppResult<(Session, String)> {
+pub(super) fn create_model_session(model_path: &PathBuf) -> AppResult<(Session, String)> {
     let preferred_adapter = PREFERRED_DIRECTML_ADAPTER.load(Ordering::Relaxed);
     let adapters = (0..MAX_DIRECTML_ADAPTERS_TO_PROBE)
         .filter(|adapter| *adapter != preferred_adapter)
@@ -523,13 +534,13 @@ fn create_transnet_session(model_path: &PathBuf) -> AppResult<(Session, String)>
     let mut directml_errors = Vec::new();
 
     for adapter in adapters {
-        match create_directml_transnet_session(model_path, adapter) {
+        match create_directml_model_session(model_path, adapter) {
             Ok(session) => {
                 PREFERRED_DIRECTML_ADAPTER.store(adapter, Ordering::Relaxed);
                 tracing::info!(
                     provider = "DirectML",
                     adapter,
-                    "Selected storyboard inference provider"
+                    "Selected ONNX inference provider"
                 );
                 return Ok((session, format!("DirectML (adapter {adapter})")));
             }
@@ -539,7 +550,7 @@ fn create_transnet_session(model_path: &PathBuf) -> AppResult<(Session, String)>
                     model_path = %model_path.display(),
                     error_code = ?error.code(),
                     error_message = error.message(),
-                    "DirectML storyboard initialization failed for display adapter"
+                    "DirectML ONNX initialization failed for display adapter"
                 );
                 directml_errors.push(format!(
                     "adapter {adapter}: {:?}: {}",
@@ -554,18 +565,18 @@ fn create_transnet_session(model_path: &PathBuf) -> AppResult<(Session, String)>
         attempted_adapters = MAX_DIRECTML_ADAPTERS_TO_PROBE,
         "No usable DirectML display adapter was found; retrying with the CPU provider"
     );
-    create_cpu_transnet_session(model_path)
+    create_cpu_model_session(model_path)
         .map(|session| {
             tracing::info!(
                 provider = "CPU",
-                "Selected storyboard inference provider after DirectML fallback"
+                "Selected ONNX inference provider after DirectML fallback"
             );
             (session, "CPU".to_string())
         })
         .map_err(|cpu_error| {
             let directml_detail = directml_errors.join("; ");
             storyboard_ort_error(
-                "load TransNetV2 ONNX model with DirectML or CPU",
+                "load ONNX model with DirectML or CPU",
                 format!(
                     "DirectML initialization failed on all probed adapters ({directml_detail}); CPU fallback failed: {cpu_error}"
                 ),
@@ -573,7 +584,7 @@ fn create_transnet_session(model_path: &PathBuf) -> AppResult<(Session, String)>
         })
 }
 
-fn create_directml_transnet_session(model_path: &PathBuf, adapter: i32) -> ort::Result<Session> {
+fn create_directml_model_session(model_path: &PathBuf, adapter: i32) -> ort::Result<Session> {
     Session::builder()?
         // The DirectML execution provider requires sequential execution and
         // memory-pattern optimization to be disabled. ort rc.9 does not apply
@@ -589,7 +600,7 @@ fn create_directml_transnet_session(model_path: &PathBuf, adapter: i32) -> ort::
         .commit_from_file(model_path)
 }
 
-fn create_cpu_transnet_session(model_path: &PathBuf) -> ort::Result<Session> {
+pub(super) fn create_cpu_model_session(model_path: &PathBuf) -> ort::Result<Session> {
     let threads = storyboard_cpu_thread_budget(available_cpu_threads());
     tracing::info!(threads, "Configured storyboard CPU inference threads");
     Session::builder()?
@@ -1329,7 +1340,7 @@ mod tests {
             .commit()
             .expect("packaged ONNX Runtime must initialize");
 
-        let session = create_cpu_transnet_session(&runtime_dir.join(TRANSNET_MODEL_FILE))
+        let session = create_cpu_model_session(&runtime_dir.join(TRANSNET_MODEL_FILE))
             .expect("packaged model must load with the CPU provider");
         assert_transnet_reuse_matches_fresh_tensors(session);
     }
@@ -1431,7 +1442,7 @@ mod tests {
             .commit()
             .expect("packaged ONNX Runtime must initialize");
 
-        let session = create_directml_transnet_session(&runtime_dir.join(TRANSNET_MODEL_FILE), 0)
+        let session = create_directml_model_session(&runtime_dir.join(TRANSNET_MODEL_FILE), 0)
             .expect("packaged model must load with DirectML adapter 0");
         assert_transnet_reuse_matches_fresh_tensors(session);
     }

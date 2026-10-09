@@ -320,7 +320,7 @@ impl StoryboardConsumer {
             move || {
                 let started = Instant::now();
                 init_storyboard_ort(&runtime)?;
-                let (session, provider) = create_transnet_session(&runtime.model)?;
+                let (session, provider) = create_model_session(&runtime.model)?;
                 let model = TransnetSession::new(session)?;
                 tracing::info!(
                     provider,

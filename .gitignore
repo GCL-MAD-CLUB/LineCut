@@ -66,3 +66,7 @@ Desktop.ini
 # Local patches
 *.diff
 *.patch
+
+# Downloaded semantic embedding model
+src-tauri/resources/semantic-search/*
+!src-tauri/resources/semantic-search/MODEL.md

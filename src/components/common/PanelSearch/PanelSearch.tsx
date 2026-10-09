@@ -46,6 +46,7 @@ interface PanelSearchProps {
   onScopeChange?: (scope: SearchScope) => void;
   onMatchNumberChange?: (matchNumber: number) => void;
   onNavigate: (direction: -1 | 1) => void;
+  semantic?: { threshold: number; onThresholdChange: (value: number) => void };
 }
 
 export function PanelSearch({
@@ -65,6 +66,7 @@ export function PanelSearch({
   onScopeChange,
   onMatchNumberChange,
   onNavigate,
+  semantic,
 }: PanelSearchProps) {
   const [menu, setMenu] = useState<{
     kind: "mode" | "scope" | "rule";
@@ -72,10 +74,20 @@ export function PanelSearch({
     y: number;
   } | null>(null);
   const [matchDraft, setMatchDraft] = useState<string | null>(null);
+  const [thresholdDraft, setThresholdDraft] = useState<string | null>(null);
+  function commitThreshold() {
+    if (thresholdDraft !== null && thresholdDraft.trim()) {
+      const value = Number(thresholdDraft);
+      if (Number.isFinite(value))
+        semantic?.onThresholdChange(Math.round(Math.min(1, Math.max(0, value)) * 100) / 100);
+    }
+    setThresholdDraft(null);
+  }
   useCloseOnOutsidePointer(Boolean(menu), () => setMenu(null));
   useEffect(() => {
     setMenu(null);
     setMatchDraft(null);
+    setThresholdDraft(null);
   }, [disabled, mode, rule, scope]);
 
   const navigationDisabled = disabled || mode !== "highlight" || !query.trim() || !canNavigate;
@@ -135,68 +147,116 @@ export function PanelSearch({
         />
       </label>
       <span className="panel-search-separator" aria-hidden="true" />
-      {dropdown("mode", "模式", mode === "filter" ? "过滤" : "高亮")}
-      <div className="panel-search-navigation" aria-label="切换搜索结果">
-        <button
-          type="button"
-          disabled={navigationDisabled}
-          title="上一个搜索项（←）"
-          aria-label="上一个搜索项"
-          onClick={() => onNavigate(-1)}
-        >
-          <ChevronLeft aria-hidden="true" />
-        </button>
-        {showMatchCount && (
-          <span className="panel-search-count">
-            <input
-              className="panel-search-count-input"
-              value={matchDraft ?? (activeMatchNumber > 0 ? String(activeMatchNumber) : "")}
-              style={{ width: `calc(${matchDigits}ch + 4px)` }}
-              inputMode="numeric"
-              aria-label={`跳转到第几条${label}搜索结果，共 ${matchCount} 条`}
-              onFocus={(event) => {
-                setMatchDraft(activeMatchNumber > 0 ? String(activeMatchNumber) : "");
-                event.currentTarget.select();
-              }}
-              onChange={(event) => setMatchDraft(event.currentTarget.value.replace(/\D+/g, ""))}
-              onPointerDown={(event) => event.stopPropagation()}
-              onClick={(event) => event.stopPropagation()}
-              onBlur={() => commitMatchNumber()}
-              onKeyDown={(event) => {
-                event.stopPropagation();
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  commitMatchNumber();
-                  event.currentTarget.blur();
-                } else if (event.key === "Escape") {
-                  event.preventDefault();
-                  setMatchDraft(null);
-                  event.currentTarget.blur();
-                }
-              }}
-            />
-            <span className="panel-search-count-slash">/</span>
-            <span className="panel-search-count-total">{matchCount}</span>
-          </span>
-        )}
-        <button
-          type="button"
-          disabled={navigationDisabled}
-          title="下一个搜索项（→）"
-          aria-label="下一个搜索项"
-          onClick={() => onNavigate(1)}
-        >
-          <ChevronRight aria-hidden="true" />
-        </button>
-      </div>
+      {dropdown("mode", "模式", mode === "semantic" ? "语义" : mode === "filter" ? "过滤" : "高亮")}
+      {mode === "semantic" && semantic ? (
+        <div className="panel-search-semantic" aria-label="语义相似度阈值">
+          <input
+            className="panel-search-threshold-slider"
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={semantic.threshold}
+            disabled={disabled}
+            aria-label="调整语义相似度阈值"
+            onChange={(event) => {
+              setThresholdDraft(null);
+              semantic.onThresholdChange(Number(event.currentTarget.value));
+            }}
+          />
+          <input
+            className="panel-search-count-input panel-search-threshold-input"
+            value={thresholdDraft ?? semantic.threshold.toFixed(2)}
+            inputMode="decimal"
+            aria-label="语义相似度阈值，范围 0 到 1"
+            disabled={disabled}
+            onFocus={(event) => {
+              setThresholdDraft(semantic.threshold.toFixed(2));
+              event.currentTarget.select();
+            }}
+            onChange={(event) => setThresholdDraft(event.currentTarget.value)}
+            onBlur={commitThreshold}
+            onKeyDown={(event) => {
+              event.stopPropagation();
+              if (event.key === "Enter") {
+                event.preventDefault();
+                event.currentTarget.blur();
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                // Clear the draft without blurring: blur would commit the old render's draft.
+                setThresholdDraft(null);
+              }
+            }}
+          />
+        </div>
+      ) : (
+        <div className="panel-search-navigation" aria-label="切换搜索结果">
+          <button
+            type="button"
+            disabled={navigationDisabled}
+            title="上一个搜索项（←）"
+            aria-label="上一个搜索项"
+            onClick={() => onNavigate(-1)}
+          >
+            <ChevronLeft aria-hidden="true" />
+          </button>
+          {showMatchCount && (
+            <span className="panel-search-count">
+              <input
+                className="panel-search-count-input"
+                value={matchDraft ?? (activeMatchNumber > 0 ? String(activeMatchNumber) : "")}
+                style={{ width: `calc(${matchDigits}ch + 4px)` }}
+                inputMode="numeric"
+                aria-label={`跳转到第几条${label}搜索结果，共 ${matchCount} 条`}
+                onFocus={(event) => {
+                  setMatchDraft(activeMatchNumber > 0 ? String(activeMatchNumber) : "");
+                  event.currentTarget.select();
+                }}
+                onChange={(event) => setMatchDraft(event.currentTarget.value.replace(/\D+/g, ""))}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => event.stopPropagation()}
+                onBlur={() => commitMatchNumber()}
+                onKeyDown={(event) => {
+                  event.stopPropagation();
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    commitMatchNumber();
+                    event.currentTarget.blur();
+                  } else if (event.key === "Escape") {
+                    event.preventDefault();
+                    setMatchDraft(null);
+                    event.currentTarget.blur();
+                  }
+                }}
+              />
+              <span className="panel-search-count-slash">/</span>
+              <span className="panel-search-count-total">{matchCount}</span>
+            </span>
+          )}
+          <button
+            type="button"
+            disabled={navigationDisabled}
+            title="下一个搜索项（→）"
+            aria-label="下一个搜索项"
+            onClick={() => onNavigate(1)}
+          >
+            <ChevronRight aria-hidden="true" />
+          </button>
+        </div>
+      )}
       {scope !== undefined && (
         <>
           <span className="panel-search-separator" aria-hidden="true" />
           {dropdown("scope", "范围", scopeLabels[scope])}
         </>
       )}
-      <span className="panel-search-separator" aria-hidden="true" />
-      {dropdown("rule", "规则", ruleLabels[rule])}
+      {mode !== "semantic" && (
+        <>
+          <span className="panel-search-separator" aria-hidden="true" />
+          {dropdown("rule", "规则", ruleLabels[rule])}
+        </>
+      )}
       <span className="panel-search-summary">{summary}</span>
       {menu &&
         createPortal(
@@ -209,18 +269,20 @@ export function PanelSearch({
             onContextMenu={(event) => event.preventDefault()}
           >
             {menu.kind === "mode"
-              ? (["filter", "highlight"] as const).map((value) => (
-                  <PopupMenuItem
-                    key={value}
-                    checked={mode === value}
-                    onSelect={() => {
-                      onModeChange(value);
-                      setMenu(null);
-                    }}
-                  >
-                    {value === "filter" ? "过滤" : "高亮"}
-                  </PopupMenuItem>
-                ))
+              ? (["filter", "highlight", ...(semantic ? ["semantic" as const] : [])] as const).map(
+                  (value) => (
+                    <PopupMenuItem
+                      key={value}
+                      checked={mode === value}
+                      onSelect={() => {
+                        onModeChange(value);
+                        setMenu(null);
+                      }}
+                    >
+                      {value === "semantic" ? "语义" : value === "filter" ? "过滤" : "高亮"}
+                    </PopupMenuItem>
+                  ),
+                )
               : menu.kind === "scope"
                 ? (Object.keys(scopeLabels) as SearchScope[]).map((value) => (
                     <Fragment key={value}>

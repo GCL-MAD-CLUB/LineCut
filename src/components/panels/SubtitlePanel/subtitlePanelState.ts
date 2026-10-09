@@ -22,6 +22,7 @@ interface SubtitleTrackSessionState {
   query: string;
   searchMode: SearchMode;
   searchRule: SearchRule;
+  semanticThreshold: number;
   showOnlySelected: boolean;
   minimumRating: number;
   ratingComparator: SubtitleRatingComparator;
@@ -41,6 +42,7 @@ interface SubtitlePanelUiState extends SubtitleTrackSessionState {
   setQuery: (query: string) => void;
   setSearchMode: (mode: SearchMode) => void;
   setSearchRule: (rule: SearchRule) => void;
+  setSemanticThreshold: (value: number) => void;
   setShowOnlySelected: (value: boolean) => void;
   setMinimumRating: (rating: number) => void;
   setRatingComparator: (comparator: SubtitleRatingComparator) => void;
@@ -75,6 +77,7 @@ function defaultTrackSessionState(): SubtitleTrackSessionState {
     query: "",
     searchMode: "filter",
     searchRule: "containsAll",
+    semanticThreshold: 0.5,
     showOnlySelected: false,
     minimumRating: 0,
     ratingComparator: "gte",
@@ -91,6 +94,7 @@ function trackSessionFromState(state: SubtitlePanelUiState): SubtitleTrackSessio
     query: state.query,
     searchMode: state.searchMode,
     searchRule: state.searchRule,
+    semanticThreshold: state.semanticThreshold,
     showOnlySelected: state.showOnlySelected,
     minimumRating: state.minimumRating,
     ratingComparator: state.ratingComparator,
@@ -146,6 +150,8 @@ const useSubtitlePanelUiState = createPanelState<SubtitlePanelUiState>(() => (se
       };
     }),
   setQuery: (query) => set({ query }),
+  setSemanticThreshold: (value) =>
+    set({ semanticThreshold: Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0.5 }),
   setSearchMode: (searchMode) =>
     set((state) => ({
       searchMode,
