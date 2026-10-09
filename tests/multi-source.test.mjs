@@ -7,6 +7,7 @@ import {
   scopedStoryboard,
   scopedSubtitles,
   sortBySource,
+  nextSourceSortDirection,
   sourceContexts,
   sourceRowId,
   sourceRowParts,
@@ -87,6 +88,30 @@ test("source is the primary sort key, with stable secondary ordering and distinc
       ["a", 2],
     ],
   );
+});
+
+test("disabled source sorting preserves global secondary order without reading sources", () => {
+  const rows = [
+    { context: "b", score: 0.9 },
+    { context: "a", score: 0.8 },
+    { context: "b", score: 0.7 },
+    { context: "a", score: 0.6 },
+  ];
+  const sorted = sortBySource(
+    rows,
+    () => {
+      throw new Error("Source must not participate");
+    },
+    "none",
+  );
+  assert.deepEqual(sorted, rows);
+  assert.deepEqual(
+    rows.map((row) => row.score),
+    [0.9, 0.8, 0.7, 0.6],
+  );
+  assert.equal(nextSourceSortDirection("ascending"), "descending");
+  assert.equal(nextSourceSortDirection("descending"), "none");
+  assert.equal(nextSourceSortDirection("none"), "ascending");
 });
 
 test("separate keyword lists merge for selected media and persist without importing unrelated lists", () => {

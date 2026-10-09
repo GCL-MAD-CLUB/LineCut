@@ -788,7 +788,7 @@ export const userGuideOperationGroups = [
       ["subtitle-add-source", "增加字幕来源", "勾选其他视频"],
       ["subtitle-remove-last-source", "取消最后一个字幕来源", "包括最后一个来源"],
       ["subtitle-replace-source-track", "替换同视频字幕轨", "替换旧轨道"],
-      ["subtitle-sort-source", "切换来源排序方向", "来源的升序或降序"],
+      ["subtitle-sort-source", "切换来源排序方向", "正序 → 倒序 → 无"],
       ["subtitle-resize-source", "调整来源列宽", "来源列可像其他列一样拖动列宽"],
       ["subtitle-reset-source-width", "恢复来源列默认宽度", "双击分隔线恢复默认宽度"],
     ],
@@ -805,7 +805,7 @@ export const userGuideOperationGroups = [
     operations: [
       ["storyboard-add-source", "增加分镜来源", "勾选视频"],
       ["storyboard-remove-last-source", "取消最后一个分镜来源", "包括最后一个来源"],
-      ["storyboard-sort-source", "切换分镜来源排序方向", "单击来源表头"],
+      ["storyboard-sort-source", "切换分镜来源排序方向", "正序 → 倒序 → 无"],
       ["storyboard-resize-source", "调整分镜来源列宽", "来源列可像其他列一样拖动列宽"],
       ["storyboard-reset-source-width", "恢复分镜来源列宽", "双击分隔线恢复默认宽度"],
       ["merge-storyboard-shots", "按视频分别合并镜头", "**合并(M)**"],

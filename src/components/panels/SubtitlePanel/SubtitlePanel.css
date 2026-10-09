@@ -435,7 +435,7 @@
   --subtitle-thumbnail-height: 46px;
   --subtitle-row-height: 82px;
   --subtitle-table-columns: var(--subtitle-col-thumbnail) var(--subtitle-col-source,)
-    var(--subtitle-col-similarity,) var(--subtitle-col-subtitle) var(--subtitle-col-media-start)
+    var(--subtitle-col-subtitle) var(--subtitle-col-similarity,) var(--subtitle-col-media-start)
     var(--subtitle-col-media-end) var(--subtitle-col-duration) var(--subtitle-col-rating)
     var(--subtitle-col-retained) var(--subtitle-col-label) minmax(0, 1fr);
   --subtitle-table-min-width: 1012px;

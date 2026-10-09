@@ -96,6 +96,7 @@ pub fn run() {
             prune_project_states,
             detect_storyboard_shots,
             search_subtitles_semantic,
+            index_subtitles_semantic,
             set_media_import_drop_region,
             reveal_in_file_manager,
             open_user_guide,

@@ -40,6 +40,7 @@ export type OperationKey =
   | "runtime.unhandled"
   | "storage.recentPaths"
   | "subtitle.semanticSearch"
+  | "subtitle.semanticIndex"
   | "storyboard.detect"
   | "storyboard.motion"
   | "storyboard.trace"

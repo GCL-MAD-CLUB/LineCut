@@ -5,6 +5,8 @@ import {
   sourceRowId,
   sourceRowParts,
   sortBySource,
+  nextSourceSortDirection,
+  type SourceSortDirection,
 } from "../../../core/editor/multiSource";
 import {
   matchesTextSearch,
@@ -185,7 +187,7 @@ const subtitleSortOptions: Array<{
   label: string;
   defaultDirection: SubtitleSortDirection;
 }> = [
-  { id: "similarity", label: "相似度", defaultDirection: "descending" },
+  { id: "similarity", label: "匹配度", defaultDirection: "descending" },
   { id: "subtitle", label: "字幕", defaultDirection: "ascending" },
   { id: "mediaStart", label: "媒体开始", defaultDirection: "ascending" },
   { id: "mediaEnd", label: "媒体结束", defaultDirection: "ascending" },
@@ -239,7 +241,7 @@ const maximumSubtitleColumnWidths: SubtitleColumnWidths = {
 const subtitleResizableColumnLabels: Record<SubtitleResizableColumnId, string> = {
   thumbnail: "缩略图",
   source: "来源",
-  similarity: "相似度",
+  similarity: "匹配度",
   subtitle: "字幕",
   mediaStart: "媒体开始",
   mediaEnd: "媒体结束",
@@ -794,6 +796,7 @@ export function SubtitlePanel() {
   const trackContext = sourceScope(sources.map((source) => source.context));
   const {
     projects,
+    projectId,
     mediaItems,
     mediaFolders,
     detachedVideoIds,
@@ -801,7 +804,7 @@ export function SubtitlePanel() {
     messagePublished,
     subtitleCuesDeleted,
   } = useProjectPort(
-    ["projects", "mediaItems", "mediaFolders", "detachedVideoIds", "exportState"],
+    ["projects", "projectId", "mediaItems", "mediaFolders", "detachedVideoIds", "exportState"],
     ["messagePublished", "subtitleCuesDeleted"],
   );
   const {
@@ -884,7 +887,7 @@ export function SubtitlePanel() {
     [subtitleSources],
   );
   const activeTrack = activeSource?.tracks.find((track) => track.id === activeTrackId);
-  const [sourceDirection, setSourceDirection] = useState<SubtitleSortDirection>("ascending");
+  const [sourceDirection, setSourceDirection] = useState<SourceSortDirection>("ascending");
   usePersistedMediaPanelState({
     selection,
     onRestoreWorkspaces: selection.hydrateWorkspaces,
@@ -918,27 +921,43 @@ export function SubtitlePanel() {
     );
   }
   const semanticSubtitles = useMemo(
-    () => allCues.map((cue) => ({ id: cue.id, text: cue.plain_text })),
-    [allCues],
+    () =>
+      allCues.map((cue) => ({
+        id: cue.id,
+        text: cue.plain_text,
+        source: sourceForCue(cue).context,
+      })),
+    [allCues, sources],
   );
-  const semantic = useSubtitleSemanticSearch(searchMode === "semantic", query, semanticSubtitles);
-  const [similarityScope, setSimilarityScope] = useState<string | null>(null);
-  const semanticScope = JSON.stringify([selection.workspaceId, trackContext]);
+  const semanticScope = JSON.stringify([projectId, selection.workspaceId, trackContext]);
+  const semantic = useSubtitleSemanticSearch(
+    searchMode === "semantic",
+    query,
+    semanticSubtitles,
+    semanticScope,
+    () => setQuery(""),
+  );
+  const showSimilarity = searchMode === "semantic" && Boolean(query.trim());
   const hasSemanticResults =
-    searchMode === "semantic" &&
-    semantic.status === "ready" &&
-    [...semantic.scores.values()].some((score) => score >= semanticThreshold);
-  const showSimilarity =
-    searchMode === "semantic" && (similarityScope === semanticScope || hasSemanticResults);
+    showSimilarity && semantic.status === "ready" && semantic.scores.size > 0;
+  const ordinaryCueSort = useRef<SubtitleSort>(defaultSubtitleSort);
+  if (cueSort.columnId !== "similarity") ordinaryCueSort.current = cueSort;
+  const activeCueSort =
+    cueSort.columnId === "similarity" && !hasSemanticResults ? ordinaryCueSort.current : cueSort;
+  const lastSemanticSortVersion = useRef(0);
   useEffect(() => {
-    if (hasSemanticResults && similarityScope !== semanticScope) {
-      setSimilarityScope(semanticScope);
+    if (hasSemanticResults && lastSemanticSortVersion.current !== semantic.resultVersion) {
+      lastSemanticSortVersion.current = semantic.resultVersion;
+      setSourceDirection("none");
       setCueSort({ columnId: "similarity", direction: "descending" });
     }
-    if (searchMode !== "semantic") setSimilarityScope(null);
-    if (!showSimilarity)
-      setCueSort((current) => (current.columnId === "similarity" ? defaultSubtitleSort : current));
-  }, [hasSemanticResults, similarityScope, semanticScope, searchMode, showSimilarity]);
+    if (!hasSemanticResults) lastSemanticSortVersion.current = 0;
+    if (!showSimilarity) {
+      setCueSort((current) =>
+        current.columnId === "similarity" ? ordinaryCueSort.current : current,
+      );
+    }
+  }, [hasSemanticResults, semantic.resultVersion, showSimilarity]);
   const filteredCues = useMemo(
     () =>
       allCues.filter(
@@ -946,8 +965,8 @@ export function SubtitlePanel() {
           (!showOnlySelected || selectedCueIds.has(cue.id)) &&
           (searchMode === "semantic"
             ? !query.trim() ||
-              (semantic.status === "ready" &&
-                (semantic.scores.get(cue.id) ?? -1) >= semanticThreshold)
+              semantic.status !== "ready" ||
+              (semantic.scores.get(cue.id) ?? -1) >= semanticThreshold
             : searchMode === "highlight" ||
               cueMatches(cue, cueAnnotations[cue.id], query, searchRule)) &&
           cueMatchesFilter(
@@ -980,11 +999,11 @@ export function SubtitlePanel() {
   const sortedCues = useMemo(
     () =>
       sortBySource(
-        sortSubtitleCues(filteredCues, cueSort, cueAnnotations, semantic.scores),
+        sortSubtitleCues(filteredCues, activeCueSort, cueAnnotations, semantic.scores),
         sourceForCue,
         sourceDirection,
       ),
-    [cueAnnotations, cueSort, filteredCues, sources, sourceDirection, semantic.scores],
+    [cueAnnotations, activeCueSort, filteredCues, sources, sourceDirection, semantic.scores],
   );
   const matchingCueIndices = useMemo(
     () =>
@@ -1023,7 +1042,7 @@ export function SubtitlePanel() {
     selectedCount > (activeCueId && selectedCueIds.has(activeCueId) ? 1 : 0);
   const isEditAuthority = panelActive && focusedPanelId === panelInstanceId;
   const footerSortLabel =
-    subtitleSortOptions.find((option) => option.id === cueSort.columnId)?.label ?? "媒体开始";
+    subtitleSortOptions.find((option) => option.id === activeCueSort.columnId)?.label ?? "媒体开始";
   const sprayUsesCustomLabel = sprayMode === "colorLabel" && sprayCustomLabel.trim().length > 0;
   const { altPressed: sprayAltPressed } = useSprayToolModifiers(sprayActive, false);
   const sprayCanEraseWithAlt =
@@ -2169,14 +2188,16 @@ export function SubtitlePanel() {
     if (allCues.length === 0) {
       return;
     }
-    setCueSort((current) =>
-      current.columnId === columnId
+    setCueSort((stored) => {
+      const current =
+        stored.columnId === "similarity" && !hasSemanticResults ? ordinaryCueSort.current : stored;
+      return current.columnId === columnId
         ? {
             columnId,
             direction: current.direction === "ascending" ? "descending" : "ascending",
           }
-        : { columnId, direction: columnId === "similarity" ? "descending" : "ascending" },
-    );
+        : { columnId, direction: columnId === "similarity" ? "descending" : "ascending" };
+    });
   }
 
   function startColumnResize(
@@ -2247,13 +2268,12 @@ export function SubtitlePanel() {
       >
         <button
           type="button"
-          className="subtitle-column-sort-button active"
-          onClick={() =>
-            setSourceDirection((value) => (value === "ascending" ? "descending" : "ascending"))
-          }
+          className={`subtitle-column-sort-button${sourceDirection === "none" ? "" : " active"}`}
+          title={`来源排序：${sourceDirection === "ascending" ? "正序" : sourceDirection === "descending" ? "倒序" : "无"}`}
+          onClick={() => setSourceDirection(nextSourceSortDirection)}
         >
           <span className="subtitle-column-label-text">来源</span>
-          <SortArrow direction={sourceDirection} />
+          {sourceDirection !== "none" && <SortArrow direction={sourceDirection} />}
         </button>
       </span>
     );
@@ -2262,20 +2282,20 @@ export function SubtitlePanel() {
     const isActive =
       header.sortColumnId !== undefined &&
       allCues.length > 0 &&
-      cueSort.columnId === header.sortColumnId;
-    const nextDirection = isActive && cueSort.direction === "ascending" ? "降序" : "升序";
+      activeCueSort.columnId === header.sortColumnId;
+    const nextDirection = isActive && activeCueSort.direction === "ascending" ? "降序" : "升序";
     const resizeColumn =
-      header.id === "subtitle" && showSimilarity
-        ? "similarity"
-        : (header.id === "subtitle" || header.id === "similarity") && multipleSources
-          ? "source"
+      header.id === "subtitle" && multipleSources
+        ? "source"
+        : header.id === "mediaStart" && showSimilarity
+          ? "similarity"
           : header.resizeColumn;
     return (
       <span
         key={header.id}
         className={`subtitle-column-header subtitle-column-${header.id}`}
         role="columnheader"
-        aria-sort={isActive ? cueSort.direction : undefined}
+        aria-sort={isActive ? activeCueSort.direction : undefined}
       >
         {header.sortColumnId ? (
           <button
@@ -2284,10 +2304,10 @@ export function SubtitlePanel() {
             title={`按${header.label}${nextDirection}排列`}
             aria-label={`按${header.label}${nextDirection}排列`}
             onClick={() => toggleCueSort(header.sortColumnId!)}
-            disabled={allCues.length === 0}
+            disabled={allCues.length === 0 || (header.id === "similarity" && !hasSemanticResults)}
           >
             <span className="subtitle-column-label-text">{header.label}</span>
-            {isActive && <SortArrow direction={cueSort.direction} />}
+            {isActive && <SortArrow direction={activeCueSort.direction} />}
           </button>
         ) : header.label ? (
           <span className="subtitle-column-label-text">{header.label}</span>
@@ -2366,7 +2386,11 @@ export function SubtitlePanel() {
         query={query}
         mode={searchMode}
         rule={searchRule}
-        semantic={{ threshold: semanticThreshold, onThresholdChange: setSemanticThreshold }}
+        semantic={{
+          threshold: semanticThreshold,
+          onThresholdChange: setSemanticThreshold,
+          available: hasSemanticResults,
+        }}
         disabled={sources.length === 0}
         canNavigate={matchingCueIndices.length > 0}
         matchCount={matchingCueIndices.length}
@@ -2542,16 +2566,17 @@ export function SubtitlePanel() {
             header.id === "subtitle"
               ? [
                   ...(multipleSources ? [renderSourceHeader()] : []),
+                  renderTableHeader(header),
                   ...(showSimilarity
                     ? [
                         renderTableHeader({
                           id: "similarity",
-                          label: "相似度",
+                          label: "匹配度",
                           sortColumnId: "similarity",
+                          resizeColumn: "subtitle",
                         }),
                       ]
                     : []),
-                  renderTableHeader(header),
                 ]
               : [renderTableHeader(header)],
           )}
@@ -2768,20 +2793,21 @@ export function SubtitlePanel() {
                   className="subtitle-footer-sort-direction"
                   onClick={() => {
                     setFooterSortMenu(null);
-                    setCueSort((current) => ({
-                      ...current,
-                      direction: current.direction === "ascending" ? "descending" : "ascending",
-                    }));
+                    setCueSort({
+                      ...activeCueSort,
+                      direction:
+                        activeCueSort.direction === "ascending" ? "descending" : "ascending",
+                    });
                   }}
                   disabled={allCues.length === 0}
-                  title={cueSort.direction === "ascending" ? "切换为降序" : "切换为升序"}
+                  title={activeCueSort.direction === "ascending" ? "切换为降序" : "切换为升序"}
                   aria-label={
-                    cueSort.direction === "ascending"
+                    activeCueSort.direction === "ascending"
                       ? "当前升序，切换为降序"
                       : "当前降序，切换为升序"
                   }
                 >
-                  {cueSort.direction === "ascending" ? (
+                  {activeCueSort.direction === "ascending" ? (
                     <ArrowDownAZ aria-hidden="true" />
                   ) : (
                     <ArrowDownZA aria-hidden="true" />
@@ -3084,7 +3110,8 @@ export function SubtitlePanel() {
                 <Fragment key={option.id}>
                   {option.id === "rating" && <PopupMenuSeparator />}
                   <PopupMenuItem
-                    checked={cueSort.columnId === option.id}
+                    checked={activeCueSort.columnId === option.id}
+                    disabled={option.id === "similarity" && !hasSemanticResults}
                     onSelect={() => {
                       setCueSort((current) =>
                         current.columnId === option.id

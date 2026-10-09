@@ -46,7 +46,7 @@ interface PanelSearchProps {
   onScopeChange?: (scope: SearchScope) => void;
   onMatchNumberChange?: (matchNumber: number) => void;
   onNavigate: (direction: -1 | 1) => void;
-  semantic?: { threshold: number; onThresholdChange: (value: number) => void };
+  semantic?: { threshold: number; onThresholdChange: (value: number) => void; available: boolean };
 }
 
 export function PanelSearch({
@@ -76,6 +76,10 @@ export function PanelSearch({
   const [matchDraft, setMatchDraft] = useState<string | null>(null);
   const [thresholdDraft, setThresholdDraft] = useState<string | null>(null);
   function commitThreshold() {
+    if (!semantic?.available) {
+      setThresholdDraft(null);
+      return;
+    }
     if (thresholdDraft !== null && thresholdDraft.trim()) {
       const value = Number(thresholdDraft);
       if (Number.isFinite(value))
@@ -88,7 +92,7 @@ export function PanelSearch({
     setMenu(null);
     setMatchDraft(null);
     setThresholdDraft(null);
-  }, [disabled, mode, rule, scope]);
+  }, [disabled, mode, rule, scope, semantic?.available]);
 
   const navigationDisabled = disabled || mode !== "highlight" || !query.trim() || !canNavigate;
   const showMatchCount = !disabled && mode === "highlight" && matchCount > 0;
@@ -149,7 +153,7 @@ export function PanelSearch({
       <span className="panel-search-separator" aria-hidden="true" />
       {dropdown("mode", "模式", mode === "semantic" ? "语义" : mode === "filter" ? "过滤" : "高亮")}
       {mode === "semantic" && semantic ? (
-        <div className="panel-search-semantic" aria-label="语义相似度阈值">
+        <div className="panel-search-semantic" aria-label="语义匹配度阈值">
           <input
             className="panel-search-threshold-slider"
             type="range"
@@ -157,8 +161,8 @@ export function PanelSearch({
             max={1}
             step={0.01}
             value={semantic.threshold}
-            disabled={disabled}
-            aria-label="调整语义相似度阈值"
+            disabled={disabled || !semantic.available}
+            aria-label="调整语义匹配度阈值"
             onChange={(event) => {
               setThresholdDraft(null);
               semantic.onThresholdChange(Number(event.currentTarget.value));
@@ -168,8 +172,8 @@ export function PanelSearch({
             className="panel-search-count-input panel-search-threshold-input"
             value={thresholdDraft ?? semantic.threshold.toFixed(2)}
             inputMode="decimal"
-            aria-label="语义相似度阈值，范围 0 到 1"
-            disabled={disabled}
+            aria-label="语义匹配度阈值，范围 0 到 1"
+            disabled={disabled || !semantic.available}
             onFocus={(event) => {
               setThresholdDraft(semantic.threshold.toFixed(2));
               event.currentTarget.select();

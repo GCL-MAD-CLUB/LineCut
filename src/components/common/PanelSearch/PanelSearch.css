@@ -279,3 +279,16 @@
   box-shadow: inset 0 0 0 3px #d0d0d0;
   cursor: default;
 }
+
+.panel-search-threshold-slider:disabled::-webkit-slider-thumb {
+  box-shadow: inset 0 0 0 2px #666;
+}
+
+.panel-search-threshold-slider:disabled::-webkit-slider-runnable-track {
+  background: #383838;
+}
+
+.panel-search-threshold-input:disabled {
+  color: #666;
+  cursor: default;
+}

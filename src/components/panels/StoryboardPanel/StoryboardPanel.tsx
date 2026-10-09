@@ -4,6 +4,8 @@ import {
   sourceRowId,
   sourceRowParts,
   sortBySource,
+  nextSourceSortDirection,
+  type SourceSortDirection,
 } from "../../../core/editor/multiSource";
 import { matchesTextSearch, nextSearchMatchIndex } from "../../../core/editor/textSearch";
 import { PanelSearch, useSearchNavigation } from "../../common/PanelSearch/PanelSearch";
@@ -1235,7 +1237,7 @@ export function StoryboardPanel() {
     pointerId: number;
   } | null>(null);
   const multipleSources = sources.length > 1;
-  const [sourceDirection, setSourceDirection] = useState<StoryboardSortDirection>("ascending");
+  const [sourceDirection, setSourceDirection] = useState<SourceSortDirection>("ascending");
   usePersistedMediaPanelState({
     selection,
     onRestoreWorkspaces: selection.hydrateWorkspaces,
@@ -3390,13 +3392,12 @@ export function StoryboardPanel() {
       >
         <button
           type="button"
-          className="storyboard-column-sort-button active"
-          onClick={() =>
-            setSourceDirection((value) => (value === "ascending" ? "descending" : "ascending"))
-          }
+          className={`storyboard-column-sort-button${sourceDirection === "none" ? "" : " active"}`}
+          title={`来源排序：${sourceDirection === "ascending" ? "正序" : sourceDirection === "descending" ? "倒序" : "无"}`}
+          onClick={() => setSourceDirection(nextSourceSortDirection)}
         >
           <span className="storyboard-column-label-text">来源</span>
-          <SortArrow direction={sourceDirection} />
+          {sourceDirection !== "none" && <SortArrow direction={sourceDirection} />}
         </button>
       </span>
     );

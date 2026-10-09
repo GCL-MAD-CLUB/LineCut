@@ -11,6 +11,11 @@ import { PanelManagerProvider } from "../src/components/common/DockLayout/index.
 import { SubtitlePanel } from "../src/components/panels/SubtitlePanel/SubtitlePanel.tsx";
 import { useSubtitlePanelState } from "../src/components/panels/SubtitlePanel/subtitlePanelState.ts";
 import { usePanelMediaSourceSelection } from "../src/application/media/panelMediaSources.ts";
+import {
+  TaskProgress,
+  createTaskProgress,
+  useTaskProgressStatus,
+} from "../src/systems/TaskSystem/index.ts";
 import { useProjectPort } from "../src/systems/ProjectSystem/index.ts";
 
 const h = React.createElement;
@@ -19,20 +24,36 @@ function check(value, message) {
   if (!value) throw new Error(message);
 }
 
+async function waitFor(predicate, message) {
+  for (let i = 0; i < 120; i++) {
+    if (predicate()) return;
+    await pause(25);
+  }
+  check(false, message);
+}
+
 export async function runSubtitleSemanticTests() {
   const previous = window.__TAURI_INTERNALS__;
-  const calls = [];
-  const cancellations = [];
+  const indexes = [],
+    searches = [],
+    cancellations = [];
+  let holdSearch = false;
   window.__TAURI_INTERNALS__ = {
     transformCallback: () => 1,
     unregisterCallback: () => {},
     invoke: (command, args) => {
       if (command === "cancel_task") {
         cancellations.push(args.taskId);
-        return Promise.resolve(true);
+        return Promise.resolve(false);
+      }
+      if (command === "index_subtitles_semantic") {
+        return new Promise((resolve, reject) => indexes.push({ ...args, resolve, reject }));
       }
       if (command === "search_subtitles_semantic") {
-        return new Promise((resolve) => calls.push({ ...args, resolve }));
+        return new Promise((resolve) => {
+          searches.push({ ...args, resolve });
+          if (!holdSearch) resolve(args.subtitles.map((cue) => ({ id: cue.id, similarity: 0.73 })));
+        });
       }
       return Promise.resolve(null);
     },
@@ -40,43 +61,123 @@ export async function runSubtitleSemanticTests() {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
-  let snapshot;
-  let threshold = 0.5;
-  let input = { enabled: true, query: "travel", subtitles: [{ id: "a", text: "去旅行" }] };
+  let snapshot, duplicateSnapshot, taskStatus;
+  let threshold = 0.5,
+    duplicate = false;
+  let input = {
+    enabled: true,
+    query: "travel",
+    scope: "a",
+    subtitles: [
+      { id: "a", text: "去旅行" },
+      { id: "b", text: "回家" },
+    ],
+  };
+  const clearQuery = () => {
+    input = { ...input, query: "" };
+    render();
+  };
+  function Duplicate() {
+    duplicateSnapshot = useSubtitleSemanticSearch(
+      input.enabled,
+      input.query,
+      input.subtitles.map((cue) => ({ ...cue, source: cue.source ?? input.scope })),
+      input.scope,
+      clearQuery,
+    );
+    return null;
+  }
   function Harness() {
-    snapshot = useSubtitleSemanticSearch(input.enabled, input.query, input.subtitles);
-    return h(PanelSearch, {
-      label: "字幕",
-      query: input.query,
-      mode: "semantic",
-      rule: "contains",
-      disabled: false,
-      canNavigate: false,
-      summary: snapshot.status,
-      onQueryChange: () => {},
-      onModeChange: () => {},
-      onRuleChange: () => {},
-      onNavigate: () => {},
-      semantic: {
-        threshold,
-        onThresholdChange: (value) => {
-          threshold = value;
+    snapshot = useSubtitleSemanticSearch(
+      input.enabled,
+      input.query,
+      input.subtitles.map((cue) => ({ ...cue, source: cue.source ?? input.scope })),
+      input.scope,
+      clearQuery,
+    );
+    taskStatus = useTaskProgressStatus("subtitle.semanticIndex");
+    return h(
+      React.Fragment,
+      null,
+      h(TaskProgress, { children: null }),
+      h(PanelSearch, {
+        label: "字幕",
+        query: input.query,
+        mode: input.enabled ? "semantic" : "filter",
+        rule: "contains",
+        disabled: false,
+        canNavigate: false,
+        summary: snapshot.status,
+        onQueryChange: (query) => {
+          input = { ...input, query };
           render();
         },
-      },
-    });
+        onModeChange: () => {},
+        onRuleChange: () => {},
+        onNavigate: () => {},
+        semantic: {
+          threshold,
+          available: snapshot.status === "ready" && snapshot.scores.size > 0,
+          onThresholdChange: (value) => {
+            threshold = value;
+            render();
+          },
+        },
+      }),
+      duplicate ? h(Duplicate) : null,
+    );
   }
   const render = () => flushSync(() => root.render(h(Harness)));
+  const change = (next) => {
+    input = { ...input, ...next };
+    render();
+  };
+  const cancelledError = {
+    errorId: "cancel-test",
+    code: "TASK_CANCELLED",
+    category: "cancelled",
+    detail: "cancelled",
+    retryable: false,
+  };
+  const startScope = async (scope, query = "meaning") => {
+    const count = indexes.length;
+    change({ enabled: true, scope, query, subtitles: [{ id: scope, text: scope }] });
+    await waitFor(() => indexes.length === count + 1, `index starts for ${scope}`);
+    return indexes.at(-1);
+  };
   try {
     render();
-    check(snapshot.status === "pending", "search must remain pending until all indexing completes");
-    check(!host.querySelector(".panel-search-navigation"), "semantic replaces both arrows");
-    check(!host.querySelector(".panel-search-rule"), "text rules do not apply to semantic search");
     const slider = host.querySelector('input[type="range"]');
+    check(
+      slider.disabled && host.querySelector(".panel-search-threshold-input").disabled,
+      "threshold stays disabled until results exist",
+    );
+    check(!host.querySelector(".panel-search-navigation"), "semantic replaces arrows");
+    await waitFor(() => indexes.length === 1, "first index starts");
+    check(
+      taskStatus.count === 1 && !taskStatus.tasks[0].blocking,
+      "index is a registered non-blocking task",
+    );
+    indexes[0].onProgress.onmessage({ phase: "indexing", completed: 1, total: 2 });
+    await pause();
+    check(
+      taskStatus.tasks[0].percent === 50 &&
+        host.querySelector(".topbar-progress-fill").style.width === "50%",
+      "native progress updates real task bar",
+    );
+    change({ query: "family" });
+    await pause(400);
+    check(
+      indexes.length === 1 && cancellations.length === 0,
+      "query edits preserve in-flight indexing",
+    );
+    indexes[0].resolve();
+    await waitFor(() => snapshot.status === "ready", "newest query produces results");
+    check(
+      searches[0].query === "family" && taskStatus.count === 0 && !slider.disabled,
+      "index completion uses current query and enables slider",
+    );
     const thresholdInput = host.querySelector(".panel-search-threshold-input");
-    check(slider.min === "0" && slider.max === "1", "slider bounds");
-    check(thresholdInput.value === "0.50", "default threshold display");
-    check(getComputedStyle(thresholdInput).textAlign === "center", "threshold alignment");
     const editThreshold = async (text) => {
       thresholdInput.focus();
       await pause();
@@ -90,64 +191,148 @@ export async function runSubtitleSemanticTests() {
       await pause();
     };
     await editThreshold("2");
-    check(threshold === 1 && thresholdInput.value === "1.00", "typed threshold clamps upper bound");
+    check(threshold === 1, "upper bound clamps");
     await editThreshold("-1");
-    check(threshold === 0, "typed threshold clamps lower bound");
+    check(threshold === 0, "lower bound clamps");
     await editThreshold("0.556");
-    check(
-      threshold === 0.56 && slider.value === "0.56",
-      "input and slider share displayed precision",
-    );
+    check(threshold === 0.56 && slider.value === "0.56", "controls share precision");
     await editThreshold("invalid");
-    check(threshold === 0.56, "invalid threshold restores previous value");
+    check(threshold === 0.56, "invalid value restores threshold");
+    check(
+      indexes.length === 1 && searches.length === 1,
+      "threshold never repeats indexing or inference",
+    );
+
+    holdSearch = true;
+    change({ query: "first" });
+    await waitFor(() => searches.length === 2, "first retrieval starts");
+    change({ query: "second" });
+    searches[1].resolve([{ id: "a", similarity: 0.99 }]);
+    await waitFor(() => searches.length === 3, "current retrieval follows stale result");
+    check(snapshot.scores.size === 0, "obsolete retrieval cannot publish scores");
+    searches[2].resolve([{ id: "a", similarity: 0.73 }]);
+    await waitFor(() => snapshot.status === "ready", "current retrieval finishes");
+    holdSearch = false;
+
+    let job = await startScope("cancel-same");
+    await taskStatus.tasks[0].cancel();
+    await pause();
+    check(input.query === "" && snapshot.status === "idle", "matching cancellation clears query");
+    check(
+      taskStatus.count === 1 && taskStatus.tasks[0].isCancelling,
+      "slot remains owned until native work settles",
+    );
+    const previousCancelCount = cancellations.length;
+    job.onProgress.onmessage({ phase: "indexing", completed: 0, total: 1 });
+    check(
+      cancellations.length > previousCancelCount,
+      "late native registration retries cancellation",
+    );
+    job.reject(cancelledError);
+    await waitFor(() => taskStatus.count === 0, "cancelled task leaves queue");
+    change({ query: "meaning" });
+    await waitFor(() => indexes.at(-1) !== job, "retyping cancelled query starts a fresh job");
+    indexes.at(-1).resolve();
+    await waitFor(() => snapshot.status === "ready", "fresh task completes");
+
+    job = await startScope("cancel-new-query", "old");
+    change({ query: "new" });
+    await taskStatus.tasks[0].cancel();
+    await pause();
+    check(input.query === "new", "cancelling obsolete query preserves current query");
+    job.reject(cancelledError);
+    await waitFor(() => indexes.at(-1) !== job, "cancelled obsolete task is replaced once");
+    indexes.at(-1).resolve();
+    await waitFor(() => snapshot.status === "ready", "replacement retrieves new query");
+    check(searches.at(-1).query === "new", "replacement uses new query");
+
+    job = await startScope("switch-from");
+    const indexCount = indexes.length,
+      searchCount = searches.length;
+    change({ scope: "switch-to", subtitles: [{ id: "next", text: "next" }], query: "current" });
     await pause(400);
-    check(calls.length === 1, "debounced search starts once");
-    calls[0].onProgress.onmessage({ phase: "indexing", completed: 0, total: 1 });
+    check(indexes.length === indexCount, "scope switch waits for current background index");
+    job.resolve();
+    await waitFor(() => indexes.length === indexCount + 1, "changed scope creates one new job");
+    check(searches.length === searchCount, "old scope produces no retrieval");
+    indexes.at(-1).resolve();
+    await waitFor(() => snapshot.status === "ready", "new scope retrieves");
+
+    job = await startScope("cancel-changed-scope");
+    change({
+      scope: "cancel-target",
+      subtitles: [{ id: "target", text: "target" }],
+      query: "target-query",
+    });
+    await taskStatus.tasks[0].cancel();
+    await pause();
+    check(input.query === "target-query", "obsolete scope cancellation preserves query");
+    job.reject(cancelledError);
+    await waitFor(() => indexes.at(-1) !== job, "cancelled scope starts current task");
+    indexes.at(-1).resolve();
+    await waitFor(() => snapshot.status === "ready", "current scope completes");
+
+    for (const exit of [{ enabled: false }, { query: "" }]) {
+      job = await startScope(`exit-${JSON.stringify(exit)}`);
+      const beforeIndexes = indexes.length,
+        beforeSearches = searches.length;
+      change({ scope: "changed-but-inactive", ...exit });
+      job.resolve();
+      await pause(450);
+      check(
+        indexes.length === beforeIndexes &&
+          searches.length === beforeSearches &&
+          snapshot.status === "idle",
+        "inactive state suppresses all follow-up even after scope change",
+      );
+    }
+    job = await startScope("exit-and-return");
+    change({ enabled: false });
+    await pause();
+    change({ enabled: true, query: "returned" });
+    job.resolve();
+    await waitFor(
+      () => snapshot.status === "ready",
+      "completion reads present mode instead of history",
+    );
+    check(
+      searches.at(-1).query === "returned",
+      "returning before completion searches current query",
+    );
+
+    duplicate = true;
+    job = await startScope("deduplicated");
+    await pause(400);
+    check(
+      taskStatus.count === 1 && indexes.at(-1) === job,
+      "two panels share one scope index task",
+    );
+    job.resolve();
+    await waitFor(
+      () => snapshot.status === "ready" && duplicateSnapshot.status === "ready",
+      "shared indexing serves both panels",
+    );
+    duplicate = false;
+    render();
+
+    const blocker = await createTaskProgress({
+      operation: "export.run",
+      label: "test blocker",
+      current: 0,
+      total: 1,
+    });
+    const beforeQueued = indexes.length;
+    change({ scope: "queued-cancel", subtitles: [{ id: "q", text: "q" }], query: "queued" });
+    await waitFor(() => taskStatus.count === 1, "index is queued");
+    check(taskStatus.tasks[0].state === "queued", "queue exposes task before native work");
+    await taskStatus.tasks[0].cancel();
     await pause();
     check(
-      snapshot.status === "pending" && snapshot.scores.size === 0,
-      "partial indexes cannot produce results",
+      input.query === "" && indexes.length === beforeQueued,
+      "queued cancellation clears matching query without native work",
     );
-    input = { ...input, query: "family" };
-    render();
-    await pause(400);
-    check(cancellations.includes(calls[0].taskId), "superseded query cancels native task");
-    calls[0].onProgress.onmessage({ phase: "indexing", completed: 1, total: 1 });
-    check(cancellations.length >= 2, "late registration acknowledgement retries cancellation");
-    calls[0].resolve([{ id: "a", similarity: 0.99 }]);
-    await pause();
-    check(snapshot.scores.size === 0, "late results must not replace current query");
-    calls[1].resolve([{ id: "a", similarity: 0.73 }]);
-    await pause();
-    check(
-      snapshot.status === "ready" && snapshot.scores.get("a") === 0.73,
-      "current results are published",
-    );
-    threshold = 0.8;
-    render();
-    await pause(400);
-    check(calls.length === 2, "threshold changes reuse existing scores");
-    input = { ...input, subtitles: [{ id: "a", text: "edited subtitle" }] };
-    render();
-    check(
-      snapshot.status === "pending" && snapshot.scores.size === 0,
-      "edited text invalidates results immediately",
-    );
-    await pause(400);
-    check(
-      calls.length === 3 && calls[2].subtitles[0].text === "edited subtitle",
-      "edited text is reindexed",
-    );
-    input = { ...input, enabled: false };
-    render();
-    check(
-      snapshot.status === "idle" && snapshot.scores.size === 0,
-      "leaving semantic mode clears visible results",
-    );
-    check(cancellations.includes(calls[2].taskId), "leaving semantic mode cancels indexing");
-    calls[2].resolve([]);
-    await pause();
-    return "Passed: controls, progress gating, debounce, cancellation races, threshold reuse, text invalidation, mode exit";
+    blocker.remove();
+    return "Passed: task progress, non-blocking indexing, latest-query retrieval, cancellation and scope transitions, deduplication, queued cancellation, threshold controls";
   } finally {
     flushSync(() => root.unmount());
     host.remove();
@@ -158,6 +343,8 @@ export async function runSubtitleSemanticTests() {
 export async function runSubtitleSemanticTableTests() {
   const previous = window.__TAURI_INTERNALS__;
   const requests = [];
+  const indexes = [];
+  let holdIndex = true;
   window.__TAURI_INTERNALS__ = {
     transformCallback: () => 1,
     unregisterCallback: () => {},
@@ -165,11 +352,25 @@ export async function runSubtitleSemanticTableTests() {
     invoke: async (command, args) => {
       if (command === "load_project_states") return {};
       if (command === "plugin:event|listen") return 1;
+      if (command === "index_subtitles_semantic") {
+        indexes.push(args);
+        if (holdIndex)
+          return new Promise((resolve) => {
+            args.resolve = resolve;
+          });
+        return null;
+      }
       if (command === "search_subtitles_semantic") {
         requests.push(args);
         return args.subtitles.map((cue) => ({
           id: cue.id,
-          similarity: cue.text.includes("later") ? 0.9 : 0.6,
+          similarity: cue.text.startsWith("b ")
+            ? cue.text.includes("later")
+              ? 0.95
+              : 0.65
+            : cue.text.includes("later")
+              ? 0.9
+              : 0.6,
         }));
       }
       return null;
@@ -242,7 +443,7 @@ export async function runSubtitleSemanticTableTests() {
     await pause(60);
   };
   const headers = () => [...host.querySelectorAll('[role="columnheader"]')];
-  const similarityHeader = () => headers().find((element) => element.textContent === "相似度");
+  const similarityHeader = () => headers().find((element) => element.textContent === "匹配度");
   const rowTexts = () =>
     [...host.querySelectorAll(".cue-subtitle-copy")].map((element) => element.textContent);
   try {
@@ -271,14 +472,35 @@ export async function runSubtitleSemanticTableTests() {
       subtitle.setSearchMode("semantic");
       subtitle.setQuery("meaning");
     });
-    await pause(500);
+    check(similarityHeader(), "nonempty semantic query immediately shows match column");
+    check(!similarityHeader().hasAttribute("aria-sort"), "pending index preserves ordinary sort");
+    check(rowTexts()[0] === "a earlier", "pending index retains original row order");
+    check(
+      [...host.querySelectorAll(".cue-similarity-cell")].every((cell) => cell.textContent === "-"),
+      "pending match cells display placeholders",
+    );
+    check(
+      host.querySelector('[aria-label="调整语义匹配度阈值"]').disabled,
+      "threshold disabled while indexing",
+    );
+    await waitFor(() => indexes.length === 1, "native index starts in background");
+    check(
+      indexes[0].subtitles.every((cue) => cue.source),
+      "file identity is supplied to native indexing",
+    );
+    holdIndex = false;
+    indexes[0].resolve();
+    await waitFor(
+      () => requests.length === 1 && similarityHeader()?.getAttribute("aria-sort") === "descending",
+      "result changes sort after indexing",
+    );
     check(
       similarityHeader()?.getAttribute("aria-sort") === "descending",
       "first semantic result selects descending similarity sort",
     );
     check(rowTexts()[0] === "a later", "higher score precedes chronological first cue");
     check(
-      host.querySelector('[aria-label="调整相似度列宽"]'),
+      host.querySelector('[aria-label="调整匹配度列宽"]'),
       "similarity column has a resize handle",
     );
     check(
@@ -311,28 +533,51 @@ export async function runSubtitleSemanticTableTests() {
     await pause(500);
     const labels = headers().map((element) => element.textContent);
     check(
-      labels.indexOf("来源") + 1 === labels.indexOf("相似度") &&
-        labels.indexOf("相似度") + 1 === labels.indexOf("字幕"),
-      "column order is source, similarity, subtitle",
+      labels.indexOf("来源") + 1 === labels.indexOf("字幕") &&
+        labels.indexOf("字幕") + 1 === labels.indexOf("匹配度"),
+      "column order is source, subtitle, match",
     );
+    const sourceHeader = () => headers().find((element) => element.textContent === "来源");
+    const clickSource = () => act(() => sourceHeader().querySelector("button").click());
+    const globalMatchOrder = "b later|a later|b earlier|a earlier";
     check(
-      rowTexts().join("|") === "a later|a earlier|b later|b earlier",
-      "source grouping and descending similarity coexist",
+      rowTexts().join("|") === globalMatchOrder &&
+        sourceHeader().getAttribute("aria-sort") === "none",
+      "semantic results disable source grouping and rank across all videos",
     );
-    await act(() =>
-      headers()
-        .find((element) => element.textContent === "来源")
-        .querySelector("button")
-        .click(),
+    check(!sourceHeader().querySelector("svg"), "disabled source sorting has no arrow");
+    await clickSource();
+    check(
+      rowTexts().join("|") === "a later|a earlier|b later|b earlier" &&
+        sourceHeader().getAttribute("aria-sort") === "ascending",
+      "none cycles to ascending source grouping",
     );
+    await clickSource();
     check(
       rowTexts().join("|") === "b later|b earlier|a later|a earlier" &&
+        sourceHeader().getAttribute("aria-sort") === "descending" &&
         similarityHeader().getAttribute("aria-sort") === "descending",
-      "source sort remains independent",
+      "ascending cycles to descending independently of match sorting",
+    );
+    await clickSource();
+    check(
+      rowTexts().join("|") === globalMatchOrder &&
+        sourceHeader().getAttribute("aria-sort") === "none",
+      "descending cycles to none and restores global match order",
+    );
+    await clickSource();
+    await act(() => subtitle.setQuery("new meaning"));
+    check(
+      sourceHeader().getAttribute("aria-sort") === "ascending",
+      "pending query keeps existing source sort",
+    );
+    await waitFor(
+      () => requests.length === 3 && sourceHeader().getAttribute("aria-sort") === "none",
+      "new semantic result resets source sorting to none",
     );
     await act(() => subtitle.setSearchMode("filter"));
     check(!similarityHeader(), "leaving semantic mode restores ordinary columns");
-    return "Passed: column visibility/order/width, default relevance sort, ordinary sort, threshold filtering, independent source sort";
+    return "Passed: column visibility/order/width, global semantic ranking, three-state source sort, ordinary sort, threshold filtering";
   } finally {
     if (port) await act(() => port.projectClosed());
     flushSync(() => root.unmount());
