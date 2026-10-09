@@ -9,19 +9,22 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { PanelInstanceProvider } from "../src/runtime/systems/PanelState.tsx";
-import { PanelManagerProvider, usePanelManagerState } from "../src/components/DockLayout/index.ts";
+import {
+  PanelManagerProvider,
+  usePanelManagerState,
+} from "../src/components/common/DockLayout/index.ts";
 import {
   usePanelMediaSource,
   usePanelMediaSourceSelection,
 } from "../src/application/media/panelMediaSources.ts";
-import { StoryboardPanel } from "../src/components/StoryboardPanel/StoryboardPanel.tsx";
-import { SubtitlePanel } from "../src/components/SubtitlePanel/SubtitlePanel.tsx";
+import { StoryboardPanel } from "../src/components/panels/StoryboardPanel/StoryboardPanel.tsx";
+import { SubtitlePanel } from "../src/components/panels/SubtitlePanel/SubtitlePanel.tsx";
 import { useProjectPort, getProjectWorkspaceSnapshot } from "../src/systems/ProjectSystem/index.ts";
-import { useStoryboardPanelState } from "../src/components/StoryboardPanel/storyboardPanelState.ts";
-import { useSubtitlePanelState } from "../src/components/SubtitlePanel/subtitlePanelState.ts";
-import { useStoryboardDetection } from "../src/components/StoryboardPanel/useStoryboardDetection.tsx";
-import { SourceMonitor } from "../src/components/SourceMonitor/SourceMonitor.tsx";
-import { useSourceMonitorState } from "../src/components/SourceMonitor/sourceMonitorState.ts";
+import { useStoryboardPanelState } from "../src/components/panels/StoryboardPanel/storyboardPanelState.ts";
+import { useSubtitlePanelState } from "../src/components/panels/SubtitlePanel/subtitlePanelState.ts";
+import { useStoryboardDetection } from "../src/components/panels/StoryboardPanel/hooks/useStoryboardDetection.tsx";
+import { SourceMonitor } from "../src/components/panels/SourceMonitor/SourceMonitor.tsx";
+import { useSourceMonitorState } from "../src/components/panels/SourceMonitor/sourceMonitorState.ts";
 import { publishEvent } from "../src/runtime/events/react.ts";
 import { eventSource } from "../src/runtime/events/EventHub.ts";
 import { emptyStoryboard, sourceScope, sourceRowId } from "../src/core/editor/multiSource.ts";

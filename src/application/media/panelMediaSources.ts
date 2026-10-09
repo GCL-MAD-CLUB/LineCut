@@ -17,7 +17,7 @@ import {
   usePanelManagerState,
   type PanelManagerState,
   type PanelMenuEntryDefinition,
-} from "../../components/DockLayout";
+} from "../../components/common/DockLayout";
 import { useBroadcastEvent } from "../../runtime/events/react";
 import { stateHub, useProjections } from "../../runtime/state/StateHub";
 import {

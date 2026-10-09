@@ -44,7 +44,8 @@ function componentOwner(path) {
   if (relativePath.startsWith(`..${sep}`) || relativePath === "..") {
     return undefined;
   }
-  return relativePath.split(sep)[0];
+  const [category, component] = relativePath.split(sep);
+  return component ? `${category}/${component}` : undefined;
 }
 
 function importedComponentOwner(path, specifier) {
@@ -52,12 +53,12 @@ function importedComponentOwner(path, specifier) {
     return undefined;
   }
   const target = resolve(dirname(path), specifier);
-  const relativePath = relative(componentsRoot, target);
-  if (relativePath.startsWith(`..${sep}`) || relativePath === "..") {
+  const owner = componentOwner(target);
+  if (!owner) {
     return undefined;
   }
   return {
-    owner: relativePath.split(sep)[0],
+    owner,
     leaf: basename(target),
   };
 }

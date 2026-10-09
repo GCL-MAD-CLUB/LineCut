@@ -1,6 +1,6 @@
 import { TriangleAlert } from "lucide-react";
 import { Component, useSyncExternalStore, type ErrorInfo, type ReactNode } from "react";
-import { ModalDialog } from "../components/ModalDialog";
+import { ModalDialog } from "../components/common/ModalDialog";
 import {
   captureIncident,
   dismissIncident,

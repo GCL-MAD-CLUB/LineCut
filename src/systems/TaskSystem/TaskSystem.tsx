@@ -1,7 +1,7 @@
 import { X } from "lucide-react";
 import { useMemo, useSyncExternalStore, type ReactNode } from "react";
 import { captureOperationError, type OperationKey, type PublicContext } from "../../errors";
-import "../../components/TaskProgress/TaskProgress.css";
+import "../../components/common/TaskProgress/TaskProgress.css";
 
 export interface CreateTaskProgressOptions {
   resourceKey?: string;

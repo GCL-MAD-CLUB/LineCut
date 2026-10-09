@@ -35,7 +35,9 @@ LineCut 中的“组件”是一套自治系统，而不只是 UI。业务能力
 - `src/runtime/systems`：稳定的系统身份。
 - `src/systems/ProjectSystem`：项目聚合与历史；外部只能使用按需选择的类型化项目端口。
 - `src/systems/TaskSystem`：软件级任务生命周期。
-- `src/components/*`：组件直接组合其需要的项目端口、私有状态和运行时能力；不得新增 `use...System` 聚合层。
+- `src/components/panels`：业务面板和导入、导出工作区；组件直接组合其需要的项目端口、私有状态和运行时能力，不得新增 `use...System` 聚合层。
+- `src/components/common`：共享对话框、菜单、布局、搜索和控件；`utils` 保存共享交互辅助逻辑。
+- 面板目录保留入口、主组件、样式和面板私有状态；文件较多时按职责拆入 `views`、`controls`、`browser`、`selection`、`preview`、`annotations`、`analysis` 等子目录。监视器的 `video`、`timeline`、`histogram` 和 `audio` 分别管理视频显示、时间轴、直方图和音频实现。
 
 ## EventHub：无目标广播
 
@@ -139,13 +141,13 @@ const editCapabilities = useProjections<EditCapabilityProjection>(EDIT_CAPABILIT
 | 模块                                           | 职责与不变量                                                           |
 | ---------------------------------------------- | ---------------------------------------------------------------------- |
 | `core/editor/textSearch.ts`                    | 纯文本匹配、高亮范围与循环索引；不读项目、DOM 或媒体文件               |
-| `components/PanelSearch`                       | 共享搜索 UI、模式/规则菜单、序号输入与键盘导航；业务选择仍交给调用面板 |
+| `components/common/PanelSearch`                | 共享搜索 UI、模式/规则菜单、序号输入与键盘导航；业务选择仍交给调用面板 |
 | `core/editor/panelSourceSelection.ts`          | 来源选择、工作区快照、有界历史与配置校验的纯逻辑                       |
 | `application/media/panelMediaSources.ts`       | 组织可用来源、各面板来源工作区、预览联动与面板菜单                     |
 | `application/media/panelMediaPersistence.ts`   | 恢复/保存来源工作区、来源列宽与方向                                    |
 | `application/media/projectPanelPersistence.ts` | 按项目与面板恢复状态，延迟保存，切换时刷新待写快照                     |
 | `core/editor/multiSource.ts`                   | 以来源上下文包装显示 ID，汇总视图并把编辑分发回原来源                  |
-| `components/MediaSourceMenu`                   | 按媒体箱树构造菜单，并标示后代是否包含选择                             |
+| `components/common/MediaSourceMenu`            | 按媒体箱树构造菜单，并标示后代是否包含选择                             |
 
 显示行采用 `@row:` 编码来源上下文与本地 ID，组合作用域使用 `@sources:`。它们仅用于面板和多来源变换；持久化字幕/分镜仍使用原本 ID。即使两个视频有同一镜头编号，标注也不会按编号覆盖另一来源。来源作为第一排序键；每个来源内部继续应用该面板列排序。
 

@@ -1,5 +1,5 @@
 ﻿import { parseFrameRate } from "../../core/editor/timeline";
-import { expandedStoryboardKeywordText } from "../../components/StoryboardPanel/storyboardKeywords";
+import { expandedStoryboardKeywordText } from "../../components/panels/StoryboardPanel/annotations/storyboardKeywords";
 import { storyboardShotDefaultTitle } from "../../core/editor/storyboard";
 import type { MediaBinItem, MediaStream, Project, StoryboardState } from "../../types";
 import {

@@ -1,0 +1,178 @@
+﻿import { convertFileSrc } from "@tauri-apps/api/core";
+import { useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
+import { runOperation } from "../../../../errors";
+import { isTauriRuntime } from "../../../../platform/tauri/runtime";
+import { extractVideoCover } from "../../../../application/media/thumbnail";
+import { useMediaCoverDeferred } from "../../../../application/media/mediaAnalysisTask";
+import { frameDurationUs, normalizeFrameRate } from "../../../../core/editor/timeline";
+import type { MediaBinItem, Project } from "../../../../types";
+
+interface MediaBinVideoThumbnailProps {
+  item: MediaBinItem;
+  project: Project;
+  hoverProgress: number | null;
+}
+
+function hoverThumbnailTimeUs(project: Project, progress: number) {
+  const videoStream =
+    project.streams.find((stream) => stream.index === project.asset.video_stream_index) ??
+    project.streams.find((stream) => stream.codec_type === "video");
+  const frameRate = normalizeFrameRate(videoStream?.avg_frame_rate, videoStream?.r_frame_rate);
+  const latestFrameTimeUs = Math.max(
+    0,
+    project.asset.duration_us - Math.round(frameDurationUs(frameRate)),
+  );
+  return Math.min(
+    Math.round(project.asset.duration_us * Math.min(1, Math.max(0, progress))),
+    latestFrameTimeUs,
+  );
+}
+
+function currentVideo(event: SyntheticEvent<HTMLVideoElement>) {
+  return event.currentTarget;
+}
+
+export function MediaBinVideoThumbnail({
+  item,
+  project,
+  hoverProgress,
+}: MediaBinVideoThumbnailProps) {
+  const analysisPending = useMediaCoverDeferred(project.asset.id);
+  const hoverTargetTimeUs = useMemo(
+    () => (hoverProgress === null ? null : hoverThumbnailTimeUs(project, hoverProgress)),
+    [hoverProgress, project],
+  );
+  const [thumbnail, setThumbnail] = useState<{ fingerprint: string; src: string } | null>(null);
+  const [hoverFrameReady, setHoverFrameReady] = useState(false);
+  const firstFrameVideoRef = useRef<HTMLVideoElement | null>(null);
+  const hoverVideoRef = useRef<HTMLVideoElement | null>(null);
+  const fallbackPath = project.proxy_path || item.path;
+  const fallbackSrc = isTauriRuntime() ? convertFileSrc(fallbackPath) : fallbackPath;
+
+  useEffect(() => {
+    if (analysisPending) {
+      setThumbnail(null);
+      return;
+    }
+    let cancelled = false;
+    let objectUrl = "";
+
+    const showThumbnail = (bytes: Uint8Array) => {
+      if (cancelled) {
+        return;
+      }
+      const imageBuffer = new ArrayBuffer(bytes.byteLength);
+      new Uint8Array(imageBuffer).set(bytes);
+      objectUrl = URL.createObjectURL(new Blob([imageBuffer], { type: "image/jpeg" }));
+      setThumbnail({ fingerprint: project.asset.fingerprint, src: objectUrl });
+    };
+
+    if (!isTauriRuntime()) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void runOperation("thumbnail.video", () =>
+      extractVideoCover(item.id, project.asset.fingerprint),
+    ).then((outcome) => {
+      if (outcome.status === "success" && outcome.value) {
+        showThumbnail(outcome.value);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [item.id, project.asset.fingerprint, analysisPending]);
+
+  useEffect(() => {
+    const video = firstFrameVideoRef.current;
+    if (!video) return;
+    video.pause();
+    if (video.readyState >= HTMLMediaElement.HAVE_METADATA && video.currentTime !== 0) {
+      video.currentTime = 0;
+    }
+  }, [fallbackSrc]);
+
+  useEffect(() => {
+    if (hoverTargetTimeUs === null) {
+      setHoverFrameReady(false);
+      return;
+    }
+    const video = hoverVideoRef.current;
+    if (video && video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+      seekHoverVideo(video);
+    }
+  }, [hoverTargetTimeUs]);
+
+  function seekHoverVideo(video: HTMLVideoElement) {
+    if (hoverTargetTimeUs === null) {
+      return;
+    }
+    const targetSeconds = hoverTargetTimeUs / 1_000_000;
+    const latestTime = Number.isFinite(video.duration)
+      ? Math.max(0, video.duration - 0.001)
+      : targetSeconds;
+    const clampedTime = Math.min(targetSeconds, latestTime);
+    if (Math.abs(video.currentTime - clampedTime) > 0.001) {
+      video.currentTime = clampedTime;
+    } else if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      setHoverFrameReady(true);
+    }
+  }
+
+  const hoverThumbnail = hoverTargetTimeUs !== null && (
+    <video
+      ref={hoverVideoRef}
+      className={`media-bin-card-thumbnail media-bin-card-hover-thumbnail ${
+        hoverFrameReady ? "is-ready" : ""
+      }`}
+      src={fallbackSrc}
+      muted
+      playsInline
+      preload="auto"
+      aria-hidden="true"
+      draggable={false}
+      onLoadedMetadata={(event) => seekHoverVideo(currentVideo(event))}
+      onLoadedData={(event) => seekHoverVideo(currentVideo(event))}
+      onSeeked={() => setHoverFrameReady(true)}
+    />
+  );
+
+  const thumbnailSrc = thumbnail?.fingerprint === project.asset.fingerprint ? thumbnail.src : "";
+
+  if (thumbnailSrc && !analysisPending) {
+    return (
+      <>
+        <img className="media-bin-card-thumbnail" src={thumbnailSrc} alt="" draggable={false} />
+        {hoverThumbnail}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <video
+        ref={firstFrameVideoRef}
+        className="media-bin-card-thumbnail"
+        src={fallbackSrc}
+        muted
+        playsInline
+        preload="auto"
+        aria-hidden="true"
+        draggable={false}
+        onLoadedMetadata={(event) => {
+          const video = currentVideo(event);
+          video.pause();
+          if (video.currentTime !== 0) video.currentTime = 0;
+        }}
+        onLoadedData={(event) => currentVideo(event).pause()}
+      />
+      {hoverThumbnail}
+    </>
+  );
+}

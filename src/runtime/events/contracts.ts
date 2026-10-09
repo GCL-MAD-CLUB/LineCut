@@ -26,6 +26,11 @@ export interface ApplicationEventMap {
       | { kind: "storyboard"; videoContext: string; shotId: string };
   };
   "storyboard.reveal-shot.requested": { videoContext: string; shotId: string };
+  "playback.frame-preview.requested": {
+    sessionId: string;
+    assetId: string;
+    frame: number | null;
+  };
   "storyboard.detection.completed": { videoContext: string; firstShotId?: string };
 }
 

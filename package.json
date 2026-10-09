@@ -19,6 +19,7 @@
     "npm": ">=10"
   },
   "scripts": {
+    "test:frame-trace": "node scripts/test-frame-trace.mjs",
     "dev": "vite --host 127.0.0.1 --port 1420",
     "docs:check": "node scripts/check-user-guide.mjs",
     "docs:dev": "vitepress dev docs/user-guide",
@@ -56,6 +57,7 @@
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.1.0",
     "prettier": "^3.9.6",
+    "ssim.js": "^3.5.0",
     "typescript": "^6.0.3",
     "vite": "^8.2.2",
     "vitepress": "^1.6.4"
