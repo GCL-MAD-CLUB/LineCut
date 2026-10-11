@@ -350,7 +350,7 @@ export async function runSubtitleSemanticTests() {
   }
 }
 
-export async function runSubtitleSemanticTableTests() {
+export async function runSubtitleSemanticTableTests({ available = true } = {}) {
   const previous = window.__TAURI_INTERNALS__;
   const requests = [];
   const indexes = [];
@@ -361,6 +361,7 @@ export async function runSubtitleSemanticTableTests() {
     convertFileSrc: (path) => path,
     invoke: async (command, args) => {
       if (command === "load_project_states") return {};
+      if (command === "semantic_search_available") return available;
       if (command === "plugin:event|listen") return 1;
       if (command === "index_subtitles_semantic") {
         indexes.push(args);
@@ -478,6 +479,34 @@ export async function runSubtitleSemanticTableTests() {
     await act(() => port.projectOpened(workspace, "/semantic-test.lcp", "semantic-test"));
     await act(() => source.selectVideo("a", "a-1"));
     check(!similarityHeader(), "similarity column is initially hidden");
+    const modeButton = () => host.querySelector(".panel-search-mode");
+    await act(() => modeButton().click());
+    const modeMenu = document.querySelector('[role="menu"][aria-label="字幕搜索模式"]');
+    const modes = [...modeMenu.querySelectorAll('[role="menuitemcheckbox"], [role="menuitem"]')];
+    check(
+      modes.some((item) => item.textContent === "语义") === available,
+      "semantic mode is offered only when the optional component is installed",
+    );
+    await act(() => modeButton().click());
+    if (!available) {
+      await act(() => {
+        // A workspace saved on an installation with the component can retain this value.
+        subtitle.setSearchMode("semantic");
+        subtitle.setQuery("earlier");
+      });
+      await pause(500);
+      check(modeButton().textContent.includes("过滤"), "stored semantic mode falls back to filter");
+      check(!similarityHeader(), "missing component never shows the match column");
+      check(!host.querySelector(".panel-search-semantic"), "missing component has no threshold");
+      check(rowTexts().join() === "a earlier", "ordinary text filtering remains functional");
+      check(
+        indexes.length === 0 && requests.length === 0,
+        "missing component starts no native work",
+      );
+      await act(() => subtitle.setSearchMode("highlight"));
+      check(modeButton().textContent.includes("高亮"), "highlight mode remains available");
+      return "Passed: optional component hides semantic mode, restores ordinary filtering for saved semantic state, and starts no indexing or retrieval";
+    }
     await act(() => {
       subtitle.setSearchMode("semantic");
       subtitle.setQuery("meaning");

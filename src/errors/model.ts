@@ -41,6 +41,7 @@ export type OperationKey =
   | "storage.recentPaths"
   | "subtitle.semanticSearch"
   | "subtitle.semanticIndex"
+  | "subtitle.semanticAvailability"
   | "storyboard.detect"
   | "storyboard.motion"
   | "storyboard.trace"

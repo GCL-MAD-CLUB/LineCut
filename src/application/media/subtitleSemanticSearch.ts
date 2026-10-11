@@ -2,6 +2,24 @@ import { Channel } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invokeCommand, runOperation } from "../../errors";
 import { createTaskProgress } from "../../systems/TaskSystem";
+import { isTauriRuntime } from "../../platform/tauri/runtime";
+
+export function useSemanticSearchAvailable() {
+  const [available, setAvailable] = useState(false);
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    let active = true;
+    void runOperation("subtitle.semanticAvailability", () =>
+      invokeCommand<boolean>("semantic_search_available"),
+    ).then((outcome) => {
+      if (active) setAvailable(outcome.status === "success" && outcome.value === true);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+  return available;
+}
 
 export interface SemanticSubtitle {
   id: string;

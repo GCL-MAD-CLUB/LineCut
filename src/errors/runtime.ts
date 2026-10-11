@@ -268,6 +268,7 @@ const operationPolicies = {
   "storage.recentPaths": silent("最近记录更新失败"),
   "subtitle.semanticSearch": modal("字幕语义搜索失败"),
   "subtitle.semanticIndex": modal("字幕语义索引构建失败"),
+  "subtitle.semanticAvailability": silent("检查字幕语义检索组件失败"),
   "storyboard.detect": modal("分镜切分失败"),
   "storyboard.motion": silent("计算动势图失败"),
   "storyboard.trace": silent("计算帧迹图失败"),

@@ -56,7 +56,7 @@ fn inference_error(error: impl std::fmt::Display) -> AppError {
     app_error(ErrorCode::SemanticInferenceFailed, error.to_string())
 }
 
-fn resource_directory(app: &tauri::AppHandle) -> AppResult<PathBuf> {
+fn find_resource_directory(app: &tauri::AppHandle) -> Option<PathBuf> {
     let name = "semantic-search";
     let mut candidates = Vec::new();
     if let Ok(path) = app.path().resolve(name, BaseDirectory::Resource) {
@@ -68,27 +68,35 @@ fn resource_directory(app: &tauri::AppHandle) -> AppResult<PathBuf> {
             candidates.push(parent.join("resources").join(name));
         }
     }
+    #[cfg(debug_assertions)]
     if let Ok(cwd) = env::current_dir() {
         candidates.push(cwd.join("src-tauri/resources").join(name));
         candidates.push(cwd.join("resources").join(name));
     }
-    candidates
-        .into_iter()
-        .find(|path| {
-            [
-                "model_quantized.onnx",
-                "model_quantized.onnx_data",
-                "tokenizer.json",
-            ]
-            .iter()
-            .all(|name| path.join(name).is_file())
-        })
-        .ok_or_else(|| {
-            app_error(
-                ErrorCode::SemanticModelMissing,
-                "Jina INT8 model or tokenizer is missing; run npm run prepare:semantic",
-            )
-        })
+    candidates.into_iter().find(|path| {
+        [
+            "model_quantized.onnx",
+            "model_quantized.onnx_data",
+            "tokenizer.json",
+        ]
+        .iter()
+        .all(|name| path.join(name).is_file())
+    })
+}
+
+fn resource_directory(app: &tauri::AppHandle) -> AppResult<PathBuf> {
+    find_resource_directory(app).ok_or_else(|| {
+        app_error(
+            ErrorCode::SemanticModelMissing,
+            "Jina INT8 model or tokenizer is missing; run npm run prepare:semantic",
+        )
+    })
+}
+
+// Checking an optional component never loads the tokenizer, model, or ONNX Runtime.
+#[tauri::command]
+pub(crate) fn semantic_search_available(app: tauri::AppHandle) -> CommandResult<bool> {
+    Ok(find_resource_directory(&app).is_some())
 }
 
 impl EmbeddingModel {

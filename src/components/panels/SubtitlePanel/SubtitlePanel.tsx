@@ -1,4 +1,7 @@
-import { useSubtitleSemanticSearch } from "../../../application/media/subtitleSemanticSearch";
+import {
+  useSemanticSearchAvailable,
+  useSubtitleSemanticSearch,
+} from "../../../application/media/subtitleSemanticSearch";
 import { panelSourceTitle } from "../../../core/editor/panelSourceSelection";
 import {
   sourceScope,
@@ -809,7 +812,7 @@ export function SubtitlePanel() {
   );
   const {
     query,
-    searchMode,
+    searchMode: storedSearchMode,
     searchRule,
     semanticThreshold,
     setSemanticThreshold,
@@ -842,6 +845,9 @@ export function SubtitlePanel() {
     cueSelectionCleared,
     cueSelectionReplaced,
   } = useSubtitlePanelState((state) => state, trackContext, selection.workspaceId);
+  const semanticSearchAvailable = useSemanticSearchAvailable();
+  const searchMode =
+    storedSearchMode === "semantic" && !semanticSearchAvailable ? "filter" : storedSearchMode;
   const playbackStatus = usePlaybackStatus();
   const playback = previewVideoId === activeVideoId ? playbackStatus : undefined;
   const panelRef = useRef<HTMLElement | null>(null);
@@ -2386,11 +2392,15 @@ export function SubtitlePanel() {
         query={query}
         mode={searchMode}
         rule={searchRule}
-        semantic={{
-          threshold: semanticThreshold,
-          onThresholdChange: setSemanticThreshold,
-          available: hasSemanticResults,
-        }}
+        semantic={
+          semanticSearchAvailable
+            ? {
+                threshold: semanticThreshold,
+                onThresholdChange: setSemanticThreshold,
+                available: hasSemanticResults,
+              }
+            : undefined
+        }
         disabled={sources.length === 0}
         canNavigate={matchingCueIndices.length > 0}
         matchCount={matchingCueIndices.length}
