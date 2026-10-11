@@ -337,12 +337,23 @@ export function updateScopedStoryboard(
   return result;
 }
 
-/** Stable source groups; equal display names still remain separate media groups. */
+export type SourceSortDirection = "ascending" | "descending" | "none";
+
+export function nextSourceSortDirection(direction: SourceSortDirection): SourceSortDirection {
+  return direction === "ascending"
+    ? "descending"
+    : direction === "descending"
+      ? "none"
+      : "ascending";
+}
+
+/** Stable source groups; disabling them preserves the other column's ordering. */
 export function sortBySource<T>(
   rows: readonly T[],
   source: (row: T) => { name: string; context: string },
-  direction: "ascending" | "descending",
+  direction: SourceSortDirection,
 ) {
+  if (direction === "none") return [...rows];
   const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
   const sign = direction === "ascending" ? 1 : -1;
   return [...rows].sort((a, b) => {

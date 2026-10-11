@@ -39,6 +39,7 @@ sha2 = "0.10"
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
 time = "=0.3.47"
+tokenizers = { version = "0.22", default-features = false, features = ["fancy-regex"] }
 tokio = { version = "1", features = ["process", "io-util", "time"] }
 tracing = "0.1"
 tracing-appender = "0.2"

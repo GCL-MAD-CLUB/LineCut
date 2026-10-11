@@ -40,7 +40,8 @@
     "format:rust:check": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check && cargo fmt --manifest-path src-tauri/thumbnail-provider/Cargo.toml -- --check",
     "preview": "vite preview --host 127.0.0.1 --port 1421",
     "release:build": "node scripts/release.mjs",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "prepare:semantic": "node scripts/prepare-semantic-assets.mjs"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.14.10",

@@ -44,6 +44,7 @@ function annotationTargets(cueId: string, selectedCueIds: ReadonlySet<string>) {
 interface SubtitleListViewProps {
   sourceForRow: (row: SubtitleCue) => PanelRowSource;
   showSource: boolean;
+  similarityScores?: ReadonlyMap<string, number>;
   searchHighlight?: SearchHighlightOptions;
   cues: SubtitleCue[];
   currentCueIndex: number;
@@ -81,6 +82,7 @@ interface SubtitleListViewProps {
 export function SubtitleListView({
   sourceForRow,
   showSource,
+  similarityScores,
   searchHighlight,
   cues,
   currentCueIndex,
@@ -322,6 +324,11 @@ export function SubtitleListView({
                       />
                     </span>
                   </span>
+                  {similarityScores && (
+                    <span className="cue-similarity-cell" role="cell">
+                      {similarityScores.get(cue.id)?.toFixed(3) ?? "-"}
+                    </span>
+                  )}
                   <span
                     className={cellClassName(cue.id, "mediaStart", selected, "cue-time-cell")}
                     role="cell"

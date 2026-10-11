@@ -1,6 +1,6 @@
 ---
 title: 安装与首次启动
-description: 安装 LineCut、选择 FFmpeg 方案，并确认首次启动状态。
+description: 安装 LineCut、选择 FFmpeg 方案和语义检索组件，并确认首次启动状态。
 ---
 
 # 安装与首次启动
@@ -12,7 +12,10 @@ description: 安装 LineCut、选择 FFmpeg 方案，并确认首次启动状态
 1. 打开 LineCut 的 GitHub Releases 页面，下载与 Windows 对应的安装程序。
 2. 运行安装程序并按屏幕提示完成安装。
 3. 安装程序询问 FFmpeg 方案时，首次使用建议选择**内置 FFmpeg**。它用于探测媒体、导入字幕、生成代理和导出。
-4. 从开始菜单或桌面快捷方式启动 LineCut。
+4. 在 FFmpeg 之后的**语义检索**页选择是否附带组件，首次安装默认勾选。未勾选时，程序的搜索模式中不会出现“语义”选项。
+5. 从开始菜单或桌面快捷方式启动 LineCut。
+
+语义检索模型在本机运行，附带组件会占用额外磁盘空间。覆盖安装时可以修改选择；自动更新会保留此前的选择。
 
 如果已安装并维护了自己的 FFmpeg，也可以不安装内置版本，随后在 **编辑 → 首选项** 中填写 `FFmpeg` 与 `ffprobe` 的可执行文件路径。具体排查方式见[FFmpeg、ffprobe 与工具路径](/troubleshooting/troubleshooting)。
 

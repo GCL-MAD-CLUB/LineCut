@@ -5,6 +5,7 @@ import {
   type PersistedPanelMediaWorkspaces,
 } from "../../core/editor/panelSourceSelection";
 import { useProjectPort } from "../../systems/ProjectSystem";
+import type { SourceSortDirection } from "../../core/editor/multiSource";
 import { usePersistedProjectPanelState } from "./projectPanelPersistence";
 
 export interface MediaPanelSourceSelection {
@@ -15,17 +16,17 @@ export interface MediaPanelSourceSelection {
 interface PersistedMediaPanelState {
   sources?: MediaPanelSourceSelection[];
   workspaceState?: PersistedPanelMediaWorkspaces;
-  sourceDirection?: "ascending" | "descending";
+  sourceDirection?: SourceSortDirection;
   sourceWidth?: number;
 }
 
 interface PersistedMediaPanelStateOptions {
   selection: PanelMediaWorkspaceState & { projectId: string | null | undefined };
-  sourceDirection: "ascending" | "descending";
+  sourceDirection: SourceSortDirection;
   sourceWidth: number;
   onRestoreWorkspaces: (projectId: string, saved: PersistedPanelMediaWorkspaces) => void;
   onRestoreSources: (sources: MediaPanelSourceSelection[]) => void;
-  onRestoreSourceDirection: (direction: "ascending" | "descending") => void;
+  onRestoreSourceDirection: (direction: SourceSortDirection) => void;
   onRestoreSourceWidth: (width: number) => void;
 }
 
@@ -81,7 +82,11 @@ export function usePersistedMediaPanelState({
       const sources = persistedSources(saved.sources);
       if (sources !== null) onRestoreSources(sources);
     }
-    if (saved.sourceDirection === "ascending" || saved.sourceDirection === "descending") {
+    if (
+      saved.sourceDirection === "ascending" ||
+      saved.sourceDirection === "descending" ||
+      saved.sourceDirection === "none"
+    ) {
       onRestoreSourceDirection(saved.sourceDirection);
     }
     if (Number.isFinite(saved.sourceWidth)) {

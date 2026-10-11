@@ -396,7 +396,11 @@ FunctionEnd
 !insertmacro MUI_PAGE_INIT
 Page custom LineCutFfmpegPageCreate LineCutFfmpegPageLeave
 
-; 7. Start menu shortcut page
+; 7. Choose whether subtitle semantic search resources are installed
+!insertmacro MUI_PAGE_INIT
+Page custom LineCutSemanticPageCreate LineCutSemanticPageLeave
+
+; 8. Start menu shortcut page
 Var AppStartMenuFolder
 !if "${STARTMENUFOLDER}" != ""
   !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
@@ -406,10 +410,10 @@ Var AppStartMenuFolder
 !endif
 !insertmacro MUI_PAGE_STARTMENU Application $AppStartMenuFolder
 
-; 8. Installation page
+; 9. Installation page
 !insertmacro MUI_PAGE_INSTFILES
 
-; 9. Finish page
+; 10. Finish page
 ;
 ; Don't auto jump to finish page after installation page,
 ; because the installation page has useful info that can be used debug any issues with the installer.
@@ -485,6 +489,7 @@ FunctionEnd
 Function .onInit
   ; Bundled FFmpeg is the default, including passive installs.
   StrCpy $LineCutBundleFfmpeg 1
+  StrCpy $LineCutBundleSemantic 1
   ${GetOptions} $CMDLINE "/P" $PassiveMode
   ${IfNot} ${Errors}
     StrCpy $PassiveMode 1
@@ -531,6 +536,18 @@ Function .onInit
   !if "${INSTALLMODE}" == "both"
     !insertmacro MULTIUSER_INIT
   !endif
+
+  ; Restore the component choice before an upgrade can uninstall the old version.
+  ; Fresh installations (including silent ones) include semantic search by default.
+  ReadRegStr $1 SHCTX "${UNINSTKEY}" "InstallLocation"
+  ${If} $1 != ""
+    ClearErrors
+    ReadRegDWORD $0 SHCTX "${MANUPRODUCTKEY}" "BundleSemanticSearch"
+    ${IfNot} ${Errors}
+    ${AndIf} $0 == 0
+      StrCpy $LineCutBundleSemantic 0
+    ${EndIf}
+  ${EndIf}
 FunctionEnd
 
 
@@ -670,11 +687,23 @@ Section Install
   File "${MAINBINARYSRCPATH}"
 
   ; Copy resources
+  ; Deselecting the component during reinstallation removes previously bundled models.
+  ${If} $LineCutBundleSemantic == 0
+    RMDir /r "$INSTDIR\semantic-search"
+  ${EndIf}
   {{#each resources_dirs}}
-    CreateDirectory "$INSTDIR\\{{this}}"
+    StrCpy $0 "{{this}}\" 16
+    ${If} $LineCutBundleSemantic == 1
+    ${OrIf} $0 != "semantic-search\"
+      CreateDirectory "$INSTDIR\\{{this}}"
+    ${EndIf}
   {{/each}}
   {{#each resources}}
-    File /a "/oname={{this.[1]}}" "{{no-escape @key}}"
+    StrCpy $0 "{{this.[1]}}" 16
+    ${If} $LineCutBundleSemantic == 1
+    ${OrIf} $0 != "semantic-search\"
+      File /a "/oname={{this.[1]}}" "{{no-escape @key}}"
+    ${EndIf}
   {{/each}}
 
   ; Copy external binaries only when the user selected bundled FFmpeg.
@@ -715,6 +744,7 @@ Section Install
 
   ; Save $INSTDIR in registry for future installations
   WriteRegStr SHCTX "${MANUPRODUCTKEY}" "" $INSTDIR
+  WriteRegDWORD SHCTX "${MANUPRODUCTKEY}" "BundleSemanticSearch" $LineCutBundleSemantic
 
   !if "${INSTALLMODE}" == "both"
     ; Save install mode to be selected by default for the next installation such as updating

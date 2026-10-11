@@ -1,5 +1,6 @@
 !include "LogicLib.nsh"
 !include "nsDialogs.nsh"
+!include "${__FILEDIR__}\semantic-options.nsh"
 
 Var LineCutBundleFfmpeg
 Var LineCutFfmpegPath

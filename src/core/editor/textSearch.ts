@@ -1,4 +1,4 @@
-export type SearchMode = "filter" | "highlight";
+export type SearchMode = "filter" | "highlight" | "semantic";
 export type SearchRule =
   | "contains"
   | "containsAll"
