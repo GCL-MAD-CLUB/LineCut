@@ -231,12 +231,13 @@ fn encode_text(tokenizer: &Tokenizer, text: &str, query: bool) -> AppResult<Vec<
 
 type DocumentBatch = Vec<(usize, Vec<f32>)>;
 type DocumentPublisher<'a> = dyn FnMut(DocumentBatch) -> AppResult<()> + 'a;
+type BatchInference<'a> = dyn FnMut(&[&[i64]], usize) -> AppResult<Vec<Vec<f32>>> + 'a;
 
 fn publish_batch_with(
     batch: &[(usize, Vec<i64>)],
     length: usize,
     cancel: &AtomicBool,
-    infer: &mut dyn FnMut(&[&[i64]], usize) -> AppResult<Vec<Vec<f32>>>,
+    infer: &mut BatchInference<'_>,
     publish: &mut DocumentPublisher<'_>,
 ) -> AppResult<()> {
     ensure_not_cancelled(cancel)?;
