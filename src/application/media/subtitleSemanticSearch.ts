@@ -36,7 +36,6 @@ interface IndexJob {
   scope: string;
   query: string;
   cancelled: boolean;
-  progress: SemanticProgress | null;
   listeners: Set<() => void>;
   promise: Promise<"ready" | "cancelled" | "failed">;
 }
@@ -51,7 +50,6 @@ function indexSubtitles(state: SearchState): IndexJob {
     scope: state.scope,
     query: state.query,
     cancelled: false,
-    progress: null,
     listeners: new Set(),
     promise: Promise.resolve("ready"),
   };
@@ -64,7 +62,7 @@ function indexSubtitles(state: SearchState): IndexJob {
     const task = await createTaskProgress({
       operation: "subtitle.semanticIndex",
       resourceKey: state.scope,
-      label: "构建字幕语义索引",
+      label: "正在构建索引...",
       current: 0,
       total: 1,
       on_cancel: async () => {
@@ -86,12 +84,10 @@ function indexSubtitles(state: SearchState): IndexJob {
           void runOperation("task.cancel", () => invokeCommand("cancel_task", { taskId }));
           return;
         }
-        job.progress = progress;
         task.update({
+          label: `正在构建 ${progress.total} 条索引...`,
           current: progress.total ? progress.completed / progress.total : 0,
-          label: `构建字幕语义索引 ${progress.completed}/${progress.total}`,
         });
-        notify();
       });
       await invokeCommand("index_subtitles_semantic", {
         subtitles: state.subtitles,
@@ -119,8 +115,10 @@ export function useSubtitleSemanticSearch(
   clearQuery: () => void,
 ) {
   const indexKey = useMemo(() => JSON.stringify([scope, subtitles]), [scope, subtitles]);
-  const requestKey =
-    enabled && query.trim() && subtitles.length ? JSON.stringify([indexKey, query]) : "";
+  const requestKey = useMemo(
+    () => (enabled && query.trim() && subtitles.length ? JSON.stringify([indexKey, query]) : ""),
+    [enabled, query, indexKey, subtitles.length],
+  );
   const latest = useRef<SearchState>({
     enabled,
     query,
@@ -139,7 +137,6 @@ export function useSubtitleSemanticSearch(
   const version = useRef(0);
   const [tick, setTick] = useState(0);
   const [result, setResult] = useState<SearchResult | null>(null);
-  const [progress, setProgress] = useState<(SemanticProgress & { indexKey: string }) | null>(null);
 
   useEffect(() => {
     mounted.current = true;
@@ -163,7 +160,6 @@ export function useSubtitleSemanticSearch(
         const start = latest.current;
         try {
           if (!start.requestKey) return;
-          setProgress(null);
           if (!indexed.current.has(start.indexKey)) {
             const job = indexSubtitles(start);
             const onUpdate = () => {
@@ -173,7 +169,6 @@ export function useSubtitleSemanticSearch(
                 cancelledRequest.current = current.requestKey;
                 current.clearQuery();
               }
-              if (job.progress) setProgress({ ...job.progress, indexKey: start.indexKey });
             };
             job.listeners.add(onUpdate);
             onUpdate();
@@ -204,12 +199,6 @@ export function useSubtitleSemanticSearch(
           const current = latest.current;
           if (!mounted.current || !current.requestKey || current.indexKey !== start.indexKey)
             return;
-          setProgress({
-            phase: "searching",
-            completed: current.subtitles.length,
-            total: current.subtitles.length,
-            indexKey: current.indexKey,
-          });
           const outcome = await runOperation("subtitle.semanticSearch", () =>
             invokeCommand<SemanticMatch[]>("search_subtitles_semantic", {
               query: current.query.trim(),
@@ -249,13 +238,11 @@ export function useSubtitleSemanticSearch(
     scores: current?.scores ?? emptyScores,
     status: !requestKey ? "idle" : (current?.status ?? "pending"),
     resultVersion: current?.version ?? 0,
-    progress: progress?.indexKey === indexKey ? progress : null,
     retry: () => {
       indexed.current.delete(indexKey);
       completedRequest.current = null;
       cancelledRequest.current = null;
       setResult(null);
-      setProgress(null);
       setTick((value) => value + 1);
     },
   };

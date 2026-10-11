@@ -62,6 +62,7 @@ export async function runSubtitleSemanticTests() {
   document.body.append(host);
   const root = createRoot(host);
   let snapshot, duplicateSnapshot, taskStatus;
+  let duplicateRenders = 0;
   let threshold = 0.5,
     duplicate = false;
   let input = {
@@ -78,6 +79,7 @@ export async function runSubtitleSemanticTests() {
     render();
   };
   function Duplicate() {
+    duplicateRenders++;
     duplicateSnapshot = useSubtitleSemanticSearch(
       input.enabled,
       input.query,
@@ -87,6 +89,7 @@ export async function runSubtitleSemanticTests() {
     );
     return null;
   }
+  const MemoDuplicate = React.memo(Duplicate);
   function Harness() {
     snapshot = useSubtitleSemanticSearch(
       input.enabled,
@@ -124,7 +127,7 @@ export async function runSubtitleSemanticTests() {
           },
         },
       }),
-      duplicate ? h(Duplicate) : null,
+      duplicate ? h(MemoDuplicate, { input }) : null,
     );
   }
   const render = () => flushSync(() => root.render(h(Harness)));
@@ -306,6 +309,13 @@ export async function runSubtitleSemanticTests() {
     check(
       taskStatus.count === 1 && indexes.at(-1) === job,
       "two panels share one scope index task",
+    );
+    const rendersBeforeProgress = duplicateRenders;
+    job.onProgress.onmessage({ phase: "indexing", completed: 1, total: 2 });
+    await pause();
+    check(
+      duplicateRenders === rendersBeforeProgress,
+      "index progress does not re-render subtitle search consumers",
     );
     job.resolve();
     await waitFor(

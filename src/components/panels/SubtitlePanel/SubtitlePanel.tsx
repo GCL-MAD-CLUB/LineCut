@@ -2402,21 +2402,7 @@ export function SubtitlePanel() {
         onNavigate={navigateSearch}
         summary={
           <>
-            {searchMode === "semantic" && semantic.status === "pending" ? (
-              semantic.progress?.phase === "searching" ? (
-                "正在语义搜索…"
-              ) : (
-                `正在索引字幕 ${semantic.progress?.completed ?? 0}/${allCues.length}…`
-              )
-            ) : searchMode === "semantic" && semantic.status === "failed" ? (
-              <button type="button" onClick={semantic.retry}>
-                语义搜索失败，点击重试
-              </button>
-            ) : (
-              <>
-                {selectedCount} 条已选择，共 {sortedCues.length} 条
-              </>
-            )}
+            {selectedCount} 条已选择，共 {sortedCues.length} 条
           </>
         }
       />
