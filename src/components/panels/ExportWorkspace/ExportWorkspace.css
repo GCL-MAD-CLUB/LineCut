@@ -242,6 +242,8 @@
 .export-clip-thumbnail {
   display: grid;
   place-items: center;
+  padding: 0;
+  cursor: pointer;
   width: 100%;
   aspect-ratio: 16 / 9;
   overflow: hidden;

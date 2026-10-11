@@ -831,20 +831,20 @@ export const userGuideOperationGroups = [
   },
   {
     id: "export-storyboard-ranges",
-    area: "分镜导出范围",
+    area: "导出范围",
     guide: "export/exporting.md",
-    heading: "## 调整分镜的导出范围",
+    heading: "## 调整导出范围 {#调整分镜的导出范围}",
     sources: [
       "src/systems/ExportSystem/exportWorkspaceState.ts",
       "src/components/panels/SourceMonitor/SourceMonitor.tsx",
       "src/App.tsx",
     ],
     operations: [
-      ["export-range-start", "调整分镜导出入点", "拖动左边界更改入点"],
-      ["export-range-end", "调整分镜导出出点", "右边界更改出点"],
-      ["export-range-move", "移动整个分镜导出范围", "中间手柄整体移动范围"],
-      ["export-range-undo", "撤销分镜导出范围", "Ctrl + Z"],
-      ["export-range-redo", "重做分镜导出范围", "Ctrl + Shift + Z"],
+      ["export-range-start", "调整导出入点", "拖动左边界更改入点"],
+      ["export-range-end", "调整导出出点", "右边界更改出点"],
+      ["export-range-move", "移动整个导出范围", "中间手柄整体移动范围"],
+      ["export-range-undo", "撤销导出范围", "Ctrl + Z"],
+      ["export-range-redo", "重做导出范围", "Ctrl + Shift + Z"],
     ],
   },
 ];

@@ -8,7 +8,7 @@ interface ExportSourceListProps {
   previewClipId: string | null;
   onToggleClip: (clipId: string) => void;
   onSetAllSelected: (selected: boolean) => void;
-  onPreviewClip: (clipId: string) => void;
+  onPreviewClip: (clipId: string, play?: boolean) => void;
 }
 
 function clipDurationUs(clip: ExportClip) {
@@ -43,7 +43,7 @@ export function ExportSourceList({
           <span>全选</span>
         </label>
         <span className="export-source-summary">
-          已选 {selectedClips.length} / {source.clips.length} 个 · 总时长{" "}
+          已选 {selectedClips.length} / {source.clips.length} 个 总时长{" "}
           {formatDuration(totalDurationUs)}
         </span>
       </div>
@@ -67,7 +67,7 @@ export function ExportSourceList({
               >
                 <input type="checkbox" checked={selected} onChange={() => onToggleClip(clip.id)} />
               </span>
-              <ExportClipThumbnail clip={clip} />
+              <ExportClipThumbnail clip={clip} onPlay={() => onPreviewClip(clip.id, true)} />
               <span className="export-clip-info">
                 <span className="export-clip-label">{clip.label}</span>
                 <span className="export-clip-meta">

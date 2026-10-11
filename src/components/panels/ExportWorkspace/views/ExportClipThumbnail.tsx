@@ -8,9 +8,10 @@ import type { ExportClip } from "../../../../systems/ExportSystem";
 
 interface ExportClipThumbnailProps {
   clip: ExportClip;
+  onPlay: () => void;
 }
 
-export function ExportClipThumbnail({ clip }: ExportClipThumbnailProps) {
+export function ExportClipThumbnail({ clip, onPlay }: ExportClipThumbnailProps) {
   const [src, setSrc] = useState<string | null>(null);
 
   useEffect(() => {
@@ -44,12 +45,20 @@ export function ExportClipThumbnail({ clip }: ExportClipThumbnailProps) {
   }, [clip.sourcePath, clip.thumbnail]);
 
   return (
-    <span className="export-clip-thumbnail">
+    <button
+      type="button"
+      className="export-clip-thumbnail"
+      aria-label={`播放 ${clip.label}`}
+      onClick={(event) => {
+        event.stopPropagation();
+        onPlay();
+      }}
+    >
       {src ? (
         <img src={src} alt="" draggable={false} />
       ) : (
         <Film className="export-clip-thumbnail-placeholder" size={20} />
       )}
-    </span>
+    </button>
   );
 }

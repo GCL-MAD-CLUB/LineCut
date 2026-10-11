@@ -269,8 +269,10 @@ export function ExportWorkspace() {
   const mediaItemsRef = useRef(mediaItems);
   mediaItemsRef.current = mediaItems;
   const [previewRequestId, setPreviewRequestId] = useState(0);
+  const previewPlayRequestRef = useRef<string | null>(null);
 
-  function handlePreviewClip(clipId: string) {
+  function handlePreviewClip(clipId: string, play = false) {
+    previewPlayRequestRef.current = play ? clipId : null;
     setPreviewClip(clipId);
     setPreviewRequestId((count) => count + 1);
   }
@@ -289,12 +291,15 @@ export function ExportWorkspace() {
       activeVideoChanged(sourceItem.id);
       return;
     }
+    const play = previewPlayRequestRef.current === previewClip.id;
+    previewPlayRequestRef.current = null;
     void publishEvent(
       "playback.seek.requested",
       {
+        videoId: sourceItem?.id,
         timeUs: previewClip.startUs,
         focusEndUs: previewClip.endUs > 0 ? previewClip.endUs : undefined,
-        play: false,
+        play,
       },
       exportWorkspaceEventSource,
     );

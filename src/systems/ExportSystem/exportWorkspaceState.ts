@@ -74,7 +74,7 @@ export interface ExportWorkspaceState {
 }
 
 export function canEditExportClipRange(state: Pick<ExportWorkspaceState, "source">) {
-  return state.source?.kind === "storyboard";
+  return state.source !== null;
 }
 
 export function defaultExportSettings(): ExportSettings {
