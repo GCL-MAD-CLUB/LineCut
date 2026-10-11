@@ -1485,6 +1485,17 @@ export function SourceMonitor() {
         0,
         durationFrames,
       );
+      const cueEndFrame = cuePlaybackEndFrameRef.current;
+      if (
+        isExportMonitor &&
+        effectiveRate > 0 &&
+        cueEndFrame !== null &&
+        nextFrame >= cueEndFrame
+      ) {
+        manualPlaybackFrameRef.current = cueEndFrame;
+        finishCuePlaybackAtFrame(video, cueEndFrame);
+        return;
+      }
       if (effectiveRate > 0 && skipCrossedStoryboardGap(video, Math.floor(nextFrame))) {
         if (playbackModeRef.current !== 0) {
           playbackTickRef.current = requestAnimationFrame(tick);
@@ -1496,7 +1507,7 @@ export function SourceMonitor() {
         effectiveRate < 0 ? Math.ceil(nextFrame) : Math.floor(nextFrame),
       );
       if (targetFrame !== seekTargetFrameRef.current) {
-        seekToFrame(targetFrame, false, true, true);
+        seekToFrame(targetFrame, isExportMonitor, true, true);
       }
       const reachedPlaybackEdge =
         (effectiveRate < 0 && nextFrame <= 0) || (effectiveRate > 0 && nextFrame >= durationFrames);
@@ -1535,7 +1546,16 @@ export function SourceMonitor() {
     if (!preserveCuePlaybackEnd) {
       stopCuePlaybackFrameMonitor();
       cuePlaybackPauseFrameRef.current = null;
-      cuePlaybackEndFrameRef.current = null;
+      const pointerFrame = currentFrameRef.current;
+      cuePlaybackEndFrameRef.current =
+        isExportMonitor &&
+        effectivePlaybackRate(nextMode, frameRate) > 0 &&
+        cueRange &&
+        pointerFrame >= cueRange.startFrame &&
+        pointerFrame <= cueRange.endFrame
+          ? cueRange.endFrame
+          : null;
+      preserveCuePlaybackEnd = cuePlaybackEndFrameRef.current !== null;
     }
 
     const currentMode = playbackModeRef.current;
@@ -1603,6 +1623,7 @@ export function SourceMonitor() {
       stopRollingPcmAudio();
       playBoundAudio(video);
     }
+    if (isExportMonitor) startCuePlaybackFrameMonitor(video);
     void runOperation("media.playback", () => video.play()).then((outcome) => {
       if (outcome.status !== "success" && playbackModeRef.current === nextMode && video.paused) {
         commitPlaybackMode(0);
@@ -1666,11 +1687,7 @@ export function SourceMonitor() {
 
   function changeCueRangeFromTimeline(range: { startFrame: number; endFrame: number } | null) {
     const target = cueRangeTargetRef.current;
-    if (
-      target?.kind === "subtitle" ||
-      (isExportMonitor ? !exportClipRangeEditable : !storyboardMode)
-    )
-      return;
+    if (isExportMonitor ? !exportClipRangeEditable : !storyboardMode) return;
     cuePlaybackEndFrameRef.current = range?.endFrame ?? null;
     if (isExportMonitor) {
       setCueRange(range);
@@ -1686,6 +1703,7 @@ export function SourceMonitor() {
       }
       return;
     }
+    if (target?.kind === "subtitle") return;
     if (!range || !target) {
       setCueRange(range);
       return;
@@ -1820,7 +1838,9 @@ export function SourceMonitor() {
           const cuePauseFrame = cuePlaybackPauseFrameRef.current;
           cuePlaybackPauseFrameRef.current = null;
           stopCuePlaybackFrameMonitor();
-          cuePlaybackEndFrameRef.current = null;
+          if (!isExportMonitor || !usesManualPlaybackClock(playbackModeRef.current)) {
+            cuePlaybackEndFrameRef.current = null;
+          }
           if (pendingPreviewRestoreRef.current) {
             stopPlaybackTicker();
             manualPlaybackTickAtRef.current = null;
