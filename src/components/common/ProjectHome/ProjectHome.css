@@ -111,7 +111,7 @@
 .project-home-welcome {
   flex-shrink: 0;
   margin: 24px 0 28px;
-  color: var(--color-text);
+  color: #dedede;
   font-size: 28px;
   font-weight: 300;
   line-height: 1.4;
