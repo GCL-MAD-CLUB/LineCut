@@ -38,6 +38,7 @@ import { ProjectDiscardDialog, ProjectSaveDialog } from "./components/common/Pro
 import { ExportConflictDialog } from "./components/common/ExportConflictDialog";
 import { PreferencesDialog } from "./components/common/PreferencesDialog";
 import { ProxyCreationDialog } from "./components/common/ProxyCreationDialog";
+import { ProjectHome } from "./components/common/ProjectHome";
 import { SecondaryTopbar } from "./components/common/SecondaryTopbar";
 import { sourcePanelType } from "./components/panels/SourceMonitor";
 import { storyboardPanelType } from "./components/panels/StoryboardPanel";
@@ -293,6 +294,7 @@ function AppContent() {
   const panelInstances = usePanelManagerState((state) => state.instances);
   const openPanel = usePanelManagerState((state) => state.openPanel);
   const closePanel = usePanelManagerState((state) => state.closePanel);
+  const [projectHomeMode, setProjectHomeMode] = useState<"startup" | "manual" | null>("startup");
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [historyNavigating, setHistoryNavigating] = useState(false);
   const [recentMediaPaths, setRecentMediaPaths] = useState(() =>
@@ -704,6 +706,7 @@ function AppContent() {
       // A brand-new document gets its own identity, persisted on first save.
       projectCreated(crypto.randomUUID());
       setActiveWorkspace("import");
+      setProjectHomeMode(null);
     });
     if (outcome.status === "success") {
       messagePublished("已新建项目。");
@@ -712,10 +715,10 @@ function AppContent() {
 
   function rememberRecentProject(entry: RecentProjectEntry) {
     setRecentProjects((current) =>
-      [{ ...entry }, ...current.filter((currentEntry) => currentEntry.path !== entry.path)].slice(
-        0,
-        recentPathsLimit,
-      ),
+      [
+        { ...entry, lastUsedAt: Date.now() },
+        ...current.filter((currentEntry) => currentEntry.path !== entry.path),
+      ].slice(0, recentPathsLimit),
     );
   }
 
@@ -763,6 +766,7 @@ function AppContent() {
     );
     if (outcome.status === "success") {
       const result = outcome.value;
+      setProjectHomeMode(null);
       projectOpened(result.workspace, result.path, result.project_id);
       warningsReplaced(result.warnings);
       rememberRecentProject({ path: result.path, projectId: result.project_id });
@@ -1500,6 +1504,7 @@ function AppContent() {
           workspaces={appWorkspaces}
           activeWorkspace={activeWorkspace}
           isWorkspaceSwitchingDisabled={isBusy}
+          onHome={() => setProjectHomeMode("manual")}
           onWorkspaceChange={setActiveWorkspace}
         />
 
@@ -1527,6 +1532,18 @@ function AppContent() {
               </div>
             ))}
           </aside>
+        )}
+
+        {projectHomeMode && (
+          <ProjectHome
+            showWelcome={projectHomeMode === "startup"}
+            projects={recentProjects}
+            busy={isBusy}
+            suspended={Boolean(pendingDiscardMessage || pendingCloseTarget || preferencesOpen)}
+            onClose={() => setProjectHomeMode(null)}
+            onNew={newProject}
+            onOpen={openProject}
+          />
         )}
 
         {pendingCloseTarget && (

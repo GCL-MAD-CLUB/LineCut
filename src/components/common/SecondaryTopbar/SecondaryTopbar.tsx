@@ -16,6 +16,7 @@ interface SecondaryTopbarProps<WorkspaceId extends string> {
   workspaces: readonly WorkspaceDefinition<WorkspaceId>[];
   activeWorkspace: WorkspaceId;
   isWorkspaceSwitchingDisabled?: boolean;
+  onHome: () => void;
   onWorkspaceChange: (workspace: WorkspaceId) => void;
 }
 
@@ -27,6 +28,7 @@ export function SecondaryTopbar<WorkspaceId extends string>({
   activeWorkspace,
   isWorkspaceSwitchingDisabled = false,
   onWorkspaceChange,
+  onHome,
 }: SecondaryTopbarProps<WorkspaceId>) {
   const projectLabel = projectFilePath
     ? projectName(projectFilePath)
@@ -54,6 +56,7 @@ export function SecondaryTopbar<WorkspaceId extends string>({
       </div>
 
       <WorkspaceSwitcher
+        onHome={onHome}
         workspaces={workspaces}
         activeWorkspace={activeWorkspace}
         disabled={isWorkspaceSwitchingDisabled}

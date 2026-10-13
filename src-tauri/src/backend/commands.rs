@@ -1218,3 +1218,26 @@ mod tests {
         fs::remove_dir_all(&directory).unwrap();
     }
 }
+
+/// Read only the size of each recent project; missing files stay visible in history.
+#[tauri::command]
+pub(crate) async fn recent_project_sizes(paths: Vec<String>) -> CommandResult<Vec<Option<u64>>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        paths
+            .iter()
+            .map(|path| {
+                fs::metadata(path)
+                    .ok()
+                    .filter(|metadata| metadata.is_file())
+                    .map(|metadata| metadata.len())
+            })
+            .collect()
+    })
+    .await
+    .map_err(|error| {
+        app_error(
+            ErrorCode::BlockingTaskFailed,
+            format!("Recent project metadata task failed: {error}"),
+        )
+    })
+}

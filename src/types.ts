@@ -294,6 +294,7 @@ export interface OpenProjectResult {
 export interface RecentProjectEntry {
   path: string;
   projectId: string;
+  lastUsedAt?: number;
 }
 
 /**
