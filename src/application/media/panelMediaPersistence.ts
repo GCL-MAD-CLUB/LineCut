@@ -14,6 +14,7 @@ export interface MediaPanelSourceSelection {
 }
 
 interface PersistedMediaPanelState {
+  sourceLocked?: boolean;
   sources?: MediaPanelSourceSelection[];
   workspaceState?: PersistedPanelMediaWorkspaces;
   sourceDirection?: SourceSortDirection;
@@ -21,7 +22,11 @@ interface PersistedMediaPanelState {
 }
 
 interface PersistedMediaPanelStateOptions {
-  selection: PanelMediaWorkspaceState & { projectId: string | null | undefined };
+  selection: PanelMediaWorkspaceState & {
+    projectId: string | null | undefined;
+    sourceLocked: boolean;
+    setSourceLocked: (locked: boolean) => void;
+  };
   sourceDirection: SourceSortDirection;
   sourceWidth: number;
   onRestoreWorkspaces: (projectId: string, saved: PersistedPanelMediaWorkspaces) => void;
@@ -65,6 +70,7 @@ export function usePersistedMediaPanelState({
   const snapshot: PersistedMediaPanelState | null =
     selection.projectId === projectId
       ? {
+          sourceLocked: selection.sourceLocked,
           sources: selection.sources.map((source) => ({ ...source })),
           workspaceState: {
             workspaceId: selection.workspaceId,
@@ -75,6 +81,7 @@ export function usePersistedMediaPanelState({
         }
       : null;
   usePersistedProjectPanelState(snapshot, (saved, restoredProjectId) => {
+    selection.setSourceLocked(false);
     if (!saved || typeof saved !== "object") return;
     const workspaceState = readPanelMediaWorkspaces(saved.workspaceState);
     if (workspaceState) onRestoreWorkspaces(restoredProjectId, workspaceState);
@@ -82,6 +89,7 @@ export function usePersistedMediaPanelState({
       const sources = persistedSources(saved.sources);
       if (sources !== null) onRestoreSources(sources);
     }
+    selection.setSourceLocked(saved.sourceLocked === true);
     if (
       saved.sourceDirection === "ascending" ||
       saved.sourceDirection === "descending" ||
