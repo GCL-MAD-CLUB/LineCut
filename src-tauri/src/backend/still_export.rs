@@ -490,7 +490,11 @@ mod tests {
         // creating videos or exercising a video-rendering test pipeline.
         let ffmpeg =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("bin/ffmpeg-x86_64-pc-windows-msvc.exe");
-        if !cfg!(windows) || !ffmpeg.is_file() {
+        // CI creates an empty sidecar placeholder for compilation. Only run
+        // this integration test when the real bundled executable is present.
+        if !cfg!(windows)
+            || !fs::metadata(&ffmpeg).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
+        {
             return;
         }
         let directory = env::temp_dir().join(format!("linecut-still-encoders-{}", Uuid::new_v4()));
