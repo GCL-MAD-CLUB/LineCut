@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useId,
   useRef,
@@ -7,12 +8,14 @@ import {
   type CSSProperties,
   type MouseEvent,
   type PointerEvent,
+  type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
 import { formatMonitorFrame, parseMonitorFrame } from "../../../../core/editor/time";
 import { timeUsToFrame } from "../../../../core/editor/timeline";
 import {
   moveStoryboardCuts,
+  canAddStoryboardCut,
   removeStoryboardCuts,
   restoreStoryboardShots,
   splitStoryboardShot,
@@ -33,6 +36,7 @@ import type { MonitorCueRange } from "../sourceMonitorState";
 import { TimelineRuler, type TimelineRulerProps } from "./TimelineRuler";
 
 interface StoryboardTimelineProps extends TimelineRulerProps {
+  addCutRef?: RefObject<((frame: number) => void) | null>;
   videoContext: string;
   frameRate: number;
   durationUs: number;
@@ -81,6 +85,7 @@ function storyboardCutColor(annotation: StoryboardShotAnnotation | undefined) {
 }
 
 export function StoryboardTimeline({
+  addCutRef,
   videoContext,
   frameRate,
   durationUs,
@@ -154,11 +159,15 @@ export function StoryboardTimeline({
   const contextCut = cuts.find((shot) => shot.id === menu?.cutId);
   const menuEditCut = contextCut && selectedIds.has(contextCut.id) ? contextCut : selectedCuts[0];
   const cutFrame = Math.round(currentFrame);
-  const canAdd =
-    hasMedia &&
-    (!storyboard
-      ? cutFrame > 0 && cutFrame < durationFrames
-      : shots.some((shot) => cutFrame > shot.start_frame && cutFrame <= shot.end_frame));
+  const canAdd = hasMedia && canAddStoryboardCut(storyboard, cutFrame, durationFrames);
+
+  useLayoutEffect(() => {
+    if (!addCutRef) return;
+    addCutRef.current = addCut;
+    return () => {
+      addCutRef.current = null;
+    };
+  });
 
   useCloseOnOutsidePointer(Boolean(menu), () => setMenu(null), { ignorePopupMenuTargets: true });
 
@@ -221,12 +230,12 @@ export function StoryboardTimeline({
     focusTimeline();
   }
 
-  function addCut() {
-    if (!canAdd) return;
+  function addCut(frame = cutFrame) {
+    if (!hasMedia || !canAddStoryboardCut(storyboard, frame, durationFrames)) return;
     onPause();
     const id = `shot:${crypto.randomUUID()}`;
     storyboardUpdated(videoContext, "添加切点", (current) =>
-      splitStoryboardShot(current, cutFrame, frameRate, id, durationFrames, durationUs),
+      splitStoryboardShot(current, frame, frameRate, id, durationFrames, durationUs),
     );
     setSelectedIds(new Set([id]));
     setMenu(null);

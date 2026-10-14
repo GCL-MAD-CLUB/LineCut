@@ -140,6 +140,49 @@
     var(--monitor-time-width);
 }
 
+/* Each dropdown gives up 32px to the two additional 24px buttons and 8px gaps.
+   The complete control row keeps the same minimum width as the three-button row. */
+.source-control-row.with-storyboard-actions {
+  --transport-buttons-width: calc(
+    var(--transport-button-size) * 5 + var(--transport-button-gap) * 4
+  );
+  --transport-column-min-width: calc(
+    var(--transport-buttons-width) + var(--monitor-control-gap) * 2
+  );
+  grid-template-columns:
+    var(--monitor-time-width)
+    minmax(62px, 90px)
+    minmax(var(--transport-column-min-width), 1fr)
+    minmax(62px, 90px)
+    var(--monitor-time-width);
+}
+
+.source-control-row.with-storyboard-actions.empty-state {
+  grid-template-columns:
+    var(--monitor-time-width) minmax(var(--transport-column-min-width), 1fr)
+    var(--monitor-time-width);
+}
+
+.with-storyboard-actions .monitor-select .select-dropdown-trigger > span {
+  padding: 0 0 0 6px;
+}
+
+.storyboard-action-icon {
+  display: block;
+  width: 14px;
+  height: 11px;
+  flex: none;
+}
+
+.storyboard-action-icon-cut {
+  width: 9px;
+  height: 10px;
+}
+
+.transport-controls button:disabled {
+  opacity: 0.45;
+}
+
 .monitor-time,
 .monitor-duration {
   color: var(--color-accent-monitor);

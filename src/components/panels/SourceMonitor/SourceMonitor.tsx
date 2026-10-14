@@ -12,6 +12,9 @@ import {
 import { flushSync } from "react-dom";
 import { useSourcePreviewRequest } from "../../../application/media/panelMediaSources";
 import { usePersistedProjectPanelState } from "../../../application/media/projectPanelPersistence";
+import type { StillExportRequest } from "../../../application/media/stillExportTask";
+import { isTauriRuntime } from "../../../platform/tauri/runtime";
+import { StillExportDialog } from "../../common/StillExportDialog/StillExportDialog";
 import {
   usePlaybackCapability,
   usePlaybackHistogramRequested,
@@ -26,6 +29,7 @@ import {
   isMediaItemEnabled,
   isMediaItemOffline,
   isMediaVideoDetached,
+  mediaDisplayName,
   resolvedMediaAudioSources,
   useProjectPort,
 } from "../../../systems/ProjectSystem";
@@ -38,7 +42,8 @@ import {
 } from "../../../core/editor/timeline";
 import { MonitorRange } from "./timeline/MonitorRange";
 import { crossedStoryboardGap, storyboardGaps } from "../../../core/editor/storyboard";
-import { resizeStoryboardShot } from "../../../core/editor/storyboardCuts";
+import { canAddStoryboardCut, resizeStoryboardShot } from "../../../core/editor/storyboardCuts";
+import { formatMonitorFrame } from "../../../core/editor/time";
 import { storyboardVideoContext } from "../../../core/editor/storyboardDetection";
 import { activeMediaDragVideoId, markMediaDragHandled } from "../MediaBin/mediaDrag";
 import { usePanelManagerState } from "../../common/DockLayout";
@@ -344,6 +349,8 @@ export function SourceMonitor() {
   const timelineSpanFramesRef = useRef(timelineSpanFrames);
   const [isVideoDragOver, setIsVideoDragOver] = useState(false);
   const [minTimelineSpanFrames, setMinTimelineSpanFrames] = useState(0);
+  const [stillExportRequest, setStillExportRequest] = useState<StillExportRequest | null>(null);
+  const storyboardAddCutRef = useRef<((frame: number) => void) | null>(null);
 
   const registerBoundAudioElement = useCallback(
     (itemId: string, element: HTMLAudioElement | null) => {
@@ -547,6 +554,31 @@ export function SourceMonitor() {
   }, [isPlaying]);
   const videoContext = storyboardVideoContext(activeVideoId, project);
   const storyboard = storyboards[videoContext];
+  const canAddCut = hasMedia && canAddStoryboardCut(storyboard, currentFrame, durationFrames);
+
+  function addStoryboardCut() {
+    if (!storyboardMode || !hasMedia) return;
+    const frame = Math.round(playbackFrame());
+    storyboardAddCutRef.current?.(frame);
+  }
+
+  function openStillExportDialog() {
+    if (!storyboardMode || !project || activeVideoOffline) return;
+    if (!isTauriRuntime()) {
+      messagePublished("此功能仅在桌面版可用。");
+      return;
+    }
+    const frame = clamp(Math.round(playbackFrame()), 0, Math.max(0, durationFrames - 1));
+    pausePlaybackForPreciseSeek();
+    setStillExportRequest({
+      assetId: project.asset.id,
+      mediaName: mediaDisplayName(project, mediaItems, activeVideoId),
+      frame,
+      frameRate,
+      timecode: formatMonitorFrame(frame, frameRate).replaceAll(":", "_"),
+      projectId,
+    });
+  }
   const skippedRanges = useMemo(
     () => (storyboard ? storyboardGaps(storyboard.shots, durationFrames) : []),
     [storyboard, durationFrames],
@@ -853,7 +885,7 @@ export function SourceMonitor() {
         return false;
       }
       const targetElement = target instanceof Element ? target : null;
-      if (targetElement?.closest(".popup-menu")) {
+      if (targetElement?.closest(".popup-menu, .still-export-dialog") || stillExportRequest) {
         return false;
       }
       const rect = element.getBoundingClientRect();
@@ -1021,7 +1053,7 @@ export function SourceMonitor() {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onWindowBlur);
     };
-  }, [durationFrames, hasMedia, isPlaybackShortcutAuthority, panelActive]);
+  }, [durationFrames, hasMedia, isPlaybackShortcutAuthority, panelActive, stillExportRequest]);
 
   function changePreviewMode(value: PreviewMode) {
     if (value === "source") {
@@ -1894,6 +1926,16 @@ export function SourceMonitor() {
           previewMode={useProxy ? "proxy" : "source"}
           previewModeOptions={previewModeOptions}
           previewModeLabels={previewModeLabels}
+          storyboardActions={
+            storyboardMode
+              ? {
+                  canAddCut,
+                  canExportFrame: hasMedia && !activeVideoOffline && durationFrames > 0,
+                  onAddCut: addStoryboardCut,
+                  onExportFrame: openStillExportDialog,
+                }
+              : undefined
+          }
           onSeekFrame={seekToFrame}
           onPlaybackFrameRequest={playbackFrame}
           onPauseForPreciseSeek={pausePlaybackForPreciseSeek}
@@ -1904,6 +1946,7 @@ export function SourceMonitor() {
           onPreviewModeChange={changePreviewMode}
         />
         <TimelineComponent
+          addCutRef={storyboardAddCutRef}
           key={`${mediaKey}:${project?.asset.fingerprint ?? ""}:${storyboardMode}`}
           videoContext={videoContext}
           skippedRanges={skippedRanges}
@@ -1954,6 +1997,12 @@ export function SourceMonitor() {
           onTimelineSpanFramesChange={updateTimelineSpanFrames}
         />
       </div>
+      {stillExportRequest && (
+        <StillExportDialog
+          request={stillExportRequest}
+          onClose={() => setStillExportRequest(null)}
+        />
+      )}
     </div>
   );
 }

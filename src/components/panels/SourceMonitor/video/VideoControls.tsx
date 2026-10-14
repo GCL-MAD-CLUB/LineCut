@@ -45,6 +45,12 @@ interface VideoControlsProps {
   previewMode: PreviewMode;
   previewModeOptions: readonly PreviewMode[];
   previewModeLabels: Record<PreviewMode, string>;
+  storyboardActions?: {
+    canAddCut: boolean;
+    canExportFrame: boolean;
+    onAddCut: () => void;
+    onExportFrame: () => void;
+  };
   onSeekFrame: (frame: number) => number;
   onPlaybackFrameRequest: () => number;
   onPauseForPreciseSeek: () => void;
@@ -80,6 +86,7 @@ export function VideoControls({
   previewMode,
   previewModeOptions,
   previewModeLabels,
+  storyboardActions,
   onSeekFrame,
   onPlaybackFrameRequest,
   onPauseForPreciseSeek,
@@ -419,7 +426,7 @@ export function VideoControls({
   return (
     <div
       ref={rowRef}
-      className={`source-control-row ${hasMedia ? "" : "empty-state"}`}
+      className={`source-control-row ${hasMedia ? "" : "empty-state"} ${storyboardActions ? "with-storyboard-actions" : ""}`}
       style={monitorTimeStyle}
     >
       {editingTime && hasMedia ? (
@@ -463,6 +470,22 @@ export function VideoControls({
         />
       )}
       <div className="transport-controls">
+        {storyboardActions && (
+          <button
+            onClick={storyboardActions.onAddCut}
+            title="添加切点"
+            aria-label="添加切点"
+            disabled={!storyboardActions.canAddCut}
+          >
+            <svg
+              className="storyboard-action-icon storyboard-action-icon-cut"
+              viewBox="22 18 18 20"
+              aria-hidden="true"
+            >
+              <path d="M22 18 H40 V29 L31 38 L22 29 Z" fill="#B0B0B0" />
+            </svg>
+          </button>
+        )}
         <button onClick={() => onStepFrame(-1)} title="上一帧" disabled={!hasMedia}>
           <span className="transport-icon step-left" />
         </button>
@@ -472,6 +495,19 @@ export function VideoControls({
         <button onClick={() => onStepFrame(1)} title="下一帧" disabled={!hasMedia}>
           <span className="transport-icon step-right" />
         </button>
+        {storyboardActions && (
+          <button
+            onClick={storyboardActions.onExportFrame}
+            title="导出帧"
+            aria-label="导出帧"
+            disabled={!storyboardActions.canExportFrame}
+          >
+            <svg className="storyboard-action-icon" viewBox="17 16 28 22" aria-hidden="true">
+              <path d="M17 20 H24 L27 16 H35 L38 20 H45 V38 H17 Z" fill="#B0B0B0" />
+              <circle cx="30.5" cy="27.5" r="4.5" fill="none" stroke="#1D1D1D" strokeWidth="2.5" />
+            </svg>
+          </button>
+        )}
       </div>
       {hasMedia && (
         <SelectDropdown
