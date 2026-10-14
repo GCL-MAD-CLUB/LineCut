@@ -484,19 +484,20 @@ mod tests {
             .any(|arg| ["-vf", "-s", "-r"].contains(&arg.as_str())));
     }
 
+    #[cfg(windows)]
     #[test]
+    #[ignore = "requires real bundled FFmpeg; run manually to validate still image encoders"]
     fn bundled_encoders_write_all_eight_image_formats() {
         // A tiny bitmap fixture verifies encoder/muxer compatibility without
         // creating videos or exercising a video-rendering test pipeline.
         let ffmpeg =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("bin/ffmpeg-x86_64-pc-windows-msvc.exe");
-        // CI creates an empty sidecar placeholder for compilation. Only run
-        // this integration test when the real bundled executable is present.
-        if !cfg!(windows)
-            || !fs::metadata(&ffmpeg).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
-        {
-            return;
-        }
+        // CI only provides empty sidecars for compilation. An explicit manual
+        // run must use the real binary and must never silently pass without it.
+        assert!(
+            fs::metadata(&ffmpeg).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0),
+            "Manual still encoder validation requires the real bundled FFmpeg executable"
+        );
         let directory = env::temp_dir().join(format!("linecut-still-encoders-{}", Uuid::new_v4()));
         fs::create_dir(&directory).unwrap();
         let input = directory.join("original.ppm");
