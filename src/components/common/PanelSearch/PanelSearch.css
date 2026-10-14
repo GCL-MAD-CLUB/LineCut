@@ -113,7 +113,7 @@
   width: 16px;
   height: 22px;
   padding: 0;
-  color: #777;
+  color: #aaa;
   background: transparent;
   border: 0;
   border-radius: 4px;
@@ -126,10 +126,29 @@
 }
 
 .panel-source-navigation {
-  margin: 0;
+  gap: 4px;
+  margin: 0 0 0 auto;
 }
 
-.panel-source-navigation button:hover:not(:disabled) {
+.panel-source-navigation button {
+  flex: 0 0 22px;
+  width: 22px;
+  height: 24px;
+}
+
+.panel-source-navigation svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.75;
+}
+
+.panel-source-navigation .panel-source-lock svg {
+  width: 14px;
+  height: 14px;
+}
+
+.panel-source-navigation button:hover:not(:disabled),
+.panel-source-navigation button.active {
   color: #eee;
 }
 

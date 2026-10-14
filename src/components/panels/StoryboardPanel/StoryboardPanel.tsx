@@ -3460,7 +3460,7 @@ export function StoryboardPanel() {
           aria-label={`选择分镜视频，当前为${videoLabel}`}
           aria-haspopup="menu"
           aria-expanded={Boolean(videoMenu)}
-          disabled={selectableVideos.length === 0}
+          disabled={selection.sourceLocked || selectableVideos.length === 0}
           onPointerDown={(event) => event.stopPropagation()}
           onClick={(event) => {
             event.stopPropagation();
@@ -3480,33 +3480,40 @@ export function StoryboardPanel() {
           <span className="storyboard-video-name">{videoLabel}</span>
           <ChevronsUpDown aria-hidden="true" />
         </button>
-        <SourceSelectionNavigation
-          canGoBack={selection.sourceHistoryIndex > 0}
-          canGoForward={selection.sourceHistoryIndex < selection.sourceHistory.length - 1}
-          onNavigate={selection.navigateSources}
-        />
-        <button
-          type="button"
-          className={`storyboard-detect-button ${isDetecting ? "is-detecting" : ""}`}
-          onClick={requestStoryboardDetection}
-          disabled={!canDetect}
-          title={
-            isDetecting
-              ? "正在切分"
-              : canDetect
-                ? shots.length > 0
-                  ? "重新切分"
-                  : "切分"
-                : "请先导入可用视频"
-          }
-          aria-busy={isDetecting}
-        >
-          {isDetecting ? (
-            <Loader2 className="spin" aria-hidden="true" />
-          ) : (
-            <Scissors aria-hidden="true" />
-          )}
-        </button>
+        <div className="storyboard-source-actions">
+          <SourceSelectionNavigation
+            locked={selection.sourceLocked}
+            onLockChange={(locked) => {
+              setVideoMenu(null);
+              selection.setSourceLocked(locked, sources);
+            }}
+            canGoBack={selection.sourceHistoryIndex > 0}
+            canGoForward={selection.sourceHistoryIndex < selection.sourceHistory.length - 1}
+            onNavigate={selection.navigateSources}
+          />
+          <button
+            type="button"
+            className={`storyboard-detect-button ${isDetecting ? "is-detecting" : ""}`}
+            onClick={requestStoryboardDetection}
+            disabled={!canDetect}
+            title={
+              isDetecting
+                ? "正在切分"
+                : canDetect
+                  ? shots.length > 0
+                    ? "重新切分"
+                    : "切分"
+                  : "请先导入可用视频"
+            }
+            aria-busy={isDetecting}
+          >
+            {isDetecting ? (
+              <Loader2 size={13} className="spin" aria-hidden="true" />
+            ) : (
+              <Scissors size={13} aria-hidden="true" />
+            )}
+          </button>
+        </div>
       </div>
 
       <PanelSearch
@@ -4797,6 +4804,7 @@ export function StoryboardPanel() {
           document.body,
         )}
       {videoMenu &&
+        !selection.sourceLocked &&
         createPortal(
           <PopupMenu
             className="media-source-menu"

@@ -9,6 +9,7 @@ import {
   resolvePanelSourceChoices,
   togglePanelSourceChoice,
   type PanelMediaWorkspace,
+  type PanelSourceChoice,
   type PanelSourceSnapshot,
   type PersistedPanelMediaWorkspaces,
 } from "../../core/editor/panelSourceSelection";
@@ -52,6 +53,8 @@ export interface PanelMediaSource {
 }
 
 interface PanelMediaSelection {
+  sourceLocked: boolean;
+  setSourceLocked: (locked: boolean, sources?: readonly PanelSourceChoice[]) => void;
   sourceHistory: PanelSourceSnapshot[];
   sourceHistoryIndex: number;
   navigateSources: (direction: -1 | 1) => void;
@@ -83,10 +86,24 @@ interface PanelMediaSelection {
 }
 
 const usePanelMediaSelection = createPanelState<PanelMediaSelection>(() => (set, get) => ({
+  sourceLocked: false,
+  setSourceLocked: (sourceLocked, sources) =>
+    set((current) => {
+      if (!sourceLocked || current.sourceLocked || !sources) return { sourceLocked };
+      // Freeze the displayed choices, including a track resolved after automatic binding.
+      const active = sources.find((source) => source.videoId === current.videoId) ?? sources[0];
+      return {
+        sourceLocked,
+        sources: sources.map(({ videoId, trackId }) => ({ videoId, trackId })),
+        videoId: active?.videoId ?? "",
+        trackId: active?.trackId ?? "",
+      };
+    }),
   sourceHistory: [],
   sourceHistoryIndex: 0,
   navigateSources: (direction) =>
     set((current) => {
+      if (current.sourceLocked) return current;
       const index = current.sourceHistoryIndex + direction;
       const next = current.sourceHistory[index];
       if (!next) return current;
@@ -123,16 +140,21 @@ const usePanelMediaSelection = createPanelState<PanelMediaSelection>(() => (set,
   nextWorkspaceId: 1,
   workspaces: [],
   openWorkspace: (projectId, source) =>
-    set((current) => ({
-      ...source,
-      sourceHistory: [panelSourceSnapshot(source)],
-      sourceHistoryIndex: 0,
-      projectId,
-      workspaces: current.projectId === projectId ? panelMediaWorkspaces(current) : [],
-      workspaceId: current.nextWorkspaceId,
-      nextWorkspaceId: current.nextWorkspaceId + 1,
-      openVersion: current.openVersion + 1,
-    })),
+    set((current) =>
+      current.sourceLocked && current.projectId === projectId
+        ? current
+        : {
+            ...source,
+            sourceLocked: current.projectId === projectId && current.sourceLocked,
+            sourceHistory: [panelSourceSnapshot(source)],
+            sourceHistoryIndex: 0,
+            projectId,
+            workspaces: current.projectId === projectId ? panelMediaWorkspaces(current) : [],
+            workspaceId: current.nextWorkspaceId,
+            nextWorkspaceId: current.nextWorkspaceId + 1,
+            openVersion: current.openVersion + 1,
+          },
+    ),
   restoreWorkspace: (id) =>
     set((current) => {
       if (id === current.workspaceId) return current;
@@ -172,6 +194,7 @@ const usePanelMediaSelection = createPanelState<PanelMediaSelection>(() => (set,
   sources: [],
   setSources: (sources) =>
     set((current) => {
+      if (current.sourceLocked) return current;
       const workspace =
         current.workspaceId === null && sources.length
           ? { workspaceId: current.nextWorkspaceId, nextWorkspaceId: current.nextWorkspaceId + 1 }
@@ -218,36 +241,52 @@ const usePanelMediaSelection = createPanelState<PanelMediaSelection>(() => (set,
     ),
   savedFrame: () => get().frame,
   openVideo: (projectId, videoId, trackId) =>
-    set((current) => ({
-      workspaces: [],
-      workspaceId: videoId ? current.nextWorkspaceId : null,
-      nextWorkspaceId: current.nextWorkspaceId + 1,
-      projectId,
-      videoId: videoId || "",
-      trackId,
-      sources: videoId ? [{ videoId, trackId }] : [],
-      sourceHistory: videoId
-        ? [{ videoId, trackId, sources: [{ videoId, trackId }], frame: 0 }]
-        : [],
-      sourceHistoryIndex: 0,
-      openVersion: current.openVersion + 1,
-      frame: current.projectId === projectId && current.videoId === videoId ? current.frame : 0,
-    })),
+    set((current) =>
+      current.sourceLocked && current.projectId === projectId
+        ? current
+        : {
+            sourceLocked: false,
+            workspaces: [],
+            workspaceId: videoId ? current.nextWorkspaceId : null,
+            nextWorkspaceId: current.nextWorkspaceId + 1,
+            projectId,
+            videoId: videoId || "",
+            trackId,
+            sources: videoId ? [{ videoId, trackId }] : [],
+            sourceHistory: videoId
+              ? [{ videoId, trackId, sources: [{ videoId, trackId }], frame: 0 }]
+              : [],
+            sourceHistoryIndex: 0,
+            openVersion: current.openVersion + 1,
+            frame:
+              current.projectId === projectId && current.videoId === videoId ? current.frame : 0,
+          },
+    ),
   previewVideo: (projectId, videoId, trackId, sources, frame, recordHistory = false) =>
-    set((current) => ({
-      ...(recordHistory
-        ? recordPanelSourceHistory(current, { videoId, trackId, sources, frame })
-        : {}),
-      ...(current.workspaceId === null && sources.length
-        ? { workspaceId: current.nextWorkspaceId, nextWorkspaceId: current.nextWorkspaceId + 1 }
-        : {}),
-      projectId,
-      videoId,
-      trackId,
-      sources,
-      openVersion: current.openVersion + 1,
-      frame: Math.max(0, Math.round(frame)),
-    })),
+    set((current) =>
+      current.sourceLocked &&
+      (current.projectId !== projectId ||
+        JSON.stringify(current.sources) !== JSON.stringify(sources) ||
+        !current.sources.some((source) => source.videoId === videoId && source.trackId === trackId))
+        ? current
+        : {
+            ...(recordHistory
+              ? recordPanelSourceHistory(current, { videoId, trackId, sources, frame })
+              : {}),
+            ...(current.workspaceId === null && sources.length
+              ? {
+                  workspaceId: current.nextWorkspaceId,
+                  nextWorkspaceId: current.nextWorkspaceId + 1,
+                }
+              : {}),
+            projectId,
+            videoId,
+            trackId,
+            sources,
+            openVersion: current.openVersion + 1,
+            frame: Math.max(0, Math.round(frame)),
+          },
+    ),
 }));
 
 /** A single visible media panel acts as focused; with multiple panels, actual focus wins. */
@@ -299,6 +338,7 @@ export function usePanelMediaSourceSelection(kind?: "subtitles" | "storyboard") 
         videoId: source.item.id,
         tracks: source.tracks,
       })),
+      selection.sourceLocked,
     );
     return choices.map(({ videoId, trackId }) => {
       const { item, project, tracks } = availableById.get(videoId)!;
@@ -320,7 +360,15 @@ export function usePanelMediaSourceSelection(kind?: "subtitles" | "storyboard") 
         frameRate: normalizeFrameRate(stream?.avg_frame_rate, stream?.r_frame_rate),
       };
     });
-  }, [initialized, selection.sources, previewVideoId, previewTrackId, mediaItems, projects]);
+  }, [
+    initialized,
+    selection.sources,
+    selection.sourceLocked,
+    previewVideoId,
+    previewTrackId,
+    mediaItems,
+    projects,
+  ]);
   const activeSource =
     selectedSources.find((source) => source.videoId === selection.videoId) ?? selectedSources[0];
   const activeVideoId = activeSource?.videoId ?? "";
@@ -344,6 +392,7 @@ export function usePanelMediaSourceSelection(kind?: "subtitles" | "storyboard") 
   }, [kind, panelId, projectHistory, projectId, selection.previewVideo]);
   const changeSources = useCallback(
     (next: PanelSourceSelection) => {
+      if (selection.sourceLocked) return;
       if (kind === "subtitles" && selection.projectId === projectId) {
         const before = {
           videoId: selection.videoId ?? activeVideoId,
@@ -361,6 +410,7 @@ export function usePanelMediaSourceSelection(kind?: "subtitles" | "storyboard") 
   );
   const selectVideo = useCallback(
     (videoId: string, trackId?: string, newWorkspace = false) => {
+      if (selection.sourceLocked) return false;
       const nextVideo = mediaItems.find(
         (item) => item.id === videoId && item.kind === "video" && isMediaItemEnabled(item),
       );
@@ -383,6 +433,7 @@ export function usePanelMediaSourceSelection(kind?: "subtitles" | "storyboard") 
     [activeTrackId, activeVideoId, mediaItems, projects, changeSources, selection, projectId],
   );
   const toggleSource = (videoId: string, trackId?: string) => {
+    if (selection.sourceLocked) return;
     const item = mediaItems.find(
       (item) => item.id === videoId && item.kind === "video" && isMediaItemEnabled(item),
     );
@@ -401,10 +452,12 @@ export function usePanelMediaSourceSelection(kind?: "subtitles" | "storyboard") 
   };
   const previewSource = (videoId: string, trackId: string, frame = 0) => {
     if (selection.videoId === videoId && selection.trackId === trackId) return;
-    const sources = selectedSources.map((source) => ({
-      videoId: source.videoId,
-      trackId: source.videoId === videoId ? trackId : source.trackId,
-    }));
+    const sources = (selection.sourceLocked ? selection.sources : selectedSources).map(
+      (source) => ({
+        videoId: source.videoId,
+        trackId: source.videoId === videoId ? trackId : source.trackId,
+      }),
+    );
     selection.previewVideo(projectId, videoId, trackId, sources, frame);
   };
   return {
@@ -548,6 +601,7 @@ export function usePanelMediaWorkspaceMenu(
             const choices = resolvePanelSourceChoices(
               workspace.sources,
               available.map((source) => ({ videoId: source.item.id, tracks: source.tracks })),
+              selection.sourceLocked,
             );
             const sources = choices.map((choice) => ({
               name: available.find((source) => source.item.id === choice.videoId)!.item.file_name,

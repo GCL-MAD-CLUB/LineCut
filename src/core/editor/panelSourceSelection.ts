@@ -174,10 +174,12 @@ export function mediaPanelTitle(
 /**
  * An unbound video stays selected; its first visible track becomes selected when bound.
  * Resolve availability without replacing the requested choices, so undo can restore them.
+ * Locked scopes retain their exact track choice even if tracks are added or removed.
  */
 export function resolvePanelSourceChoices(
   requested: readonly PanelSourceChoice[],
   available: readonly AvailablePanelSource[],
+  preserveTracks = false,
 ): PanelSourceChoice[] {
   const byVideo = new Map(available.map((source) => [source.videoId, source]));
   return requested.flatMap((choice) => {
@@ -186,10 +188,11 @@ export function resolvePanelSourceChoices(
     return [
       {
         videoId: choice.videoId,
-        trackId:
-          source.tracks.find((track) => track.id === choice.trackId)?.id ??
-          source.tracks[0]?.id ??
-          "",
+        trackId: preserveTracks
+          ? choice.trackId
+          : (source.tracks.find((track) => track.id === choice.trackId)?.id ??
+            source.tracks[0]?.id ??
+            ""),
       },
     ];
   });

@@ -2355,7 +2355,7 @@ export function SubtitlePanel() {
         <button
           type="button"
           className={`subtitle-track-trigger ${trackMenu ? "active" : ""}`}
-          disabled={subtitleSources.length === 0}
+          disabled={selection.sourceLocked || subtitleSources.length === 0}
           title={panelSourceTitle(activeTrackLabel, selectedSources)}
           aria-label={`选择字幕，当前为${activeTrackLabel}`}
           aria-haspopup="menu"
@@ -2381,6 +2381,11 @@ export function SubtitlePanel() {
           <ChevronsUpDown aria-hidden="true" />
         </button>
         <SourceSelectionNavigation
+          locked={selection.sourceLocked}
+          onLockChange={(locked) => {
+            setTrackMenu(null);
+            selection.setSourceLocked(locked, selectedSources);
+          }}
           canGoBack={selection.sourceHistoryIndex > 0}
           canGoForward={selection.sourceHistoryIndex < selection.sourceHistory.length - 1}
           onNavigate={selection.navigateSources}
@@ -2979,6 +2984,7 @@ export function SubtitlePanel() {
       </footer>
 
       {trackMenu &&
+        !selection.sourceLocked &&
         createPortal(
           <PopupMenu
             className="media-source-menu"
