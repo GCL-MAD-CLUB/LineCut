@@ -1,5 +1,18 @@
 # Third-party notices
 
+## Linecut UI Sans
+
+The bundled `src/assets/fonts/linecut-ui-sans-vf.woff2` is the Simplified Chinese
+face extracted from Adobe Source Han Sans's `SourceHanSans-VF.ttf.ttc`, converted
+to WOFF2 without character subsetting. It retains the variable weight range
+250–900 and is renamed Linecut UI Sans to respect the reserved font name.
+
+Source Han Sans is copyright 2014–2025 Adobe and is licensed under the SIL Open
+Font License 1.1. The full license is included in `src/assets/fonts/OFL.txt` and
+installed as `licenses/linecut-ui-sans-OFL.txt`.
+
+- <https://github.com/adobe-fonts/source-han-sans>
+
 ## FFmpeg and FFprobe
 
 The optional bundled `ffmpeg-x86_64-pc-windows-msvc.exe` and
@@ -48,7 +61,7 @@ separate license from Jina AI. The model is used without weight modifications.
 Semantic search shares the bundled ONNX Runtime and DirectML binaries described
 above. `npm run prepare:semantic` downloads the pinned INT8 model and tokenizer.
 
-The application code in this repository, excluding those optional FFmpeg and
+The application code in this repository, excluding the bundled UI font, optional FFmpeg and
 FFprobe executables, optional TransNetV2/ONNX Runtime assets, Jina model assets, and their
 respective notices, is licensed under Apache License 2.0; see
 [LICENSE](LICENSE).

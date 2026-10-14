@@ -54,6 +54,7 @@
     "resources": {
       "../LICENSE": "LICENSE",
       "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
+      "../src/assets/fonts/OFL.txt": "licenses/linecut-ui-sans-OFL.txt",
       "target/release/linecut_thumbnail_provider.dll": "linecut_thumbnail_provider.dll",
       "resources/transnetv2": "transnetv2",
       "resources/semantic-search": "semantic-search"

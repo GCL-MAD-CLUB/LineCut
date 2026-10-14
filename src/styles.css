@@ -1,3 +1,11 @@
+@font-face {
+  font-family: "Linecut UI Sans";
+  src: url("./assets/fonts/linecut-ui-sans-vf.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 250 900;
+  font-display: swap;
+}
+
 :root {
   color: var(--color-text);
   background: var(--color-canvas);
@@ -7,9 +15,9 @@
   -webkit-font-smoothing: antialiased;
 
   /* Typography */
-  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-sans: "Linecut UI Sans", sans-serif;
   --font-song: 宋体;
-  --font-mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  --font-mono: Consolas;
 
   /* Semantic colors */
   --color-canvas: #1d1d1d;

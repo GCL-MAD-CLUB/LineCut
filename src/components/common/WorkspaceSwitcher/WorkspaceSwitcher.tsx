@@ -10,6 +10,7 @@ interface WorkspaceSwitcherProps<WorkspaceId extends string> {
   workspaces: readonly WorkspaceDefinition<WorkspaceId>[];
   activeWorkspace: WorkspaceId;
   disabled?: boolean;
+  onHome: () => void;
   onWorkspaceChange: (workspace: WorkspaceId) => void;
 }
 
@@ -18,6 +19,7 @@ export function WorkspaceSwitcher<WorkspaceId extends string>({
   activeWorkspace,
   disabled = false,
   onWorkspaceChange,
+  onHome,
 }: WorkspaceSwitcherProps<WorkspaceId>) {
   return (
     <nav className="workspace-switcher" aria-label="工作区">
@@ -35,6 +37,18 @@ export function WorkspaceSwitcher<WorkspaceId extends string>({
           </button>
         </Fragment>
       ))}
+      <span className="workspace-switcher-divider" aria-hidden="true" />
+      <button
+        type="button"
+        className="workspace-home"
+        onClick={onHome}
+        aria-label="项目首页"
+        title="项目首页"
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M12 2 1 13h3v9h6v-7h4v7h6v-9h3L12 2Z" />
+        </svg>
+      </button>
     </nav>
   );
 }

@@ -75,6 +75,7 @@ pub fn run() {
             save_project_file,
             auto_save_project_snapshot,
             open_project_file,
+            recent_project_sizes,
             sync_project_workspace,
             close_project,
             path_is_file,
