@@ -1,0 +1,141 @@
+.modal-dialog.still-export-dialog {
+  width: min(406px, calc(100vw - 32px));
+}
+
+.still-export-dialog-body {
+  display: grid;
+  gap: 15px;
+  padding: 20px 20px 11px;
+  color: var(--color-text);
+  font-size: 12px;
+}
+
+.still-export-field {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 200px);
+  align-items: center;
+  min-height: 20px;
+}
+
+.still-export-field > :first-child,
+.still-export-path > :first-child {
+  text-align: left;
+}
+
+.still-export-field > input {
+  width: 100%;
+  min-width: 0;
+  height: 20px;
+  padding: 0 7px;
+  color: var(--color-text);
+  font-size: 12px;
+  background: var(--color-surface-field-strong);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+}
+
+.still-export-format {
+  background: var(--color-surface-field-strong);
+}
+
+.still-export-format .select-dropdown-trigger {
+  min-height: 22px;
+}
+
+.still-export-format .select-dropdown-trigger > span {
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.still-export-format-menu {
+  max-height: min(216px, calc(100vh - 16px));
+  scrollbar-gutter: auto;
+  padding: 4px 0;
+}
+
+.still-export-format-menu .select-dropdown-option {
+  min-height: 24px;
+  line-height: 24px;
+  grid-template-columns: 18px minmax(0, 1fr);
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.still-export-path {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  align-items: center;
+  min-height: 20px;
+}
+
+.still-export-path > :last-child {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  user-select: text;
+}
+
+.still-export-destination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.still-export-destination > label {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.still-export-destination input[type="checkbox"] {
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  margin: 0;
+  padding: 0;
+  flex: none;
+  border: 2px solid #b0b0b0;
+  border-radius: 2px;
+  background: transparent center / contain no-repeat;
+  cursor: pointer;
+}
+
+.still-export-destination input[type="checkbox"]:checked {
+  background-color: #b0b0b0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M1.5 6.5 5 10 10.5 2.5' fill='none' stroke='%231d1d1d' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+.still-export-destination input[type="checkbox"]:hover {
+  border-color: #d0d0d0;
+}
+
+.still-export-destination > button {
+  width: 80px;
+  min-height: 24px;
+  padding: 0 8px;
+  color: var(--color-text);
+  font-size: 12px;
+  background: var(--color-surface-field-strong);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+}
+
+.still-export-destination > button:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
+}
+
+.still-export-dialog > .modal-dialog-actions {
+  padding: 0 20px 20px;
+}
+
+.still-export-dialog .modal-dialog-confirm,
+.still-export-dialog .modal-dialog-cancel {
+  width: 53px;
+  min-width: 53px;
+  min-height: 24px;
+  padding: 0;
+}

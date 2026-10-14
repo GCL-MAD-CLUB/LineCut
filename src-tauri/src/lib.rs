@@ -71,6 +71,8 @@ pub fn run() {
             decode_audio_pcm_window,
             generate_proxy,
             export_clips,
+            still_export_defaults,
+            export_still_frame,
             add_external_subtitles,
             save_project_file,
             auto_save_project_snapshot,

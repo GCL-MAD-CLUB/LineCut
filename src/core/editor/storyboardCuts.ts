@@ -94,6 +94,17 @@ function preserveStoryboardTitles(
   return { ...storyboard, shotAnnotations };
 }
 
+export function canAddStoryboardCut(
+  storyboard: StoryboardState | undefined,
+  frame: number,
+  durationFrames: number,
+) {
+  if (!Number.isInteger(frame)) return false;
+  return !storyboard || (!storyboard.shots.length && !storyboard.deletedShots?.length)
+    ? frame > 0 && frame < durationFrames
+    : storyboard.shots.some((shot) => frame > shot.start_frame && frame <= shot.end_frame);
+}
+
 export function splitStoryboardShot(
   storyboard: StoryboardState,
   frame: number,
