@@ -60,6 +60,7 @@ interface ActiveCell {
 interface StoryboardListViewProps {
   sourceForRow: (row: StoryboardShot) => PanelRowSource;
   showSource: boolean;
+  similarityScores?: ReadonlyMap<string, number>;
   searchHighlight?: SearchHighlightOptions;
   searchScope: "any" | "title" | "keywords";
   shots: StoryboardShot[];
@@ -130,6 +131,7 @@ function annotationTargets(
 export function StoryboardListView({
   sourceForRow,
   showSource,
+  similarityScores,
   searchHighlight,
   searchScope,
   shots,
@@ -509,6 +511,11 @@ export function StoryboardListView({
                   >
                     {renderEditableCell(shot, "title")}
                   </span>
+                  {similarityScores && (
+                    <span className="shot-similarity-cell" role="cell">
+                      {similarityScores.get(shot.id)?.toFixed(3) ?? "-"}
+                    </span>
+                  )}
                   <span
                     className={cellClassName(shot.id, "mediaStart", selected, "shot-time-cell")}
                     role="cell"

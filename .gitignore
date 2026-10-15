@@ -70,3 +70,7 @@ Desktop.ini
 # Downloaded semantic embedding model
 src-tauri/resources/semantic-search/*
 !src-tauri/resources/semantic-search/MODEL.md
+
+# Downloaded storyboard embedding model
+src-tauri/resources/storyboard-semantic/*
+!src-tauri/resources/storyboard-semantic/MODEL.md

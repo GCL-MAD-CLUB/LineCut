@@ -11,16 +11,16 @@ FunctionEnd
 
 Function LineCutSemanticPageCreate
   Call SkipIfPassive
-  !insertmacro MUI_HEADER_TEXT "选择是否附带语义检索" "选择是否安装字幕语义检索组件。"
+  !insertmacro MUI_HEADER_TEXT "选择是否附带语义检索" "选择是否安装字幕与分镜语义检索组件。"
   nsDialogs::Create 1018
   Pop $0
   ${If} $0 == error
     Abort
   ${EndIf}
 
-  ${NSD_CreateLabel} 0 0 100% 24u "语义检索可以根据含义查找字幕，模型在本机运行。"
+  ${NSD_CreateLabel} 0 0 100% 24u "包含字幕语义检索与分镜选帧组件，模型在本机运行。"
   Pop $0
-  ${NSD_CreateGroupBox} 0 30u 100% 90u "字幕语义检索"
+  ${NSD_CreateGroupBox} 0 30u 100% 90u "字幕与分镜语义检索"
   Pop $0
   ${NSD_CreateCheckbox} 12u 48u 88% 12u "附带语义检索组件（默认勾选）"
   Pop $LineCutSemanticCheckbox

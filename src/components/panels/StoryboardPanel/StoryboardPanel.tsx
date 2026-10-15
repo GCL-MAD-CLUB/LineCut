@@ -1,3 +1,8 @@
+import {
+  useStoryboardSemanticSearch,
+  useStoryboardSemanticSearchAvailable,
+} from "../../../application/media/storyboardSemanticSearch";
+import { useStoryboardSelectedFrames } from "../../../application/media/storyboardSelectedFrames";
 import { panelSourceTitle } from "../../../core/editor/panelSourceSelection";
 import {
   sourceScope,
@@ -138,6 +143,7 @@ const STORYBOARD_THUMBNAIL_COLUMN_PADDING = 16;
 const STORYBOARD_STATUS_GUTTER_WIDTH = 16;
 
 type StoryboardResizableColumnId =
+  | "similarity"
   | "thumbnail"
   | "source"
   | "title"
@@ -149,6 +155,7 @@ type StoryboardResizableColumnId =
   | "rating"
   | "retained";
 type StoryboardSortableColumnId =
+  | "similarity"
   | "title"
   | "mediaStart"
   | "mediaEnd"
@@ -183,6 +190,7 @@ const storyboardTableHeaders: Array<{
 }> = [
   { id: "thumbnail", label: "" },
   { id: "title", label: "标题", sortColumnId: "title" },
+  { id: "similarity", label: "匹配度", sortColumnId: "similarity", resizeColumn: "title" },
   { id: "mediaStart", label: "媒体开始", sortColumnId: "mediaStart", resizeColumn: "title" },
   { id: "mediaEnd", label: "媒体结束", sortColumnId: "mediaEnd", resizeColumn: "mediaStart" },
   {
@@ -203,6 +211,7 @@ const storyboardGridSortOptions: Array<{
   label: string;
   defaultDirection: StoryboardSortDirection;
 }> = [
+  { id: "similarity", label: "匹配度", defaultDirection: "descending" },
   { id: "title", label: "标题", defaultDirection: "ascending" },
   { id: "mediaStart", label: "媒体开始", defaultDirection: "ascending" },
   { id: "mediaEnd", label: "媒体结束", defaultDirection: "ascending" },
@@ -216,6 +225,7 @@ const storyboardGridSortOptions: Array<{
 type StoryboardResizableColumnWidths = Record<StoryboardResizableColumnId, number>;
 
 const initialStoryboardColumnWidths: StoryboardResizableColumnWidths = {
+  similarity: 80,
   thumbnail: 104,
   source: 180,
   title: 128,
@@ -229,6 +239,7 @@ const initialStoryboardColumnWidths: StoryboardResizableColumnWidths = {
 };
 
 const minimumStoryboardColumnWidths: StoryboardResizableColumnWidths = {
+  similarity: 38,
   thumbnail: 60,
   source: 38,
   title: 38,
@@ -242,6 +253,7 @@ const minimumStoryboardColumnWidths: StoryboardResizableColumnWidths = {
 };
 
 const maximumStoryboardColumnWidths: StoryboardResizableColumnWidths = {
+  similarity: 300,
   thumbnail: 720,
   source: 720,
   title: 720,
@@ -255,6 +267,7 @@ const maximumStoryboardColumnWidths: StoryboardResizableColumnWidths = {
 };
 
 const storyboardResizableColumnLabels: Record<StoryboardResizableColumnId, string> = {
+  similarity: "匹配度",
   thumbnail: "缩略图",
   source: "来源",
   title: "标题",
@@ -1053,6 +1066,7 @@ function sortStoryboardShots(
   keywordNodes: readonly StoryboardKeywordNode[],
   shotCount: number,
   sortShotsById: ReadonlyMap<string, StoryboardShot>,
+  similarityScores: ReadonlyMap<string, number>,
 ) {
   const direction = sort.direction === "ascending" ? 1 : -1;
   const compareSortValues = (left: string | number, right: string | number) => {
@@ -1070,6 +1084,13 @@ function sortStoryboardShots(
   return shots
     .map((shot, index) => ({ shot, index }))
     .sort((left, right) => {
+      if (sort.columnId === "similarity") {
+        return (
+          ((similarityScores.get(left.shot.id) ?? -1) -
+            (similarityScores.get(right.shot.id) ?? -1)) *
+            direction || left.index - right.index
+        );
+      }
       const leftSortShot = sortShotsById.get(left.shot.id) ?? left.shot;
       const rightSortShot = sortShotsById.get(right.shot.id) ?? right.shot;
       const valueDelta = compareSortValues(
@@ -1126,7 +1147,9 @@ export function StoryboardPanel() {
   );
   const {
     query,
-    searchMode,
+    searchMode: storedSearchMode,
+    semanticThreshold,
+    setSemanticThreshold,
     searchScope,
     searchRule,
     showOnlySelected,
@@ -1180,6 +1203,9 @@ export function StoryboardPanel() {
     shotSelectionCleared,
     shotSelectionReplaced,
   } = useStoryboardPanelState((state) => state, videoContext, selection.workspaceId);
+  const semanticSearchAvailable = useStoryboardSemanticSearchAvailable();
+  const searchMode =
+    storedSearchMode === "semantic" && !semanticSearchAvailable ? "filter" : storedSearchMode;
   const { requestDetection, canRequestDetection, detectionDialog, detectionTasks } =
     useStoryboardDetection();
   const playbackStatus = usePlaybackStatus();
@@ -1308,21 +1334,82 @@ export function StoryboardPanel() {
     () => visibleStoryboardShots(shots, shotStacks),
     [shotStacks, shots],
   );
+  const semanticShots = useMemo(
+    () =>
+      shots.flatMap((shot) => {
+        const source = sourceForShot(shot);
+        return source
+          ? [
+              {
+                id: shot.id,
+                source: source.context,
+                assetId: source.assetId,
+                fingerprint: source.fingerprint,
+                startFrame: shot.start_frame,
+                endFrame: shot.end_frame,
+              },
+            ]
+          : [];
+      }),
+    [shots, sources],
+  );
+  const semantic = useStoryboardSemanticSearch(
+    searchMode === "semantic",
+    query,
+    semanticShots,
+    JSON.stringify([selection.projectId, selection.workspaceId, videoContext]),
+    () => setQuery(""),
+  );
+  const showSimilarity = searchMode === "semantic" && Boolean(query.trim());
+  const hasSemanticResults =
+    showSimilarity && semantic.status === "ready" && semantic.scores.size > 0;
+  const ordinaryShotSort = useRef<StoryboardSort>(defaultStoryboardSort);
+  const ordinaryGridShotSort = useRef<StoryboardSort>(defaultStoryboardGridSort);
+  if (shotSort.columnId !== "similarity") ordinaryShotSort.current = shotSort;
+  if (gridShotSort.columnId !== "similarity") ordinaryGridShotSort.current = gridShotSort;
+  const effectiveShotSort =
+    shotSort.columnId === "similarity" && !hasSemanticResults ? ordinaryShotSort.current : shotSort;
+  const effectiveGridShotSort =
+    gridShotSort.columnId === "similarity" && !hasSemanticResults
+      ? ordinaryGridShotSort.current
+      : gridShotSort;
+  const lastSemanticSortVersion = useRef(0);
+  useEffect(() => {
+    if (hasSemanticResults && lastSemanticSortVersion.current !== semantic.resultVersion) {
+      lastSemanticSortVersion.current = semantic.resultVersion;
+      setSourceDirection("none");
+      setShotSort({ columnId: "similarity", direction: "descending" });
+      setGridShotSort({ columnId: "similarity", direction: "descending" });
+    }
+    if (!hasSemanticResults) lastSemanticSortVersion.current = 0;
+    if (!showSimilarity) {
+      setShotSort((current) =>
+        current.columnId === "similarity" ? ordinaryShotSort.current : current,
+      );
+      setGridShotSort((current) =>
+        current.columnId === "similarity" ? ordinaryGridShotSort.current : current,
+      );
+    }
+  }, [hasSemanticResults, semantic.resultVersion, showSimilarity]);
   const filteredShots = useMemo(
     () =>
       displayShots.filter(
         (shot) =>
           (!showOnlySelected || selectedShotIds.has(shot.id)) &&
-          (searchMode === "highlight" ||
-            shotMatchesSearch(
-              shot,
-              shotAnnotations[shot.id],
-              shotCount,
-              keywordNodes,
-              query,
-              searchScope,
-              searchRule,
-            )) &&
+          (searchMode === "semantic"
+            ? !query.trim() ||
+              semantic.status !== "ready" ||
+              (semantic.scores.get(shot.id) ?? -1) >= semanticThreshold
+            : searchMode === "highlight" ||
+              shotMatchesSearch(
+                shot,
+                shotAnnotations[shot.id],
+                shotCount,
+                keywordNodes,
+                query,
+                searchScope,
+                searchRule,
+              )) &&
           shotMatchesFilter(
             shotAnnotations[shot.id],
             minimumRating,
@@ -1348,6 +1435,9 @@ export function StoryboardPanel() {
       quickFilterKeywordIds,
       ratingComparator,
       searchMode,
+      semantic.status,
+      semantic.scores,
+      semanticThreshold,
       searchRule,
       searchScope,
       selectedShotIds,
@@ -1356,7 +1446,7 @@ export function StoryboardPanel() {
       showOnlySelected,
     ],
   );
-  const activeShotSort = viewMode === "grid" ? gridShotSort : shotSort;
+  const activeShotSort = viewMode === "grid" ? effectiveGridShotSort : effectiveShotSort;
   const playbackTraceShot = tracePlaybackStatus?.videoId
     ? filteredShots.find(
         (shot) =>
@@ -1369,6 +1459,9 @@ export function StoryboardPanel() {
     ? (playbackTraceShot ?? selectedMotionShot)
     : (selectedMotionShot ?? playbackTraceShot);
   const traceSource = traceShot ? sourceForShot(traceShot) : undefined;
+  const selectedFrames = useStoryboardSelectedFrames(
+    semanticShots.find((shot) => shot.id === traceShot?.id),
+  );
   const setActiveShotSort = viewMode === "grid" ? setGridShotSort : setShotSort;
   const sortedShots = useMemo(
     () =>
@@ -1380,6 +1473,7 @@ export function StoryboardPanel() {
           keywordNodes,
           shotCount,
           sortShotsById,
+          semantic.scores,
         ),
         sourceForShot,
         sourceDirection,
@@ -1391,6 +1485,7 @@ export function StoryboardPanel() {
       shotAnnotations,
       shotCount,
       sortShotsById,
+      semantic.scores,
       sources,
       sourceDirection,
     ],
@@ -1575,12 +1670,14 @@ export function StoryboardPanel() {
     storyboardColumnWidths.keywords +
     storyboardColumnWidths.label +
     storyboardColumnWidths.rating +
-    storyboardColumnWidths.retained;
+    storyboardColumnWidths.retained +
+    (showSimilarity ? storyboardColumnWidths.similarity : 0);
   const tableStyle = {
     "--storyboard-fixed-thumbnail-width": `${thumbnailColumnWidth}px`,
     "--storyboard-status-gutter-width": `${STORYBOARD_STATUS_GUTTER_WIDTH}px`,
     "--storyboard-col-source": multipleSources ? `${storyboardColumnWidths.source}px` : " ",
     "--storyboard-col-thumbnail": `${thumbnailColumnWidth}px`,
+    "--storyboard-col-similarity": showSimilarity ? `${storyboardColumnWidths.similarity}px` : " ",
     "--storyboard-col-title": `${storyboardColumnWidths.title}px`,
     "--storyboard-col-media-start": `${storyboardColumnWidths.mediaStart}px`,
     "--storyboard-col-media-end": `${storyboardColumnWidths.mediaEnd}px`,
@@ -3268,14 +3365,16 @@ export function StoryboardPanel() {
     if (displayShots.length === 0) {
       return;
     }
-    setShotSort((current) =>
-      current.columnId === columnId
+    setShotSort((stored) => {
+      const current =
+        stored.columnId === "similarity" && !hasSemanticResults ? ordinaryShotSort.current : stored;
+      return current.columnId === columnId
         ? {
             columnId,
             direction: current.direction === "ascending" ? "descending" : "ascending",
           }
-        : { columnId, direction: "ascending" },
-    );
+        : { columnId, direction: columnId === "similarity" ? "descending" : "ascending" };
+    });
   }
 
   function setRatingFilter(minimum: number) {
@@ -3406,15 +3505,20 @@ export function StoryboardPanel() {
     const isActive =
       header.sortColumnId !== undefined &&
       displayShots.length > 0 &&
-      shotSort.columnId === header.sortColumnId;
-    const nextDirection = isActive && shotSort.direction === "ascending" ? "降序" : "升序";
-    const resizeColumn = header.id === "title" && multipleSources ? "source" : header.resizeColumn;
+      effectiveShotSort.columnId === header.sortColumnId;
+    const nextDirection = isActive && effectiveShotSort.direction === "ascending" ? "降序" : "升序";
+    const resizeColumn =
+      header.id === "title" && multipleSources
+        ? "source"
+        : header.id === "mediaStart" && showSimilarity
+          ? "similarity"
+          : header.resizeColumn;
     return (
       <span
         key={header.id}
         className={`storyboard-column-header storyboard-column-${header.id}`}
         role="columnheader"
-        aria-sort={isActive ? shotSort.direction : undefined}
+        aria-sort={isActive ? effectiveShotSort.direction : undefined}
       >
         {header.sortColumnId ? (
           <button
@@ -3423,10 +3527,12 @@ export function StoryboardPanel() {
             title={`按${header.label}${nextDirection}排列`}
             aria-label={`按${header.label}${nextDirection}排列`}
             onClick={() => toggleShotSort(header.sortColumnId!)}
-            disabled={displayShots.length === 0}
+            disabled={
+              displayShots.length === 0 || (header.id === "similarity" && !hasSemanticResults)
+            }
           >
             <span className="storyboard-column-label-text">{header.label}</span>
-            {isActive && <SortArrow direction={shotSort.direction} />}
+            {isActive && <SortArrow direction={effectiveShotSort.direction} />}
           </button>
         ) : header.label ? (
           <span className="storyboard-column-label-text">{header.label}</span>
@@ -3518,11 +3624,20 @@ export function StoryboardPanel() {
 
       <PanelSearch
         label="分镜"
+        semantic={
+          semanticSearchAvailable
+            ? {
+                threshold: semanticThreshold,
+                onThresholdChange: setSemanticThreshold,
+                available: hasSemanticResults,
+              }
+            : undefined
+        }
         query={query}
         mode={searchMode}
         rule={searchRule}
-        scope={searchScope}
-        disabled={shots.length === 0}
+        scope={searchMode === "semantic" ? undefined : searchScope}
+        disabled={sources.length === 0}
         canNavigate={matchingShotIndices.length > 0}
         matchCount={matchingShotIndices.length}
         activeMatchNumber={activeSearchMatchNumber}
@@ -3692,11 +3807,14 @@ export function StoryboardPanel() {
               showSource={multipleSources}
               currentShotIndex={currentShotIndex}
               tableStyle={tableStyle}
-              headerContent={storyboardTableHeaders.flatMap((header) =>
-                header.id === "title" && multipleSources
-                  ? [renderSourceHeader(), renderTableHeader(header)]
-                  : [renderTableHeader(header)],
-              )}
+              similarityScores={showSimilarity ? semantic.scores : undefined}
+              headerContent={storyboardTableHeaders
+                .filter((header) => header.id !== "similarity" || showSimilarity)
+                .flatMap((header) =>
+                  header.id === "title" && multipleSources
+                    ? [renderSourceHeader(), renderTableHeader(header)]
+                    : [renderTableHeader(header)],
+                )}
               rowVirtualizer={rowVirtualizer}
               virtualRows={virtualRows}
               thumbnailWindow={thumbnailWindow}
@@ -3759,6 +3877,7 @@ export function StoryboardPanel() {
               <StoryboardMotionPanel
                 visible={keywordPanelOpen}
                 shot={traceShot}
+                selectedFrames={selectedFrames}
                 assetId={traceSource?.assetId}
                 fingerprint={traceSource?.fingerprint}
                 videoSource={
@@ -4303,24 +4422,27 @@ export function StoryboardPanel() {
             onPointerDown={(event) => event.stopPropagation()}
             onContextMenu={(event) => event.preventDefault()}
           >
-            {storyboardGridSortOptions.map((option) => (
-              <Fragment key={option.id}>
-                {option.id === "rating" && <PopupMenuSeparator />}
-                <PopupMenuItem
-                  checked={activeShotSort.columnId === option.id}
-                  onSelect={() => {
-                    setActiveShotSort((current) =>
-                      current.columnId === option.id
-                        ? current
-                        : { columnId: option.id, direction: option.defaultDirection },
-                    );
-                    setFooterSortMenu(null);
-                  }}
-                >
-                  {option.label}
-                </PopupMenuItem>
-              </Fragment>
-            ))}
+            {storyboardGridSortOptions
+              .filter((option) => option.id !== "similarity" || showSimilarity)
+              .map((option) => (
+                <Fragment key={option.id}>
+                  {option.id === "rating" && <PopupMenuSeparator />}
+                  <PopupMenuItem
+                    checked={activeShotSort.columnId === option.id}
+                    disabled={option.id === "similarity" && !hasSemanticResults}
+                    onSelect={() => {
+                      setActiveShotSort((current) =>
+                        current.columnId === option.id
+                          ? current
+                          : { columnId: option.id, direction: option.defaultDirection },
+                      );
+                      setFooterSortMenu(null);
+                    }}
+                  >
+                    {option.label}
+                  </PopupMenuItem>
+                </Fragment>
+              ))}
           </PopupMenu>,
           document.body,
         )}

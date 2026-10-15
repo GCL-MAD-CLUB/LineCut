@@ -209,7 +209,7 @@ fn decoding_prefetches_during_inference_and_cancellation_unblocks_full_queue() {
         .submit_with(
             task,
             || Ok(((), "test".into())),
-            move |_, window| {
+            move |_, window, _| {
                 if first {
                     first = false;
                     started_tx.send(()).unwrap();
@@ -291,7 +291,7 @@ fn concurrent_admission_and_retirement_never_overlap_sessions() {
                             assert_eq!(active.fetch_add(1, Ordering::SeqCst), 0);
                             Ok((ActiveModel(active), "test".into()))
                         },
-                        |_, window| predict(window),
+                        |_, window, _| predict(window),
                     )
                     .unwrap();
                 feed(&sender, &id, index, 1);
@@ -314,7 +314,7 @@ fn stalled_queue_does_not_delay_another_task() {
         .submit_with(
             stalled,
             || Ok(((), "test".into())),
-            |_, window| predict(window),
+            |_, window, _| predict(window),
         )
         .unwrap();
     let (sender, _, _, ready, ready_result) = task(&consumer, "ready");
@@ -322,7 +322,7 @@ fn stalled_queue_does_not_delay_another_task() {
         .submit_with(
             ready,
             || Ok(((), "test".into())),
-            |_, window| predict(window),
+            |_, window, _| predict(window),
         )
         .unwrap();
     feed(&sender, "ready", 8, 51);
@@ -358,7 +358,7 @@ fn one_session_round_robin_isolation_retirement_and_restart() {
                 gate.recv_timeout(TEST_TIMEOUT).unwrap();
                 Ok((ModelLifetime(model_dropped), "test-provider".into()))
             },
-            move |_, window| {
+            move |_, window, _| {
                 window_order.lock().unwrap().push(window[0][0]);
                 predict(window)
             },
@@ -368,8 +368,8 @@ fn one_session_round_robin_isolation_retirement_and_restart() {
     consumer
         .submit_with(
             b,
-            || -> AppResult<((), String)> { panic!("must reuse the session") },
-            |_, window| predict(window),
+            || -> AppResult<((), SessionProvider)> { panic!("must reuse the session") },
+            |_, window, _| predict(window),
         )
         .unwrap();
     let (failed_sender, _, _, failed, failed_result) = task(&consumer, "failed");
@@ -377,7 +377,7 @@ fn one_session_round_robin_isolation_retirement_and_restart() {
         .submit_with(
             failed,
             || Ok(((), "unused".into())),
-            |_, window| predict(window),
+            |_, window, _| predict(window),
         )
         .unwrap();
     failed_sender
@@ -391,7 +391,7 @@ fn one_session_round_robin_isolation_retirement_and_restart() {
         .submit_with(
             cancelled,
             || Ok(((), "unused".into())),
-            |_, window| predict(window),
+            |_, window, _| predict(window),
         )
         .unwrap();
     cancel.store(true, Ordering::SeqCst);
@@ -427,7 +427,7 @@ fn one_session_round_robin_isolation_retirement_and_restart() {
                 init_count.fetch_add(1, Ordering::SeqCst);
                 Ok((ModelLifetime(model_dropped), "restarted".into()))
             },
-            |_, window| predict(window),
+            |_, window, _| predict(window),
         )
         .unwrap();
     feed(&sender, "next", 33, 1);
@@ -491,7 +491,7 @@ fn cancellation_while_all_queues_are_empty_finishes_without_producer_message() {
                 ready_tx.send(()).unwrap();
                 Ok(((), "test".into()))
             },
-            |_, window| predict(window),
+            |_, window, _| predict(window),
         )
         .unwrap();
     ready.recv_timeout(TEST_TIMEOUT).unwrap();
@@ -507,13 +507,13 @@ fn model_initialization_failure_fails_admitted_tasks_and_releases_queues() {
     consumer
         .submit_with(
             task,
-            || -> AppResult<((), String)> {
+            || -> AppResult<((), SessionProvider)> {
                 Err(app_error(
                     ErrorCode::StoryboardInferenceFailed,
                     "test initialization failure",
                 ))
             },
-            |_, window| predict(window),
+            |_, window, _| predict(window),
         )
         .unwrap();
     assert_eq!(
@@ -574,7 +574,7 @@ fn completed_tasks_reuse_warm_session_before_idle_retirement() {
         .submit_with(
             first,
             move || Ok((ModelLifetime(model_dropped), "warm".into())),
-            |_, window| predict(window),
+            |_, window, _| predict(window),
         )
         .unwrap();
     feed(&sender, "first", 1, 1);
@@ -586,8 +586,8 @@ fn completed_tasks_reuse_warm_session_before_idle_retirement() {
     consumer
         .submit_with(
             second,
-            || -> AppResult<((), String)> { panic!("idle session must be reused") },
-            |_, window| predict(window),
+            || -> AppResult<((), SessionProvider)> { panic!("idle session must be reused") },
+            |_, window, _| predict(window),
         )
         .unwrap();
     feed(&sender, "second", 2, 51);

@@ -223,7 +223,7 @@ impl InferenceTask {
 
     fn step(
         &mut self,
-        provider: &str,
+        provider: &SessionProvider,
         infer: &mut impl FnMut(&VecDeque<Vec<u8>>) -> AppResult<Vec<f32>>,
     ) -> AppResult<bool> {
         ensure_not_cancelled(&self.cancel)?;
@@ -320,10 +320,12 @@ impl StoryboardConsumer {
             move || {
                 let started = Instant::now();
                 init_storyboard_ort(&runtime)?;
-                let (session, provider) = create_model_session(&runtime.model)?;
+                let session =
+                    OnnxModel::load(&runtime.model, &[], ErrorCode::StoryboardInferenceFailed)?;
+                let provider = session.provider();
                 let model = TransnetSession::new(session)?;
                 tracing::info!(
-                    provider,
+                    provider = %provider,
                     initialization_ms = started.elapsed().as_millis() as u64,
                     "Storyboard inference session ready"
                 );
@@ -336,8 +338,10 @@ impl StoryboardConsumer {
     fn submit_with<M: 'static>(
         self: &Arc<Self>,
         task: InferenceTask,
-        initialize: impl FnOnce() -> AppResult<(M, String)> + Send + 'static,
-        mut predict: impl FnMut(&mut M, &VecDeque<Vec<u8>>) -> AppResult<Vec<f32>> + Send + 'static,
+        initialize: impl FnOnce() -> AppResult<(M, SessionProvider)> + Send + 'static,
+        mut predict: impl FnMut(&mut M, &VecDeque<Vec<u8>>, &AtomicBool) -> AppResult<Vec<f32>>
+            + Send
+            + 'static,
     ) -> AppResult<()> {
         let mut incoming = self
             .incoming
@@ -402,7 +406,10 @@ impl StoryboardConsumer {
                             let result = match model.as_mut().expect("model lives until retirement")
                             {
                                 Ok((model, provider)) => {
-                                    task.step(provider, &mut |window| predict(model, window))
+                                    let cancel = task.cancel.clone();
+                                    task.step(provider, &mut |window| {
+                                        predict(model, window, &cancel)
+                                    })
                                 }
                                 Err(error) => Err(error.clone()),
                             };

@@ -1,7 +1,10 @@
 //! Local subtitle retrieval. Content-addressed indexes survive source changes,
 //! but are invalidated by text, model revision, or embedding recipe changes.
+use super::onnx::OnnxModel;
 use super::*;
-use ort::{session::Session, value::Tensor};
+#[cfg(test)]
+use ort::session::Session;
+use ort::value::Tensor;
 use std::sync::{OnceLock, TryLockError};
 use tauri::{ipc::Channel, path::BaseDirectory};
 use tokenizers::{Tokenizer, TruncationParams};
@@ -48,7 +51,7 @@ pub(crate) struct SemanticMatch {
 }
 
 struct EmbeddingModel {
-    session: Session,
+    session: OnnxModel,
     tokenizer: Arc<Tokenizer>,
 }
 
@@ -103,13 +106,24 @@ impl EmbeddingModel {
     fn load(app: &tauri::AppHandle) -> AppResult<Self> {
         let directory = resource_directory(app)?;
         storyboard::init_shared_ort(app)?;
-        let (session, provider) =
-            storyboard::create_model_session(&directory.join("model_quantized.onnx"))?;
-        tracing::info!(%provider, "Selected subtitle semantic search provider");
-        Self::from_session(session, &directory)
+        let session = OnnxModel::load(
+            &directory.join("model_quantized.onnx"),
+            &[],
+            ErrorCode::SemanticInferenceFailed,
+        )?;
+        tracing::info!(provider = %session.provider(), "Selected subtitle semantic search provider");
+        Self::from_model(session, &directory)
     }
 
+    #[cfg(test)]
     fn from_session(session: Session, directory: &Path) -> AppResult<Self> {
+        Self::from_model(
+            OnnxModel::from_session(session, ErrorCode::SemanticInferenceFailed),
+            directory,
+        )
+    }
+
+    fn from_model(session: OnnxModel, directory: &Path) -> AppResult<Self> {
         let mut tokenizer =
             Tokenizer::from_file(directory.join("tokenizer.json")).map_err(inference_error)?;
         tokenizer.with_padding(None);
@@ -130,6 +144,15 @@ impl EmbeddingModel {
     }
 
     fn embed_tokens(&self, sequences: &[&[i64]], length: usize) -> AppResult<Vec<Vec<f32>>> {
+        self.embed_tokens_with_cancel(sequences, length, None)
+    }
+
+    fn embed_tokens_with_cancel(
+        &self,
+        sequences: &[&[i64]],
+        length: usize,
+        cancel: Option<&AtomicBool>,
+    ) -> AppResult<Vec<Vec<f32>>> {
         if sequences.is_empty() {
             return Ok(Vec::new());
         }
@@ -148,34 +171,32 @@ impl EmbeddingModel {
             .map_err(inference_error)?;
         let mask = Tensor::from_array(([batch, length], mask.into_boxed_slice()))
             .map_err(inference_error)?;
-        let outputs = self
-            .session
-            .run(
-                ort::inputs!["input_ids" => ids, "attention_mask" => mask]
-                    .map_err(inference_error)?,
-            )
-            .map_err(inference_error)?;
-        let output = outputs
-            .get("last_hidden_state")
-            .ok_or_else(|| inference_error("Missing last_hidden_state output"))?;
-        let (shape, values) = output
-            .try_extract_raw_tensor::<f32>()
-            .map_err(inference_error)?;
-        if shape != [batch as i64, length as i64, DIMENSIONS as i64] {
-            return Err(inference_error(format!(
-                "Unexpected Jina output shape: {shape:?}"
-            )));
-        }
-        sequences
-            .iter()
-            .enumerate()
-            .map(|(row, sequence)| {
-                // Right padding keeps real-token positions unchanged. Pool each
-                // row's last real token, never the last padded tensor position.
-                let offset = (row * length + sequence.len() - 1) * DIMENSIONS;
-                normalize_embedding(&values[offset..offset + DIMENSIONS])
-            })
-            .collect()
+        let rows = self.session.run(cancel, |session| {
+            let outputs = session.run(vec![
+                ("input_ids", ids.view()),
+                ("attention_mask", mask.view()),
+            ])?;
+            let output = outputs
+                .get("last_hidden_state")
+                .ok_or_else(|| ort::Error::new("Missing last_hidden_state output"))?;
+            let (shape, values) = output.try_extract_raw_tensor::<f32>()?;
+            if shape != [batch as i64, length as i64, DIMENSIONS as i64] {
+                return Err(ort::Error::new(format!(
+                    "Unexpected Jina output shape: {shape:?}"
+                )));
+            }
+            Ok(sequences
+                .iter()
+                .enumerate()
+                .map(|(row, sequence)| {
+                    // Right padding preserves real-token positions. Pool each
+                    // row's last real token, including on a CPU retry.
+                    let offset = (row * length + sequence.len() - 1) * DIMENSIONS;
+                    values[offset..offset + DIMENSIONS].to_vec()
+                })
+                .collect::<Vec<_>>())
+        })?;
+        rows.iter().map(|row| normalize_embedding(row)).collect()
     }
 
     fn embed(&self, text: &str, query: bool) -> AppResult<Vec<f32>> {
@@ -196,7 +217,7 @@ impl EmbeddingModel {
             batch,
             length,
             cancel,
-            &mut |tokens, padded| self.embed_tokens(tokens, padded),
+            &mut |tokens, padded| self.embed_tokens_with_cancel(tokens, padded, Some(cancel)),
             publish,
         )
     }
@@ -1110,7 +1131,10 @@ mod tests {
             .unwrap();
         let model = EmbeddingModel::from_session(session, &directory).unwrap();
         model.embed(texts[1], false).unwrap();
-        let profile_path = model.session.end_profiling().unwrap();
+        let profile_path = model
+            .session
+            .run(None, |session| session.end_profiling())
+            .unwrap();
         let events: Vec<serde_json::Value> =
             serde_json::from_slice(&fs::read(&profile_path).unwrap()).unwrap();
         let mut providers = std::collections::BTreeMap::<String, (usize, u64)>::new();

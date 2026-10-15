@@ -1775,9 +1775,10 @@ body.is-resizing-storyboard-keyword-panel * {
   --storyboard-thumbnail-height: 50px;
   --storyboard-row-height: 82px;
   --storyboard-table-columns: var(--storyboard-col-thumbnail) var(--storyboard-col-source,)
-    var(--storyboard-col-title) var(--storyboard-col-media-start) var(--storyboard-col-media-end)
-    var(--storyboard-col-duration) var(--storyboard-col-keywords) var(--storyboard-col-rating)
-    var(--storyboard-col-retained) var(--storyboard-col-label) minmax(0, 1fr);
+    var(--storyboard-col-title) var(--storyboard-col-similarity,) var(--storyboard-col-media-start)
+    var(--storyboard-col-media-end) var(--storyboard-col-duration) var(--storyboard-col-keywords)
+    var(--storyboard-col-rating) var(--storyboard-col-retained) var(--storyboard-col-label)
+    minmax(0, 1fr);
   --storyboard-table-min-width: 1140px;
 }
 
@@ -2728,6 +2729,7 @@ body.is-resizing-storyboard-keyword-panel * {
 .shot-row > .shot-time-cell,
 .shot-row > .shot-duration-cell,
 .shot-row > .shot-source-cell,
+.shot-row > .shot-similarity-cell,
 .shot-row > .shot-title-cell,
 .shot-row > .shot-keywords-cell,
 .shot-row > .shot-label-cell,
