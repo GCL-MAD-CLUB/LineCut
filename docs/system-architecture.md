@@ -120,23 +120,9 @@ const editCapabilities = useProjections<EditCapabilityProjection>(EDIT_CAPABILIT
 
 `npm run check:architecture` 会检查这些边界，`npm run build` 默认先执行该检查。
 
-## 已移除的旧入口
+## 应用媒体层与多来源
 
-以下旧架构不再保留兼容层：
-
-- `src/appEvents.ts`
-- `src/store.ts`
-- `src/projectHistory.ts`
-- `src/panelState.tsx`
-- `useAppStore`、`appStore`
-- `emitAppEvent`、`useAppEvent`
-- 带面板实例目标的事件载荷
-
-不提供双写或桥接层，避免新旧通信模型长期并存。
-
-## 0.3.3 的应用媒体层与多来源
-
-本节以 `release/0.3.3` 为基准，补充前述组件边界在多来源界面中的具体落点。多来源是应用视图与编辑路由，不把各视频转换成一个共享媒体文件。
+多来源是应用视图与编辑路由，不把各视频转换成一个共享媒体文件。
 
 | 模块                                           | 职责与不变量                                                           |
 | ---------------------------------------------- | ---------------------------------------------------------------------- |
@@ -165,18 +151,18 @@ const editCapabilities = useProjections<EditCapabilityProjection>(EDIT_CAPABILIT
 
 ## 非阻塞任务调度与媒体分析
 
-`TaskSystem` 的 `createTaskProgress` 立即注册 `queued` 任务，但 Promise 在授予执行槽后才返回句柄。调用方必须检查 `cancelled` 再启动后端，且只在底层实际完成或停止后调用 `remove` / `fail`。`blocking` 选项已经废弃，运行视图始终为非阻塞。
+`TaskSystem` 的 `createTaskProgress` 立即注册 `queued` 任务，但 Promise 在授予执行槽后才返回句柄。调用方必须检查 `cancelled` 再启动后端，且只在底层实际完成或停止后调用 `remove` / `fail`。运行视图始终为非阻塞。
 
 三个槽位只用于最多三项 `storyboard.detect` 并行；其他操作独占执行。调度按队列顺序扫描，遇到普通任务会停下，不能让后续检测越过该普通任务。取消排队任务使调用方拿到已取消句柄而不执行工作；取消运行任务由所有者清理，`cancelAllTaskProgress` 暂停补位并等待结束。
 
 `application/media/mediaAnalysisTask.ts` 保持独立于导入页面生命周期的分析队列，等待前批和优先自动绑定结束，然后提交统一任务。媒体箱延迟一秒进行首次缺失检查，并以约一分钟周期重试；`find_media_needing_analysis` 检查磁盘上的视频封面和内嵌文本字幕完整性。缓存检查不复制大型字幕集合，已有轨道/条目优先复用，异步合并校验项目与素材版本。
 
-封面读取不再顺带启动分析；视频封面生成统一进入分析队列。取消或切换项目后，只处理仍有效的目标，不能把后台结果提交给另一个项目。更具体的缩略图与检测并行实现见[分镜检测](./storyboard-event-detection.md)与[媒体管线](./media-processing.md)。
+封面读取不再顺带启动分析；视频封面生成统一进入分析队列。取消或切换项目后，只处理仍有效的目标，不能把后台结果提交给另一个项目。更具体的缩略图与检测并行实现见[媒体管线](./media-processing.md)。
 
 ## 导出范围的独立历史
 
-`ExportSystem/exportWorkspaceState.ts` 管理待导出片段及范围历史，`canEditExportClipRange` 只允许分镜来源。一次范围拖动以 `groupId` 合并为一个历史项；修改后更新片段时长和缩略图时间。它不调用项目分镜切点命令。
+`ExportSystem/exportWorkspaceState.ts` 管理待导出片段及范围历史，`canEditExportClipRange` 控制字幕、分镜和媒体箱来源的临时范围编辑。一次范围拖动以 `groupId` 合并为一个历史项；修改后更新片段时长和缩略图时间。它不调用项目分镜切点命令。
 
 `App.tsx` 根据工作区路由撤销/重做：编辑区调用项目历史，导出区调用 `undoClipRange` / `redoClipRange`。刷新来源时按片段 ID 与 `sourcePath` 保留仍适用的范围并过滤历史；切换项目清空。任务提交时克隆来源与设置，后续 UI 范围变化不回写已排队任务，也不能撤销文件覆盖。
 
-验证这些边界优先阅读源代码、纯逻辑测试和仓库门禁。用户操作清单由 `scripts/user-guide-operations.mjs` 维护；文档结构与链接由 `npm run docs:build` 验证。不要通过生成视频和复杂媒体软件流程代替代码级审查。
+验证这些边界优先阅读源代码、纯逻辑测试和仓库门禁。文档结构与链接由 `npm run docs:build` 验证。开发和文档规范统一见 [CONTRIBUTING.md](../CONTRIBUTING.md)。

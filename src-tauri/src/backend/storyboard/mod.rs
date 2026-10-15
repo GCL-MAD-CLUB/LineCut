@@ -1223,6 +1223,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires packaged TransNetV2 and ONNX Runtime assets; run manually"]
     fn packaged_transnet_model_loads_with_cpu_provider() {
         let runtime_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("resources")
@@ -1245,10 +1246,9 @@ mod tests {
     }
 
     fn assert_transnet_reuse_matches_fresh_tensors(session: Session) {
-        let mut model = TransnetSession::new(OnnxModel::from_session(
-            session,
-            ErrorCode::StoryboardInferenceFailed,
-        ))
+        let mut model = TransnetSession::new(OnnxModel::from_session(session, |detail| {
+            app_error(ErrorCode::StoryboardInferenceFailed, detail)
+        }))
         .unwrap();
         let input_address = model.input.extract_raw_tensor().1.as_ptr();
         // Exercise unrelated windows as the shared session would when tasks

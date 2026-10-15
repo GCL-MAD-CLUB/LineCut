@@ -5,7 +5,7 @@ description: 系统排查 FFmpeg、离线媒体、预览、导入、导出、缓
 
 # 故障排查
 
-> 适用版本：LineCut 0.3.3。本文以 `release/0.3.3` 分支实现为准。
+> 适用版本：LineCut 0.3.3。
 
 排错的目标是先缩小问题范围，再改变设置。请保留错误文字，从一个短小、可重复的样本开始，每次只改变一个条件；不要一开始就移动全部素材、清空所有缓存或覆盖原项目。
 
@@ -40,8 +40,6 @@ LineCut 会把应用启动、后台任务和错误诊断写入本机日志。遇
 
 LineCut 使用 FFmpeg 执行媒体处理和导出，使用 ffprobe 读取媒体信息。路径配置不正确、可执行文件不可运行或硬件编码不可用时，导入分析、代理和导出都可能失败。
 
-<GuideImage src="/images/troubleshooting/ffmpeg.png" alt="首选项中的 FFmpeg / ffprobe 设置" />
-
 ### 先检查首选项路径
 
 1. 打开 [首选项](../projects/preferences)。
@@ -70,8 +68,6 @@ LineCut 使用 FFmpeg 执行媒体处理和导出，使用 ffprobe 读取媒体�
 
 媒体离线意味着项目保存的路径已经找不到原文件，常见原因是移动磁盘、重命名文件夹、改盘符或只复制了 `.lcp` 而未复制素材。离线项不会自动变成可用素材。
 
-<GuideImage src="/images/troubleshooting/media.png" alt="素材箱中的离线媒体与重新链接入口" />
-
 ### 恢复离线媒体
 
 1. 在素材箱定位离线项目；
@@ -99,8 +95,6 @@ LineCut 使用 FFmpeg 执行媒体处理和导出，使用 ffprobe 读取媒体�
 ## 导入与导出失败排查
 
 下面的清单按“最容易验证、最少改变项目”的顺序排列。每执行一步后，先在短样本上复测，避免在未知状态下反复改动大量设置。
-
-<GuideImage src="/images/troubleshooting/import-export.png" alt="任务进度或错误通知" />
 
 ### 导入失败
 
@@ -145,8 +139,6 @@ LineCut 使用 FFmpeg 执行媒体处理和导出，使用 ffprobe 读取媒体�
 ## 性能、缓存与稳定性
 
 长视频、高分辨率素材、多轨音频、密集缩略图和自动分镜检测都会增加 CPU、GPU、内存、磁盘与媒体解码的负担。性能问题应先通过缩小工作集和验证代理来定位，而不是直接改变全部项目设置。
-
-<GuideImage src="/images/troubleshooting/performance.png" alt="缓存与代理相关设置" />
 
 ### 预览不流畅
 

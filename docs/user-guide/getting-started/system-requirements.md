@@ -5,7 +5,7 @@ description: 在安装 LineCut 前确认系统、显示器、磁盘空间和媒�
 
 # 系统要求
 
-> 适用版本：LineCut 0.3.3。本文以 `release/0.3.3` 分支实现为准。
+> 适用版本：LineCut 0.3.3。
 
 LineCut 是 Windows 桌面应用。媒体分析、缩略图、代理和导出都在本机完成，因此视频长度、分辨率和编码格式会直接影响所需时间、内存和磁盘空间。
 
@@ -29,8 +29,6 @@ LineCut 的 `.lcp` 项目只记录素材路径、项目内容和工作状态，�
 - 导出目标目录。
 
 如果素材位于可移动磁盘、网络盘或稍后会改名的目录，先阅读[项目文件与素材位置](/projects/projects)和[脱机、替换和重新链接](/media/offline-proxies)。
-
-<GuideImage src="/images/getting-started/system-requirements.png" alt="推荐的目录规划示意" />
 
 ## 性能预期
 

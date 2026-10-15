@@ -136,7 +136,7 @@ fn embed(app: &tauri::AppHandle, rgb: &[u8], cancel: &AtomicBool) -> AppResult<V
         let model = OnnxModel::load(
             &directory.join("model.onnx"),
             &INPUT_DIMENSIONS,
-            ErrorCode::SemanticInferenceFailed,
+            inference_error,
         )?;
         tracing::info!(provider = %model.provider(), "Selected storyboard DINOv3 provider");
         *guard = Some(model);

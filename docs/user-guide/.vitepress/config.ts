@@ -110,7 +110,6 @@ export default defineConfig({
         items: [
           { text: "支持的媒体与输出格式", link: "/reference/supported-formats" },
           { text: "使用限制与数据说明", link: "/reference/limitations" },
-          { text: "功能覆盖清单", link: "/coverage" },
         ],
       },
       {

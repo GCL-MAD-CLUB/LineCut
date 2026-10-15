@@ -20,7 +20,7 @@ validation split.
 The preparation script also copies package license and notice files beside the
 runtime binaries.
 
-## LineCut 0.3.3 runtime integration
+## Runtime integration
 
 The packaged model still has fixed input dimensions `[1, 100, 27, 48, 3]`.
 Multiple detections share one inference session and reuse one overwritten input
@@ -32,5 +32,5 @@ The session stays warm for 30 seconds after its last task and then retires.
 This changes lifecycle and scheduling, not the model license or validation
 status. The event coefficients remain `bootstrap_uncalibrated`; do not describe
 them as fitted production parameters. See
-[the detection pipeline](../../../docs/storyboard-event-detection.md) for bounded
+[the detection pipeline](../../../docs/media-processing.md) for bounded
 queues, thread budgets, cancellation and diagnostics.

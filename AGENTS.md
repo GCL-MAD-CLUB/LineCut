@@ -1,5 +1,20 @@
 # AGENTS.md
 
+## Repository organization
+
+- Keep Rust tests inline in the implementation file under `#[cfg(test)] mod tests`.
+  Do not create standalone Rust test files, external test modules, or Rust test directories.
+- Keep deterministic frontend tests in `tests/unit/`, manual browser tests in
+  `tests/browser/`, and external-tool tests in `tests/integration/`.
+- `scripts/` contains executable build, asset preparation, release, and repository
+  check commands only. Every script needs a `package.json` entry point. Do not put
+  tests, experiments, or documentation inventories there.
+- Keep documentation focused on maintained contracts and user instructions.
+  Delete obsolete notes instead of accumulating progress logs, incident reports,
+  one-off benchmarks, unfinished plans, and duplicate feature inventories.
+- Run `npm run check:layout` and `npm test` after changing repository tooling or
+  moving tests. Keep real media encoding and model/GPU checks out of normal CI.
+
 ## Code formatting
 
 - TypeScript, TSX, JavaScript, JSON, CSS, HTML, and Markdown are formatted with the

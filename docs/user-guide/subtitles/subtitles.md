@@ -5,7 +5,7 @@ description: 从字幕轨选择到搜索、筛选、标注、批量喷涂、选�
 
 # 使用字幕
 
-> 适用版本：LineCut 0.3.3。本文以 `release/0.3.3` 分支实现为准。
+> 适用版本：LineCut 0.3.3。
 
 字幕不仅用于观看台词，也是 LineCut 定位内容和收集片段的主要入口。一个完整的字幕工作流通常包含：选择正确的字幕轨，缩小结果范围，标注候选台词，选择片段，然后交给导出工作区。
 
@@ -43,8 +43,6 @@ description: 从字幕轨选择到搜索、筛选、标注、批量喷涂、选�
 每条字幕有开始和结束时间、原始文本和用于搜索的纯文本；部分轨道还提供说话人、样式或层级信息。列表中可显示缩略图、星级、旗标、色标和自定义标签。
 
 如果字幕轨带有提示或警告，字幕面板会在列表上方显示。常见原因包括解析格式限制、位图字幕不能像文本字幕一样检索，或时间信息存在异常。
-
-<GuideImage src="/images/subtitles/tracks.png" alt="字幕轨选择与字幕列表" />
 
 下一步阅读[搜索、过滤和排序字幕](/subtitles/subtitles)。
 
@@ -138,8 +136,6 @@ description: 从字幕轨选择到搜索、筛选、标注、批量喷涂、选�
 
 底部控件可以调整字幕缩略图大小。更多选项菜单还可控制选择、喷涂工具、排序、旗标、星级、色标和缩略图大小这些底部区域是否显示；隐藏控件不会移除相应功能。
 
-<GuideImage src="/images/subtitles/search-filter.png" alt="展开的字幕过滤器" />
-
 若要给结果做长期标注，继续[星级、旗标和色标](/subtitles/subtitles)。
 
 ## 星级、旗标和色标
@@ -186,8 +182,6 @@ description: 从字幕轨选择到搜索、筛选、标注、批量喷涂、选�
 
 不要仅因要导出一次就把所有字幕都设为留用旗标；如果它们不代表长期“可用”判断，单纯选择即可。
 
-<GuideImage src="/images/subtitles/annotations.png" alt="同一条字幕的标记控件" />
-
 批量连续处理时使用[喷涂工具批量标注](/subtitles/subtitles)。
 
 ## 使用喷涂工具批量标注
@@ -228,8 +222,6 @@ description: 从字幕轨选择到搜索、筛选、标注、批量喷涂、选�
 
 **使用后**，可按旗标、色标、星级或自定义标签过滤结果。发现整笔错误时优先使用一次撤销；逐条反向喷涂只适合少量修正。
 
-<GuideImage src="/images/subtitles/spray.png" alt="字幕喷涂状态" />
-
 同一套概念也用于分镜标记；见[标记分镜](/storyboard/storyboards)。
 
 ## 选择字幕并导出
@@ -268,8 +260,6 @@ description: 从字幕轨选择到搜索、筛选、标注、批量喷涂、选�
 <kbd>Delete</kbd> 或 <kbd>Backspace</kbd> 执行普通删除；字幕面板聚焦时，<kbd>Shift</kbd> + <kbd>Delete</kbd> 执行波纹删除。
 
 具体结果取决于当前项目内容和选择范围。若目标只是“不导出”，不要删除，改用取消选择或设置排除旗标。
-
-<GuideImage src="/images/subtitles/selection-export.png" alt="字幕右键导出菜单" />
 
 继续学习[导出工作区概览](/export/exporting)。
 

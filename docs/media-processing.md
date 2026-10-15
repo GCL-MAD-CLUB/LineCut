@@ -1,6 +1,6 @@
-# 0.3.3 媒体分析、缩略图与任务边界
+# 媒体分析、缩略图与推理管线
 
-本页以 `release/0.3.3` 代码为基准，描述开发维护所需的阶段、缓存和异步提交规则。用户入口见[导入和整理媒体](./user-guide/media/import-organize.md)、[后台任务](./user-guide/workspace/workspace.md)和[分镜](./user-guide/storyboard/storyboards.md)。
+本页描述媒体处理的阶段、缓存、推理与异步提交约束。用户入口见[导入和整理媒体](./user-guide/media/import-organize.md)、[后台任务](./user-guide/workspace/workspace.md)和[分镜](./user-guide/storyboard/storyboards.md)。
 
 ## 登记、绑定与分析
 
@@ -35,9 +35,9 @@
 
 合并调用 `mergeDetectedStoryboardShots`，将新切点加入当前有效镜头，不重复切点；覆盖重建 shots、deletedShots、shotStacks 和 shotAnnotations。结果提交前再次验证项目、媒体启用/在线状态与素材上下文，过期结果不可落到替换后的文件或另一项目。
 
-后端每任务由 FFmpeg reader 提供 50 帧 RGB 块，最多四个块等待；统一推理线程轮转各队列，保持 100 帧输入、50 帧步长和边缘填充。会话空闲保温 30 秒，然后在锁保护下退役；失败与取消隔离在任务内。完整线程预算、DirectML/CPU 策略与决策阶段约束见[Storyboard event detection](./storyboard-event-detection.md)。
+后端每任务由 FFmpeg reader 提供 50 帧 RGB 块，最多四个块等待；统一推理线程轮转各队列，保持 100 帧输入、50 帧步长和边缘填充。会话空闲保温 30 秒，然后在锁保护下退役；失败与取消隔离在任务内。后端按物理核心数 C 限制提取并行度 W = min(C, 3)，每个提取的 FFmpeg 线程预算为 min(floor(C / W), 16)；进程级信号量保证直接后端请求也遵守此限制，子进程回收后才释放槽位。
 
-Windows D3D11VA 是解码阶段的请求，不是无条件的硬件成功保证。驱动、FFmpeg 构建和源编码不兼容时提取会携带诊断失败；DirectML 推理初始化失败则按推理实现尝试 CPU。不要在文档中把这两类行为合并成同一个自动回退承诺。
+Windows D3D11VA 是解码阶段的请求，不是无条件的硬件成功保证。驱动、FFmpeg 构建和源编码不兼容时提取会携带诊断失败；DirectML 会话创建或推理失败时按下述契约尝试 CPU。不要在文档中把这两类行为合并成同一个自动回退承诺。
 
 ## 统一调度和取消
 
@@ -47,6 +47,20 @@ Windows D3D11VA 是解码阶段的请求，不是无条件的硬件成功保证�
 
 导出在 `ExportSystem/exportTask.ts` 拍下来源与参数快照，共享同一任务系统。冲突确认也属于当前导出批次，取消会结束确认；成功才记录可复用设置。字幕、分镜和媒体箱来源共用临时导出范围编辑与撤销逻辑，不修改原始内容，也不触碰磁盘文件。
 
-## 维护验证
+## ONNX 会话与回退
 
-先核对模块、资源 ID、去重键、取消释放点、配置读写顺序与项目身份，再运行对应纯逻辑测试或仓库门禁。用户文档变化执行 `npm run docs:check`、`npm run docs:build`，版本字段执行 `npm run check:versions`。格式仅处理已修改文件；不生成视频、不进行复杂外部媒体软件测试，不把既有微基准数字写成所有电脑的端到端速度承诺。
+TransNetV2、字幕 Jina 和分镜 DINOv3 统一通过 `backend/onnx.rs` 的 `OnnxModel` 创建并调用。共享运行库由 `prepare:transnetv2` 准备；各模型资源见对应目录的 MODEL 或 README 文档。
+
+会话创建优先探测 DirectML 适配器，失败后尝试 CPU。DirectML 会话顺序执行并禁用 memory patterns；CPU 使用可用逻辑线程数的一半，限制为 1–8 线程。推理阶段的 GPU 错误在 CPU 上重试同一输入，后续批次复用 CPU，不在提供器间循环。CPU 创建或重试也失败时保留两段诊断；缺失运行库、损坏模型与非法输入仍通过类型化错误报告。
+
+互斥锁保证共享会话串行调用。回退保留模型路径、固定维度、批次与原始输入；仅在完整调用成功后发布结果。推理前、失败后、CPU 重建后和重试后均检查取消。任务最终报告实际使用的提供器。
+
+## 分镜决策与选帧
+
+`backend/storyboard/decision.rs` 只处理 TransNetV2 输出的逐帧概率：局部中位数和 MAD 估计背景，生成并合并候选事件，再提取事件特征、应用分类与可选校准，最后按成本阈值、非极大值抑制和最短镜头惩罚决定切点。
+
+事件参数位于 `resources/transnetv2/storyboard-event-model.json`，特征顺序必须匹配。缺失配置使用相同默认参数，损坏配置明确报错。当前参数标记为 `bootstrap_uncalibrated`，不能宣称为经过训练或校准的生产模型。
+
+`backend/storyboard_semantic/cses.rs` 使用 DINOv3 特征执行自适应选帧。选帧结果仅保留在进程和前端内存中，不写 `.lcp` 或磁盘索引；取消不发布未完成分镜。素材、流、帧率或分镜边界改变会使结果失效。当前分镜语义入口仅完成选帧，检索返回全部已完成分镜且分数固定为 1.0，尚无基于文字的匹配排序。
+
+维护时检查去重键、取消释放点、配置写入顺序与项目身份；测试及文档规范见 [CONTRIBUTING.md](../CONTRIBUTING.md)。
