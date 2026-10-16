@@ -84,6 +84,50 @@ impl OnnxModel {
         self.provider.clone()
     }
 
+    // Batch tuning first retries a smaller accelerated shape. A speculative
+    // large-batch OOM must not retire an otherwise healthy GPU model family.
+    pub fn run_without_recovery<T>(
+        &self,
+        cancel: &AtomicBool,
+        infer: impl FnOnce(&Session) -> ort::Result<T>,
+    ) -> AppResult<T> {
+        check_optional_cancel(Some(cancel))?;
+        let session = self
+            .session
+            .lock()
+            .map_err(|e| (self.make_error)(e.to_string()))?;
+        let result = infer(&session);
+        check_optional_cancel(Some(cancel))?;
+        result.map_err(|e| {
+            (self.make_error)(format!(
+                "ONNX batch inference on {} failed: {e}",
+                self.provider
+            ))
+        })
+    }
+
+    // A model family that already recovered to CPU must not reprobe failing
+    // GPU providers whenever its batch-specialized shape changes.
+    pub fn load_cpu(
+        path: &Path,
+        dimensions: &[(&str, i64)],
+        make_error: fn(String) -> AppError,
+    ) -> AppResult<Self> {
+        let session = create_cpu_model_session_with_dimensions(path, dimensions)
+            .map_err(|e| make_error(format!("Load CPU ONNX model {}: {e}", path.display())))?;
+        Ok(Self {
+            session: Mutex::new(session),
+            provider: "CPU".into(),
+            path: path.to_owned(),
+            dimensions: dimensions
+                .iter()
+                .map(|&(name, size)| (name.to_owned(), size))
+                .collect(),
+            make_error,
+            recover: false,
+        })
+    }
+
     // Return owned outputs: the failed session can be replaced only after every
     // output from its failed attempt has been dropped. Callers reuse the same
     // inputs and publish results only after this method succeeds.
@@ -214,7 +258,7 @@ pub(super) fn create_model_session_with_dimensions(
         .map_err(|error| ort::Error::new(format!("DirectML initialization failed ({}); CPU initialization failed: {error}", errors.join("; "))))
 }
 
-fn create_directml_model_session_with_dimensions(
+pub(super) fn create_directml_model_session_with_dimensions(
     path: &Path,
     adapter: i32,
     dimensions: &[(&str, i64)],
