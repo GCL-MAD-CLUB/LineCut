@@ -25,6 +25,7 @@ async fn produce(
     task_id: String,
     cancel: Arc<AtomicBool>,
     count: usize,
+    side: usize,
     sender: mpsc::Sender<Vec<u8>>,
 ) -> AppResult<()> {
     ensure_not_cancelled(&cancel)?;
@@ -74,7 +75,7 @@ async fn produce(
     let read = Box::pin(async {
         for start in (0..count).step_by(DECODE_CHUNK) {
             ensure_not_cancelled(&cancel)?;
-            let mut batch = vec![0u8; (count - start).min(DECODE_CHUNK) * SIDE * SIDE * 3];
+            let mut batch = vec![0u8; (count - start).min(DECODE_CHUNK) * side * side * 3];
             stdout
                 .read_exact(&mut batch)
                 .await
@@ -128,6 +129,30 @@ pub(super) fn embed_stream(
     cancel: &Arc<AtomicBool>,
     count: usize,
 ) -> AppResult<Vec<Vec<f32>>> {
+    embed_stream_with(
+        app,
+        program,
+        args,
+        task_id,
+        cancel,
+        count,
+        SIDE,
+        |remaining| preferred_batch(remaining, cancel),
+        |rgb| embed(app, rgb, cancel),
+    )
+}
+
+pub(super) fn embed_stream_with(
+    app: &tauri::AppHandle,
+    program: &str,
+    args: Vec<String>,
+    task_id: &str,
+    cancel: &Arc<AtomicBool>,
+    count: usize,
+    side: usize,
+    mut choose: impl FnMut(usize) -> AppResult<usize>,
+    mut infer: impl FnMut(&[u8]) -> AppResult<Vec<Vec<f32>>>,
+) -> AppResult<Vec<Vec<f32>>> {
     // Two small queued chunks plus at most MAX_BATCH inference frames. Device
     // tuning cannot accidentally grow the decoder's prefetch allocation.
     let (sender, mut receiver) = mpsc::channel(2);
@@ -138,19 +163,19 @@ pub(super) fn embed_stream(
         task_id.to_owned(),
         Arc::clone(cancel),
         count,
+        side,
         sender,
     ));
     let outcome = (|| {
         let mut embeddings = Vec::with_capacity(count);
-        let mut rgb = Vec::with_capacity(batch::MAX_BATCH * SIDE * SIDE * 3);
+        let mut rgb = Vec::with_capacity(batch::MAX_BATCH * side * side * 3);
         let mut pending = Vec::new();
         let mut pending_offset = 0;
         while embeddings.len() < count {
             ensure_not_cancelled(cancel)?;
-            let target =
-                preferred_batch(count - embeddings.len(), cancel)?.min(count - embeddings.len());
+            let target = choose(count - embeddings.len())?.min(count - embeddings.len());
             rgb.clear();
-            while rgb.len() < target * SIDE * SIDE * 3 {
+            while rgb.len() < target * side * side * 3 {
                 if pending_offset == pending.len() {
                     pending = receiver
                         .blocking_recv()
@@ -158,16 +183,16 @@ pub(super) fn embed_stream(
                     pending_offset = 0;
                 }
                 let take =
-                    (target * SIDE * SIDE * 3 - rgb.len()).min(pending.len() - pending_offset);
+                    (target * side * side * 3 - rgb.len()).min(pending.len() - pending_offset);
                 rgb.extend_from_slice(&pending[pending_offset..pending_offset + take]);
                 pending_offset += take;
             }
             // The cursor also preserves the second frame when memory-pressure
             // recovery must fall back to single-row execution.
-            if rgb.len() != target * SIDE * SIDE * 3 {
+            if rgb.len() != target * side * side * 3 {
                 return Err(inference_error("Misaligned storyboard RGB batch"));
             }
-            embeddings.extend(embed(app, &rgb, cancel)?);
+            embeddings.extend(infer(&rgb)?);
         }
         // Keep the receiver alive until the producer validates EOF and exits.
         // Otherwise sender.closed() could kill a successfully decoded process.

@@ -15,6 +15,8 @@ mod batch;
 mod cache;
 mod cses;
 mod decode;
+mod index;
+mod siglip;
 const SIDE: usize = 224;
 const DIMENSIONS: usize = 384;
 #[cfg(test)]
@@ -118,7 +120,7 @@ fn resource_directory(app: &tauri::AppHandle) -> Option<PathBuf> {
 
 #[tauri::command]
 pub(crate) fn storyboard_semantic_search_available(app: tauri::AppHandle) -> CommandResult<bool> {
-    Ok(resource_directory(&app).is_some())
+    Ok(resource_directory(&app).is_some() && siglip::directory(&app).is_some())
 }
 
 fn model_guard(
@@ -432,17 +434,7 @@ fn resolve_shots(
         .collect()
 }
 
-fn decode_and_embed(
-    app: &tauri::AppHandle,
-    source: &ShotSource,
-    positions: &[usize],
-    program: &str,
-    task_id: &str,
-    cancel: &Arc<AtomicBool>,
-) -> AppResult<Vec<Vec<f32>>> {
-    if positions.is_empty() {
-        return Ok(Vec::new());
-    }
+fn frame_decode_args(source: &ShotSource, positions: &[usize], side: usize) -> Vec<String> {
     let first = positions[0];
     let select = positions
         .iter()
@@ -468,7 +460,7 @@ fn decode_and_embed(
         "-sn".into(),
         "-dn".into(),
         "-vf".into(),
-        format!("select='{select}',scale={SIDE}:{SIDE}:flags=bilinear,format=rgb24"),
+        format!("select='{select}',scale={side}:{side}:flags=bilinear,format=rgb24"),
         "-frames:v".into(),
         positions.len().to_string(),
         "-fps_mode".into(),
@@ -481,7 +473,52 @@ fn decode_and_embed(
         "rawvideo".into(),
         "pipe:1".into(),
     ]);
+    args
+}
+
+fn decode_and_embed(
+    app: &tauri::AppHandle,
+    source: &ShotSource,
+    positions: &[usize],
+    program: &str,
+    task_id: &str,
+    cancel: &Arc<AtomicBool>,
+) -> AppResult<Vec<Vec<f32>>> {
+    if positions.is_empty() {
+        return Ok(Vec::new());
+    }
+    let args = frame_decode_args(source, positions, SIDE);
     decode::embed_stream(app, program, args, task_id, cancel, positions.len())
+}
+
+fn decode_selected_and_embed(
+    app: &tauri::AppHandle,
+    source: &ShotSource,
+    positions: &[usize],
+    program: &str,
+    task_id: &str,
+    cancel: &Arc<AtomicBool>,
+    publish: &mut dyn FnMut(&[Vec<f32>]) -> AppResult<()>,
+) -> AppResult<Vec<Vec<f32>>> {
+    if positions.is_empty() {
+        return Ok(Vec::new());
+    }
+    let args = frame_decode_args(source, positions, 256);
+    decode::embed_stream_with(
+        app,
+        program,
+        args,
+        task_id,
+        cancel,
+        positions.len(),
+        256,
+        |remaining| siglip::preferred_batch(remaining, cancel),
+        |rgb| {
+            let vectors = siglip::embed(app, rgb, cancel)?;
+            publish(&vectors)?;
+            Ok(vectors)
+        },
+    )
 }
 
 fn encode_missing(
@@ -554,6 +591,7 @@ pub(crate) async fn select_storyboard_frames(
     let preferences = preferences_clone(&state)?;
     let program = ffmpeg_program(&preferences);
     let root = cache::root(&preferences);
+    let semantic_root = index::root(&preferences);
     let token = task.cancel_token();
     spawn_blocking_cancellable(
         task.cancel_token(),
@@ -579,9 +617,22 @@ pub(crate) async fn select_storyboard_frames(
                         })
                     })
                 })?;
+                let frames = data.selection.selected_frames();
+                index::get_or_build(
+                    &semantic_root,
+                    &source,
+                    &frames,
+                    cancel,
+                    |positions, publish| {
+                        decode_selected_and_embed(
+                            &app, &source, positions, &program, &task_id, &token, publish,
+                        )?;
+                        Ok(())
+                    },
+                )?;
                 output.push(SelectedShotFrames {
                     id: source.shot.id,
-                    frames: data.selection.selected_frames(),
+                    frames,
                 });
                 report(output.len(), total);
             }
@@ -591,47 +642,59 @@ pub(crate) async fn select_storyboard_frames(
     .await
 }
 
-// The only placeholder: replace this function with actual retrieval later.
+// Retrieval only consumes completed SigLIP2 indexes; frame scores are cosine
+// similarities just like subtitle retrieval, with a maximum reduction per shot.
 fn search_completed_shots(
+    app: &tauri::AppHandle,
     query: &str,
     sources: &[ShotSource],
-    root: &Path,
+    selection_root: &Path,
+    semantic_root: &Path,
 ) -> AppResult<Vec<StoryboardSemanticMatch>> {
-    if query.trim().is_empty() {
+    if query.trim().is_empty() || sources.is_empty() {
         return Ok(Vec::new());
     }
-    for source in sources {
-        if cache::read(root, &source.identity).is_none() {
-            return Err(inference_error(
-                "Storyboard frame selection must complete before retrieval",
-            ));
-        }
-    }
-    Ok(sources
+    let query_embedding = siglip::text_embedding(app, query)?;
+    sources
         .iter()
-        .map(|source| StoryboardSemanticMatch {
-            id: source.shot.id.clone(),
-            similarity: 1.0,
+        .map(|source| {
+            let data = cache::read(selection_root, &source.identity).ok_or_else(|| {
+                inference_error("Storyboard selection must complete before retrieval")
+            })?;
+            let vectors = index::read(
+                semantic_root,
+                &source.identity,
+                &data.selection.selected_frames(),
+            )?;
+            Ok(StoryboardSemanticMatch {
+                id: source.shot.id.clone(),
+                similarity: index::max_similarity(&vectors, &query_embedding)?,
+            })
         })
-        .collect())
+        .collect()
 }
 
 #[tauri::command]
 pub(crate) async fn search_storyboards_semantic(
     query: String,
     shots: Vec<SemanticShot>,
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> CommandResult<Vec<StoryboardSemanticMatch>> {
     let sources = resolve_shots(shots, &state)?;
-    let root = cache::root(&preferences_clone(&state)?);
-    tokio::task::spawn_blocking(move || search_completed_shots(&query, &sources, &root))
-        .await
-        .map_err(|error| {
-            app_error(
-                ErrorCode::BlockingTaskFailed,
-                format!("Storyboard retrieval task failed: {error}"),
-            )
-        })?
+    let preferences = preferences_clone(&state)?;
+    let selection_root = cache::root(&preferences);
+    let semantic_root = index::root(&preferences);
+    tokio::task::spawn_blocking(move || {
+        search_completed_shots(&app, &query, &sources, &selection_root, &semantic_root)
+    })
+    .await
+    .map_err(|error| {
+        app_error(
+            ErrorCode::BlockingTaskFailed,
+            format!("Storyboard retrieval task failed: {error}"),
+        )
+    })?
 }
 
 #[cfg(test)]

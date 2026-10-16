@@ -18,7 +18,7 @@ Function LineCutSemanticPageCreate
     Abort
   ${EndIf}
 
-  ${NSD_CreateLabel} 0 0 100% 24u "包含字幕语义检索与分镜选帧组件，模型在本机运行。"
+  ${NSD_CreateLabel} 0 0 100% 24u "包含字幕与分镜语义检索组件，模型在本机运行。"
   Pop $0
   ${NSD_CreateGroupBox} 0 30u 100% 90u "字幕与分镜语义检索"
   Pop $0

@@ -84,7 +84,7 @@ function indexShots(state: SearchState): IndexJob {
     const task = await createTaskProgress({
       operation: "storyboard.semanticIndex",
       resourceKey: state.scope,
-      label: "正在选择分镜帧...",
+      label: "正在构建分镜索引...",
       current: 0,
       total: 1,
       on_cancel: async () => {
@@ -107,7 +107,7 @@ function indexShots(state: SearchState): IndexJob {
           return;
         }
         task.update({
-          label: `正在选择 ${progress.total} 条分镜帧...`,
+          label: `正在构建 ${progress.total} 条分镜索引...`,
           current: progress.total ? progress.completed / progress.total : 0,
         });
       });

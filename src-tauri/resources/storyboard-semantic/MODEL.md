@@ -1,4 +1,42 @@
-# DINOv3 storyboard frame selection
+# Storyboard selection and semantic retrieval
+
+## SigLIP2 semantic retrieval
+
+Selected frames are encoded with `vision_model_fp16.onnx` from
+`onnx-community/siglip2-base-patch16-256-ONNX`, pinned revision
+`d1114256522a37ffa257a0a58017348ab0058db2`. Queries use the paired
+`text_model_int8.onnx` and `tokenizer.json`. Assets live in the `siglip2/`
+subdirectory and are prepared by the same `npm run prepare:storyboard-semantic`
+command and installed by the existing semantic component choice.
+
+Vision input is RGB, bilinear resize to 256 × 256, NCHW float32,
+rescale 1/255 and mean/std 0.5. FP16 describes the model weights; the exported
+graph's input/output tensors are float32. Text uses the tokenizer's EOS template,
+right padding with token 0 to 64 tokens, and truncation to 64 tokens. Queries
+are passed directly without Jina prefixes or classification prompt templates.
+Both graphs return a 768-dimensional `pooler_output`, normalized to unit length.
+The score of a storyboard is the maximum cosine similarity across its selected
+frame embeddings, without sigmoid or across-result min-max normalization.
+
+Vision execution follows the selection encoder's online batch policy, bounded
+two-chunk RGB decoder queue, reusable tensors, at most two specialized sessions,
+smaller-batch retry and shared ONNX CPU recovery. Only completed inference batches
+are checkpointed. Pending text queries get priority before the next vision batch.
+Text runs in its own serialized session using the same provider recovery.
+
+Selection and vision encoding occupy one cancellable task. A storyboard counts
+as complete only after both stages succeed. Semantic indexes live in the configured
+cache root under `Storyboard Semantic Search`, independently of `Storyboard Keyframe`.
+Their identities include the paired model revision, preprocessing recipe, media
+fingerprint/metadata, stream, frame rate, shot range and selected positions.
+Complete indexes are reused; partial checkpoints resume missing frames. A changed
+identity or corrupt file causes rebuilding. Cached index reads use a bounded
+32 MiB memory layer and file stamps; media and model files are not rehashed.
+
+Source: [SigLIP2 ONNX](https://huggingface.co/onnx-community/siglip2-base-patch16-256-ONNX),
+[upstream model](https://huggingface.co/google/siglip2-base-patch16-256), Apache-2.0.
+
+## DINOv3 frame selection
 
 Model: [onnx-community/dinov3-vits16plus-pretrain-lvd1689m-ONNX](https://huggingface.co/onnx-community/dinov3-vits16plus-pretrain-lvd1689m-ONNX).
 Pinned revision: `81f43e32cbf964b3c284da6cfd3be9fcba6d82ef`.

@@ -148,3 +148,51 @@ if (patched) {
   console.log(`Applied DirectML compatibility to ${patched} DINOv3 attention reshapes.`);
 }
 console.log("Storyboard DINOv3 assets are ready.");
+
+const siglipDirectory = join(destination, "siglip2");
+const siglipRevision = "d1114256522a37ffa257a0a58017348ab0058db2";
+const siglipBase = `https://huggingface.co/onnx-community/siglip2-base-patch16-256-ONNX/resolve/${siglipRevision}`;
+mkdirSync(siglipDirectory, { recursive: true });
+for (const name of [
+  "onnx/vision_model_fp16.onnx",
+  "onnx/text_model_int8.onnx",
+  "tokenizer.json",
+  "tokenizer_config.json",
+  "preprocessor_config.json",
+  "config.json",
+]) {
+  const target = join(siglipDirectory, name.split("/").at(-1));
+  if (existsSync(target) && statSync(target).size > 0) continue;
+  const temporary = `${target}.tmp`;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      console.log(`Downloading SigLIP2 asset: ${name}`);
+      await promisify(execFile)(
+        process.platform === "win32" ? "curl.exe" : "curl",
+        [
+          ...(proxy ? ["--proxy", proxy] : []),
+          "--fail",
+          "--location",
+          "--silent",
+          "--show-error",
+          "--connect-timeout",
+          "30",
+          "--max-time",
+          "600",
+          "--output",
+          temporary,
+          `${siglipBase}/${name}?download=true`,
+        ],
+        { windowsHide: true },
+      );
+      if (!statSync(temporary).size) throw new Error(`Empty SigLIP2 asset: ${name}`);
+      renameSync(temporary, target);
+      break;
+    } catch (error) {
+      rmSync(temporary, { force: true });
+      if (attempt === 4) throw error;
+      console.warn(`Retry ${attempt}: ${error.message}`);
+    }
+  }
+}
+console.log("Storyboard SigLIP2 assets are ready.");
