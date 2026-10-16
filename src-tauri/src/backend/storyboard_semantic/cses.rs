@@ -1,5 +1,5 @@
 //! CSES, arXiv:2608.00714v1, Eqs. 1–9 and Algorithms 1–2.
-//! The only score substitution is fixed-reference visual novelty v_i.
+//! Relevance is replaced by local, sech-weighted visual novelty v_i.
 use super::*;
 
 const DELTA: f64 = 1e-6;
@@ -7,6 +7,7 @@ const TAU: f64 = 2.0;
 const KAPPA: f64 = 0.005;
 const EPSILON: f64 = 0.05;
 const K_MIN: usize = 1;
+const NOVELTY_RADIUS: usize = 10;
 
 struct Budgets {
     probes: usize,
@@ -55,6 +56,8 @@ fn median(values: &[f64]) -> f64 {
     }
 }
 
+// The encoder supplies L2-normalized embeddings. Both novelty and visual
+// coverage use nonnegative cosine similarity.
 fn affinity(a: &[f32], b: &[f32]) -> f64 {
     a.iter()
         .zip(b)
@@ -74,18 +77,33 @@ fn concentration(peak: f64, background: f64, mad: f64, maximum: f64) -> (f64, f6
     (u, 1.0 + (1.0 - u) * (maximum - 1.0))
 }
 
-fn novelty(vector: &[f32], probes: &[Vec<f32>], own_probe: Option<usize>) -> f64 {
-    let count = probes.len() - usize::from(own_probe.is_some());
-    if count == 0 {
-        return 0.0;
+fn novelty_scores(positions: &[usize], embeddings: &[Vec<f32>]) -> Vec<f64> {
+    let mut order: Vec<usize> = (0..positions.len()).collect();
+    order.sort_unstable_by_key(|&i| positions[i]);
+    let weights: Vec<f64> = (1..=NOVELTY_RADIUS)
+        .map(|distance| (distance as f64 / 2.0).cosh().recip())
+        .collect();
+    let mut scores = vec![0.0; positions.len()];
+    for (rank, &i) in order.iter().enumerate() {
+        let start = rank.saturating_sub(NOVELTY_RADIUS);
+        let end = (rank + NOVELTY_RADIUS + 1).min(order.len());
+        let mut weighted_similarity = 0.0;
+        let mut total_weight = 0.0;
+        for (offset, &j) in order[start..end].iter().enumerate() {
+            let distance = rank.abs_diff(start + offset);
+            if distance == 0 {
+                continue;
+            }
+            let weight = weights[distance - 1];
+            weighted_similarity += weight * affinity(&embeddings[i], &embeddings[j]);
+            total_weight += weight;
+        }
+        // A lone point has no neighbors; retain the single-frame convention.
+        if total_weight > 0.0 {
+            scores[i] = 1.0 - weighted_similarity / total_weight;
+        }
     }
-    1.0 - probes
-        .iter()
-        .enumerate()
-        .filter(|(j, _)| Some(*j) != own_probe)
-        .map(|(_, other)| affinity(vector, other))
-        .sum::<f64>()
-        / count as f64
+    scores
 }
 
 pub(super) fn select(
@@ -104,11 +122,7 @@ pub(super) fn select(
     if probes.len() != observed.len() {
         return Err(inference_error("Incomplete probe embeddings"));
     }
-    let mut scores: Vec<f64> = probes
-        .iter()
-        .enumerate()
-        .map(|(i, e)| novelty(e, &probes, Some(i)))
-        .collect();
+    let mut scores = novelty_scores(&observed, &probes);
     let background = median(&scores);
     let mad = median(
         &scores
@@ -217,11 +231,13 @@ pub(super) fn select(
     if acquired.len() != acquisition.len() {
         return Err(inference_error("Incomplete acquisition embeddings"));
     }
-    // O0 never changes, including the leave-one-out definition for probe scores.
-    scores.extend(acquired.iter().map(|e| novelty(e, &probes, None)));
     observed.extend(acquisition);
     let mut embeddings = probes;
     embeddings.extend(acquired);
+    // New points change temporal ranks and neighborhoods, including those of
+    // existing probes. Recompute every score over the expanded encoded set.
+    // Eq. 9 still uses the background median/MAD saved from Stage 1.
+    scores = novelty_scores(&observed, &embeddings);
     let peak = scores.iter().copied().fold(0.0, f64::max);
     let (_, bandwidth) = concentration(peak, background, mad, budget.bandwidth_max);
     let n = observed.len();

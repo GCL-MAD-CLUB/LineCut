@@ -15,6 +15,17 @@ Output: `pooler_output`, 384-dimensional CLS feature, followed by L2 normalizati
 Frames are read from the original video stream using the same seek/frame convention
 as the native frame trace. Decoding and model batches stay in memory.
 
+CSES relevance is replaced by local visual novelty. For each encoded point, sort
+the current encoded set by time and take up to ten neighbors on either side,
+excluding the point itself. With rank distance `d`, use
+`w_d = sech(d/2) = 1/cosh(d/2)` and compute
+`v_i = 1 - sum(w_d * max(0, cos(f_i, f_j))) / sum(w_d)`.
+Only existing neighbors contribute to the denominator; a lone point has novelty
+zero. Distance is the difference in encoded-point ranks, not source frame numbers.
+After active acquisition, recompute every novelty score over the expanded set.
+The final log-prominence recalibration still retains the Stage 1 background
+median and MAD, as in CSES Equation 9.
+
 The pinned graph's symbolic dimensions `s99`, `s100`, and `s4` are fixed to
 `8`, `224`, and `224` when creating the session. Short batches are padded to eight
 rows and only real-frame embeddings are returned. This lets ONNX Runtime fold
