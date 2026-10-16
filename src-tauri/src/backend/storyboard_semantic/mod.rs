@@ -1,4 +1,4 @@
-//! Query-independent storyboard frame selection. Results live only in memory.
+//! Query-independent storyboard frame selection and persistent CSES source data.
 use super::onnx::OnnxModel;
 use super::*;
 use ort::{
@@ -12,6 +12,7 @@ use std::sync::{OnceLock, TryLockError};
 use tauri::{ipc::Channel, path::BaseDirectory};
 
 mod batch;
+mod cache;
 mod cses;
 mod decode;
 const SIDE: usize = 224;
@@ -44,9 +45,8 @@ struct BatchEngine {
     last_size: usize,
 }
 static MODEL: OnceLock<Mutex<Option<BatchEngine>>> = OnceLock::new();
-static RESULTS: OnceLock<Mutex<HashMap<String, Vec<usize>>>> = OnceLock::new();
 // Like subtitle indexing, overlapping windows serialize preparation and recheck
-// completed items after acquiring the slot. Search only needs the result lock.
+// completed items after acquiring the slot. Search only reads completed files.
 static BUILD: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -81,7 +81,7 @@ pub(crate) struct SelectionProgress {
 
 struct ShotSource {
     shot: SemanticShot,
-    key: String,
+    identity: cache::ShotIdentity,
     path: String,
     stream: i32,
     rate: f64,
@@ -409,22 +409,20 @@ fn resolve_shots(
             if *fingerprint != shot.fingerprint {
                 return Err(inference_error("Storyboard source changed"));
             }
-            // No media hashing, embeddings, or selection data are written to disk.
-            let key = serde_json::to_string(&(
-                &shot.asset_id,
-                &shot.fingerprint,
-                &*path,
-                *stream,
-                *rate,
-                shot.start_frame,
-                shot.end_frame,
-                *length,
-                *modified,
-            ))
-            .map_err(inference_error)?;
+            // Reuse the imported media hash without reading media bytes again.
+            // Asset IDs and paths are deliberately absent from persisted identity.
+            let identity = cache::ShotIdentity {
+                fingerprint: shot.fingerprint.clone(),
+                media_length: *length,
+                media_modified_ns: *modified,
+                stream: *stream,
+                rate: *rate,
+                start_frame: shot.start_frame,
+                end_frame: shot.end_frame,
+            };
             Ok(ShotSource {
                 shot,
-                key,
+                identity,
                 path: path.clone(),
                 stream: *stream,
                 rate: *rate,
@@ -432,13 +430,6 @@ fn resolve_shots(
             })
         })
         .collect()
-}
-
-fn results() -> AppResult<std::sync::MutexGuard<'static, HashMap<String, Vec<usize>>>> {
-    RESULTS
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .map_err(inference_error)
 }
 
 fn decode_and_embed(
@@ -493,6 +484,40 @@ fn decode_and_embed(
     decode::embed_stream(app, program, args, task_id, cancel, positions.len())
 }
 
+fn encode_missing(
+    positions: &[usize],
+    start_frame: usize,
+    available: &HashMap<usize, Vec<f32>>,
+    mut encode: impl FnMut(&[usize]) -> AppResult<Vec<Vec<f32>>>,
+) -> AppResult<Vec<Vec<f32>>> {
+    let missing: Vec<usize> = positions
+        .iter()
+        .copied()
+        .filter(|frame| !available.contains_key(&(start_frame + frame)))
+        .collect();
+    let encoded = if missing.is_empty() {
+        Vec::new()
+    } else {
+        encode(&missing)?
+    };
+    if encoded.len() != missing.len() {
+        return Err(inference_error(
+            "Incomplete replacement storyboard embeddings",
+        ));
+    }
+    let mut encoded = encoded.into_iter();
+    positions
+        .iter()
+        .map(|frame| {
+            available
+                .get(&(start_frame + frame))
+                .cloned()
+                .or_else(|| encoded.next())
+                .ok_or_else(|| inference_error("Missing replacement storyboard embedding"))
+        })
+        .collect()
+}
+
 #[tauri::command]
 pub(crate) async fn select_storyboard_frames(
     shots: Vec<SemanticShot>,
@@ -526,7 +551,9 @@ pub(crate) async fn select_storyboard_frames(
     };
     report(0, 0);
     let sources = resolve_shots(shots, &state)?;
-    let program = ffmpeg_program(&preferences_clone(&state)?);
+    let preferences = preferences_clone(&state)?;
+    let program = ffmpeg_program(&preferences);
+    let root = cache::root(&preferences);
     let token = task.cancel_token();
     spawn_blocking_cancellable(
         task.cancel_token(),
@@ -545,24 +572,16 @@ pub(crate) async fn select_storyboard_frames(
             report(0, total);
             for source in sources {
                 ensure_not_cancelled(cancel)?;
-                let existing = results()?.get(&source.key).cloned();
-                let frames = if let Some(frames) = existing {
-                    frames
-                } else {
-                    let selected = cses::select(source.frames, source.rate, cancel, |positions| {
-                        decode_and_embed(&app, &source, positions, &program, &task_id, &token)
-                    })?;
-                    let frames: Vec<usize> = selected
-                        .into_iter()
-                        .map(|frame| frame + source.shot.start_frame)
-                        .collect();
-                    ensure_not_cancelled(cancel)?;
-                    results()?.insert(source.key.clone(), frames.clone());
-                    frames
-                };
+                let data = cache::get_or_build(&root, &source, cancel, |available| {
+                    cses::select(source.frames, source.rate, cancel, |positions| {
+                        encode_missing(positions, source.shot.start_frame, available, |missing| {
+                            decode_and_embed(&app, &source, missing, &program, &task_id, &token)
+                        })
+                    })
+                })?;
                 output.push(SelectedShotFrames {
                     id: source.shot.id,
-                    frames,
+                    frames: data.selection.selected_frames(),
                 });
                 report(output.len(), total);
             }
@@ -576,13 +595,13 @@ pub(crate) async fn select_storyboard_frames(
 fn search_completed_shots(
     query: &str,
     sources: &[ShotSource],
+    root: &Path,
 ) -> AppResult<Vec<StoryboardSemanticMatch>> {
     if query.trim().is_empty() {
         return Ok(Vec::new());
     }
-    let ready = results()?;
     for source in sources {
-        if !ready.contains_key(&source.key) {
+        if cache::read(root, &source.identity).is_none() {
             return Err(inference_error(
                 "Storyboard frame selection must complete before retrieval",
             ));
@@ -604,7 +623,8 @@ pub(crate) async fn search_storyboards_semantic(
     state: tauri::State<'_, AppState>,
 ) -> CommandResult<Vec<StoryboardSemanticMatch>> {
     let sources = resolve_shots(shots, &state)?;
-    tokio::task::spawn_blocking(move || search_completed_shots(&query, &sources))
+    let root = cache::root(&preferences_clone(&state)?);
+    tokio::task::spawn_blocking(move || search_completed_shots(&query, &sources, &root))
         .await
         .map_err(|error| {
             app_error(

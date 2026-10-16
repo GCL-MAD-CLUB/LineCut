@@ -354,9 +354,13 @@ fn model_guard(
 }
 
 fn semantic_index_root(state: &tauri::State<'_, AppState>) -> AppResult<PathBuf> {
-    Ok(configured_cache_root(&preferences_clone(state)?)
-        .join("semantic-search")
-        .join(MODEL_REVISION))
+    Ok(subtitle_cache_root(&preferences_clone(state)?))
+}
+
+fn subtitle_cache_root(preferences: &Preferences) -> PathBuf {
+    configured_cache_root(preferences)
+        .join("Subtitle Semantic Search")
+        .join(MODEL_REVISION)
 }
 
 // Indexing is query-independent and owns its cancellable background task.
@@ -508,6 +512,38 @@ pub(crate) async fn search_subtitles_semantic(
 mod tests {
     use super::index::{write_file_index, SubtitleFileIndex};
     use super::*;
+
+    #[test]
+    fn subtitle_cache_uses_new_directory_without_reusing_legacy_files() {
+        let cache_root = root();
+        let preferences = Preferences {
+            cache_dir: cache_root.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        let legacy = cache_root.join("semantic-search").join(MODEL_REVISION);
+        fs::create_dir_all(&legacy).unwrap();
+        let subtitles = [cue("source", "id", "hello")];
+        let files = subtitle_files(&subtitles);
+        let index = SubtitleFileIndex {
+            key: files[0].key.clone(),
+            embeddings: vec![Some(vector())],
+        };
+        write_file_index(&legacy, &index).unwrap();
+        let current = subtitle_cache_root(&preferences);
+        assert_eq!(
+            current,
+            cache_root
+                .join("Subtitle Semantic Search")
+                .join(MODEL_REVISION)
+        );
+        assert!(read_file_index(&current, &files[0]).is_none());
+        assert!(read_file_index(&legacy, &files[0]).is_some());
+        fs::create_dir_all(&current).unwrap();
+        write_file_index(&current, &index).unwrap();
+        assert!(read_file_index(&current, &files[0]).is_some());
+        assert_eq!(cache_root.parent(), Some(env::temp_dir().as_path()));
+        fs::remove_dir_all(cache_root).unwrap();
+    }
 
     fn cue(source: &str, id: &str, text: &str) -> SemanticSubtitle {
         SemanticSubtitle {

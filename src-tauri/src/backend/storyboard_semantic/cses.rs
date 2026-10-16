@@ -9,16 +9,23 @@ const EPSILON: f64 = 0.05;
 const K_MIN: usize = 1;
 const NOVELTY_RADIUS: usize = 10;
 
-struct Budgets {
-    probes: usize,
-    scored: usize,
-    grid: usize,
-    selected: usize,
-    bandwidth_max: f64,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(super) struct Parameters {
+    pub(super) probes: usize,
+    pub(super) scored: usize,
+    pub(super) grid: usize,
+    pub(super) selected: usize,
+    pub(super) bandwidth_max: f64,
+    minimum_selected: usize,
+    delta: f64,
+    tau: f64,
+    kappa: f64,
+    epsilon: f64,
+    novelty_radius: usize,
 }
 
-impl Budgets {
-    fn for_shot(frames: usize, rate: f64) -> Self {
+impl Parameters {
+    pub(super) fn for_shot(frames: usize, rate: f64) -> Self {
         let duration = frames as f64 / rate;
         let probes = ((duration * 2.0).ceil() as usize).clamp(4, 64).min(frames);
         Self {
@@ -27,7 +34,57 @@ impl Budgets {
             grid: 512.min(frames - probes),
             selected: ((duration * 2.0).ceil() as usize).clamp(1, 32).min(frames),
             bandwidth_max: (duration / 4.0).clamp(1.0, 38.0),
+            minimum_selected: K_MIN,
+            delta: DELTA,
+            tau: TAU,
+            kappa: KAPPA,
+            epsilon: EPSILON,
+            novelty_radius: NOVELTY_RADIUS,
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(super) struct EncodedFrame {
+    // Relative to the shot during selection; made absolute before persistence.
+    pub(super) frame: usize,
+    pub(super) v_i: f64,
+    // The complete encoder vector used by CSES, before pairwise affinities.
+    // This is the original L2-normalized DINOv3 CLS embedding, with no quantization.
+    pub(super) e_i: Vec<f32>,
+    pub(super) probe: bool,
+    pub(super) selected: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(super) struct Calibration {
+    pub(super) background_median: f64,
+    pub(super) background_mad: f64,
+    pub(super) initial_peak: f64,
+    pub(super) final_peak: f64,
+    pub(super) initial_bandwidth: f64,
+    pub(super) final_bandwidth: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(super) struct Selection {
+    pub(super) parameters: Parameters,
+    pub(super) calibration: Calibration,
+    // Preserve O's calculation order: probes, then acquisition points. This also
+    // preserves floating-point summation order for final-selection replay.
+    pub(super) frames: Vec<EncodedFrame>,
+}
+
+impl Selection {
+    pub(super) fn selected_frames(&self) -> Vec<usize> {
+        let mut frames: Vec<usize> = self
+            .frames
+            .iter()
+            .filter(|frame| frame.selected)
+            .map(|frame| frame.frame)
+            .collect();
+        frames.sort_unstable();
+        frames
     }
 }
 
@@ -200,12 +257,10 @@ pub(super) fn select(
     rate: f64,
     cancel: &AtomicBool,
     mut encode: impl FnMut(&[usize]) -> AppResult<Vec<Vec<f32>>>,
-) -> AppResult<Vec<usize>> {
+) -> AppResult<Selection> {
     ensure_not_cancelled(cancel)?;
-    if frames == 1 {
-        return Ok(vec![0]);
-    }
-    let budget = Budgets::for_shot(frames, rate);
+    // Even a single-frame shot now needs its vector in the persisted source.
+    let budget = Parameters::for_shot(frames, rate);
     let mut observed = uniform(frames, budget.probes);
     let probes = encode(&observed)?;
     if probes.len() != observed.len() {
@@ -221,8 +276,9 @@ pub(super) fn select(
             .map(|v| (v - background).abs())
             .collect::<Vec<_>>(),
     );
-    let peak = scores.iter().copied().fold(0.0, f64::max);
-    let (u, bandwidth) = concentration(peak, background, mad, budget.bandwidth_max);
+    let initial_peak = scores.iter().copied().fold(0.0, f64::max);
+    let (u, bandwidth) = concentration(initial_peak, background, mad, budget.bandwidth_max);
+    let initial_bandwidth = bandwidth;
 
     // Sample uniformly in the ordered set of unscored frames, without allocating
     // an array proportional to video length. Probe endpoints bracket every c.
@@ -360,13 +416,168 @@ pub(super) fn select(
             coverage[i] = coverage[i].max(kernel[i][j]);
         }
     }
-    result.sort_unstable();
-    Ok(result)
+    ensure_not_cancelled(cancel)?;
+    Ok(Selection {
+        calibration: Calibration {
+            background_median: background,
+            background_mad: mad,
+            initial_peak,
+            final_peak: peak,
+            initial_bandwidth,
+            final_bandwidth: bandwidth,
+        },
+        frames: observed
+            .into_iter()
+            .zip(scores)
+            .zip(embeddings)
+            .enumerate()
+            .map(|(i, ((frame, v_i), e_i))| EncodedFrame {
+                frame,
+                v_i,
+                e_i,
+                probe: i < budget.probes,
+                selected: selected[i],
+            })
+            .collect(),
+        parameters: budget,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn captured_source_contains_acquisition_final_scores_and_replays_selection() {
+        let cancel = AtomicBool::new(false);
+        let mut batches = Vec::new();
+        let embedding = |frame: usize| {
+            let angle = frame as f64 * 0.037;
+            vec![angle.cos() as f32, angle.sin() as f32]
+        };
+        let selection = select(10000, 1.0, &cancel, |positions| {
+            batches.push(positions.to_vec());
+            Ok(positions.iter().map(|&frame| embedding(frame)).collect())
+        })
+        .unwrap();
+        assert_eq!(batches.len(), 2, "fixture must exercise active acquisition");
+        let positions: Vec<usize> = batches.iter().flatten().copied().collect();
+        assert_eq!(
+            selection
+                .frames
+                .iter()
+                .map(|frame| frame.frame)
+                .collect::<Vec<_>>(),
+            positions
+        );
+        let embeddings: Vec<Vec<f32>> = positions.iter().map(|&frame| embedding(frame)).collect();
+        let mut affinities = VisualAffinities::new(positions.len());
+        affinities.extend(&embeddings);
+        let final_scores = novelty_scores(&positions, &affinities);
+        for (i, frame) in selection.frames.iter().enumerate() {
+            assert_eq!(frame.e_i, embeddings[i]);
+            assert_eq!(frame.v_i, final_scores[i]);
+            assert_eq!(frame.probe, i < batches[0].len());
+        }
+        let mut coarse = VisualAffinities::new(batches[0].len());
+        coarse.extend(&embeddings[..batches[0].len()]);
+        let coarse_scores = novelty_scores(&batches[0], &coarse);
+        assert!(coarse_scores.iter().zip(&final_scores).any(|(a, b)| a != b));
+        assert_eq!(
+            selection.calibration.background_median,
+            median(&coarse_scores)
+        );
+
+        // Full-scan replay consumes only the captured final data, not the
+        // encoder, acquisition planner, or optimized greedy implementation.
+        let frames = &selection.frames;
+        let weights: Vec<f64> = frames
+            .iter()
+            .map(|frame| frame.v_i + selection.parameters.kappa)
+            .collect();
+        let total: f64 = weights.iter().sum();
+        let n = frames.len();
+        let kernel: Vec<Vec<f64>> = frames
+            .iter()
+            .map(|a| {
+                frames
+                    .iter()
+                    .map(|b| {
+                        if a.frame == b.frame {
+                            1.0
+                        } else {
+                            affinity(&a.e_i, &b.e_i)
+                                * temporal(
+                                    a.frame,
+                                    b.frame,
+                                    1.0,
+                                    selection.calibration.final_bandwidth,
+                                )
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        let mut covered = vec![0.0_f64; n];
+        let mut chosen = HashSet::new();
+        while chosen.len() < selection.parameters.selected {
+            if chosen.len() >= selection.parameters.minimum_selected
+                && weights
+                    .iter()
+                    .zip(&covered)
+                    .map(|(w, c)| w * c)
+                    .sum::<f64>()
+                    >= (1.0 - selection.parameters.epsilon) * total
+            {
+                break;
+            }
+            let mut best = None;
+            let mut best_gain = 0.0;
+            for j in 0..n {
+                if chosen.contains(&j) {
+                    continue;
+                }
+                let gain: f64 = (0..n)
+                    .map(|i| weights[i] * (kernel[i][j] - covered[i]).max(0.0))
+                    .sum();
+                if gain > best_gain
+                    || (gain == best_gain
+                        && gain > 0.0
+                        && best.is_some_and(|b: usize| {
+                            covered[j] < covered[b]
+                                || (covered[j] == covered[b] && frames[j].frame < frames[b].frame)
+                        }))
+                {
+                    best = Some(j);
+                    best_gain = gain;
+                }
+            }
+            let Some(j) = best else {
+                break;
+            };
+            chosen.insert(j);
+            for i in 0..n {
+                covered[i] = covered[i].max(kernel[i][j]);
+            }
+        }
+        let mut replayed: Vec<usize> = chosen.into_iter().map(|i| frames[i].frame).collect();
+        replayed.sort_unstable();
+        assert_eq!(replayed, selection.selected_frames());
+    }
+
+    #[test]
+    fn single_frame_also_records_its_embedding() {
+        let cancel = AtomicBool::new(false);
+        let selected = select(1, 25.0, &cancel, |positions| {
+            assert_eq!(positions, [0]);
+            Ok(vec![vec![0.6, 0.8]])
+        })
+        .unwrap();
+        assert_eq!(selected.selected_frames(), [0]);
+        assert_eq!(selected.frames[0].v_i, 0.0);
+        assert_eq!(selected.frames[0].e_i, [0.6, 0.8]);
+        assert!(selected.frames[0].probe);
+    }
 
     #[test]
     fn bounded_greedy_matches_full_scan_with_changing_weights_and_ties() {
