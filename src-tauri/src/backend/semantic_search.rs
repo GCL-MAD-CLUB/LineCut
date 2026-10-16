@@ -354,13 +354,33 @@ fn model_guard(
 }
 
 fn semantic_index_root(state: &tauri::State<'_, AppState>) -> AppResult<PathBuf> {
-    Ok(subtitle_cache_root(&preferences_clone(state)?))
+    prepare_subtitle_cache_root(&preferences_clone(state)?)
 }
 
 fn subtitle_cache_root(preferences: &Preferences) -> PathBuf {
     configured_cache_root(preferences)
         .join("Subtitle Semantic Search")
-        .join(MODEL_REVISION)
+        .join(format!("{:x}", Sha256::digest(MODEL_REVISION.as_bytes())))
+}
+
+fn prepare_subtitle_cache_root(preferences: &Preferences) -> AppResult<PathBuf> {
+    // Serialize the one-time rename across simultaneous preparation/search calls.
+    // Only the directory name changes; index identities and payloads stay valid.
+    static LAYOUT: Mutex<()> = Mutex::new(());
+    let _layout = LAYOUT.lock().map_err(inference_error)?;
+    let root = subtitle_cache_root(preferences);
+    let previous = configured_cache_root(preferences)
+        .join("Subtitle Semantic Search")
+        .join(MODEL_REVISION);
+    if !root.exists() && previous.is_dir() {
+        fs::rename(&previous, &root).map_err(|error| {
+            app_error(
+                ErrorCode::SemanticIndexWriteFailed,
+                format!("Cannot rename subtitle semantic cache directory: {error}"),
+            )
+        })?;
+    }
+    Ok(root)
 }
 
 // Indexing is query-independent and owns its cancellable background task.
@@ -534,13 +554,22 @@ mod tests {
             current,
             cache_root
                 .join("Subtitle Semantic Search")
-                .join(MODEL_REVISION)
+                .join(format!("{:x}", Sha256::digest(MODEL_REVISION.as_bytes())))
         );
+        let directory = current.file_name().unwrap().to_str().unwrap();
+        assert_eq!(directory.len(), 64);
+        assert!(directory.bytes().all(|c| c.is_ascii_hexdigit()));
         assert!(read_file_index(&current, &files[0]).is_none());
         assert!(read_file_index(&legacy, &files[0]).is_some());
-        fs::create_dir_all(&current).unwrap();
-        write_file_index(&current, &index).unwrap();
+        let previous = cache_root
+            .join("Subtitle Semantic Search")
+            .join(MODEL_REVISION);
+        fs::create_dir_all(&previous).unwrap();
+        write_file_index(&previous, &index).unwrap();
+        assert_eq!(prepare_subtitle_cache_root(&preferences).unwrap(), current);
+        assert!(!previous.exists());
         assert!(read_file_index(&current, &files[0]).is_some());
+        assert_eq!(prepare_subtitle_cache_root(&preferences).unwrap(), current);
         assert_eq!(cache_root.parent(), Some(env::temp_dir().as_path()));
         fs::remove_dir_all(cache_root).unwrap();
     }

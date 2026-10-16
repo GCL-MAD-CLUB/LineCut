@@ -61,7 +61,7 @@ TransNetV2、字幕 Jina 和分镜 DINOv3 统一通过 `backend/onnx.rs` 的 `On
 
 事件参数位于 `resources/transnetv2/storyboard-event-model.json`，特征顺序必须匹配。缺失配置使用相同默认参数，损坏配置明确报错。当前参数标记为 `bootstrap_uncalibrated`，不能宣称为经过训练或校准的生产模型。
 
-`backend/storyboard_semantic/cses.rs` 使用 DINOv3 特征执行自适应选帧。`backend/storyboard_semantic/cache.rs` 将同一媒体的分镜聚合到首选项缓存根下的 `Storyboard Keyframe/<媒体指纹>/<UUID>.bin`，单卷以 256 MiB 为上限，超过时创建新的 UUID 分卷；每卷包含多个分镜，不为每个分镜创建文件。版本、模型、算法、分卷顺序和其他元数据均保存在文件内部，不设置版本目录，也不依赖文件名排序。媒体指纹复用导入时的 hash，不重新读取媒体计算 hash；文件内按分镜身份定位记录，身份包含文件大小与修改时间、视频流、帧率和包含首尾的绝对帧区间，不包含路径、资产 ID 或面板 ID。模型/算法版本和实际参数均参与有效性检查。字幕语义索引使用 `Subtitle Semantic Search/<模型版本>`，旧 `semantic-search` 缓存弃用，不读取或迁移；模型资源目录名不受缓存目录调整影响。
+`backend/storyboard_semantic/cses.rs` 使用 DINOv3 特征执行自适应选帧。`backend/storyboard_semantic/cache.rs` 将同一媒体的分镜聚合到首选项缓存根下的 `Storyboard Keyframe/<媒体指纹>/<UUID>.bin`，单卷以 256 MiB 为上限，超过时创建新的 UUID 分卷；每卷包含多个分镜，不为每个分镜创建文件。版本、模型、算法、分卷顺序和其他元数据均保存在文件内部，不设置版本目录，也不依赖文件名排序。媒体指纹复用导入时的 hash，不重新读取媒体计算 hash；文件内按分镜身份定位记录，身份包含文件大小与修改时间、视频流、帧率和包含首尾的绝对帧区间，不包含路径、资产 ID 或面板 ID。模型/算法版本和实际参数均参与有效性检查。字幕语义索引使用 `Subtitle Semantic Search/<SHA-256>`，旧 `semantic-search` 缓存弃用，不读取或迁移；模型资源目录名不受缓存目录调整影响。
 
 分镜缓存是有版本的 bincode 数据，包含媒体/分镜身份、来源记录、全部初始探测与主动采集帧，以及每帧的绝对帧号、最终 vᵢ、完整 eᵢ、探测标记和选中标记。vᵢ 取主动采集后对扩展集合重算的最终值；eᵢ 保留 CSES 输入的 L2 归一化 DINOv3 CLS 向量，使用原有 float32 精度，不做量化或仅存帧间相似度。帧记录保留原始计算顺序，并保存初始/最终峰值和带宽、探测背景中位数/MAD、各项预算及公式常量。单帧分镜也执行编码并保存向量，vᵢ 为 0。这些数据可重演最终覆盖率选择，但缓存复用直接读取选中标记，不解码、不向量化、不重演算法。
 
