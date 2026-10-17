@@ -77,8 +77,25 @@ pub(crate) struct StoryboardSemanticMatch {
 #[derive(Clone, Serialize)]
 pub(crate) struct SelectionProgress {
     phase: &'static str,
-    completed: usize,
+    completed: f64,
     total: usize,
+}
+
+// Both stages advance the same task. Fractional shots let inference batches
+// report progress even when a source contains only one long storyboard.
+struct BuildProgress<F> {
+    total: usize,
+    report: F,
+}
+
+impl<F: FnMut(f64, usize)> BuildProgress<F> {
+    fn selection(&mut self, completed: f64) {
+        (self.report)(completed * 0.5, self.total);
+    }
+
+    fn indexing(&mut self, completed: f64) {
+        (self.report)((self.total as f64 + completed) * 0.5, self.total);
+    }
 }
 
 struct ShotSource {
@@ -483,12 +500,13 @@ fn decode_and_embed(
     program: &str,
     task_id: &str,
     cancel: &Arc<AtomicBool>,
+    report: impl FnMut(usize),
 ) -> AppResult<Vec<Vec<f32>>> {
     if positions.is_empty() {
         return Ok(Vec::new());
     }
     let args = frame_decode_args(source, positions, SIDE);
-    decode::embed_stream(app, program, args, task_id, cancel, positions.len())
+    decode::embed_stream(app, program, args, task_id, cancel, positions.len(), report)
 }
 
 fn decode_selected_and_embed(
@@ -566,11 +584,12 @@ pub(crate) async fn select_storyboard_frames(
     let task = register_task(&task_id, state.inner())?;
     let mut last_progress = None;
     let mut last_sent = std::time::Instant::now();
-    let mut report = move |completed, total| {
+    let mut report = move |completed: f64, total: usize| {
         if last_progress == Some((completed, total)) {
             return;
         }
-        if completed != total
+        if completed != total as f64
+            && completed != total as f64 * 0.5
             && last_progress.is_some_and(|(_, previous)| previous == total)
             && last_sent.elapsed() < Duration::from_millis(100)
         {
@@ -586,7 +605,7 @@ pub(crate) async fn select_storyboard_frames(
             tracing::debug!(%error, "Storyboard selection progress receiver closed");
         }
     };
-    report(0, 0);
+    report(0.0, 0);
     let sources = resolve_shots(shots, &state)?;
     let preferences = preferences_clone(&state)?;
     let program = ffmpeg_program(&preferences);
@@ -605,36 +624,103 @@ pub(crate) async fn select_storyboard_frames(
                     Err(error) => return Err(inference_error(error)),
                 }
             };
-            let mut output = Vec::with_capacity(sources.len());
             let total = sources.len();
-            report(0, total);
-            for source in sources {
+            report(0.0, total);
+            let progress = std::cell::RefCell::new(BuildProgress { total, report });
+            let mut selections = Vec::with_capacity(total);
+            // Finish selection across the scope before spending the second
+            // half of the task on the media-level SigLIP2 indexes.
+            for (position, source) in sources.iter().enumerate() {
                 ensure_not_cancelled(cancel)?;
-                let data = cache::get_or_build(&root, &source, cancel, |available| {
+                let budget = cses::Parameters::for_shot(source.frames, source.rate).scored;
+                let mut observed = 0;
+                let data = cache::get_or_build(&root, source, cancel, |available| {
                     cses::select(source.frames, source.rate, cancel, |positions| {
-                        encode_missing(positions, source.shot.start_frame, available, |missing| {
-                            decode_and_embed(&app, &source, missing, &program, &task_id, &token)
-                        })
+                        let vectors = encode_missing(
+                            positions,
+                            source.shot.start_frame,
+                            available,
+                            |missing| {
+                                let reused = positions.len() - missing.len();
+                                decode_and_embed(
+                                    &app,
+                                    source,
+                                    missing,
+                                    &program,
+                                    &task_id,
+                                    &token,
+                                    |encoded| {
+                                        let fraction = (observed + reused + encoded) as f64
+                                            / (budget + 1) as f64;
+                                        progress.borrow_mut().selection(position as f64 + fraction);
+                                    },
+                                )
+                            },
+                        )?;
+                        observed += positions.len();
+                        progress
+                            .borrow_mut()
+                            .selection(position as f64 + observed as f64 / (budget + 1) as f64);
+                        Ok(vectors)
                     })
                 })?;
-                let frames = data.selection.selected_frames();
+                selections.push(data.selection.selected_frames());
+                progress.borrow_mut().selection((position + 1) as f64);
+            }
+            let mut output = Vec::with_capacity(total);
+            let mut processed = 0;
+            // Every media source keeps its shots in a single index file.
+            for group in media_groups(&sources) {
+                ensure_not_cancelled(cancel)?;
+                let requests = group
+                    .iter()
+                    .map(|&index| index::ShotRequest {
+                        start_frame: sources[index].shot.start_frame,
+                        end_frame: sources[index].shot.end_frame,
+                        frames: selections[index].clone(),
+                    })
+                    .collect::<Vec<_>>();
                 index::get_or_build(
                     &semantic_root,
-                    &source,
-                    &frames,
+                    &sources[group[0]].identity,
+                    &requests,
                     cancel,
-                    |positions, publish| {
+                    |completed| {
+                        progress
+                            .borrow_mut()
+                            .indexing((processed + completed) as f64)
+                    },
+                    |position, positions, publish| {
+                        let mut encoded = 0;
                         decode_selected_and_embed(
-                            &app, &source, positions, &program, &task_id, &token, publish,
+                            &app,
+                            &sources[group[position]],
+                            positions,
+                            &program,
+                            &task_id,
+                            &token,
+                            &mut |vectors| {
+                                publish(vectors)?;
+                                encoded += vectors.len();
+                                // Reserve the final unit for decoder validation
+                                // and publication of the completed shot.
+                                let fraction = encoded as f64 / (positions.len() + 1) as f64;
+                                progress
+                                    .borrow_mut()
+                                    .indexing((processed + position) as f64 + fraction);
+                                Ok(())
+                            },
                         )?;
                         Ok(())
                     },
                 )?;
-                output.push(SelectedShotFrames {
-                    id: source.shot.id,
-                    frames,
-                });
-                report(output.len(), total);
+                processed += group.len();
+                for &index in &group {
+                    output.push(SelectedShotFrames {
+                        id: sources[index].shot.id.clone(),
+                        frames: selections[index].clone(),
+                    });
+                }
             }
             Ok(output)
         },
@@ -642,8 +728,33 @@ pub(crate) async fn select_storyboard_frames(
     .await
 }
 
-// Retrieval only consumes completed SigLIP2 indexes; frame scores are cosine
-// similarities just like subtitle retrieval, with a maximum reduction per shot.
+/// Groups storyboards of one media source so each source owns a single index.
+fn media_groups(sources: &[ShotSource]) -> Vec<Vec<usize>> {
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    let mut keys: HashMap<_, usize> = HashMap::new();
+    for (index, source) in sources.iter().enumerate() {
+        let key = (
+            &source.identity.fingerprint,
+            source.identity.media_length,
+            source.identity.media_modified_ns,
+            source.identity.stream,
+            source.identity.rate.to_bits(),
+        );
+        match keys.get(&key) {
+            Some(&position) => groups[position].push(index),
+            None => {
+                keys.insert(key, groups.len());
+                groups.push(vec![index]);
+            }
+        }
+    }
+    groups
+}
+
+// Retrieval only consumes completed SigLIP2 indexes. The best frame of each
+// shot decides its score, and that score is the calibrated SigLIP2 match
+// probability, which is monotone in the cosine and therefore equal to the
+// maximum probability over the shot's frames.
 fn search_completed_shots(
     app: &tauri::AppHandle,
     query: &str,
@@ -655,23 +766,32 @@ fn search_completed_shots(
         return Ok(Vec::new());
     }
     let query_embedding = siglip::text_embedding(app, query)?;
-    sources
-        .iter()
-        .map(|source| {
+    let mut matches = Vec::with_capacity(sources.len());
+    for group in media_groups(sources) {
+        let mut requests = Vec::with_capacity(group.len());
+        for &index in &group {
+            let source = &sources[index];
             let data = cache::read(selection_root, &source.identity).ok_or_else(|| {
                 inference_error("Storyboard selection must complete before retrieval")
             })?;
-            let vectors = index::read(
-                semantic_root,
-                &source.identity,
-                &data.selection.selected_frames(),
-            )?;
-            Ok(StoryboardSemanticMatch {
-                id: source.shot.id.clone(),
-                similarity: index::max_similarity(&vectors, &query_embedding)?,
-            })
-        })
-        .collect()
+            requests.push(index::ShotRequest {
+                start_frame: source.shot.start_frame,
+                end_frame: source.shot.end_frame,
+                frames: data.selection.selected_frames(),
+            });
+        }
+        let vectors = index::read(semantic_root, &sources[group[0]].identity, &requests)?;
+        for (slot, &index) in group.iter().enumerate() {
+            matches.push(StoryboardSemanticMatch {
+                id: sources[index].shot.id.clone(),
+                similarity: siglip::match_probability(index::max_similarity(
+                    &vectors[slot],
+                    &query_embedding,
+                )?),
+            });
+        }
+    }
+    Ok(matches)
 }
 
 #[tauri::command]
@@ -700,6 +820,80 @@ pub(crate) async fn search_storyboards_semantic(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_task_progress_advances_with_batches_in_both_equal_stages() {
+        let mut updates = Vec::new();
+        let mut progress = BuildProgress {
+            total: 2,
+            report: |completed, total| updates.push((completed, total)),
+        };
+        // A partial selection, a completed selection, and a cached selection.
+        progress.selection(0.5);
+        progress.selection(1.0);
+        progress.selection(2.0);
+        // Vector batches advance before each shot's final publication.
+        progress.indexing(0.5);
+        progress.indexing(1.0);
+        progress.indexing(1.5);
+        progress.indexing(2.0);
+        assert_eq!(
+            updates,
+            vec![
+                (0.25, 2),
+                (0.5, 2),
+                (1.0, 2),
+                (1.25, 2),
+                (1.5, 2),
+                (1.75, 2),
+                (2.0, 2)
+            ]
+        );
+        assert!(updates.windows(2).all(|pair| pair[0].0 < pair[1].0));
+        assert!(updates[..updates.len() - 1]
+            .iter()
+            .all(|&(completed, total)| completed < total as f64));
+    }
+
+    #[test]
+    fn media_groups_reuse_interleaved_sources_but_separate_media_versions() {
+        let make_source = |fingerprint: &str, stream, modified, rate| ShotSource {
+            shot: SemanticShot {
+                id: "shot".into(),
+                source: "panel".into(),
+                asset_id: "asset".into(),
+                fingerprint: fingerprint.into(),
+                start_frame: 0,
+                end_frame: 0,
+            },
+            identity: cache::ShotIdentity {
+                fingerprint: fingerprint.into(),
+                stream,
+                rate,
+                media_length: 10,
+                media_modified_ns: modified,
+                start_frame: 0,
+                end_frame: 0,
+            },
+            path: "original.mp4".into(),
+            stream,
+            rate,
+            frames: 1,
+        };
+        let sources = [
+            make_source("a", 0, Some(1), 24.0),
+            make_source("b", 0, Some(1), 24.0),
+            make_source("a", 0, Some(1), 24.0),
+            make_source("a", 1, Some(1), 24.0),
+            make_source("a", 0, Some(2), 24.0),
+            make_source("a", 0, Some(1), 25.0),
+        ];
+        assert_eq!(
+            media_groups(&sources),
+            vec![vec![0, 2], vec![1], vec![3], vec![4], vec![5]]
+        );
+        assert!(media_groups(&[]).is_empty());
+    }
 
     #[test]
     #[ignore = "requires packaged DINOv3, ONNX Runtime and a DirectML GPU"]

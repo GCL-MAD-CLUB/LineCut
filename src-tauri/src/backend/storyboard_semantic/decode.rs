@@ -128,7 +128,9 @@ pub(super) fn embed_stream(
     task_id: &str,
     cancel: &Arc<AtomicBool>,
     count: usize,
+    mut report: impl FnMut(usize),
 ) -> AppResult<Vec<Vec<f32>>> {
+    let mut completed = 0;
     embed_stream_with(
         app,
         program,
@@ -138,7 +140,12 @@ pub(super) fn embed_stream(
         count,
         SIDE,
         |remaining| preferred_batch(remaining, cancel),
-        |rgb| embed(app, rgb, cancel),
+        |rgb| {
+            let vectors = embed(app, rgb, cancel)?;
+            completed += vectors.len();
+            report(completed);
+            Ok(vectors)
+        },
     )
 }
 

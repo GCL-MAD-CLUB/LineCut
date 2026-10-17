@@ -4,6 +4,23 @@ use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams};
 const SIDE: usize = 256;
 pub(super) const DIMENSIONS: usize = 768;
 const TOKENS: usize = 64;
+// The exported graphs stop at the normalized `pooler_output` pair, so the
+// pairwise logits SiglipModel applies next are not part of the ONNX assets.
+// Both values come from the upstream checkpoint
+// `google/siglip2-base-patch16-256` that the pinned ONNX revision exports:
+// logits = exp(logit_scale) * cosine + logit_bias, then sigmoid, exactly like
+// `SiglipModel.forward` and the zero-shot pipeline.
+const LOGIT_SCALE: f64 = 4.726513;
+const LOGIT_BIAS: f64 = -16.771803;
+
+/// Calibrated SigLIP2 image/text match probability for one exact cosine.
+/// Raw cosine values of this checkpoint live in a narrow band, so retrieval
+/// needs the trained pair calibration to produce a usable 0..1 score.
+pub(super) fn match_probability(cosine: f32) -> f32 {
+    let logits = f64::from(cosine).mul_add(LOGIT_SCALE.exp(), LOGIT_BIAS);
+    (1.0 / (1.0 + (-logits).exp())) as f32
+}
+
 pub(super) fn directory(app: &tauri::AppHandle) -> Option<PathBuf> {
     let path = super::resource_directory(app)?.join("siglip2");
     [
@@ -21,6 +38,50 @@ struct TextModel {
     tokenizer: Tokenizer,
 }
 static TEXT: OnceLock<Mutex<Option<TextModel>>> = OnceLock::new();
+
+fn text_tokenizer(path: PathBuf) -> AppResult<Tokenizer> {
+    let mut tokenizer = Tokenizer::from_file(path).map_err(inference_error)?;
+    tokenizer
+        .with_truncation(Some(TruncationParams {
+            max_length: TOKENS,
+            ..Default::default()
+        }))
+        .map_err(inference_error)?;
+    tokenizer.with_padding(Some(PaddingParams {
+        strategy: PaddingStrategy::Fixed(TOKENS),
+        pad_id: 0,
+        pad_token: "<pad>".into(),
+        ..Default::default()
+    }));
+    Ok(tokenizer)
+}
+
+fn query_ids(tokenizer: &Tokenizer, query: &str) -> AppResult<Vec<i64>> {
+    // The model's tokenizer owns EOS insertion and normalization. Do not use
+    // Jina's Query: prefix or turn the query into a classification prompt.
+    let encoding = tokenizer
+        .encode(query.trim(), true)
+        .map_err(inference_error)?;
+    let ids: Vec<i64> = encoding.get_ids().iter().map(|&id| i64::from(id)).collect();
+    if ids.len() != TOKENS {
+        return Err(inference_error("Unexpected SigLIP2 token length"));
+    }
+    Ok(ids)
+}
+
+fn run_text_embedding(session: &Session, input: &Tensor<i64>) -> ort::Result<Vec<f32>> {
+    let options =
+        RunOptions::new()?.with_outputs(OutputSelector::no_default().with("pooler_output"));
+    let outputs = session.run_with_options([input.view().into()], &options)?;
+    let values = outputs
+        .get("pooler_output")
+        .ok_or_else(|| ort::Error::new("Missing SigLIP2 pooler_output"))?
+        .try_extract_tensor::<f32>()?;
+    if values.shape() != [1, DIMENSIONS] {
+        return Err(ort::Error::new("Unexpected SigLIP2 text embedding shape"));
+    }
+    Ok(values.iter().copied().collect())
+}
 
 struct QueryPriority;
 impl Drop for QueryPriority {
@@ -44,54 +105,26 @@ pub(super) fn text_embedding(app: &tauri::AppHandle, query: &str) -> AppResult<V
             )
         })?;
         storyboard::init_shared_ort(app)?;
-        let runtime = OnnxModel::load(
+        // Use CPU for the quantized text graph because DirectML can produce
+        // inconsistent embeddings without an inference error. Vision batches
+        // continue to use the shared accelerated provider policy.
+        let runtime = OnnxModel::load_cpu(
             &directory.join("text_model_int8.onnx"),
             &[("batch_size", 1), ("sequence_length", TOKENS as i64)],
             inference_error,
         )?;
-        let mut tokenizer =
-            Tokenizer::from_file(directory.join("tokenizer.json")).map_err(inference_error)?;
-        tokenizer
-            .with_truncation(Some(TruncationParams {
-                max_length: TOKENS,
-                ..Default::default()
-            }))
-            .map_err(inference_error)?;
-        tokenizer.with_padding(Some(PaddingParams {
-            strategy: PaddingStrategy::Fixed(TOKENS),
-            pad_id: 0,
-            pad_token: "<pad>".into(),
-            ..Default::default()
-        }));
+        tracing::info!(provider = %runtime.provider(), "Selected SigLIP2 query provider");
+        let tokenizer = text_tokenizer(directory.join("tokenizer.json"))?;
         *guard = Some(TextModel { runtime, tokenizer });
     }
     let model = guard
         .as_ref()
         .ok_or_else(|| inference_error("Missing SigLIP2 text model"))?;
-    // The model's tokenizer owns EOS insertion and normalization. Do not use
-    // Jina's Query: prefix or turn the query into a classification prompt.
-    let encoding = model
-        .tokenizer
-        .encode(query.trim(), true)
-        .map_err(inference_error)?;
-    let ids: Vec<i64> = encoding.get_ids().iter().map(|&id| i64::from(id)).collect();
-    if ids.len() != TOKENS {
-        return Err(inference_error("Unexpected SigLIP2 token length"));
-    }
+    let ids = query_ids(&model.tokenizer, query)?;
     let input = Tensor::from_array(([1, TOKENS], ids)).map_err(inference_error)?;
-    let values = model.runtime.run(None, |session| {
-        let options =
-            RunOptions::new()?.with_outputs(OutputSelector::no_default().with("pooler_output"));
-        let outputs = session.run_with_options([input.view().into()], &options)?;
-        let values = outputs
-            .get("pooler_output")
-            .ok_or_else(|| ort::Error::new("Missing SigLIP2 pooler_output"))?
-            .try_extract_tensor::<f32>()?;
-        if values.shape() != [1, DIMENSIONS] {
-            return Err(ort::Error::new("Unexpected SigLIP2 text embedding shape"));
-        }
-        Ok(values.iter().copied().collect::<Vec<_>>())
-    })?;
+    let values = model
+        .runtime
+        .run(None, |session| run_text_embedding(session, &input))?;
     normalize(&values)
 }
 
@@ -376,4 +409,75 @@ fn run_embedding_batch(
         .as_slice()
         .ok_or_else(|| ort::Error::new("Non-contiguous SigLIP2 output"))?;
     Ok(values.to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn calibrated_match_probability_separates_matches_from_background() {
+        // Check both sides of the trained logit midpoint and its tails.
+        assert!(match_probability(0.1752) > 0.9);
+        assert!(match_probability(0.1237) < 0.1);
+        assert!(match_probability(0.05) < 0.001);
+        assert!(match_probability(-0.2) < 1e-6);
+        assert_eq!(match_probability(1.0), 1.0);
+        assert!(match_probability(0.2) > match_probability(0.1));
+    }
+
+    #[test]
+    #[ignore = "requires packaged SigLIP2 models, ONNX Runtime and a DirectML GPU"]
+    fn siglip2_query_encoder_provider_diagnostics() {
+        let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
+        let runtime = resources.join("transnetv2");
+        let current = env::var_os("PATH").unwrap_or_default();
+        let paths = std::iter::once(runtime.clone()).chain(env::split_paths(&current));
+        env::set_var("PATH", env::join_paths(paths).unwrap());
+        ort::init_from(
+            runtime
+                .join("onnxruntime.dll")
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .with_telemetry(false)
+        .commit()
+        .unwrap();
+        let directory = resources.join("storyboard-semantic").join("siglip2");
+        let model = directory.join("text_model_int8.onnx");
+        let dimensions = [("batch_size", 1), ("sequence_length", TOKENS as i64)];
+        let tokenizer = text_tokenizer(directory.join("tokenizer.json")).unwrap();
+        let ids = query_ids(&tokenizer, "an anime girl crying in a room").unwrap();
+        let input = Tensor::from_array(([1, TOKENS], ids)).unwrap();
+        let gpu = super::super::onnx::create_directml_model_session_with_dimensions(
+            &model,
+            0,
+            &dimensions,
+        )
+        .unwrap();
+        let cpu = super::super::onnx::create_cpu_model_session_with_dimensions(&model, &dimensions)
+            .unwrap();
+        let actual = normalize(&run_text_embedding(&gpu, &input).unwrap()).unwrap();
+        let expected = normalize(&run_text_embedding(&cpu, &input).unwrap()).unwrap();
+        let norm = |row: &[f32]| {
+            row.iter()
+                .map(|&x| f64::from(x).powi(2))
+                .sum::<f64>()
+                .sqrt()
+        };
+        let cosine = |a: &[f32], b: &[f32]| {
+            a.iter()
+                .zip(b)
+                .map(|(&x, &y)| f64::from(x) * f64::from(y))
+                .sum::<f64>()
+                / (norm(a) * norm(b))
+        };
+        let deviation = cosine(&actual, &expected);
+        eprintln!("SigLIP2 text DirectML/CPU cosine: {deviation}");
+        // Diagnose provider drift without requiring a particular GPU defect.
+        // The production query encoder always uses the validated CPU path.
+        assert!(deviation.is_finite());
+        assert!((norm(&expected) - 1.0).abs() < 1e-6);
+        assert!((norm(&actual) - 1.0).abs() < 1e-6);
+    }
 }

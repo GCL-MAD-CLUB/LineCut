@@ -15,23 +15,53 @@ graph's input/output tensors are float32. Text uses the tokenizer's EOS template
 right padding with token 0 to 64 tokens, and truncation to 64 tokens. Queries
 are passed directly without Jina prefixes or classification prompt templates.
 Both graphs return a 768-dimensional `pooler_output`, normalized to unit length.
-The score of a storyboard is the maximum cosine similarity across its selected
-frame embeddings, without sigmoid or across-result min-max normalization.
+The score of a storyboard is the calibrated match probability of its best
+selected frame: take the maximum cosine similarity across the shot's frame
+embeddings, then apply the checkpoint's trained pair logits,
+`sigmoid(exp(logit_scale) * cosine + logit_bias)` with `logit_scale = 4.726513`
+and `logit_bias = -16.771803`. Those two parameters belong to the upstream
+`google/siglip2-base-patch16-256` checkpoint and are not part of the exported
+sub-graphs. The transform is monotone, so the best frame is unchanged. It yields
+the model's 0..1 pairwise match score using the same transformation as
+[`SiglipModel`](https://github.com/huggingface/transformers/blob/main/src/transformers/models/siglip/modeling_siglip.py)
+and the zero-shot pipeline. Scores are not
+min-max normalized across results, and the reported value is never rescaled by
+the number of selected frames.
 
 Vision execution follows the selection encoder's online batch policy, bounded
 two-chunk RGB decoder queue, reusable tensors, at most two specialized sessions,
 smaller-batch retry and shared ONNX CPU recovery. Only completed inference batches
 are checkpointed. Pending text queries get priority before the next vision batch.
-Text runs in its own serialized session using the same provider recovery.
+The query encoder runs on CPU in its own serialized session because DirectML can
+produce inconsistent embeddings for this quantized graph without an inference
+error. The ignored inline test `siglip2_query_encoder_provider_diagnostics`
+validates normalized outputs and reports the DirectML/CPU cosine for manual
+diagnosis; it does not require a particular provider defect.
 
 Selection and vision encoding occupy one cancellable task. A storyboard counts
-as complete only after both stages succeed. Semantic indexes live in the configured
-cache root under `Storyboard Semantic Search`, independently of `Storyboard Keyframe`.
-Their identities include the paired model revision, preprocessing recipe, media
-fingerprint/metadata, stream, frame rate, shot range and selected positions.
-Complete indexes are reused; partial checkpoints resume missing frames. A changed
-identity or corrupt file causes rebuilding. Cached index reads use a bounded
-32 MiB memory layer and file stamps; media and model files are not rehashed.
+as complete only after both stages succeed. The same progress bar assigns 50% to
+selection across the scope and 50% to SigLIP2 indexing. Both stages report batch
+progress and cached shot completion; the last fraction of each shot is reserved
+for successful validation and persistence. Semantic indexes live in the configured
+cache root as `Storyboard Semantic Search/<recipe hash>/<media key>.bin`,
+independently of `Storyboard Keyframe`. That is the subtitle layout: one revision
+directory holding one index per source file, so every storyboard of one media
+shares a single index instead of writing a file per shot at the cache root.
+The media key hashes only the recipe, media fingerprint and stream; media length,
+timestamps and frame rate are stored inside the file, so a re-encoded source
+replaces its own index instead of leaving an orphan behind. Each shot stores its
+range, selected positions and one vector per position. Complete shots are reused
+across panels and projects; building another scope preserves existing shots, and
+its checkpoints do not hide completed shots from retrieval. A changed selection
+or media re-encodes only what it invalidates. Each validated inference batch is
+checkpointed, so partial shots resume their missing frames. Invalid vectors are
+re-encoded individually while healthy vectors remain reusable; invalid shot
+structure or an unreadable file is rebuilt.
+Indexes written by the earlier per-shot layout, including partial checkpoints,
+are adopted into the media index and then removed after successful persistence.
+Cached index reads
+use a bounded 32 MiB memory layer and file stamps; media and model files are not
+rehashed.
 
 Source: [SigLIP2 ONNX](https://huggingface.co/onnx-community/siglip2-base-patch16-256-ONNX),
 [upstream model](https://huggingface.co/google/siglip2-base-patch16-256), Apache-2.0.
