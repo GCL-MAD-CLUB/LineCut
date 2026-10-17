@@ -17,6 +17,7 @@ mod cses;
 mod decode;
 mod index;
 mod siglip;
+mod storage;
 const SIDE: usize = 224;
 const DIMENSIONS: usize = 384;
 #[cfg(test)]
@@ -509,34 +510,60 @@ fn decode_and_embed(
     decode::embed_stream(app, program, args, task_id, cancel, positions.len(), report)
 }
 
-fn decode_selected_and_embed(
-    app: &tauri::AppHandle,
-    source: &ShotSource,
-    positions: &[usize],
-    program: &str,
-    task_id: &str,
-    cancel: &Arc<AtomicBool>,
-    publish: &mut dyn FnMut(&[Vec<f32>]) -> AppResult<()>,
-) -> AppResult<Vec<Vec<f32>>> {
-    if positions.is_empty() {
-        return Ok(Vec::new());
+// Coalesce nearby selected frames across shots, but seek over long sparse gaps.
+// Every process emits frames in pending-job order so the index can publish batches
+// without retaining a source-wide RGB buffer or reordering embeddings.
+fn selected_decode_jobs(
+    sources: &[ShotSource],
+    group: &[usize],
+    pending: &[index::PendingShot],
+) -> Vec<decode::DecodeJob> {
+    let mut jobs = Vec::new();
+    let mut source_index = 0;
+    let mut absolute = Vec::<usize>::new();
+    let mut completed_shots = 0;
+    let flush = |jobs: &mut Vec<decode::DecodeJob>,
+                 source_index: usize,
+                 absolute: &mut Vec<usize>,
+                 completed_shots| {
+        if absolute.is_empty() {
+            return;
+        }
+        let source = &sources[source_index];
+        let positions: Vec<_> = absolute
+            .iter()
+            .map(|frame| frame - source.shot.start_frame)
+            .collect();
+        jobs.push(decode::DecodeJob {
+            args: frame_decode_args(source, &positions, 256),
+            count: positions.len(),
+            completed_shots,
+        });
+        absolute.clear();
+    };
+    for (position, shot) in pending.iter().enumerate() {
+        let current = group[shot.position];
+        let source = &sources[current];
+        for (frame_position, &relative) in shot.frames.iter().enumerate() {
+            let frame = source.shot.start_frame + relative;
+            let adjacent = absolute.last().is_none_or(|&last| {
+                frame > last
+                    && (frame - last) as f64 <= source.rate * 2.0
+                    && (frame - absolute[0]) as f64 <= source.rate * 30.0
+                    && absolute.len() < 256
+            });
+            if !adjacent {
+                flush(&mut jobs, source_index, &mut absolute, completed_shots);
+            }
+            if absolute.is_empty() {
+                source_index = current;
+            }
+            absolute.push(frame);
+            completed_shots = position + usize::from(frame_position + 1 == shot.frames.len());
+        }
     }
-    let args = frame_decode_args(source, positions, 256);
-    decode::embed_stream_with(
-        app,
-        program,
-        args,
-        task_id,
-        cancel,
-        positions.len(),
-        256,
-        |remaining| siglip::preferred_batch(remaining, cancel),
-        |rgb| {
-            let vectors = siglip::embed(app, rgb, cancel)?;
-            publish(&vectors)?;
-            Ok(vectors)
-        },
-    )
+    flush(&mut jobs, source_index, &mut absolute, completed_shots);
+    jobs
 }
 
 fn encode_missing(
@@ -628,6 +655,7 @@ pub(crate) async fn select_storyboard_frames(
             report(0.0, total);
             let progress = std::cell::RefCell::new(BuildProgress { total, report });
             let mut selections = Vec::with_capacity(total);
+            let mut vision_released = false;
             // Finish selection across the scope before spending the second
             // half of the task on the media-level SigLIP2 indexes.
             for (position, source) in sources.iter().enumerate() {
@@ -635,6 +663,10 @@ pub(crate) async fn select_storyboard_frames(
                 let budget = cses::Parameters::for_shot(source.frames, source.rate).scored;
                 let mut observed = 0;
                 let data = cache::get_or_build(&root, source, cancel, |available| {
+                    if !vision_released {
+                        siglip::release_vision_sessions(cancel)?;
+                        vision_released = true;
+                    }
                     cses::select(source.frames, source.rate, cancel, |positions| {
                         let vectors = encode_missing(
                             positions,
@@ -667,9 +699,14 @@ pub(crate) async fn select_storyboard_frames(
                 selections.push(data.selection.selected_frames());
                 progress.borrow_mut().selection((position + 1) as f64);
             }
+            // Only one vision encoder runs in each stage. Free DINOv3's GPU
+            // allocations before SigLIP2 specializes its throughput batches.
+            if let Some(engine) = model_guard(cancel)?.as_mut() {
+                engine.sessions.clear();
+            }
             let mut output = Vec::with_capacity(total);
             let mut processed = 0;
-            // Every media source keeps its shots in a single index file.
+            // Every media source shares one directory of size-rotated index shards.
             for group in media_groups(&sources) {
                 ensure_not_cancelled(cancel)?;
                 let requests = group
@@ -685,33 +722,21 @@ pub(crate) async fn select_storyboard_frames(
                     &sources[group[0]].identity,
                     &requests,
                     cancel,
-                    |completed| {
-                        progress
-                            .borrow_mut()
-                            .indexing((processed + completed) as f64)
-                    },
-                    |position, positions, publish| {
-                        let mut encoded = 0;
-                        decode_selected_and_embed(
-                            &app,
-                            &sources[group[position]],
-                            positions,
-                            &program,
-                            &task_id,
-                            &token,
-                            &mut |vectors| {
-                                publish(vectors)?;
-                                encoded += vectors.len();
-                                // Reserve the final unit for decoder validation
-                                // and publication of the completed shot.
-                                let fraction = encoded as f64 / (positions.len() + 1) as f64;
-                                progress
-                                    .borrow_mut()
-                                    .indexing((processed + position) as f64 + fraction);
-                                Ok(())
+                    |completed| progress.borrow_mut().indexing(processed as f64 + completed),
+                    |pending, publish| {
+                        decode::embed_jobs(
+                            decode::StreamContext {
+                                app: &app,
+                                program: &program,
+                                task_id: &task_id,
+                                cancel: &token,
                             },
-                        )?;
-                        Ok(())
+                            selected_decode_jobs(&sources, &group, pending),
+                            256,
+                            |remaining| siglip::preferred_batch(remaining, cancel),
+                            |rgb| siglip::embed(&app, rgb, cancel),
+                            publish,
+                        )
                     },
                 )?;
                 processed += group.len();
@@ -820,6 +845,109 @@ pub(crate) async fn search_storyboards_semantic(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_decode_jobs_coalesce_neighbors_and_seek_over_sparse_gaps() {
+        let source = |start_frame, end_frame| ShotSource {
+            shot: SemanticShot {
+                id: "shot".into(),
+                source: "panel".into(),
+                asset_id: "asset".into(),
+                fingerprint: "a".repeat(64),
+                start_frame,
+                end_frame,
+            },
+            identity: cache::ShotIdentity {
+                fingerprint: "a".repeat(64),
+                media_length: 1,
+                media_modified_ns: None,
+                stream: 0,
+                rate: 25.0,
+                start_frame,
+                end_frame,
+            },
+            path: "original.mp4".into(),
+            stream: 0,
+            rate: 25.0,
+            frames: end_frame - start_frame + 1,
+        };
+        let sources = [source(100, 149), source(150, 199), source(1000, 1800)];
+        let pending = [
+            index::PendingShot {
+                position: 0,
+                frames: vec![0, 25],
+            },
+            index::PendingShot {
+                position: 1,
+                frames: vec![0, 25],
+            },
+            index::PendingShot {
+                position: 2,
+                frames: vec![0, 400, 800],
+            },
+        ];
+        let jobs = selected_decode_jobs(&sources, &[0, 1, 2], &pending);
+        assert_eq!(
+            jobs.iter()
+                .map(|job| (job.count, job.completed_shots))
+                .collect::<Vec<_>>(),
+            vec![(4, 2), (1, 2), (1, 2), (1, 3)]
+        );
+        let seeks: Vec<_> = jobs
+            .iter()
+            .map(|job| {
+                let position = job.args.iter().position(|arg| arg == "-ss").unwrap();
+                job.args[position + 1].parse::<f64>().unwrap()
+            })
+            .collect();
+        assert_eq!(seeks, vec![4.0, 40.0, 56.0, 72.0]);
+        assert!(jobs[0].args.iter().any(|arg| arg.contains("eq(n\\,75)")));
+        // Descending UI order must create a new seek, preserving output order.
+        let jobs = selected_decode_jobs(
+            &sources,
+            &[2, 0, 1],
+            &[
+                index::PendingShot {
+                    position: 0,
+                    frames: vec![800],
+                },
+                index::PendingShot {
+                    position: 1,
+                    frames: vec![0],
+                },
+            ],
+        );
+        assert_eq!(jobs.len(), 2);
+        assert_eq!(jobs[1].completed_shots, 2);
+
+        let sources: Vec<_> = (0..16).map(|i| source(i * 32, i * 32 + 31)).collect();
+        let pending: Vec<_> = (0..16)
+            .map(|position| index::PendingShot {
+                position,
+                frames: (0..32).collect(),
+            })
+            .collect();
+        let jobs = selected_decode_jobs(&sources, &(0..16).collect::<Vec<_>>(), &pending);
+        assert_eq!(
+            jobs.iter()
+                .map(|job| (job.count, job.completed_shots))
+                .collect::<Vec<_>>(),
+            vec![(256, 8), (256, 16)]
+        );
+
+        let sources: Vec<_> = (0..20).map(|i| source(i * 50, i * 50)).collect();
+        let pending: Vec<_> = (0..20)
+            .map(|position| index::PendingShot {
+                position,
+                frames: vec![0],
+            })
+            .collect();
+        let jobs = selected_decode_jobs(&sources, &(0..20).collect::<Vec<_>>(), &pending);
+        assert_eq!(
+            jobs.iter().map(|job| job.count).collect::<Vec<_>>(),
+            vec![16, 4]
+        );
+    }
 
     #[test]
     fn one_task_progress_advances_with_batches_in_both_equal_stages() {

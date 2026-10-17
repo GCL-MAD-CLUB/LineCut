@@ -30,8 +30,15 @@ the number of selected frames.
 
 Vision execution follows the selection encoder's online batch policy, bounded
 two-chunk RGB decoder queue, reusable tensors, at most two specialized sessions,
-smaller-batch retry and shared ONNX CPU recovery. Only completed inference batches
-are checkpointed. Pending text queries get priority before the next vision batch.
+smaller-batch retry and shared ONNX CPU recovery. Missing frames from all shots
+of a media source share one inference stream, allowing 8/16/32-row batches to
+cross storyboard boundaries. Nearby frames share a decode process (at most 256
+selected frames spanning 30 seconds); gaps over two seconds start a new accurate seek.
+The RGB queue remains bounded across seeks, and only pooled vectors are retained.
+Short tails reuse resident shapes instead of compiling a new graph. Idle vision
+sessions of the other encoder are released when switching stages to free GPU
+memory; measured batch preferences remain reusable. Pending text queries get
+priority before the next vision batch.
 The query encoder runs on CPU in its own serialized session because DirectML can
 produce inconsistent embeddings for this quantized graph without an inference
 error. The ignored inline test `siglip2_query_encoder_provider_diagnostics`
@@ -43,25 +50,54 @@ as complete only after both stages succeed. The same progress bar assigns 50% to
 selection across the scope and 50% to SigLIP2 indexing. Both stages report batch
 progress and cached shot completion; the last fraction of each shot is reserved
 for successful validation and persistence. Semantic indexes live in the configured
-cache root as `Storyboard Semantic Search/<recipe hash>/<media key>.bin`,
-independently of `Storyboard Keyframe`. That is the subtitle layout: one revision
-directory holding one index per source file, so every storyboard of one media
-shares a single index instead of writing a file per shot at the cache root.
-The media key hashes only the recipe, media fingerprint and stream; media length,
-timestamps and frame rate are stored inside the file, so a re-encoded source
-replaces its own index instead of leaving an orphan behind. Each shot stores its
-range, selected positions and one vector per position. Complete shots are reused
-across panels and projects; building another scope preserves existing shots, and
-its checkpoints do not hide completed shots from retrieval. A changed selection
-or media re-encodes only what it invalidates. Each validated inference batch is
-checkpointed, so partial shots resume their missing frames. Invalid vectors are
-re-encoded individually while healthy vectors remain reusable; invalid shot
-structure or an unreadable file is rebuilt.
-Indexes written by the earlier per-shot layout, including partial checkpoints,
-are adopted into the media index and then removed after successful persistence.
-Cached index reads
-use a bounded 32 MiB memory layer and file stamps; media and model files are not
-rehashed.
+cache root as
+`Storyboard Semantic Search/<fingerprint>/<recipe-media hash>/<sequence>-<UUID>.bin`.
+The revision hash includes the complete model/recipe, media length and timestamp;
+stream and frame rate remain part of each shot key. Keyframe uses the same layout
+under `Storyboard Keyframe`. Existing storage formats are neither read nor migrated.
+
+Both caches share `storage.rs`. Shards rotate by size at 256 MiB, aggregating many
+shots; their sequence is parsed from filenames without opening file headers.
+Each record stores one shot snapshot, bounded to 4 MiB (Keyframe limits its codec
+to 2 MiB). Headers carry length, shot key, payload SHA-256 and a SHA-256 covering
+all preceding header fields. Header verification precedes trusting keys/lengths;
+payload verification precedes deserialization. Readers scan headers under a
+per-media process lock, pin handles, then read and decode only requested shots
+outside the lock. The cache directory must not be written by multiple processes.
+
+Committed records remain reusable after cancellation. Torn suffixes are truncated
+before append. Resynchronizing after a damaged middle advances the committed
+high-water mark through later healthy records, so append cannot truncate them.
+A shot becomes searchable only after its decoder succeeds and every vector exists.
+Invalid vectors in a verified, decodable record are re-encoded individually.
+The 32 MiB decoded-record LRU retains unrelated shots across appends; external
+file changes invalidate their tokens. Media and model files are not rehashed.
+
+After each append batch, obsolete bytes trigger compaction at
+`max(64 KiB, live record bytes / 2)`. Compaction streams the latest verified record
+for each key into size-limited temporary shards, syncs every file, publishes higher
+sequences, syncs the directory, and only then removes old shards. Any latest-record
+read or checksum failure aborts compaction and retains every old shard. Maintenance
+failures are logged only in the backend; they never produce frontend warnings or
+fail an already successful append.
+Copying is
+cancellable; publication is not. Interrupted publication leaves safe duplicates.
+The first committed batch for a new recipe/media generation also removes obsolete
+generation directories for that fingerprint. Successful cleanup is remembered for
+that generation in the current process, avoiding repeated parent-directory scans.
+Cleanup is lazy on writes, not a
+background sweep of unused media.
+
+Semantic checkpoints append all their shot records with one lock, one directory
+barrier and one maintenance pass. Each touched shard calls `sync_all` once, at
+rotation or batch completion. Records retain individual commit markers: cancellation
+syncs the committed prefix and drops only an uncommitted record. Keyframe single
+records use the same batch implementation. Unix additionally syncs directory
+creation, compaction publication and removal; generation cleanup syncs its parent
+only when a directory was removed. Windows standard-library APIs provide no directory fsync
+barrier: file contents are synced and process crashes are recoverable, but namespace
+changes are not guaranteed durable across sudden power loss. Invalid/missing cache
+records are rebuilt from source media.
 
 Source: [SigLIP2 ONNX](https://huggingface.co/onnx-community/siglip2-base-patch16-256-ONNX),
 [upstream model](https://huggingface.co/google/siglip2-base-patch16-256), Apache-2.0.

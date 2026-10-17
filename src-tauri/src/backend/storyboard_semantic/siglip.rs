@@ -157,6 +157,7 @@ struct BatchEngine {
     policy: batch::BatchPolicy,
     cpu: bool,
     last_size: usize,
+    next_size: usize,
 }
 static MODEL: OnceLock<Mutex<Option<BatchEngine>>> = OnceLock::new();
 fn model_guard(
@@ -178,10 +179,22 @@ fn model_guard(
 
 pub(super) fn preferred_batch(remaining: usize, cancel: &AtomicBool) -> AppResult<usize> {
     let mut guard = model_guard(cancel)?;
-    Ok(guard
-        .get_or_insert_with(BatchEngine::default)
+    let engine = guard.get_or_insert_with(BatchEngine::default);
+    let size = engine
         .policy
-        .choose(remaining))
+        .choose_resident(remaining, engine.sessions.iter().map(|model| model.size));
+    engine.next_size = size;
+    Ok(size)
+}
+
+pub(super) fn release_vision_sessions(cancel: &AtomicBool) -> AppResult<()> {
+    if MODEL.get().is_some() {
+        if let Some(engine) = model_guard(cancel)?.as_mut() {
+            engine.sessions.clear();
+            engine.next_size = 0;
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn embed(
@@ -221,6 +234,7 @@ fn embed_resilient(
             let size = engine.last_size;
             engine.policy.failed(size);
             engine.sessions.retain(|session| session.size < size);
+            engine.next_size = 0;
             tracing::warn!(size, %error, "Retrying SigLIP2 with smaller real batches");
             if frames == 1 {
                 return embed_resilient(app, engine, rgb, cancel);
@@ -246,7 +260,9 @@ fn embed_attempt(
     }
     // Tails use an already resident shape when possible. Never compile another
     // large graph just to eliminate a few padded rows.
-    let size = if batch.is_power_of_two() && batch >= 2 {
+    let size = if engine.next_size >= batch {
+        engine.next_size
+    } else if batch.is_power_of_two() && batch >= 2 {
         batch
     } else {
         engine

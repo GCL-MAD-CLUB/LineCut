@@ -1,38 +1,13 @@
 //! Completed CSES source data, grouped by the existing media fingerprint.
 //! Files are independent of panel IDs and source paths; no media is rehashed.
+use super::storage::{self, SHARD_BYTES};
 use super::*;
 use bincode::Options;
-use std::collections::VecDeque;
-use std::io::Write;
 
 const CACHE_REVISION: &str = "dinov3-cses-v1";
 const MODEL_REVISION: &str =
     "dinov3-vits16plus-81f43e32cbf964b3c284da6cfd3be9fcba6d82ef-cls-l2-224";
 const MAX_RECORD_BYTES: u64 = 2 * 1024 * 1024;
-const MEMORY_BYTES: usize = 32 * 1024 * 1024;
-const SHARD_BYTES: u64 = 256 * 1024 * 1024;
-const FILE_MAGIC: &[u8; 8] = b"LCKF0002";
-const FILE_HEADER_BYTES: u64 = 16;
-const RECORD_COMMIT: &[u8; 8] = b"LCKFDONE";
-const RECORD_MAGIC: &[u8; 8] = b"LCKFSHOT";
-const RECORD_HEADER_BYTES: u64 = 48;
-
-#[derive(Clone, Copy)]
-struct Record {
-    offset: u64,
-    length: u64,
-}
-
-struct MediaIndex {
-    path: PathBuf,
-    stamp: (u64, SystemTime),
-    valid_end: u64,
-    records: HashMap<[u8; 32], Record>,
-}
-
-// Offsets let a media contain many shots without loading/re-writing its vectors.
-// The same lock also serializes append/repair against readers in this process.
-static INDEXES: Mutex<VecDeque<MediaIndex>> = Mutex::new(VecDeque::new());
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(super) struct ShotIdentity {
@@ -57,21 +32,7 @@ pub(super) struct ShotData {
     pub(super) selection: cses::Selection,
 }
 
-struct WarmShot {
-    path: PathBuf,
-    key: [u8; 32],
-    offset: u64,
-    data: Arc<ShotData>,
-    bytes: usize,
-}
-
-#[derive(Default)]
-struct WarmShots {
-    entries: VecDeque<WarmShot>,
-    bytes: usize,
-}
-
-static WARM: OnceLock<Mutex<WarmShots>> = OnceLock::new();
+static WARM: OnceLock<Mutex<storage::Warm<ShotData>>> = OnceLock::new();
 
 pub(super) fn root(preferences: &Preferences) -> PathBuf {
     configured_cache_root(preferences).join("Storyboard Keyframe")
@@ -85,55 +46,31 @@ fn codec() -> impl Options {
 }
 
 fn media_directory(root: &Path, identity: &ShotIdentity) -> Option<PathBuf> {
-    if identity.fingerprint.len() != 64
-        || !identity.fingerprint.bytes().all(|c| c.is_ascii_hexdigit())
-    {
-        return None;
-    }
-    Some(root.join(&identity.fingerprint))
-}
-
-fn shard_sequence(path: &Path) -> Option<u64> {
-    let mut file = fs::File::open(path).ok()?;
-    let mut header = [0u8; FILE_HEADER_BYTES as usize];
-    file.read_exact(&mut header).ok()?;
-    if &header[..8] != FILE_MAGIC {
-        return None;
-    }
-    let mut sequence = [0u8; 8];
-    sequence.copy_from_slice(&header[8..]);
-    Some(u64::from_le_bytes(sequence))
+    // A recipe/model change or new source-media version owns a separate log.
+    // Streams/rates remain independent keys within the same media generation.
+    let revision = codec()
+        .serialize(&(
+            CACHE_REVISION,
+            MODEL_REVISION,
+            identity.media_length,
+            identity.media_modified_ns,
+        ))
+        .ok()?;
+    storage::directory(root, &identity.fingerprint, &revision)
 }
 
 #[cfg(test)]
 fn path(root: &Path, identity: &ShotIdentity) -> Option<PathBuf> {
-    shards(&media_directory(root, identity)?).into_iter().next()
-}
-
-fn shards(directory: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = fs::read_dir(directory) else {
-        return Vec::new();
-    };
-    let mut files: Vec<_> = entries
-        .flatten()
-        .filter_map(|entry| {
-            if !entry.file_type().ok()?.is_file() {
-                return None;
-            }
-            let name = entry.file_name();
-            let stem = name.to_str()?.strip_suffix(".bin")?;
-            Uuid::parse_str(stem).ok()?;
-            let path = entry.path();
-            Some((shard_sequence(&path).unwrap_or_default(), path))
-        })
-        .collect();
-    files.sort_unstable_by(|(a, ap), (b, bp)| a.cmp(b).then(ap.cmp(bp)));
-    files.into_iter().map(|(_, path)| path).collect()
+    storage::shards(&media_directory(root, identity)?)
+        .into_iter()
+        .next()
 }
 
 fn record_key(identity: &ShotIdentity) -> [u8; 32] {
     // This hashes a small identity tuple, never the media file or its vectors.
     let mut hash = Sha256::new();
+    hash.update(CACHE_REVISION.as_bytes());
+    hash.update(MODEL_REVISION.as_bytes());
     hash.update(identity.fingerprint.as_bytes());
     hash.update(identity.media_length.to_le_bytes());
     hash.update([u8::from(identity.media_modified_ns.is_some())]);
@@ -204,189 +141,28 @@ fn valid(data: &ShotData, identity: &ShotIdentity) -> bool {
             .all(|v| v.is_finite() && (1.0..=expected.bandwidth_max).contains(v))
 }
 
-fn invalidate_warm(path: &Path) {
-    if let Some(cache) = WARM.get() {
-        if let Ok(mut cache) = cache.lock() {
-            cache.entries.retain(|entry| entry.path != path);
-            cache.bytes = cache.entries.iter().map(|entry| entry.bytes).sum();
-        }
+fn load_data(root: &Path, identity: &ShotIdentity) -> Option<Arc<ShotData>> {
+    let directory = media_directory(root, identity)?;
+    let snapshot = storage::locate(&directory, &[record_key(identity)])?.pop()??;
+    let cache = WARM.get_or_init(Default::default);
+    if let Some(data) = cache.lock().ok()?.get(&snapshot.token) {
+        return Some(data);
     }
-}
-
-// Scan only record headers and commit markers; seek over vector payloads.
-// A torn tail does not hide earlier completed records.
-fn scan(path: &Path, stamp: (u64, SystemTime)) -> Option<MediaIndex> {
-    let mut index = MediaIndex {
-        path: path.into(),
-        stamp,
-        valid_end: 0,
-        records: HashMap::new(),
-    };
-    let mut file = fs::File::open(path).ok()?;
-    let mut header = [0u8; FILE_HEADER_BYTES as usize];
-    if file.read_exact(&mut header).is_err() || &header[..8] != FILE_MAGIC {
-        let Some(next) = next_record(&mut file, 0) else {
-            return Some(index);
-        };
-        index.valid_end = next;
-        file.seek(SeekFrom::Start(next)).ok()?;
-    } else {
-        index.valid_end = FILE_HEADER_BYTES;
+    let token = snapshot.token.clone();
+    // The media lock was released by locate; verification precedes decoding.
+    let bytes = snapshot.read()?;
+    let data = Arc::new(codec().deserialize::<ShotData>(&bytes).ok()?);
+    let footprint =
+        bytes.len() + data.selection.frames.len() * std::mem::size_of::<cses::EncodedFrame>();
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(token, Arc::clone(&data), footprint);
     }
-    while index.valid_end < stamp.0 {
-        let mut header = [0u8; RECORD_HEADER_BYTES as usize];
-        if file.read_exact(&mut header).is_err() {
-            break;
-        }
-        let mut length = [0u8; 8];
-        length.copy_from_slice(&header[8..16]);
-        let length = u64::from_le_bytes(length);
-        if &header[..8] != RECORD_MAGIC || length == 0 || length > MAX_RECORD_BYTES {
-            if let Some(next) = next_record(&mut file, index.valid_end + 1) {
-                index.valid_end = next;
-                file.seek(SeekFrom::Start(next)).ok()?;
-                continue;
-            }
-            break;
-        }
-        let offset = index.valid_end.checked_add(RECORD_HEADER_BYTES)?;
-        let footer = offset.checked_add(length)?;
-        let end = footer.checked_add(RECORD_COMMIT.len() as u64)?;
-        if end > stamp.0 {
-            if let Some(next) = next_record(&mut file, index.valid_end + 1) {
-                index.valid_end = next;
-                file.seek(SeekFrom::Start(next)).ok()?;
-                continue;
-            }
-            break;
-        }
-        file.seek(SeekFrom::Start(footer)).ok()?;
-        let mut commit = [0u8; 8];
-        if file.read_exact(&mut commit).is_err() || &commit != RECORD_COMMIT {
-            if let Some(next) = next_record(&mut file, index.valid_end + 1) {
-                index.valid_end = next;
-                file.seek(SeekFrom::Start(next)).ok()?;
-                continue;
-            }
-            break;
-        }
-        let mut key = [0u8; 32];
-        key.copy_from_slice(&header[16..]);
-        index.records.insert(key, Record { offset, length });
-        index.valid_end = end;
-    }
-    Some(index)
-}
-
-fn next_record(file: &mut fs::File, start: u64) -> Option<u64> {
-    file.seek(SeekFrom::Start(start)).ok()?;
-    let reader = std::io::BufReader::new(file);
-    let mut window = 0u64;
-    let target = u64::from_be_bytes(*RECORD_MAGIC);
-    for (i, byte) in reader.bytes().enumerate() {
-        window = (window << 8) | u64::from(byte.ok()?);
-        if i >= 7 && window == target {
-            return Some(start + i as u64 - 7);
-        }
-    }
-    None
-}
-
-fn index_for(indexes: &mut VecDeque<MediaIndex>, path: &Path) -> Option<usize> {
-    let metadata = fs::metadata(&path).ok()?;
-    let stamp = (metadata.len(), metadata.modified().ok()?);
-    if let Some(position) = indexes.iter().position(|index| index.path == path) {
-        if indexes[position].stamp == stamp {
-            let index = indexes.remove(position)?;
-            indexes.push_back(index);
-            return Some(indexes.len() - 1);
-        }
-        indexes.remove(position);
-    }
-    // External changes require fresh offsets and invalidate payloads warmed
-    // before that change. Our own appends update the index without rescanning.
-    invalidate_warm(path);
-    let index = scan(path, stamp)?;
-    while indexes.len() >= 8 {
-        indexes.pop_front();
-    }
-    indexes.push_back(index);
-    Some(indexes.len() - 1)
-}
-
-fn read_record(path: &Path, record: Record) -> Option<ShotData> {
-    let mut file = fs::File::open(path).ok()?;
-    file.seek(SeekFrom::Start(record.offset)).ok()?;
-    let mut bytes = vec![0; record.length as usize];
-    file.read_exact(&mut bytes).ok()?;
-    codec().deserialize(&bytes).ok()
+    Some(data)
 }
 
 pub(super) fn read(root: &Path, identity: &ShotIdentity) -> Option<Arc<ShotData>> {
-    let directory = media_directory(root, identity)?;
-    let key = record_key(identity);
-    let mut indexes = INDEXES.lock().ok()?;
-    // Newer shards/records win. Missing shots require only small offset indexes,
-    // not deserialization of other shots' vectors.
-    let (path, record) = shards(&directory).into_iter().rev().find_map(|path| {
-        let position = index_for(&mut indexes, &path)?;
-        let record = *indexes[position].records.get(&key)?;
-        Some((path, record))
-    })?;
-    let cache = WARM.get_or_init(Default::default);
-    if let Ok(mut cache) = cache.lock() {
-        if let Some(position) = cache
-            .entries
-            .iter()
-            .position(|entry| entry.path == path && entry.key == key)
-        {
-            let entry = cache.entries.remove(position)?;
-            cache.bytes -= entry.bytes;
-            if entry.offset == record.offset && entry.data.identity == *identity {
-                let data = Arc::clone(&entry.data);
-                cache.bytes += entry.bytes;
-                cache.entries.push_back(entry);
-                return Some(data);
-            }
-        }
-    }
-    let data = read_record(&path, record)?;
-    if !valid(&data, identity) {
-        tracing::warn!(path = %path.display(), "Invalid storyboard keyframe source will be rebuilt");
-        return None;
-    }
-    let footprint = record.length as usize
-        + data.selection.frames.len() * std::mem::size_of::<cses::EncodedFrame>();
-    let data = Arc::new(data);
-    if footprint <= MEMORY_BYTES {
-        if let Ok(mut cache) = cache.lock() {
-            if let Some(position) = cache
-                .entries
-                .iter()
-                .position(|entry| entry.path == path && entry.key == key)
-            {
-                if let Some(old) = cache.entries.remove(position) {
-                    cache.bytes -= old.bytes;
-                }
-            }
-            while cache.bytes + footprint > MEMORY_BYTES {
-                if let Some(old) = cache.entries.pop_front() {
-                    cache.bytes -= old.bytes;
-                } else {
-                    break;
-                }
-            }
-            cache.bytes += footprint;
-            cache.entries.push_back(WarmShot {
-                path,
-                key,
-                offset: record.offset,
-                data: Arc::clone(&data),
-                bytes: footprint,
-            });
-        }
-    }
-    Some(data)
+    let data = load_data(root, identity)?;
+    valid(&data, identity).then_some(data)
 }
 
 fn write(root: &Path, data: &ShotData, cancel: &AtomicBool) -> AppResult<()> {
@@ -402,83 +178,20 @@ fn write_with_limit(
     let directory = media_directory(root, &data.identity)
         .ok_or_else(|| inference_error("Invalid keyframe media fingerprint"))?;
     let bytes = codec().serialize(data).map_err(inference_error)?;
-    let io_error = |error: std::io::Error| {
-        app_error(
-            ErrorCode::StoryboardKeyframeWriteFailed,
-            format!(
-                "Cannot write storyboard keyframe source {}: {error}",
-                directory.display()
-            ),
-        )
-    };
-    ensure_not_cancelled(cancel)?;
-    let mut indexes = INDEXES.lock().map_err(inference_error)?;
-    fs::create_dir_all(&directory).map_err(io_error)?;
-    let mut path = shards(&directory)
-        .pop()
-        .unwrap_or_else(|| directory.join(format!("{}.bin", Uuid::new_v4())));
-    let mut sequence = shard_sequence(&path).unwrap_or_default();
-    if let Some(position) = index_for(&mut indexes, &path) {
-        let current = &indexes[position];
-        if current.valid_end > FILE_HEADER_BYTES
-            && current.valid_end.saturating_add(
-                RECORD_HEADER_BYTES + bytes.len() as u64 + RECORD_COMMIT.len() as u64,
-            ) > limit
-        {
-            sequence = sequence
-                .checked_add(1)
-                .ok_or_else(|| inference_error("Keyframe shard sequence overflow"))?;
-            path = directory.join(format!("{}.bin", Uuid::new_v4()));
+    storage::append(
+        &directory,
+        record_key(&data.identity),
+        &bytes,
+        cancel,
+        limit,
+    )
+    .map_err(|error| {
+        if error.is(ErrorCode::TaskCancelled) {
+            error
+        } else {
+            app_error(ErrorCode::StoryboardKeyframeWriteFailed, error.to_string())
         }
-    }
-    let mut file = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&path)
-        .map_err(io_error)?;
-    let position = index_for(&mut indexes, &path)
-        .ok_or_else(|| inference_error("Cannot read keyframe media index"))?;
-    let index = &mut indexes[position];
-    // Discard only a previously incomplete suffix. Completed shots stay intact.
-    file.set_len(index.valid_end).map_err(io_error)?;
-    file.seek(SeekFrom::Start(index.valid_end))
-        .map_err(io_error)?;
-    if index.valid_end == 0 {
-        file.write_all(FILE_MAGIC).map_err(io_error)?;
-        file.write_all(&sequence.to_le_bytes()).map_err(io_error)?;
-        index.valid_end = FILE_HEADER_BYTES;
-    }
-    let start = index.valid_end;
-    let key = record_key(&data.identity);
-    let outcome = (|| {
-        file.write_all(RECORD_MAGIC).map_err(io_error)?;
-        file.write_all(&(bytes.len() as u64).to_le_bytes())
-            .map_err(io_error)?;
-        file.write_all(&key).map_err(io_error)?;
-        file.write_all(&bytes).map_err(io_error)?;
-        ensure_not_cancelled(cancel)?;
-        file.write_all(RECORD_COMMIT).map_err(io_error)?;
-        file.flush().map_err(io_error)?;
-        Ok(())
-    })();
-    if outcome.is_err() {
-        let _ = file.set_len(start);
-    } else {
-        index.records.insert(
-            key,
-            Record {
-                offset: start + RECORD_HEADER_BYTES,
-                length: bytes.len() as u64,
-            },
-        );
-        index.valid_end =
-            start + RECORD_HEADER_BYTES + bytes.len() as u64 + RECORD_COMMIT.len() as u64;
-    }
-    let metadata = file.metadata().map_err(io_error)?;
-    index.stamp = (metadata.len(), metadata.modified().map_err(io_error)?);
-    outcome
+    })
 }
 
 pub(super) fn get_or_build(
@@ -517,28 +230,16 @@ pub(super) fn get_or_build(
 
 fn reusable_vectors(root: &Path, identity: &ShotIdentity) -> HashMap<usize, Vec<f32>> {
     let mut vectors = HashMap::new();
-    let Some(directory) = media_directory(root, identity) else {
-        return vectors;
-    };
-    let Ok(mut indexes) = INDEXES.lock() else {
-        return vectors;
-    };
-    let key = record_key(identity);
-    for path in shards(&directory).into_iter().rev() {
-        let Some(position) = index_for(&mut indexes, &path) else {
-            continue;
-        };
-        let Some(record) = indexes[position].records.get(&key).copied() else {
-            continue;
-        };
-        let Some(data) = read_record(&path, record) else {
-            continue;
-        };
-        if data.version != 1 || data.model != MODEL_REVISION || data.identity != *identity {
-            continue;
+    if let Some(data) = load_data(root, identity) {
+        if data.version != 1
+            || data.model != MODEL_REVISION
+            || data.recipe != CACHE_REVISION
+            || data.identity != *identity
+        {
+            return vectors;
         }
         let mut duplicates = HashSet::new();
-        for frame in data.selection.frames {
+        for frame in &data.selection.frames {
             if frame.frame < identity.start_frame
                 || frame.frame > identity.end_frame
                 || frame.e_i.len() != DIMENSIONS
@@ -549,14 +250,13 @@ fn reusable_vectors(root: &Path, identity: &ShotIdentity) -> HashMap<usize, Vec<
             {
                 continue;
             }
-            if vectors.insert(frame.frame, frame.e_i).is_some() {
+            if vectors.insert(frame.frame, frame.e_i.clone()).is_some() {
                 vectors.remove(&frame.frame);
                 duplicates.insert(frame.frame);
             }
         }
         // Use the newest decodable snapshot. Invalid scores, flags or a missing
         // vector do not require re-encoding its other valid image embeddings.
-        break;
     }
     vectors
 }
@@ -565,21 +265,21 @@ fn reusable_vectors(root: &Path, identity: &ShotIdentity) -> HashMap<usize, Vec<
 mod tests {
     use super::*;
 
-    fn invalidate(path: &Path) {
-        INDEXES.lock().unwrap().retain(|index| index.path != path);
-        invalidate_warm(path);
+    use std::io::{Seek, SeekFrom, Write};
+    use storage::{
+        sequence as shard_sequence, shards, FILE_HEADER_BYTES, RECORD_COMMIT, RECORD_HEADER_BYTES,
+    };
+
+    fn invalidate(_path: &Path) {
+        *WARM.get_or_init(Default::default).lock().unwrap() = storage::Warm::default();
     }
 
-    fn overwrite_record(path: &Path, data: &ShotData) {
-        let bytes = codec().serialize(data).unwrap();
-        let mut output = FILE_MAGIC.to_vec();
-        output.extend_from_slice(&0u64.to_le_bytes());
-        output.extend_from_slice(RECORD_MAGIC);
-        output.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
-        output.extend_from_slice(&record_key(&data.identity));
-        output.extend_from_slice(&bytes);
-        output.extend_from_slice(RECORD_COMMIT);
-        fs::write(path, output).unwrap();
+    fn overwrite_record(file: &Path, data: &ShotData) {
+        storage::overwrite_fixture(
+            file,
+            record_key(&data.identity),
+            &codec().serialize(data).unwrap(),
+        );
     }
 
     struct TestRoot(PathBuf);
@@ -647,12 +347,10 @@ mod tests {
         let file = path(&fixture.0, &source.identity).unwrap();
         assert_eq!(
             file.parent().unwrap(),
-            fixture.0.join(&source.shot.fingerprint)
+            media_directory(&fixture.0, &source.identity).unwrap()
         );
-        assert!(Uuid::parse_str(file.file_stem().unwrap().to_str().unwrap()).is_ok());
-        let metadata = fs::metadata(&file).unwrap();
-        let index = scan(&file, (metadata.len(), metadata.modified().unwrap())).unwrap();
-        let disk = read_record(&file, index.records[&record_key(&source.identity)]).unwrap();
+        assert!(shard_sequence(&file).is_some());
+        let disk = (*load_data(&fixture.0, &source.identity).unwrap()).clone();
         assert_eq!(disk, *data);
         assert!(disk.selection.frames.iter().any(|frame| !frame.selected));
         assert!(disk.selection.frames.iter().all(|frame| frame.frame >= 100
@@ -780,6 +478,21 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_storage_write_preserves_the_cancellation_error_and_previous_record() {
+        let fixture = TestRoot::new();
+        let source = source();
+        let cancel = AtomicBool::new(false);
+        let data = get_or_build(&fixture.0, &source, &cancel, |_| {
+            select_fixture(&source, &cancel)
+        })
+        .unwrap();
+        cancel.store(true, Ordering::SeqCst);
+        let error = write(&fixture.0, &data, &cancel).unwrap_err();
+        assert!(error.is(ErrorCode::TaskCancelled));
+        assert_eq!(*read(&fixture.0, &source.identity).unwrap(), *data);
+    }
+
+    #[test]
     fn media_uses_one_file_for_many_shots_and_recovers_an_incomplete_tail() {
         let fixture = TestRoot::new();
         let cancel = AtomicBool::new(false);
@@ -836,14 +549,11 @@ mod tests {
             .unwrap();
             assert_eq!(data.selection.selected_frames(), selected);
         }
-        let metadata = fs::metadata(&file).unwrap();
-        let index = scan(&file, (metadata.len(), metadata.modified().unwrap())).unwrap();
-        assert_eq!(index.records.len(), 3);
-        assert_eq!(index.valid_end, metadata.len());
+        assert!(fs::metadata(&file).unwrap().len() > FILE_HEADER_BYTES);
     }
 
     #[test]
-    fn large_media_rotates_shards_by_size_without_version_directories() {
+    fn large_media_rotates_shards_by_size() {
         let fixture = TestRoot::new();
         let source = source();
         let cancel = AtomicBool::new(false);
@@ -865,13 +575,13 @@ mod tests {
             write_with_limit(&fixture.0, &data, &cancel, limit).unwrap();
             expected.push(data);
         }
-        let directory = fixture.0.join(&source.shot.fingerprint);
+        let directory = media_directory(&fixture.0, &source.identity).unwrap();
         let files = shards(&directory);
         assert_eq!(files.len(), 2);
         assert_eq!(shard_sequence(&files[0]), Some(0));
         assert_eq!(shard_sequence(&files[1]), Some(1));
         for file in &files {
-            assert!(Uuid::parse_str(file.file_stem().unwrap().to_str().unwrap()).is_ok());
+            assert!(shard_sequence(file).is_some());
         }
         assert_eq!(fs::read_dir(&directory).unwrap().count(), 2);
         for file in &files {
@@ -949,9 +659,13 @@ mod tests {
             saved.push(data);
         }
         let file = path(&fixture.0, &source.identity).unwrap();
-        let metadata = fs::metadata(&file).unwrap();
-        let index = scan(&file, (metadata.len(), metadata.modified().unwrap())).unwrap();
-        let damaged = index.records[&record_key(&saved[1].identity)];
+        let snapshot = storage::locate(file.parent().unwrap(), &[record_key(&saved[1].identity)])
+            .unwrap()
+            .pop()
+            .unwrap()
+            .unwrap();
+        let damaged = storage::fixture_record(&snapshot);
+        drop(snapshot);
         let mut writer = fs::OpenOptions::new().write(true).open(&file).unwrap();
         writer
             .seek(SeekFrom::Start(damaged.offset - RECORD_HEADER_BYTES))

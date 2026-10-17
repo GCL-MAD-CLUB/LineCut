@@ -10,6 +10,24 @@ pub(super) struct BatchPolicy {
 }
 
 impl BatchPolicy {
+    pub(super) fn choose_resident(
+        &self,
+        remaining: usize,
+        resident: impl Iterator<Item = usize>,
+    ) -> usize {
+        let chosen = self.choose(remaining);
+        // A short source tail must not evict a warmed throughput session just
+        // to compile a new two/four-row graph. Full work still tunes all sizes.
+        if remaining < SIZES[0] {
+            resident
+                .filter(|&size| size >= remaining)
+                .min()
+                .unwrap_or(chosen)
+        } else {
+            chosen
+        }
+    }
+
     pub(super) fn best(&self) -> usize {
         (0..SIZES.len())
             .filter(|&i| !self.blocked[i] && self.samples[i] > 0)
@@ -31,9 +49,9 @@ impl BatchPolicy {
         }
         // Warmup is excluded by the caller. Three full, real batches establish
         // a candidate; padding/decoder wait/session creation never bias ranking.
-        for i in 0..SIZES.len() {
-            if !self.blocked[i] && self.samples[i] < 3 && SIZES[i] <= remaining {
-                return SIZES[i];
+        for (i, &size) in SIZES.iter().enumerate() {
+            if !self.blocked[i] && self.samples[i] < 3 && size <= remaining {
+                return size;
             }
         }
         let best = self.best();
@@ -71,6 +89,16 @@ impl BatchPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn short_tails_reuse_warmed_shapes_while_full_batches_still_tune() {
+        let policy = BatchPolicy::default();
+        assert_eq!(policy.choose_resident(1, [8, 16].into_iter()), 8);
+        assert_eq!(policy.choose_resident(4, [8, 2].into_iter()), 8);
+        assert_eq!(policy.choose_resident(2, [8, 2].into_iter()), 2);
+        assert_eq!(policy.choose_resident(3, [].into_iter()), 4);
+        assert_eq!(policy.choose_resident(64, [16, 32].into_iter()), 8);
+    }
 
     #[test]
     fn learns_throughput_instead_of_preferring_largest_batch() {

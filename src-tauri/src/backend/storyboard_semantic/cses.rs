@@ -585,14 +585,16 @@ mod tests {
             for shape in 0..3 {
                 let mut kernel = vec![vec![1.0; n]; n];
                 for i in 0..n {
-                    for j in 0..i {
+                    let (earlier, lower) = kernel.split_at_mut(i);
+                    let row = &mut lower[0];
+                    for (j, column) in earlier.iter_mut().enumerate() {
                         let value = match shape {
                             0 => temporal(i, j, 1.0, 3.0),
                             1 => ((i * 17 + j * 31) % 7) as f64 / 7.0,
                             _ => 1.0,
                         };
-                        kernel[i][j] = value;
-                        kernel[j][i] = value;
+                        row[j] = value;
+                        column[i] = value;
                     }
                 }
                 for u in [0.0, 0.37, 1.0] {
