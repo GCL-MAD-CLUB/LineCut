@@ -28,17 +28,29 @@ and the zero-shot pipeline. Scores are not
 min-max normalized across results, and the reported value is never rescaled by
 the number of selected frames.
 
-Vision execution follows the selection encoder's online batch policy, bounded
-two-chunk RGB decoder queue, reusable tensors, at most two specialized sessions,
-smaller-batch retry and shared ONNX CPU recovery. Missing frames from all shots
-of a media source share one inference stream, allowing 8/16/32-row batches to
-cross storyboard boundaries. Nearby frames share a decode process (at most 256
-selected frames spanning 30 seconds); gaps over two seconds start a new accurate seek.
-The RGB queue remains bounded across seeks, and only pooled vectors are retained.
-Short tails reuse resident shapes instead of compiling a new graph. Idle vision
-sessions of the other encoder are released when switching stages to free GPU
-memory; measured batch preferences remain reusable. Pending text queries get
-priority before the next vision batch.
+Vision execution follows the selection encoder's online batch policy, reusable
+tensors, smaller-batch retry and shared ONNX CPU recovery. Each encoder retains
+the five 2/4/8/16/32-row specialized sessions and, if necessary, a one-row recovery
+session. Challengers and tail shapes survive stage changes and subsequent builds;
+only provider recovery or failed shapes discard sessions. Short tails reuse
+resident shapes, and pending text queries get priority before the next vision batch.
+
+Cold selection decodes each original shot once to 256 x 256 RGB. Adjacent uncached
+shots of one media source share a continuous FFmpeg process. Two-frame transport
+chunks have a 32-frame queue, allowing decoding to continue during inference.
+Probe inference reads that stream while retaining the whole current shot in
+memory; acquisition reuses it. DINOv3 receives a center-aligned bilinear 256-to-224
+resize of those pixels, and SigLIP2 directly reuses selected 256-pixel frames.
+The full-shot buffer is released after selection; only selected pixels cross a
+bounded media handoff. SigLIP2 for one media can overlap selection and decoding
+for the next media. Complete caches require neither decoding nor inference;
+when only a semantic index needs repair, only missing selected frames are decoded,
+coalescing nearby frames and seeking over gaps greater than two seconds.
+Windows requests D3D11VA decoding with up to 16 processing threads. If hardware
+decoding fails before emitting pixels, it retries once in software; a partial
+stream is never replayed into inference. Closing a consumer terminates and joins
+its decoder. No inferred selection is committed until its merged decoder exits
+successfully; the semantic index likewise requires validated pixels.
 The query encoder runs on CPU in its own serialized session because DirectML can
 produce inconsistent embeddings for this quantized graph without an inference
 error. The ignored inline test `siglip2_query_encoder_provider_diagnostics`
@@ -46,14 +58,20 @@ validates normalized outputs and reports the DirectML/CPU cosine for manual
 diagnosis; it does not require a particular provider defect.
 
 Selection and vision encoding occupy one cancellable task. A storyboard counts
-as complete only after both stages succeed. The same progress bar assigns 50% to
-selection across the scope and 50% to SigLIP2 indexing. Both stages report batch
+as complete only after both stages succeed. The same progress bar adds the independent
+selection and SigLIP2 counters with 50% weight each, including overlapping media. Both stages report batch
 progress and cached shot completion; the last fraction of each shot is reserved
 for successful validation and persistence. Semantic indexes live in the configured
 cache root as
 `Storyboard Semantic Search/<fingerprint>/<recipe-media hash>/<sequence>-<UUID>.bin`.
 The revision hash includes the complete model/recipe, media length and timestamp;
-stream and frame rate remain part of each shot key. Keyframe uses the same layout
+stream and frame rate remain part of each shot key. Modification time retains the
+original nanosecond precision in directories, keys and records so existing cache
+identities remain unchanged. Current length and whole-second time must match the imported asset;
+a changed source requires reimport instead of building another generation under a
+stale fingerprint. Cache timestamps are not truncated to whole seconds.
+Cache revisions remain unchanged: Keyframe uses `dinov3-cses-v1` and the semantic
+recipe retains its `rgb256-l2-v1` suffix. Keyframe uses the same layout
 under `Storyboard Keyframe`. Existing storage formats are neither read nor migrated.
 
 Both caches share `storage.rs`. Shards rotate by size at 256 MiB, aggregating many
@@ -114,7 +132,8 @@ The shared ONNX Runtime and DirectML binaries come from `npm run prepare:transne
 The build prepares this component automatically; the existing installer semantic
 component choice controls both subtitle and storyboard models.
 
-Input: RGB, bilinear resize to 224 × 224 without center cropping, NCHW float32,
+Input: original stream bilinear-resized once to RGB 256 × 256, followed by a
+center-aligned bilinear resize to 224 × 224 without center cropping, NCHW float32,
 rescale 1/255, mean `[0.485, 0.456, 0.406]`, std `[0.229, 0.224, 0.225]`.
 Output: `pooler_output`, 384-dimensional CLS feature, followed by L2 normalization.
 Frames are read from the original video stream using the same seek/frame convention
@@ -136,12 +155,14 @@ the selected batch size, `224`, and `224` when creating each session. The online
 batch policy compares 2, 4, 8, 16, and 32 rows using real selection work, starting
 at eight when enough frames are available. It excludes session creation, the
 first run of each session, padded tails, and decoder wait from throughput samples.
-After three full samples per eligible size it chooses the lowest smoothed time
-per frame, and continues updating that estimate during normal inference. Small
+Every successful real batch, including the first run and padded tails, advances
+calibration once. After three real runs per eligible size it chooses the lowest
+smoothed measured time per frame, and continues updating that estimate during
+normal inference. Untimed shapes never displace a measured winner. Small
 jobs do not wait for larger calibration batches. No synthetic probes are run.
 
-At most two specialized sessions are resident: the measured winner and a trial
-or tail shape. Short tails reuse a resident shape when possible; padding rows
+At most six specialized sessions per encoder are resident, covering all tuned
+shapes and the one-row recovery shape. Short tails reuse a resident shape when possible; padding rows
 never enter CSES. Decoder transport uses two-frame chunks independently of the
 chosen inference batch, retaining all frames in order when the batch changes.
 Specialization still lets ONNX Runtime fold the dynamic positional-encoding
@@ -162,8 +183,9 @@ discarded and subsequent shapes are created on CPU without probing GPU again.
 One-row execution is reserved for a final tail or recovery when larger shapes
 cannot run. CSES formulas, frame budgets, scores and stopping rules do not depend
 on this policy. As with switching providers, different batch shapes may produce
-floating-point rounding differences; mathematical equivalence is not a bitwise
-identity guarantee near selection ties.
+floating-point rounding differences. Shared 256-to-224 preprocessing also differs
+from decoding directly to 224, so selections from the two preprocessing paths are not guaranteed
+identical near selection ties. CSES formulas, ordering and tie rules are unchanged.
 
 The manual inline Rust test `dinov3_directml_matches_cpu` runs the packaged graph
 with an explicit DirectML session (no automatic CPU recovery) and compares its

@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 // Transport granularity is independent of device batch size. This allows the
 // consumer to change batch immediately without restarting or reseeking FFmpeg.
 const DECODE_CHUNK: usize = 2;
+const QUEUED_CHUNKS: usize = batch::MAX_BATCH / DECODE_CHUNK;
 
 struct Registration {
     app: tauri::AppHandle,
@@ -18,6 +19,7 @@ impl Drop for Registration {
     }
 }
 
+#[derive(Clone)]
 struct StreamRequest {
     program: String,
     args: Vec<String>,
@@ -29,8 +31,43 @@ struct StreamRequest {
 
 async fn produce(
     app: tauri::AppHandle,
+    mut request: StreamRequest,
+    sender: mpsc::Sender<Vec<u8>>,
+) -> AppResult<()> {
+    let mut emitted = 0;
+    let result = produce_attempt(app.clone(), request.clone(), sender.clone(), &mut emitted).await;
+    if let Err(error) = result {
+        ensure_not_cancelled(&request.cancel)?;
+        // Unsupported hardware/codec combinations may fail before the first
+        // frame. Retrying is safe only before any pixels reached inference.
+        if !sender.is_closed() && software_retry_args(&mut request.args, emitted) {
+            tracing::warn!(%error, "Retrying storyboard decode without hardware acceleration");
+            return produce_attempt(app, request, sender, &mut emitted).await;
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn software_retry_args(args: &mut Vec<String>, emitted: usize) -> bool {
+    if emitted != 0 {
+        return false;
+    }
+    let Some(position) = args
+        .windows(2)
+        .position(|args| args == ["-hwaccel", "d3d11va"])
+    else {
+        return false;
+    };
+    args.drain(position..position + 2);
+    true
+}
+
+async fn produce_attempt(
+    app: tauri::AppHandle,
     request: StreamRequest,
     sender: mpsc::Sender<Vec<u8>>,
+    emitted: &mut usize,
 ) -> AppResult<()> {
     let StreamRequest {
         program,
@@ -96,6 +133,7 @@ async fn produce(
                 .send(batch)
                 .await
                 .map_err(|_| inference_error("Selection inference receiver closed"))?;
+            *emitted += (count - start).min(DECODE_CHUNK);
         }
         let mut extra = [0u8; 1];
         if stdout.read(&mut extra).await.map_err(inference_error)? != 0 {
@@ -133,78 +171,129 @@ async fn produce(
     read_result
 }
 
-pub(super) fn embed_stream(
-    app: &tauri::AppHandle,
-    program: &str,
-    args: Vec<String>,
-    task_id: &str,
-    cancel: &Arc<AtomicBool>,
-    count: usize,
-    mut report: impl FnMut(usize),
-) -> AppResult<Vec<Vec<f32>>> {
-    let mut completed = 0;
-    embed_stream_with(
-        app,
-        StreamRequest {
-            program: program.to_owned(),
-            args,
-            task_id: task_id.to_owned(),
-            cancel: Arc::clone(cancel),
-            count,
-            side: SIDE,
-        },
-        |remaining| preferred_batch(remaining, cancel),
-        |rgb| {
-            let vectors = embed(app, rgb, cancel)?;
-            completed += vectors.len();
-            report(completed);
-            Ok(vectors)
-        },
-    )
-}
-
-fn embed_stream_with(
-    app: &tauri::AppHandle,
-    request: StreamRequest,
-    mut choose: impl FnMut(usize) -> AppResult<usize>,
-    mut infer: impl FnMut(&[u8]) -> AppResult<Vec<Vec<f32>>>,
-) -> AppResult<Vec<Vec<f32>>> {
-    let count = request.count;
-    let side = request.side;
-    let cancel = Arc::clone(&request.cancel);
-    // Two small queued chunks plus at most MAX_BATCH inference frames. Device
-    // tuning cannot accidentally grow the decoder's prefetch allocation.
-    let (sender, mut receiver) = mpsc::channel(2);
-    let producer = tauri::async_runtime::spawn(produce(app.clone(), request, sender));
-    let mut embeddings = Vec::with_capacity(count);
-    let outcome = consume(
-        &mut receiver,
-        count,
-        side,
-        &cancel,
-        &mut choose,
-        &mut infer,
-        |batch| {
-            embeddings.extend(batch);
-            Ok(())
-        },
-    );
-    // On inference failure, release a producer blocked on backpressure. Always
-    // await its cleanup before returning or releasing the task's queue slot.
-    drop(receiver);
-    let decoded = tauri::async_runtime::block_on(producer).map_err(inference_error)?;
-    outcome?;
-    decoded?;
-    if embeddings.len() != count {
-        return Err(inference_error("Incomplete storyboard embeddings"));
-    }
-    Ok(embeddings)
-}
-
 pub(super) struct DecodeJob {
     pub(super) args: Vec<String>,
     pub(super) count: usize,
     pub(super) completed_shots: usize,
+    pub(super) rgb: Option<Vec<u8>>,
+}
+
+/// Prefetch across shots and media while selection and the other encoder run.
+/// Validation travels separately: no cache is committed before the corresponding
+/// FFmpeg process exits successfully, even when its RGB has already been used.
+pub(super) struct FrameStream {
+    receiver: mpsc::Receiver<Vec<u8>>,
+    validations: std::sync::mpsc::Receiver<AppResult<usize>>,
+    producer: Option<tauri::async_runtime::JoinHandle<AppResult<()>>>,
+    pending: Vec<u8>,
+    offset: usize,
+    consumed: usize,
+    validated: usize,
+}
+
+impl FrameStream {
+    pub(super) fn start(context: StreamContext<'_>, jobs: Vec<DecodeJob>) -> Self {
+        let (sender, receiver) = mpsc::channel(QUEUED_CHUNKS);
+        let (validated, validations) = std::sync::mpsc::channel();
+        let app = context.app.clone();
+        let program = context.program.to_owned();
+        let task_id = context.task_id.to_owned();
+        let cancel = Arc::clone(context.cancel);
+        let producer = tauri::async_runtime::spawn(async move {
+            for job in jobs {
+                let outcome = produce(
+                    app.clone(),
+                    StreamRequest {
+                        program: program.clone(),
+                        args: job.args,
+                        task_id: task_id.clone(),
+                        cancel: Arc::clone(&cancel),
+                        count: job.count,
+                        side: 256,
+                    },
+                    sender.clone(),
+                )
+                .await;
+                match outcome {
+                    Ok(()) => {
+                        let _ = validated.send(Ok(job.count));
+                    }
+                    Err(error) => {
+                        let _ = validated.send(Err(error.clone()));
+                        return Err(error);
+                    }
+                }
+            }
+            Ok(())
+        });
+        Self {
+            receiver,
+            validations,
+            producer: Some(producer),
+            pending: Vec::new(),
+            offset: 0,
+            consumed: 0,
+            validated: 0,
+        }
+    }
+
+    pub(super) fn append_frames(
+        &mut self,
+        rgb: &mut Vec<u8>,
+        count: usize,
+        cancel: &AtomicBool,
+    ) -> AppResult<()> {
+        let mut bytes = count
+            .checked_mul(256 * 256 * 3)
+            .ok_or_else(|| inference_error("Storyboard RGB allocation overflow"))?;
+        while bytes > 0 {
+            ensure_not_cancelled(cancel)?;
+            if self.offset == self.pending.len() {
+                self.pending = match self.receiver.blocking_recv() {
+                    Some(pixels) => pixels,
+                    None => {
+                        // Preserve FFmpeg's diagnostic if it closed the pipe.
+                        while let Ok(result) = self.validations.try_recv() {
+                            self.validated += result?;
+                        }
+                        return Err(inference_error("Incomplete storyboard RGB stream"));
+                    }
+                };
+                self.offset = 0;
+                if self.pending.is_empty() || self.pending.len() % (256 * 256 * 3) != 0 {
+                    return Err(inference_error("Misaligned storyboard RGB stream"));
+                }
+            }
+            let take = bytes.min(self.pending.len() - self.offset);
+            rgb.extend_from_slice(&self.pending[self.offset..self.offset + take]);
+            self.offset += take;
+            bytes -= take;
+        }
+        self.consumed += count;
+        Ok(())
+    }
+
+    pub(super) fn validate(&mut self, cancel: &AtomicBool) -> AppResult<()> {
+        while self.validated < self.consumed {
+            ensure_not_cancelled(cancel)?;
+            match self.validations.recv_timeout(Duration::from_millis(25)) {
+                Ok(result) => self.validated += result?,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(error) => return Err(inference_error(error)),
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for FrameStream {
+    fn drop(&mut self) {
+        self.receiver.close();
+        if let Some(producer) = self.producer.take() {
+            // Closing the receiver interrupts FFmpeg even while it is seeking.
+            let _ = tauri::async_runtime::block_on(producer);
+        }
+    }
 }
 
 pub(super) struct StreamContext<'a> {
@@ -227,7 +316,7 @@ pub(super) fn embed_jobs(
     let started = std::time::Instant::now();
     let decode_jobs = jobs.len();
     let count = jobs.iter().map(|job| job.count).sum();
-    let (sender, mut receiver) = mpsc::channel(2);
+    let (sender, mut receiver) = mpsc::channel(QUEUED_CHUNKS);
     let validated = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let completed = Arc::clone(&validated);
     let app = context.app.clone();
@@ -236,19 +325,32 @@ pub(super) fn embed_jobs(
     let cancel = Arc::clone(context.cancel);
     let producer = tauri::async_runtime::spawn(async move {
         for job in jobs {
-            produce(
-                app.clone(),
-                StreamRequest {
-                    program: program.clone(),
-                    args: job.args,
-                    task_id: task_id.clone(),
-                    cancel: Arc::clone(&cancel),
-                    count: job.count,
-                    side,
-                },
-                sender.clone(),
-            )
-            .await?;
+            if let Some(rgb) = job.rgb {
+                if rgb.len() != job.count * side * side * 3 {
+                    return Err(inference_error("Invalid cached storyboard RGB"));
+                }
+                for chunk in rgb.chunks(DECODE_CHUNK * side * side * 3) {
+                    ensure_not_cancelled(&cancel)?;
+                    sender
+                        .send(chunk.to_vec())
+                        .await
+                        .map_err(|_| inference_error("Selection inference receiver closed"))?;
+                }
+            } else {
+                produce(
+                    app.clone(),
+                    StreamRequest {
+                        program: program.clone(),
+                        args: job.args,
+                        task_id: task_id.clone(),
+                        cancel: Arc::clone(&cancel),
+                        count: job.count,
+                        side,
+                    },
+                    sender.clone(),
+                )
+                .await?;
+            }
             completed.store(job.completed_shots, Ordering::SeqCst);
         }
         Ok::<_, AppError>(())
@@ -326,6 +428,59 @@ fn consume(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_stream_reuses_chunks_across_shots_and_validates_process_exit_separately() {
+        const FRAME: usize = 256 * 256 * 3;
+        let (sender, receiver) = mpsc::channel(QUEUED_CHUNKS);
+        let (validated, validations) = std::sync::mpsc::channel();
+        sender
+            .blocking_send([vec![1; FRAME], vec![2; FRAME]].concat())
+            .unwrap();
+        sender.blocking_send(vec![3; FRAME]).unwrap();
+        drop(sender);
+        let mut stream = FrameStream {
+            receiver,
+            validations,
+            producer: None,
+            pending: Vec::new(),
+            offset: 0,
+            consumed: 0,
+            validated: 0,
+        };
+        let cancel = AtomicBool::new(false);
+        let mut shot = Vec::new();
+        stream.append_frames(&mut shot, 1, &cancel).unwrap();
+        assert_eq!(shot, vec![1; FRAME]);
+        assert_eq!(stream.validated, 0);
+        shot.clear();
+        stream.append_frames(&mut shot, 2, &cancel).unwrap();
+        assert_eq!(shot, [vec![2; FRAME], vec![3; FRAME]].concat());
+        validated
+            .send(Err(inference_error("decoder failed after emitting RGB")))
+            .unwrap();
+        assert!(stream
+            .validate(&cancel)
+            .unwrap_err()
+            .to_string()
+            .contains("decoder failed"));
+        assert_eq!(stream.validated, 0);
+        validated.send(Ok(3)).unwrap();
+        stream.validate(&cancel).unwrap();
+        assert_eq!(stream.validated, 3);
+    }
+
+    #[test]
+    fn queue_prefetches_a_full_inference_batch_and_close_releases_backpressure() {
+        let (sender, mut receiver) = mpsc::channel(QUEUED_CHUNKS);
+        for _ in 0..QUEUED_CHUNKS {
+            sender.try_send(vec![0; DECODE_CHUNK * 3]).unwrap();
+        }
+        assert_eq!(receiver.len() * DECODE_CHUNK, batch::MAX_BATCH);
+        assert!(sender.try_send(vec![0; 6]).is_err());
+        receiver.close();
+        assert!(sender.is_closed());
+    }
 
     fn stream(chunks: &[usize]) -> (mpsc::Receiver<Vec<u8>>, std::thread::JoinHandle<()>) {
         let (sender, receiver) = mpsc::channel(2);
@@ -435,4 +590,19 @@ mod tests {
         )
         .is_err());
     }
+}
+#[test]
+fn hardware_decode_retry_is_allowed_only_before_any_pixels_are_published() {
+    let hardware = vec![
+        "-hwaccel".into(),
+        "d3d11va".into(),
+        "-i".into(),
+        "media.mp4".into(),
+    ];
+    let mut args = hardware.clone();
+    assert!(!software_retry_args(&mut args, 1));
+    assert_eq!(args, hardware);
+    assert!(software_retry_args(&mut args, 0));
+    assert_eq!(args, ["-i", "media.mp4"]);
+    assert!(!software_retry_args(&mut args, 0));
 }

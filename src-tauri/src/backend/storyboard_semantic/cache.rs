@@ -194,6 +194,7 @@ fn write_with_limit(
     })
 }
 
+#[cfg(test)]
 pub(super) fn get_or_build(
     root: &Path,
     source: &ShotSource,
@@ -204,7 +205,34 @@ pub(super) fn get_or_build(
     if let Some(data) = read(root, &source.identity) {
         return Ok(data);
     }
+    let data = prepare(root, source, cancel, build)?;
+    commit(root, &data, cancel)?;
+    Ok(data)
+}
+
+pub(super) fn commit(root: &Path, data: &ShotData, cancel: &AtomicBool) -> AppResult<()> {
+    write(root, data, cancel)
+}
+
+// Selection may consume RGB before its merged decoder exits. The caller commits
+// this completed record only after validating that decoder's successful exit.
+pub(super) fn prepare(
+    root: &Path,
+    source: &ShotSource,
+    cancel: &AtomicBool,
+    build: impl FnOnce(&HashMap<usize, Vec<f32>>) -> AppResult<cses::Selection>,
+) -> AppResult<Arc<ShotData>> {
+    ensure_not_cancelled(cancel)?;
+    if let Some(data) = read(root, &source.identity) {
+        return Ok(data);
+    }
     let available = reusable_vectors(root, &source.identity);
+    tracing::debug!(fingerprint = %source.identity.fingerprint,
+        media_length = source.identity.media_length,
+        media_modified_ns = ?source.identity.media_modified_ns,
+        recipe = CACHE_REVISION, start_frame = source.identity.start_frame,
+        end_frame = source.identity.end_frame, reusable_vectors = available.len(),
+        "Building missing or invalid storyboard selection");
     let mut selection = build(&available)?;
     ensure_not_cancelled(cancel)?;
     for frame in &mut selection.frames {
@@ -224,7 +252,6 @@ pub(super) fn get_or_build(
             "Invalid completed storyboard keyframe source",
         ));
     }
-    write(root, &data, cancel)?;
     Ok(Arc::new(data))
 }
 
@@ -333,6 +360,60 @@ mod tests {
                 })
                 .collect())
         })
+    }
+
+    #[test]
+    fn validated_media_metadata_reuses_existing_nanosecond_cache_without_encoding() {
+        let fixture = TestRoot::new();
+        let mut source = source();
+        let cancel = AtomicBool::new(false);
+        let cached = get_or_build(&fixture.0, &source, &cancel, |_| {
+            select_fixture(&source, &cancel)
+        })
+        .unwrap();
+        let original_identity = source.identity.clone();
+        let original_directory = media_directory(&fixture.0, &original_identity).unwrap();
+        let original_key = record_key(&original_identity);
+        let modified = Duration::from_nanos(original_identity.media_modified_ns.unwrap() as u64);
+        source.identity.media_modified_ns = canonical_media_timestamp(
+            source.identity.media_length as i64,
+            modified.as_secs() as i64,
+            source.identity.media_length,
+            modified,
+        )
+        .unwrap();
+        assert_eq!(source.identity, original_identity);
+        assert_eq!(
+            media_directory(&fixture.0, &source.identity).unwrap(),
+            original_directory
+        );
+        assert_eq!(record_key(&source.identity), original_key);
+        let reused = get_or_build(&fixture.0, &source, &cancel, |_| {
+            panic!("existing cache must not encode again")
+        })
+        .unwrap();
+        assert_eq!(*reused, *cached);
+    }
+
+    #[test]
+    fn prepared_selection_is_not_published_until_decoder_validation_and_commit() {
+        let fixture = TestRoot::new();
+        let source = source();
+        let cancel = AtomicBool::new(false);
+        let data = prepare(&fixture.0, &source, &cancel, |_| {
+            select_fixture(&source, &cancel)
+        })
+        .unwrap();
+        assert!(read(&fixture.0, &source.identity).is_none());
+        assert!(!fixture.0.exists());
+        commit(&fixture.0, &data, &cancel).unwrap();
+        assert_eq!(*read(&fixture.0, &source.identity).unwrap(), *data);
+        // A later build adopts this exact selection, without another sample.
+        let reused = prepare(&fixture.0, &source, &cancel, |_| {
+            panic!("must reuse completed selection")
+        })
+        .unwrap();
+        assert_eq!(*reused, *data);
     }
 
     #[test]

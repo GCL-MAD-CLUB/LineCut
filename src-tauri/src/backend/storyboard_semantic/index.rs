@@ -342,6 +342,9 @@ pub(super) fn get_or_build(
         report(requests.len() as f64);
         return Ok(());
     }
+    tracing::debug!(fingerprint = %media.fingerprint, media_length = media.media_length,
+        media_modified_ns = ?media.media_modified_ns, recipe = RECIPE,
+        shots = requests.len(), "Building missing or incomplete storyboard semantic index");
     let mut index = load(&path, &media, requests).unwrap_or_else(|| empty_index(&media));
     let mut checkpoint = Checkpoint::new(&path, &media);
     let slots = reconcile(&mut index, &media, requests);

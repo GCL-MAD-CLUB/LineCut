@@ -187,16 +187,6 @@ pub(super) fn preferred_batch(remaining: usize, cancel: &AtomicBool) -> AppResul
     Ok(size)
 }
 
-pub(super) fn release_vision_sessions(cancel: &AtomicBool) -> AppResult<()> {
-    if MODEL.get().is_some() {
-        if let Some(engine) = model_guard(cancel)?.as_mut() {
-            engine.sessions.clear();
-            engine.next_size = 0;
-        }
-    }
-    Ok(())
-}
-
 pub(super) fn embed(
     app: &tauri::AppHandle,
     rgb: &[u8],
@@ -275,17 +265,9 @@ fn embed_attempt(
     };
     engine.last_size = size;
     if !engine.sessions.iter().any(|s| s.size == size) {
-        // Keep at most the current throughput winner and one challenger.
-        // Evict BEFORE allocating a new session to bound peak model memory.
-        if engine.sessions.len() >= 2 {
-            let best = engine.policy.best();
-            let victim = engine
-                .sessions
-                .iter()
-                .position(|s| s.size != best)
-                .unwrap_or(0);
-            engine.sessions.remove(victim);
-        }
+        // The shape set is bounded. Retain challengers, the winner and tails
+        // across batches, stages and builds; provider recovery alone resets it.
+        debug_assert!(engine.sessions.len() < batch::RESIDENT_SHAPES);
         let directory = directory(app).ok_or_else(|| {
             app_error(
                 ErrorCode::SemanticModelMissing,
@@ -390,8 +372,10 @@ fn embed_attempt(
         .collect::<AppResult<Vec<_>>>()?;
     let elapsed = started.elapsed().as_secs_f64();
     let became_cpu = model.runtime.provider().to_string() == "CPU" && !engine.cpu;
-    if model.warmed && batch == size && !became_cpu {
-        engine.policy.observe(size, elapsed);
+    if !became_cpu {
+        engine
+            .policy
+            .observe(size, batch, model.warmed.then_some(elapsed));
     }
     model.warmed = true;
     if became_cpu {

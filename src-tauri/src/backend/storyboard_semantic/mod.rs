@@ -46,6 +46,7 @@ struct BatchEngine {
     policy: batch::BatchPolicy,
     cpu: bool,
     last_size: usize,
+    next_size: usize,
 }
 static MODEL: OnceLock<Mutex<Option<BatchEngine>>> = OnceLock::new();
 // Like subtitle indexing, overlapping windows serialize preparation and recheck
@@ -87,15 +88,19 @@ pub(crate) struct SelectionProgress {
 struct BuildProgress<F> {
     total: usize,
     report: F,
+    selected: f64,
+    indexed: f64,
 }
 
 impl<F: FnMut(f64, usize)> BuildProgress<F> {
     fn selection(&mut self, completed: f64) {
-        (self.report)(completed * 0.5, self.total);
+        self.selected = completed;
+        (self.report)((self.selected + self.indexed) * 0.5, self.total);
     }
 
     fn indexing(&mut self, completed: f64) {
-        (self.report)((self.total as f64 + completed) * 0.5, self.total);
+        self.indexed = completed;
+        (self.report)((self.selected + self.indexed) * 0.5, self.total);
     }
 }
 
@@ -156,10 +161,12 @@ fn model_guard(
 
 fn preferred_batch(remaining: usize, cancel: &AtomicBool) -> AppResult<usize> {
     let mut guard = model_guard(cancel)?;
-    Ok(guard
-        .get_or_insert_with(BatchEngine::default)
+    let engine = guard.get_or_insert_with(BatchEngine::default);
+    let size = engine
         .policy
-        .choose(remaining))
+        .choose_resident(remaining, engine.sessions.iter().map(|s| s.size));
+    engine.next_size = size;
+    Ok(size)
 }
 
 fn embed(app: &tauri::AppHandle, rgb: &[u8], cancel: &AtomicBool) -> AppResult<Vec<Vec<f32>>> {
@@ -195,6 +202,7 @@ fn embed_resilient(
             let size = engine.last_size;
             engine.policy.failed(size);
             engine.sessions.retain(|session| session.size < size);
+            engine.next_size = 0;
             tracing::warn!(size, %error, "Retrying DINOv3 with smaller real batches");
             if frames == 1 {
                 return embed_resilient(app, engine, rgb, cancel);
@@ -220,7 +228,9 @@ fn embed_attempt(
     }
     // Tails use an already resident shape when possible. Never compile another
     // large graph just to eliminate a few padded rows.
-    let size = if batch.is_power_of_two() && batch >= 2 {
+    let size = if engine.next_size >= batch {
+        engine.next_size
+    } else if batch.is_power_of_two() && batch >= 2 {
         batch
     } else {
         engine
@@ -233,17 +243,9 @@ fn embed_attempt(
     };
     engine.last_size = size;
     if !engine.sessions.iter().any(|s| s.size == size) {
-        // Keep at most the current throughput winner and one challenger.
-        // Evict BEFORE allocating a new session to bound peak model memory.
-        if engine.sessions.len() >= 2 {
-            let best = engine.policy.best();
-            let victim = engine
-                .sessions
-                .iter()
-                .position(|s| s.size != best)
-                .unwrap_or(0);
-            engine.sessions.remove(victim);
-        }
+        // The shape set is bounded. Retain challengers, the winner and tails
+        // across batches, stages and builds; provider recovery alone resets it.
+        debug_assert!(engine.sessions.len() < batch::RESIDENT_SHAPES);
         let directory = resource_directory(app).ok_or_else(|| {
             app_error(
                 ErrorCode::SemanticModelMissing,
@@ -343,8 +345,10 @@ fn embed_attempt(
         .collect::<AppResult<Vec<_>>>()?;
     let elapsed = started.elapsed().as_secs_f64();
     let became_cpu = model.runtime.provider().to_string() == "CPU" && !engine.cpu;
-    if model.warmed && batch == size && !became_cpu {
-        engine.policy.observe(size, elapsed);
+    if !became_cpu {
+        engine
+            .policy
+            .observe(size, batch, model.warmed.then_some(elapsed));
     }
     model.warmed = true;
     if became_cpu {
@@ -414,14 +418,13 @@ fn resolve_shots(
                                 .or_else(|| parse_frame_rate(s.r_frame_rate.as_deref()))
                         })
                         .unwrap_or(25.0);
+                    let metadata = fs::metadata(&project.asset.path).map_err(inference_error)?;
+                    let modified = canonical_media_version(&project.asset, &metadata)?;
                     let path = project.asset.path;
                     let fingerprint = project.asset.fingerprint;
-                    let metadata = fs::metadata(&path).map_err(inference_error)?;
-                    let modified = metadata
-                        .modified()
-                        .ok()
-                        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                        .map(|d| d.as_nanos());
+                    tracing::debug!(%fingerprint, media_length = metadata.len(),
+                        media_modified_ns = ?modified, stream, rate,
+                        "Resolved storyboard media cache identity");
                     entry.insert((path, fingerprint, stream, rate, metadata.len(), modified))
                 }
             };
@@ -452,6 +455,40 @@ fn resolve_shots(
         .collect()
 }
 
+fn canonical_media_version(asset: &MediaAsset, metadata: &fs::Metadata) -> AppResult<Option<u128>> {
+    let modified = metadata.modified().map_err(inference_error)?;
+    let elapsed = modified
+        .duration_since(UNIX_EPOCH)
+        .map_err(inference_error)?;
+    canonical_media_timestamp(asset.file_size, asset.modified_at, metadata.len(), elapsed)
+}
+
+fn canonical_media_timestamp(
+    imported_length: i64,
+    imported_seconds: i64,
+    length: u64,
+    modified: Duration,
+) -> AppResult<Option<u128>> {
+    // fingerprint_file incorporates length and whole seconds. Validate those
+    // before trusting the imported fingerprint, but preserve the nanosecond
+    // identity used by existing cache directories, keys and stored records.
+    if u64::try_from(imported_length).ok() != Some(length)
+        || u64::try_from(imported_seconds).ok() != Some(modified.as_secs())
+    {
+        tracing::warn!(
+            imported_length,
+            imported_seconds,
+            length,
+            modified_seconds = modified.as_secs(),
+            "Storyboard media metadata changed since import"
+        );
+        return Err(inference_error(
+            "Storyboard source changed; reimport the media",
+        ));
+    }
+    Ok(Some(modified.as_nanos()))
+}
+
 fn frame_decode_args(source: &ShotSource, positions: &[usize], side: usize) -> Vec<String> {
     let first = positions[0];
     let select = positions
@@ -459,11 +496,23 @@ fn frame_decode_args(source: &ShotSource, positions: &[usize], side: usize) -> V
         .map(|p| format!("eq(n\\,{})", p - first))
         .collect::<Vec<_>>()
         .join("+");
+    decode_args(source, first, positions.len(), side, Some(select))
+}
+
+fn decode_args(
+    source: &ShotSource,
+    first: usize,
+    count: usize,
+    side: usize,
+    select: Option<String>,
+) -> Vec<String> {
     let mut args = vec!["-v".into(), "error".into(), "-nostdin".into()];
     append_ffmpeg_processing_thread_args(
         &mut args,
-        available_cpu_threads().saturating_sub(2).clamp(2, 4),
+        available_cpu_threads().saturating_sub(2).clamp(2, 16),
     );
+    #[cfg(windows)]
+    args.extend(["-hwaccel".into(), "d3d11va".into()]);
     args.extend([
         "-ss".into(),
         format!(
@@ -478,9 +527,12 @@ fn frame_decode_args(source: &ShotSource, positions: &[usize], side: usize) -> V
         "-sn".into(),
         "-dn".into(),
         "-vf".into(),
-        format!("select='{select}',scale={side}:{side}:flags=bilinear,format=rgb24"),
+        format!(
+            "{}scale={side}:{side}:flags=bilinear,format=rgb24",
+            select.map(|s| format!("select='{s}',")).unwrap_or_default()
+        ),
         "-frames:v".into(),
-        positions.len().to_string(),
+        count.to_string(),
         "-fps_mode".into(),
         "passthrough".into(),
         "-c:v".into(),
@@ -494,20 +546,178 @@ fn frame_decode_args(source: &ShotSource, positions: &[usize], side: usize) -> V
     args
 }
 
-fn decode_and_embed(
-    app: &tauri::AppHandle,
-    source: &ShotSource,
-    positions: &[usize],
-    program: &str,
-    task_id: &str,
-    cancel: &Arc<AtomicBool>,
-    report: impl FnMut(usize),
-) -> AppResult<Vec<Vec<f32>>> {
-    if positions.is_empty() {
-        return Ok(Vec::new());
+// Integer-coordinate, center-aligned bilinear resampling. CSES calculation and
+// selection order remain unchanged.
+fn downsample_rgb(rgb: &[u8]) -> AppResult<Vec<u8>> {
+    const INPUT: usize = 256;
+    if rgb.is_empty() || rgb.len() % (INPUT * INPUT * 3) != 0 {
+        return Err(inference_error("Invalid shared storyboard RGB"));
     }
-    let args = frame_decode_args(source, positions, SIDE);
-    decode::embed_stream(app, program, args, task_id, cancel, positions.len(), report)
+    static AXIS: OnceLock<[(usize, usize, u32); SIDE]> = OnceLock::new();
+    let axis = AXIS.get_or_init(|| {
+        std::array::from_fn(|x| {
+            let numerator = (2 * x + 1) * INPUT - SIDE;
+            let left = numerator / (2 * SIDE);
+            (
+                left,
+                (left + 1).min(INPUT - 1),
+                (numerator % (2 * SIDE)) as u32,
+            )
+        })
+    });
+    let frames = rgb.len() / (INPUT * INPUT * 3);
+    let mut output = vec![0; frames * SIDE * SIDE * 3];
+    let denominator = (2 * SIDE) as u32;
+    let area = denominator * denominator;
+    for (source, target) in rgb
+        .chunks_exact(INPUT * INPUT * 3)
+        .zip(output.chunks_exact_mut(SIDE * SIDE * 3))
+    {
+        for (y, &(top, bottom, wy)) in axis.iter().enumerate() {
+            for (x, &(left, right, wx)) in axis.iter().enumerate() {
+                for c in 0..3 {
+                    let a = u32::from(source[(top * INPUT + left) * 3 + c]);
+                    let b = u32::from(source[(top * INPUT + right) * 3 + c]);
+                    let d = u32::from(source[(bottom * INPUT + left) * 3 + c]);
+                    let e = u32::from(source[(bottom * INPUT + right) * 3 + c]);
+                    let value = (a * (denominator - wx) + b * wx) * (denominator - wy)
+                        + (d * (denominator - wx) + e * wx) * wy;
+                    target[(y * SIDE + x) * 3 + c] = ((value + area / 2) / area) as u8;
+                }
+            }
+        }
+    }
+    Ok(output)
+}
+
+fn encode_shot_pixels(
+    app: &tauri::AppHandle,
+    stream: &mut decode::FrameStream,
+    pixels: &mut Vec<u8>,
+    positions: &[usize],
+    cancel: &AtomicBool,
+    mut report: impl FnMut(usize),
+) -> AppResult<Vec<Vec<f32>>> {
+    const FRAME: usize = 256 * 256 * 3;
+    let mut output = Vec::with_capacity(positions.len());
+    while output.len() < positions.len() {
+        let end = (output.len() + preferred_batch(positions.len() - output.len(), cancel)?)
+            .min(positions.len());
+        let batch = &positions[output.len()..end];
+        let needed = batch.iter().max().copied().unwrap() + 1;
+        if needed > pixels.len() / FRAME {
+            stream.append_frames(pixels, needed - pixels.len() / FRAME, cancel)?;
+        }
+        let mut rgb = Vec::with_capacity(batch.len() * FRAME);
+        for &position in batch {
+            rgb.extend_from_slice(&pixels[position * FRAME..(position + 1) * FRAME]);
+        }
+        output.extend(embed(app, &downsample_rgb(&rgb)?, cancel)?);
+        report(output.len());
+    }
+    Ok(output)
+}
+
+// One continuous decoder per run of adjacent uncached shots. Group boundaries
+// are also validation boundaries, allowing the next media to prefetch while the
+// preceding media is indexed. Full-shot RGB is retained only by the consumer.
+fn selection_decode_jobs(
+    sources: &[ShotSource],
+    groups: &[Vec<usize>],
+    cached: &[Option<Arc<cache::ShotData>>],
+) -> Vec<decode::DecodeJob> {
+    let mut jobs: Vec<decode::DecodeJob> = Vec::new();
+    for group in groups {
+        let mut previous = None;
+        let mut seen = HashSet::new();
+        for &i in group {
+            let source = &sources[i];
+            if !seen.insert((source.shot.start_frame, source.shot.end_frame)) {
+                continue;
+            }
+            if cached[i].is_some() {
+                previous = None;
+                continue;
+            }
+            if previous.is_some_and(|last: usize| {
+                sources[last].shot.end_frame.checked_add(1) == Some(source.shot.start_frame)
+            }) {
+                let job = jobs.last_mut().unwrap();
+                job.count += source.frames;
+                let frames_arg = job.args.iter().position(|a| a == "-frames:v").unwrap() + 1;
+                job.args[frames_arg] = job.count.to_string();
+            } else {
+                jobs.push(decode::DecodeJob {
+                    args: decode_args(source, 0, source.frames, 256, None),
+                    count: source.frames,
+                    completed_shots: 0,
+                    rgb: None,
+                });
+            }
+            previous = Some(i);
+        }
+    }
+    jobs
+}
+
+#[derive(Clone)]
+struct SelectedPixels {
+    frames: Vec<usize>,
+    rgb: Vec<u8>,
+}
+
+struct IndexWork {
+    group: Vec<usize>,
+    selections: Vec<Vec<usize>>,
+    pixels: HashMap<usize, SelectedPixels>,
+}
+
+fn selected_pixel_jobs(
+    sources: &[ShotSource],
+    work: &IndexWork,
+    pending: &[index::PendingShot],
+) -> AppResult<Vec<decode::DecodeJob>> {
+    let mut jobs = Vec::new();
+    let mut position = 0;
+    while position < pending.len() {
+        let shot = &pending[position];
+        let source_index = work.group[shot.position];
+        if let Some(pixels) = work.pixels.get(&source_index) {
+            let source = &sources[source_index];
+            let mut rgb = Vec::with_capacity(shot.frames.len() * 256 * 256 * 3);
+            for &frame in &shot.frames {
+                let slot = pixels
+                    .frames
+                    .binary_search(&(source.shot.start_frame + frame))
+                    .map_err(|_| inference_error("Missing selected storyboard pixels"))?;
+                rgb.extend_from_slice(
+                    &pixels.rgb[slot * 256 * 256 * 3..(slot + 1) * 256 * 256 * 3],
+                );
+            }
+            jobs.push(decode::DecodeJob {
+                args: Vec::new(),
+                count: shot.frames.len(),
+                completed_shots: position + 1,
+                rgb: Some(rgb),
+            });
+            position += 1;
+        } else {
+            let start = position;
+            while position < pending.len()
+                && !work
+                    .pixels
+                    .contains_key(&work.group[pending[position].position])
+            {
+                position += 1;
+            }
+            let mut missing = selected_decode_jobs(sources, &work.group, &pending[start..position]);
+            for job in &mut missing {
+                job.completed_shots += start;
+            }
+            jobs.extend(missing);
+        }
+    }
+    Ok(jobs)
 }
 
 // Coalesce nearby selected frames across shots, but seek over long sparse gaps.
@@ -538,6 +748,7 @@ fn selected_decode_jobs(
             args: frame_decode_args(source, &positions, 256),
             count: positions.len(),
             completed_shots,
+            rgb: None,
         });
         absolute.clear();
     };
@@ -653,101 +864,199 @@ pub(crate) async fn select_storyboard_frames(
             };
             let total = sources.len();
             report(0.0, total);
-            let progress = std::cell::RefCell::new(BuildProgress { total, report });
-            let mut selections = Vec::with_capacity(total);
-            let mut vision_released = false;
-            // Finish selection across the scope before spending the second
-            // half of the task on the media-level SigLIP2 indexes.
-            for (position, source) in sources.iter().enumerate() {
-                ensure_not_cancelled(cancel)?;
-                let budget = cses::Parameters::for_shot(source.frames, source.rate).scored;
-                let mut observed = 0;
-                let data = cache::get_or_build(&root, source, cancel, |available| {
-                    if !vision_released {
-                        siglip::release_vision_sessions(cancel)?;
-                        vision_released = true;
-                    }
-                    cses::select(source.frames, source.rate, cancel, |positions| {
-                        let vectors = encode_missing(
-                            positions,
-                            source.shot.start_frame,
-                            available,
-                            |missing| {
-                                let reused = positions.len() - missing.len();
-                                decode_and_embed(
-                                    &app,
-                                    source,
-                                    missing,
-                                    &program,
-                                    &task_id,
-                                    &token,
-                                    |encoded| {
-                                        let fraction = (observed + reused + encoded) as f64
-                                            / (budget + 1) as f64;
-                                        progress.borrow_mut().selection(position as f64 + fraction);
+            let progress = Mutex::new(BuildProgress {
+                total,
+                report,
+                selected: 0.0,
+                indexed: 0.0,
+            });
+            let groups = media_groups(&sources);
+            let cached: Vec<_> = sources
+                .iter()
+                .map(|source| cache::read(&root, &source.identity))
+                .collect();
+            let mut stream = decode::FrameStream::start(
+                decode::StreamContext {
+                    app: &app,
+                    program: &program,
+                    task_id: &task_id,
+                    cancel: &token,
+                },
+                selection_decode_jobs(&sources, &groups, &cached),
+            );
+            // Each encoder owns its own session lock. A bounded media handoff
+            // lets SigLIP2 for media A overlap selection/decoding for media B.
+            std::thread::scope(|scope| {
+                let (sender, receiver) = std::sync::mpsc::sync_channel::<IndexWork>(1);
+                let worker = scope.spawn(|| -> AppResult<Vec<SelectedShotFrames>> {
+                    let mut output = Vec::with_capacity(total);
+                    let mut processed = 0;
+                    for work in receiver {
+                        ensure_not_cancelled(cancel)?;
+                        let requests: Vec<_> = work
+                            .group
+                            .iter()
+                            .zip(&work.selections)
+                            .map(|(&i, frames)| index::ShotRequest {
+                                start_frame: sources[i].shot.start_frame,
+                                end_frame: sources[i].shot.end_frame,
+                                frames: frames.clone(),
+                            })
+                            .collect();
+                        index::get_or_build(
+                            &semantic_root,
+                            &sources[work.group[0]].identity,
+                            &requests,
+                            cancel,
+                            |completed| {
+                                progress
+                                    .lock()
+                                    .unwrap()
+                                    .indexing(processed as f64 + completed)
+                            },
+                            |pending, publish| {
+                                decode::embed_jobs(
+                                    decode::StreamContext {
+                                        app: &app,
+                                        program: &program,
+                                        task_id: &task_id,
+                                        cancel: &token,
                                     },
+                                    selected_pixel_jobs(&sources, &work, pending)?,
+                                    256,
+                                    |remaining| siglip::preferred_batch(remaining, cancel),
+                                    |rgb| siglip::embed(&app, rgb, cancel),
+                                    publish,
                                 )
                             },
                         )?;
-                        observed += positions.len();
-                        progress
-                            .borrow_mut()
-                            .selection(position as f64 + observed as f64 / (budget + 1) as f64);
-                        Ok(vectors)
-                    })
-                })?;
-                selections.push(data.selection.selected_frames());
-                progress.borrow_mut().selection((position + 1) as f64);
-            }
-            // Only one vision encoder runs in each stage. Free DINOv3's GPU
-            // allocations before SigLIP2 specializes its throughput batches.
-            if let Some(engine) = model_guard(cancel)?.as_mut() {
-                engine.sessions.clear();
-            }
-            let mut output = Vec::with_capacity(total);
-            let mut processed = 0;
-            // Every media source shares one directory of size-rotated index shards.
-            for group in media_groups(&sources) {
-                ensure_not_cancelled(cancel)?;
-                let requests = group
-                    .iter()
-                    .map(|&index| index::ShotRequest {
-                        start_frame: sources[index].shot.start_frame,
-                        end_frame: sources[index].shot.end_frame,
-                        frames: selections[index].clone(),
-                    })
-                    .collect::<Vec<_>>();
-                index::get_or_build(
-                    &semantic_root,
-                    &sources[group[0]].identity,
-                    &requests,
-                    cancel,
-                    |completed| progress.borrow_mut().indexing(processed as f64 + completed),
-                    |pending, publish| {
-                        decode::embed_jobs(
-                            decode::StreamContext {
-                                app: &app,
-                                program: &program,
-                                task_id: &task_id,
-                                cancel: &token,
-                            },
-                            selected_decode_jobs(&sources, &group, pending),
-                            256,
-                            |remaining| siglip::preferred_batch(remaining, cancel),
-                            |rgb| siglip::embed(&app, rgb, cancel),
-                            publish,
-                        )
-                    },
-                )?;
-                processed += group.len();
-                for &index in &group {
-                    output.push(SelectedShotFrames {
-                        id: sources[index].shot.id.clone(),
-                        frames: selections[index].clone(),
-                    });
+                        processed += work.group.len();
+                        for (&i, frames) in work.group.iter().zip(work.selections) {
+                            output.push(SelectedShotFrames {
+                                id: sources[i].shot.id.clone(),
+                                frames,
+                            });
+                        }
+                    }
+                    Ok(output)
+                });
+                let selected = (|| -> AppResult<()> {
+                    let mut completed = 0;
+                    for group in groups {
+                        let mut work = IndexWork {
+                            group: group.clone(),
+                            selections: Vec::new(),
+                            pixels: HashMap::new(),
+                        };
+                        let mut records = Vec::new();
+                        let mut prepared =
+                            HashMap::<(usize, usize), (Arc<cache::ShotData>, usize)>::new();
+                        for (position, &i) in group.iter().enumerate() {
+                            ensure_not_cancelled(cancel)?;
+                            let source = &sources[i];
+                            let range = (source.shot.start_frame, source.shot.end_frame);
+                            let duplicate = prepared.get(&range).cloned();
+                            let mut rgb = Vec::new();
+                            let budget =
+                                cses::Parameters::for_shot(source.frames, source.rate).scored;
+                            let mut observed = 0;
+                            let data = if let Some(data) = &cached[i] {
+                                Arc::clone(data)
+                            } else if let Some((data, _)) = &duplicate {
+                                Arc::clone(data)
+                            } else {
+                                let data = cache::prepare(&root, source, cancel, |available| {
+                                    cses::select(source.frames, source.rate, cancel, |positions| {
+                                        let vectors = encode_missing(
+                                            positions,
+                                            source.shot.start_frame,
+                                            available,
+                                            |missing| {
+                                                let reused = positions.len() - missing.len();
+                                                encode_shot_pixels(
+                                                    &app,
+                                                    &mut stream,
+                                                    &mut rgb,
+                                                    missing,
+                                                    cancel,
+                                                    |encoded| {
+                                                        let fraction = (observed + reused + encoded)
+                                                            as f64
+                                                            / (budget + 1) as f64;
+                                                        progress.lock().unwrap().selection(
+                                                            (completed + position) as f64
+                                                                + fraction,
+                                                        );
+                                                    },
+                                                )
+                                            },
+                                        )?;
+                                        observed += positions.len();
+                                        progress.lock().unwrap().selection(
+                                            (completed + position) as f64
+                                                + observed as f64 / (budget + 1) as f64,
+                                        );
+                                        Ok(vectors)
+                                    })
+                                })?;
+                                // Missing probe endpoints can already have cached
+                                // vectors. Still consume/cache the rest of this shot
+                                // once, so acquisition and SigLIP2 never reseek it.
+                                let missing = source.frames - rgb.len() / (256 * 256 * 3);
+                                stream.append_frames(&mut rgb, missing, cancel)?;
+                                records.push(Arc::clone(&data));
+                                data
+                            };
+                            let frames = data.selection.selected_frames();
+                            if !rgb.is_empty() {
+                                let mut selected_rgb =
+                                    Vec::with_capacity(frames.len() * 256 * 256 * 3);
+                                for &frame in &frames {
+                                    let offset = (frame - source.shot.start_frame) * 256 * 256 * 3;
+                                    selected_rgb
+                                        .extend_from_slice(&rgb[offset..offset + 256 * 256 * 3]);
+                                }
+                                work.pixels.insert(
+                                    i,
+                                    SelectedPixels {
+                                        frames: frames.clone(),
+                                        rgb: selected_rgb,
+                                    },
+                                );
+                            } else if let Some((_, original)) = duplicate {
+                                if let Some(pixels) = work.pixels.get(&original).cloned() {
+                                    work.pixels.insert(i, pixels);
+                                }
+                            }
+                            prepared.entry(range).or_insert((Arc::clone(&data), i));
+                            work.selections.push(frames);
+                        }
+                        // All merged processes for this media must succeed before
+                        // either cache can expose the inferred results.
+                        stream.validate(cancel)?;
+                        for record in records {
+                            cache::commit(&root, &record, cancel)?;
+                        }
+                        completed += group.len();
+                        progress.lock().unwrap().selection(completed as f64);
+                        sender
+                            .send(work)
+                            .map_err(|_| inference_error("Storyboard indexing worker stopped"))?;
+                    }
+                    Ok(())
+                })();
+                drop(sender);
+                drop(stream);
+                let indexed = worker
+                    .join()
+                    .map_err(|_| inference_error("Storyboard indexing worker panicked"))?;
+                // Prefer the underlying encoder error if it closed the handoff.
+                if let Err(error) = indexed {
+                    return Err(error);
                 }
-            }
-            Ok(output)
+                selected?;
+                indexed
+            })
         },
     )
     .await
@@ -847,6 +1156,64 @@ mod tests {
     use super::*;
 
     #[test]
+    fn shared_rgb_resize_preserves_frame_order_channels_and_constant_pixels() {
+        let mut pixels = Vec::new();
+        for color in [[10, 60, 240], [255, 0, 127]] {
+            for _ in 0..256 * 256 {
+                pixels.extend_from_slice(&color);
+            }
+        }
+        let resized = downsample_rgb(&pixels).unwrap();
+        assert_eq!(resized.len(), 2 * SIDE * SIDE * 3);
+        for (frame, color) in resized
+            .chunks_exact(SIDE * SIDE * 3)
+            .zip([[10, 60, 240], [255, 0, 127]])
+        {
+            assert!(frame.chunks_exact(3).all(|pixel| pixel == color));
+        }
+        let ramp: Vec<_> = (0..256)
+            .flat_map(|_| (0..256u16).flat_map(|x| [x as u8; 3]))
+            .collect();
+        let resized = downsample_rgb(&ramp).unwrap();
+        for x in 0..SIDE {
+            let expected = (((2 * x + 1) as f64 * 256.0 / (2 * SIDE) as f64) - 0.5).round() as u8;
+            assert_eq!(&resized[x * 3..x * 3 + 3], &[expected; 3]);
+        }
+        assert!(downsample_rgb(&[]).is_err());
+        assert!(downsample_rgb(&pixels[..pixels.len() - 1]).is_err());
+    }
+
+    #[test]
+    fn imported_fingerprint_validation_preserves_nanosecond_cache_identity() {
+        let original = canonical_media_timestamp(1000, 123, 1000, Duration::new(123, 1)).unwrap();
+        let touched =
+            canonical_media_timestamp(1000, 123, 1000, Duration::new(123, 999_999_999)).unwrap();
+        assert_eq!(original, Some(123_000_000_001));
+        assert_eq!(touched, Some(123_999_999_999));
+        assert!(canonical_media_timestamp(1000, 123, 1001, Duration::new(123, 1)).is_err());
+        assert!(canonical_media_timestamp(1000, 123, 1000, Duration::new(124, 1)).is_err());
+        assert!(canonical_media_timestamp(-1, 123, 1000, Duration::new(123, 1)).is_err());
+    }
+
+    #[test]
+    fn progress_combines_overlapping_media_stages_without_jumps_or_regression() {
+        let mut updates = Vec::new();
+        let mut progress = BuildProgress {
+            total: 4,
+            selected: 0.0,
+            indexed: 0.0,
+            report: |completed, _| updates.push(completed),
+        };
+        progress.selection(2.0);
+        progress.indexing(0.5);
+        progress.selection(2.5);
+        progress.indexing(2.0);
+        progress.selection(4.0);
+        progress.indexing(4.0);
+        assert_eq!(updates, vec![1.0, 1.25, 1.5, 2.25, 3.0, 4.0]);
+    }
+
+    #[test]
     fn selected_decode_jobs_coalesce_neighbors_and_seek_over_sparse_gaps() {
         let source = |start_frame, end_frame| ShotSource {
             shot: SemanticShot {
@@ -872,6 +1239,31 @@ mod tests {
             frames: end_frame - start_frame + 1,
         };
         let sources = [source(100, 149), source(150, 199), source(1000, 1800)];
+        let duplicates = [source(100, 149), source(100, 149), source(150, 199)];
+        let deduplicated =
+            selection_decode_jobs(&duplicates, &[vec![0, 1, 2]], &[None, None, None]);
+        assert_eq!(deduplicated.len(), 1);
+        assert_eq!(
+            deduplicated[0].count, 100,
+            "repeated panel requests must not decode or sample the shot again"
+        );
+        let full = selection_decode_jobs(&sources, &[vec![0, 1, 2]], &[None, None, None]);
+        assert_eq!(
+            full.iter().map(|job| job.count).collect::<Vec<_>>(),
+            vec![100, 801]
+        );
+        assert!(full.iter().all(|job| job.rgb.is_none()));
+        assert!(full[0]
+            .args
+            .iter()
+            .any(|arg| arg == "scale=256:256:flags=bilinear,format=rgb24"));
+        #[cfg(windows)]
+        assert!(full[0]
+            .args
+            .windows(2)
+            .any(|args| args == ["-hwaccel", "d3d11va"]));
+        let split = selection_decode_jobs(&sources, &[vec![0], vec![1, 2]], &[None, None, None]);
+        assert_eq!(split.len(), 3, "media boundaries cannot share a process");
         let pending = [
             index::PendingShot {
                 position: 0,
@@ -886,6 +1278,41 @@ mod tests {
                 frames: vec![0, 400, 800],
             },
         ];
+        let work = IndexWork {
+            group: vec![0, 1, 2],
+            selections: Vec::new(),
+            pixels: HashMap::from([
+                (
+                    0,
+                    SelectedPixels {
+                        frames: vec![100, 125],
+                        rgb: vec![7; 2 * 256 * 256 * 3],
+                    },
+                ),
+                (
+                    2,
+                    SelectedPixels {
+                        frames: vec![1000, 1400, 1800],
+                        rgb: [
+                            vec![8; 256 * 256 * 3],
+                            vec![9; 256 * 256 * 3],
+                            vec![10; 256 * 256 * 3],
+                        ]
+                        .concat(),
+                    },
+                ),
+            ]),
+        };
+        let mixed = selected_pixel_jobs(&sources, &work, &pending).unwrap();
+        assert_eq!(
+            mixed
+                .iter()
+                .map(|job| (job.count, job.completed_shots, job.rgb.is_some()))
+                .collect::<Vec<_>>(),
+            vec![(2, 1, true), (2, 2, false), (3, 3, true)]
+        );
+        assert!(mixed[0].args.is_empty());
+        assert_eq!(mixed[2].rgb.as_ref().unwrap()[256 * 256 * 3], 9);
         let jobs = selected_decode_jobs(&sources, &[0, 1, 2], &pending);
         assert_eq!(
             jobs.iter()
@@ -954,6 +1381,8 @@ mod tests {
         let mut updates = Vec::new();
         let mut progress = BuildProgress {
             total: 2,
+            selected: 0.0,
+            indexed: 0.0,
             report: |completed, total| updates.push((completed, total)),
         };
         // A partial selection, a completed selection, and a cached selection.
