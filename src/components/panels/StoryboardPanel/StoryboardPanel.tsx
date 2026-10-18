@@ -3634,6 +3634,7 @@ export function StoryboardPanel() {
           semanticSearchAvailable
             ? {
                 threshold: semanticThreshold,
+                thresholdDecimals: 3,
                 onThresholdChange: setSemanticThreshold,
                 available: hasSemanticResults,
               }

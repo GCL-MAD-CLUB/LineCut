@@ -549,7 +549,7 @@ export function StoryboardListView({
                   </span>
                   {similarityScores && (
                     <span className="shot-similarity-cell" role="cell">
-                      {similarityScores.get(shot.id)?.toFixed(3) ?? "-"}
+                      {similarityScores.get(shot.id)?.toFixed(5) ?? "-"}
                     </span>
                   )}
                   <span

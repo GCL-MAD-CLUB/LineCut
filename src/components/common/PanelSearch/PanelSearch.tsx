@@ -46,7 +46,12 @@ interface PanelSearchProps {
   onScopeChange?: (scope: SearchScope) => void;
   onMatchNumberChange?: (matchNumber: number) => void;
   onNavigate: (direction: -1 | 1) => void;
-  semantic?: { threshold: number; onThresholdChange: (value: number) => void; available: boolean };
+  semantic?: {
+    threshold: number;
+    thresholdDecimals?: 2 | 3;
+    onThresholdChange: (value: number) => void;
+    available: boolean;
+  };
 }
 
 export function PanelSearch({
@@ -75,6 +80,8 @@ export function PanelSearch({
   } | null>(null);
   const [matchDraft, setMatchDraft] = useState<string | null>(null);
   const [thresholdDraft, setThresholdDraft] = useState<string | null>(null);
+  const thresholdDecimals = semantic?.thresholdDecimals ?? 2;
+  const thresholdScale = 10 ** thresholdDecimals;
   function commitThreshold() {
     if (!semantic?.available) {
       setThresholdDraft(null);
@@ -83,7 +90,9 @@ export function PanelSearch({
     if (thresholdDraft !== null && thresholdDraft.trim()) {
       const value = Number(thresholdDraft);
       if (Number.isFinite(value))
-        semantic?.onThresholdChange(Math.round(Math.min(1, Math.max(0, value)) * 100) / 100);
+        semantic.onThresholdChange(
+          Math.round(Math.min(1, Math.max(0, value)) * thresholdScale) / thresholdScale,
+        );
     }
     setThresholdDraft(null);
   }
@@ -159,7 +168,7 @@ export function PanelSearch({
             type="range"
             min={0}
             max={1}
-            step={0.01}
+            step={1 / thresholdScale}
             value={semantic.threshold}
             disabled={disabled || !semantic.available}
             aria-label="调整语义匹配度阈值"
@@ -170,12 +179,13 @@ export function PanelSearch({
           />
           <input
             className="panel-search-count-input panel-search-threshold-input"
-            value={thresholdDraft ?? semantic.threshold.toFixed(2)}
+            value={thresholdDraft ?? semantic.threshold.toFixed(thresholdDecimals)}
+            style={{ width: `${thresholdDecimals + 2}ch` }}
             inputMode="decimal"
             aria-label="语义匹配度阈值，范围 0 到 1"
             disabled={disabled || !semantic.available}
             onFocus={(event) => {
-              setThresholdDraft(semantic.threshold.toFixed(2));
+              setThresholdDraft(semantic.threshold.toFixed(thresholdDecimals));
               event.currentTarget.select();
             }}
             onChange={(event) => setThresholdDraft(event.currentTarget.value)}
