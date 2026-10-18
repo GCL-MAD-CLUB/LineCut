@@ -209,7 +209,7 @@ mod tests {
     #[test]
     fn snapshots_only_changed_content_and_keeps_versions_per_project() {
         let cache_root =
-            std::env::temp_dir().join(format!("linecut-auto-save-test-{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("locution-pro-auto-save-test-{}", Uuid::new_v4()));
         fs::create_dir_all(&cache_root).unwrap();
 
         let first = write_snapshot(&cache_root, "Demo.lcp", &workspace("one"), "p-1", 2)
@@ -252,7 +252,7 @@ mod tests {
     #[test]
     fn independent_directory_and_optional_current_project_save() {
         let root =
-            std::env::temp_dir().join(format!("linecut-auto-save-options-{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("locution-pro-auto-save-options-{}", Uuid::new_v4()));
         let directory = root.join("custom-auto-save");
         let current = root.join("Current.lcp");
         crate::project_file::write_project_file(&current, workspace("original"), "p-1").unwrap();
@@ -275,7 +275,7 @@ mod tests {
             "original"
         );
         assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
-        assert!(!directory.join("LineCut Auto-Save").exists());
+        assert!(!directory.join("Locution Pro Auto-Save").exists());
 
         // The snapshot is unchanged, but enabling current-project saving must
         // still write the document, preserving its identity.
@@ -298,7 +298,7 @@ mod tests {
     #[test]
     fn failed_snapshot_does_not_replace_current_project() {
         let root =
-            std::env::temp_dir().join(format!("linecut-auto-save-failure-{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("locution-pro-auto-save-failure-{}", Uuid::new_v4()));
         let current = root.join("Current.lcp");
         crate::project_file::write_project_file(&current, workspace("original"), "p-1").unwrap();
         let blocked = root.join("blocked");

@@ -1,4 +1,4 @@
-const PROCESSOR_NAME = "linecut-shuttle-audio";
+const PROCESSOR_NAME = "locution-pro-shuttle-audio";
 const GRAIN_SIZE = 4096;
 const GRAIN_HOP = 3072;
 const CROSSFADE_FRAMES = GRAIN_SIZE - GRAIN_HOP;

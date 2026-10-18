@@ -316,7 +316,7 @@ fn init_storyboard_ort(runtime: &StoryboardRuntimePaths) -> AppResult<()> {
     let onnxruntime = runtime.onnxruntime.to_string_lossy().into_owned();
     let init_result = std::panic::catch_unwind(|| {
         ort::init_from(onnxruntime)
-            .with_name("linecut-transnetv2")
+            .with_name("locution-pro-transnetv2")
             .with_telemetry(false)
             .commit()
     });
@@ -1235,7 +1235,7 @@ mod tests {
 
         prepend_runtime_path(&runtime_dir);
         ort::init_from(onnxruntime)
-            .with_name("linecut-transnetv2-cpu-test")
+            .with_name("locution-pro-transnetv2-cpu-test")
             .with_telemetry(false)
             .commit()
             .expect("packaged ONNX Runtime must initialize");
@@ -1347,7 +1347,7 @@ mod tests {
 
         prepend_runtime_path(&runtime_dir);
         ort::init_from(onnxruntime)
-            .with_name("linecut-transnetv2-directml-test")
+            .with_name("locution-pro-transnetv2-directml-test")
             .with_telemetry(false)
             .commit()
             .expect("packaged ONNX Runtime must initialize");

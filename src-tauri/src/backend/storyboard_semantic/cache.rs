@@ -312,7 +312,7 @@ mod tests {
     struct TestRoot(PathBuf);
     impl TestRoot {
         fn new() -> Self {
-            Self(env::temp_dir().join(format!("linecut-keyframe-test-{}", Uuid::new_v4())))
+            Self(env::temp_dir().join(format!("locution-pro-keyframe-test-{}", Uuid::new_v4())))
         }
     }
     impl Drop for TestRoot {

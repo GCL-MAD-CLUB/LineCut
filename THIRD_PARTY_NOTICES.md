@@ -1,15 +1,15 @@
 # Third-party notices
 
-## Linecut UI Sans
+## Locution Pro UI Sans
 
-The bundled `src/assets/fonts/linecut-ui-sans-vf.woff2` is the Simplified Chinese
+The bundled `src/assets/fonts/locution-pro-ui-sans-vf.woff2` is the Simplified Chinese
 face extracted from Adobe Source Han Sans's `SourceHanSans-VF.ttf.ttc`, converted
 to WOFF2 without character subsetting. It retains the variable weight range
-250–900 and is renamed Linecut UI Sans to respect the reserved font name.
+250–900 and is renamed Locution Pro UI Sans to respect the reserved font name.
 
 Source Han Sans is copyright 2014–2025 Adobe and is licensed under the SIL Open
 Font License 1.1. The full license is included in `src/assets/fonts/OFL.txt` and
-installed as `licenses/linecut-ui-sans-OFL.txt`.
+installed as `licenses/locution-pro-ui-sans-OFL.txt`.
 
 - <https://github.com/adobe-fonts/source-han-sans>
 
@@ -18,7 +18,7 @@ installed as `licenses/linecut-ui-sans-OFL.txt`.
 The optional bundled `ffmpeg-x86_64-pc-windows-msvc.exe` and
 `ffprobe-x86_64-pc-windows-msvc.exe` are FFmpeg 8.0.1 essentials builds. Their
 own `-L` output identifies them as GPLv3-or-later builds (`--enable-gpl` and
-`--enable-version3`). They are separate executable programs invoked by LineCut.
+`--enable-version3`). They are separate executable programs invoked by Locution Pro.
 
 FFmpeg is copyright The FFmpeg developers and is licensed under the GNU General
 Public License, version 3 or (at your option) any later version. Its license and

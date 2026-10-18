@@ -4,7 +4,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const localReleaseSecret = join(root, "src-tauri", ".linecut-project-build-secret-v1.local");
+const localReleaseSecret = join(root, "src-tauri", ".locution-pro-project-build-secret-v1.local");
+const legacyReleaseSecret = join(root, "src-tauri", ".linecut-project-build-secret-v1.local");
 const prettierCli = join(root, "node_modules", "prettier", "bin", "prettier.cjs");
 const tauriCli = join(root, "node_modules", "@tauri-apps", "cli", "tauri.js");
 const args = process.argv.slice(2);
@@ -19,12 +20,19 @@ if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) {
 }
 
 if (version.includes("+")) {
-  throw new Error("Build metadata is not supported in LineCut release tags or installer names");
+  throw new Error(
+    "Build metadata is not supported in Locution Pro release tags or installer names",
+  );
 }
 
-if (!process.env.LINECUT_PROJECT_BUILD_SECRET_V1 && !existsSync(localReleaseSecret)) {
+if (
+  !process.env.LOCUTION_PRO_PROJECT_BUILD_SECRET_V1 &&
+  !process.env.LINECUT_PROJECT_BUILD_SECRET_V1 &&
+  !existsSync(localReleaseSecret) &&
+  !existsSync(legacyReleaseSecret)
+) {
   throw new Error(
-    "Official release key is missing. Set LINECUT_PROJECT_BUILD_SECRET_V1 or restore src-tauri/.linecut-project-build-secret-v1.local.",
+    "Official release key is missing. Set LOCUTION_PRO_PROJECT_BUILD_SECRET_V1 or restore src-tauri/.locution-pro-project-build-secret-v1.local.",
   );
 }
 
@@ -62,7 +70,7 @@ updateJsonVersion(join(root, "package-lock.json"));
 replaceVersion(join(root, "src-tauri", "Cargo.toml"), /(^\[package\][\s\S]*?^version = )"[^"]+"/m);
 replaceVersion(
   join(root, "src-tauri", "Cargo.lock"),
-  /(^\[\[package\]\]\r?\nname = "linecut"\r?\nversion = )"[^"]+"/m,
+  /(^\[\[package\]\]\r?\nname = "locution-pro"\r?\nversion = )"[^"]+"/m,
 );
 updateJsonVersion(join(root, "src-tauri", "tauri.conf.json"));
 
@@ -85,7 +93,7 @@ const installer = join(
   "release",
   "bundle",
   "nsis",
-  `LineCut_${version}_x64-setup.exe`,
+  `Locution Pro_${version}_x64-setup.exe`,
 );
 if (!existsSync(installer)) {
   throw new Error(`Build completed without the expected installer: ${installer}`);

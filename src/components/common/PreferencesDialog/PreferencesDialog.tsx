@@ -349,8 +349,8 @@ function PreferencesEditor({ onClose }: { onClose: () => void }) {
                     value={draft.auto_save_dir}
                     placeholder={
                       draft.cache_dir
-                        ? `${draft.cache_dir.replace(/[\\/]+$/, "")}/LineCut Auto-Save`
-                        : "使用缓存目录下的 LineCut Auto-Save"
+                        ? `${draft.cache_dir.replace(/[\\/]+$/, "")}/Locution Pro Auto-Save`
+                        : "使用缓存目录下的 Locution Pro Auto-Save"
                     }
                     onChange={(value) =>
                       setDraft((current) => ({ ...current, auto_save_dir: value }))

@@ -1,6 +1,6 @@
 # Error system
 
-LineCut has one typed error pipeline. Classification is declared where an error is created; no
+Locution Pro has one typed error pipeline. Classification is declared where an error is created; no
 layer is allowed to infer a category from an error message.
 
 The application implementation intentionally stays compact:

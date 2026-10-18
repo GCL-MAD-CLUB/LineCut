@@ -6,10 +6,10 @@ import { basename, dirname, join, resolve } from "node:path";
 import test from "node:test";
 
 function fixture(t, additions = {}, extraScripts = {}) {
-  const root = mkdtempSync(join(tmpdir(), "linecut-layout-"));
+  const root = mkdtempSync(join(tmpdir(), "locution-pro-layout-"));
   t.after(() => {
     assert.equal(dirname(resolve(root)), resolve(tmpdir()));
-    assert(basename(root).startsWith("linecut-layout-"));
+    assert(basename(root).startsWith("locution-pro-layout-"));
     rmSync(root, { recursive: true, force: true });
   });
   const files = {

@@ -1,3 +1,5 @@
+import { readAppStorage } from "../../../runtime/storage";
+
 export type SearchHistoryKind = "subtitle" | "storyboard";
 
 const historyLimit = 6;
@@ -14,7 +16,7 @@ function normalizeHistory(value: unknown): string[] {
 
 export function readSearchHistory(kind: SearchHistoryKind, storage?: HistoryStorage): string[] {
   try {
-    const stored = (storage ?? window.localStorage).getItem(`linecut:search-history:${kind}`);
+    const stored = readAppStorage(`locution-pro:search-history:${kind}`, storage);
     return stored ? normalizeHistory(JSON.parse(stored)) : [];
   } catch {
     // History is optional; unavailable storage must not interrupt searching.
@@ -32,7 +34,7 @@ export function rememberSearch(
   const next = normalizeHistory([query, ...history]);
   try {
     (storage ?? window.localStorage).setItem(
-      `linecut:search-history:${kind}`,
+      `locution-pro:search-history:${kind}`,
       JSON.stringify(next),
     );
   } catch {

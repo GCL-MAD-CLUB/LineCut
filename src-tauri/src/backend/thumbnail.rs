@@ -1,4 +1,7 @@
-use super::cache::{hash_name, read_private_cache, write_private_cache};
+use super::cache::{
+    hash_name, promote_private_cache, read_private_cache, read_renamed_private_cache,
+    write_private_cache,
+};
 use super::*;
 
 const ANALYSIS_WIDTH: usize = 96;
@@ -18,20 +21,25 @@ const INDEX_VERSION: u16 = 1;
 const CACHE_PARENT_FOLDER: &str = "Thumbnail Cache";
 const CACHE_INDEX_FOLDER: &str = "Thumbnail Cache Analyses";
 const CACHE_FILES_FOLDER: &str = "Thumbnail Cache Files";
-const CACHE_KEY_CONTEXT: &[u8] = b"linecut-thumbnail-cache-v2";
-const INDEX_KEY_CONTEXT: &[u8] = b"linecut-thumbnail-index-v1";
+const CACHE_KEY_CONTEXT: &[u8] = b"locution-pro-thumbnail-cache-v2";
+const LEGACY_CACHE_KEY_CONTEXT: &[u8] = b"linecut-thumbnail-cache-v2";
+const INDEX_KEY_CONTEXT: &[u8] = b"locution-pro-thumbnail-index-v1";
+const LEGACY_INDEX_KEY_CONTEXT: &[u8] = b"linecut-thumbnail-index-v1";
 const SUBTITLE_THUMBNAIL_WIDTH: usize = 160;
 const SUBTITLE_THUMBNAIL_HEIGHT: usize = 90;
 const SUBTITLE_THUMBNAIL_CACHE_VERSION: u16 = 1;
 const SUBTITLE_THUMBNAIL_CACHE_FOLDER: &str = "Subtitle Thumbnail Cache Files";
-const SUBTITLE_THUMBNAIL_CACHE_KEY_CONTEXT: &[u8] = b"linecut-subtitle-thumbnail-cache-v1";
+const SUBTITLE_THUMBNAIL_CACHE_KEY_CONTEXT: &[u8] = b"locution-pro-subtitle-thumbnail-cache-v1";
+const LEGACY_SUBTITLE_THUMBNAIL_CACHE_KEY_CONTEXT: &[u8] = b"linecut-subtitle-thumbnail-cache-v1";
 const SUBTITLE_THUMBNAIL_BUCKET_US: i64 = 100_000;
 const SUBTITLE_THUMBNAIL_MATCH_TOLERANCE_US: i64 = 100_000;
 // v2: invalidates thumbnails cached at frame-boundary seek times (which could
 // land on the previous frame) so corrected frames are regenerated on upgrade.
 const STORYBOARD_THUMBNAIL_CACHE_VERSION: u16 = 2;
 const STORYBOARD_THUMBNAIL_CACHE_FOLDER: &str = "Storyboard Thumbnail Cache Files";
-const STORYBOARD_THUMBNAIL_CACHE_KEY_CONTEXT: &[u8] = b"linecut-storyboard-thumbnail-cache-v2";
+const STORYBOARD_THUMBNAIL_CACHE_KEY_CONTEXT: &[u8] = b"locution-pro-storyboard-thumbnail-cache-v2";
+const LEGACY_STORYBOARD_THUMBNAIL_CACHE_KEY_CONTEXT: &[u8] =
+    b"linecut-storyboard-thumbnail-cache-v2";
 const MAX_TIMELINE_THUMBNAIL_BYTES: usize = 8 * 1024 * 1024;
 const MAX_TIMELINE_THUMBNAIL_RESOLUTIONS: usize = 3;
 const TIMELINE_THUMBNAIL_TEMP_FOLDER: &str = "Timeline Thumbnail Temporary";
@@ -68,6 +76,7 @@ struct ThumbnailCacheLayout {
     cache_path: PathBuf,
     index_key: String,
     cache_hash: String,
+    legacy: Option<Box<ThumbnailCacheLayout>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -691,10 +700,31 @@ fn report_cover_progress(progress: Option<&CoverProgressCallback>, value: f64) {
 }
 
 fn thumbnail_cache_layout(preferences: &Preferences, fingerprint: &str) -> ThumbnailCacheLayout {
+    let mut layout = thumbnail_cache_layout_with_context(
+        preferences,
+        fingerprint,
+        CACHE_KEY_CONTEXT,
+        INDEX_KEY_CONTEXT,
+    );
+    layout.legacy = Some(Box::new(thumbnail_cache_layout_with_context(
+        preferences,
+        fingerprint,
+        LEGACY_CACHE_KEY_CONTEXT,
+        LEGACY_INDEX_KEY_CONTEXT,
+    )));
+    layout
+}
+
+fn thumbnail_cache_layout_with_context(
+    preferences: &Preferences,
+    fingerprint: &str,
+    context: &[u8],
+    index_context: &[u8],
+) -> ThumbnailCacheLayout {
     let root = configured_cache_root(preferences).join(CACHE_PARENT_FOLDER);
-    let cache_hash = hash_name(CACHE_KEY_CONTEXT, fingerprint.as_bytes());
+    let cache_hash = hash_name(context, fingerprint.as_bytes());
     let shard = &cache_hash[..2];
-    let index_key = hash_name(INDEX_KEY_CONTEXT, shard.as_bytes());
+    let index_key = hash_name(index_context, shard.as_bytes());
     ThumbnailCacheLayout {
         index_path: root
             .join(CACHE_INDEX_FOLDER)
@@ -704,6 +734,7 @@ fn thumbnail_cache_layout(preferences: &Preferences, fingerprint: &str) -> Thumb
             .join(format!("{cache_hash}.lctc")),
         index_key,
         cache_hash,
+        legacy: None,
     }
 }
 
@@ -753,12 +784,28 @@ fn subtitle_thumbnail_cache_layout(
     bucket: i64,
     width: usize,
 ) -> (PathBuf, String) {
+    subtitle_thumbnail_cache_layout_with_context(
+        preferences,
+        fingerprint,
+        bucket,
+        width,
+        SUBTITLE_THUMBNAIL_CACHE_KEY_CONTEXT,
+    )
+}
+
+fn subtitle_thumbnail_cache_layout_with_context(
+    preferences: &Preferences,
+    fingerprint: &str,
+    bucket: i64,
+    width: usize,
+    context: &[u8],
+) -> (PathBuf, String) {
     let cache_key = if width == SUBTITLE_THUMBNAIL_WIDTH {
         format!("{fingerprint}:{bucket}")
     } else {
         format!("{fingerprint}:{bucket}:{width}")
     };
-    let cache_hash = hash_name(SUBTITLE_THUMBNAIL_CACHE_KEY_CONTEXT, cache_key.as_bytes());
+    let cache_hash = hash_name(context, cache_key.as_bytes());
     let path = configured_cache_root(preferences)
         .join(CACHE_PARENT_FOLDER)
         .join(SUBTITLE_THUMBNAIL_CACHE_FOLDER)
@@ -853,10 +900,20 @@ fn read_subtitle_thumbnail_bucket_unlocked(
     let cache_time_us = subtitle_thumbnail_bucket_time(bucket, duration_us);
     let (path, cache_key) =
         subtitle_thumbnail_cache_layout(preferences, fingerprint, bucket, width);
-    let cached = read_private_cache::<CachedSubtitleThumbnail>(
+    let (legacy_path, _) = subtitle_thumbnail_cache_layout_with_context(
+        preferences,
+        fingerprint,
+        bucket,
+        width,
+        LEGACY_SUBTITLE_THUMBNAIL_CACHE_KEY_CONTEXT,
+    );
+    let cached = read_renamed_private_cache::<CachedSubtitleThumbnail>(
         &path,
         &cache_key,
         SUBTITLE_THUMBNAIL_CACHE_KEY_CONTEXT,
+        &legacy_path,
+        &cache_key,
+        LEGACY_SUBTITLE_THUMBNAIL_CACHE_KEY_CONTEXT,
     )?;
     if cached.version != SUBTITLE_THUMBNAIL_CACHE_VERSION
         || cached.time_us != cache_time_us
@@ -917,12 +974,28 @@ fn storyboard_thumbnail_cache_layout(
     time_us: i64,
     width: usize,
 ) -> (PathBuf, String) {
+    storyboard_thumbnail_cache_layout_with_context(
+        preferences,
+        fingerprint,
+        time_us,
+        width,
+        STORYBOARD_THUMBNAIL_CACHE_KEY_CONTEXT,
+    )
+}
+
+fn storyboard_thumbnail_cache_layout_with_context(
+    preferences: &Preferences,
+    fingerprint: &str,
+    time_us: i64,
+    width: usize,
+    context: &[u8],
+) -> (PathBuf, String) {
     let cache_key = if width == SUBTITLE_THUMBNAIL_WIDTH {
         format!("{fingerprint}:{time_us}")
     } else {
         format!("{fingerprint}:{time_us}:{width}")
     };
-    let cache_hash = hash_name(STORYBOARD_THUMBNAIL_CACHE_KEY_CONTEXT, cache_key.as_bytes());
+    let cache_hash = hash_name(context, cache_key.as_bytes());
     let path = configured_cache_root(preferences)
         .join(CACHE_PARENT_FOLDER)
         .join(STORYBOARD_THUMBNAIL_CACHE_FOLDER)
@@ -961,10 +1034,20 @@ fn read_storyboard_thumbnail_cache(
     let cache_time_us = clamped_storyboard_thumbnail_time(time_us, duration_us);
     let (path, cache_key) =
         storyboard_thumbnail_cache_layout(preferences, fingerprint, cache_time_us, width);
-    let Some(cached) = read_private_cache::<CachedStoryboardThumbnail>(
+    let (legacy_path, _) = storyboard_thumbnail_cache_layout_with_context(
+        preferences,
+        fingerprint,
+        cache_time_us,
+        width,
+        LEGACY_STORYBOARD_THUMBNAIL_CACHE_KEY_CONTEXT,
+    );
+    let Some(cached) = read_renamed_private_cache::<CachedStoryboardThumbnail>(
         &path,
         &cache_key,
         STORYBOARD_THUMBNAIL_CACHE_KEY_CONTEXT,
+        &legacy_path,
+        &cache_key,
+        LEGACY_STORYBOARD_THUMBNAIL_CACHE_KEY_CONTEXT,
     ) else {
         return storyboard_thumbnail_cache_miss(time_us, duration_us);
     };
@@ -998,10 +1081,20 @@ fn write_storyboard_thumbnail_cache(
     let cache_time_us = clamped_storyboard_thumbnail_time(time_us, duration_us);
     let (path, cache_key) =
         storyboard_thumbnail_cache_layout(preferences, fingerprint, cache_time_us, width);
-    if let Some(cached) = read_private_cache::<CachedStoryboardThumbnail>(
+    let (legacy_path, _) = storyboard_thumbnail_cache_layout_with_context(
+        preferences,
+        fingerprint,
+        cache_time_us,
+        width,
+        LEGACY_STORYBOARD_THUMBNAIL_CACHE_KEY_CONTEXT,
+    );
+    if let Some(cached) = read_renamed_private_cache::<CachedStoryboardThumbnail>(
         &path,
         &cache_key,
         STORYBOARD_THUMBNAIL_CACHE_KEY_CONTEXT,
+        &legacy_path,
+        &cache_key,
+        LEGACY_STORYBOARD_THUMBNAIL_CACHE_KEY_CONTEXT,
     ) {
         if cached.version == STORYBOARD_THUMBNAIL_CACHE_VERSION
             && cached.time_us == cache_time_us
@@ -1048,6 +1141,10 @@ fn register_thumbnail_cache(layout: &ThumbnailCacheLayout) -> AppResult<()> {
             "Video cover cache lock is poisoned",
         )
     })?;
+    register_thumbnail_cache_unlocked(layout)
+}
+
+fn register_thumbnail_cache_unlocked(layout: &ThumbnailCacheLayout) -> AppResult<()> {
     let index_parent = layout.index_path.parent().ok_or_else(|| {
         app_error(
             ErrorCode::ThumbnailCacheInvalid,
@@ -1366,7 +1463,7 @@ fn create_timeline_thumbnail_temp_directory(temp_root: &Path) -> AppResult<PathB
         )
     })?;
     remove_stale_timeline_thumbnail_temp_directories(temp_root);
-    let directory = temp_root.join(format!("linecut-thumb-{}", Uuid::new_v4()));
+    let directory = temp_root.join(format!("locution-pro-thumb-{}", Uuid::new_v4()));
     fs::create_dir(&directory).map_err(|error| {
         app_error(
             ErrorCode::ThumbnailExtractionFailed,
@@ -1576,16 +1673,42 @@ fn read_media_thumbnail_cache(
             return None;
         }
     };
+    if let Some(cached) =
+        read_media_thumbnail_cache_at(layout, fingerprint, CACHE_KEY_CONTEXT, INDEX_KEY_CONTEXT)
+    {
+        return Some(cached);
+    }
+    let legacy = layout.legacy.as_ref()?;
+    let cached = read_media_thumbnail_cache_at(
+        legacy,
+        fingerprint,
+        LEGACY_CACHE_KEY_CONTEXT,
+        LEGACY_INDEX_KEY_CONTEXT,
+    )?;
+    if let Err(error) = register_thumbnail_cache_unlocked(layout) {
+        tracing::warn!(detail = %error, "thumbnail index namespace migration deferred");
+    } else {
+        promote_private_cache(&layout.cache_path, fingerprint, CACHE_KEY_CONTEXT, &cached);
+    }
+    Some(cached)
+}
+
+fn read_media_thumbnail_cache_at(
+    layout: &ThumbnailCacheLayout,
+    fingerprint: &str,
+    context: &[u8],
+    index_context: &[u8],
+) -> Option<CachedMediaThumbnail> {
     let index = read_private_cache::<ThumbnailCacheIndex>(
         &layout.index_path,
         &layout.index_key,
-        INDEX_KEY_CONTEXT,
+        index_context,
     )?;
     let entry = index.entries.get(&layout.cache_hash)?;
-    if entry.cache_hash != layout.cache_hash {
+    if index.version != INDEX_VERSION || entry.cache_hash != layout.cache_hash {
         return None;
     }
-    read_private_cache(&layout.cache_path, fingerprint, CACHE_KEY_CONTEXT)
+    read_private_cache(&layout.cache_path, fingerprint, context)
 }
 
 fn write_media_thumbnail_cache(
@@ -1633,8 +1756,116 @@ mod tests {
     use super::*;
 
     #[test]
+    fn old_cover_subtitle_and_storyboard_caches_are_reused_in_new_namespaces() {
+        let root = env::temp_dir().join(format!("locution-thumbnail-migration-{}", Uuid::new_v4()));
+        let preferences = Preferences {
+            cache_dir: root.to_string_lossy().into_owned(),
+            ..Preferences::default()
+        };
+        let layout = thumbnail_cache_layout(&preferences, "media");
+        let legacy = layout.legacy.as_ref().unwrap();
+        let mut index = ThumbnailCacheIndex {
+            version: INDEX_VERSION,
+            entries: HashMap::new(),
+        };
+        index.entries.insert(
+            legacy.cache_hash.clone(),
+            ThumbnailCacheIndexEntry {
+                cache_hash: legacy.cache_hash.clone(),
+                last_accessed_ms: 1,
+            },
+        );
+        write_private_cache(
+            &legacy.index_path,
+            &legacy.index_key,
+            LEGACY_INDEX_KEY_CONTEXT,
+            &index,
+        )
+        .unwrap();
+        write_private_cache(
+            &legacy.cache_path,
+            "media",
+            LEGACY_CACHE_KEY_CONTEXT,
+            &CachedMediaThumbnail {
+                version: CACHE_VERSION,
+                sample_times: vec![0],
+                scores: vec![Some(0.5)],
+                cover: Some(vec![1, 2, 3]),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            read_media_thumbnail_cache(&layout, "media").unwrap().cover,
+            Some(vec![1, 2, 3])
+        );
+        fs::remove_file(&legacy.cache_path).unwrap();
+        assert!(read_media_thumbnail_cache(&layout, "media").is_some());
+
+        let jpeg = vec![0xff, 0xd8, 0xff, 0xd9];
+        let (old_subtitle, key) = subtitle_thumbnail_cache_layout_with_context(
+            &preferences,
+            "media",
+            1,
+            160,
+            LEGACY_SUBTITLE_THUMBNAIL_CACHE_KEY_CONTEXT,
+        );
+        write_private_cache(
+            &old_subtitle,
+            &key,
+            LEGACY_SUBTITLE_THUMBNAIL_CACHE_KEY_CONTEXT,
+            &CachedSubtitleThumbnail {
+                version: SUBTITLE_THUMBNAIL_CACHE_VERSION,
+                time_us: 100_000,
+                jpeg: jpeg.clone(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            read_subtitle_thumbnail_cache(&preferences, "media", 100_000, 1_000_000, 160).bytes,
+            Some(jpeg.clone())
+        );
+        fs::remove_file(old_subtitle).unwrap();
+        assert!(
+            read_subtitle_thumbnail_cache(&preferences, "media", 100_000, 1_000_000, 160)
+                .bytes
+                .is_some()
+        );
+
+        let (old_storyboard, key) = storyboard_thumbnail_cache_layout_with_context(
+            &preferences,
+            "media",
+            200_000,
+            160,
+            LEGACY_STORYBOARD_THUMBNAIL_CACHE_KEY_CONTEXT,
+        );
+        write_private_cache(
+            &old_storyboard,
+            &key,
+            LEGACY_STORYBOARD_THUMBNAIL_CACHE_KEY_CONTEXT,
+            &CachedStoryboardThumbnail {
+                version: STORYBOARD_THUMBNAIL_CACHE_VERSION,
+                time_us: 200_000,
+                jpeg: jpeg.clone(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            read_storyboard_thumbnail_cache(&preferences, "media", 200_000, 1_000_000, 160).bytes,
+            Some(jpeg)
+        );
+        fs::remove_file(old_storyboard).unwrap();
+        assert!(
+            read_storyboard_thumbnail_cache(&preferences, "media", 200_000, 1_000_000, 160)
+                .bytes
+                .is_some()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn completed_legacy_cover_survives_a_different_sampling_schedule() {
-        let root = std::env::temp_dir().join(format!("linecut-legacy-test-{}", Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("locution-pro-legacy-test-{}", Uuid::new_v4()));
         let preferences = Preferences {
             cache_dir: root.to_string_lossy().into_owned(),
             ..Preferences::default()
@@ -1709,13 +1940,13 @@ mod tests {
         assert!(0.9 * COVER_POSITION_DECAY.powi(119) > 0.5);
     }
 
-    // Opt in with LINECUT_TEST_FFMPEG; uses the production graph and cache path.
+    // Opt in with LOCUTION_PRO_TEST_FFMPEG; uses the production graph and cache path.
     #[test]
     fn cover_batch_ffmpeg_regression() {
-        let Ok(program) = std::env::var("LINECUT_TEST_FFMPEG") else {
+        let Ok(program) = std::env::var("LOCUTION_PRO_TEST_FFMPEG") else {
             return;
         };
-        let root = std::env::temp_dir().join(format!("linecut-cover-test-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("locution-pro-cover-test-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let input = root.join("input.mkv");
         let status = std::process::Command::new(&program)

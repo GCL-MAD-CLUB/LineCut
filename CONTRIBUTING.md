@@ -1,4 +1,4 @@
-# 参与 LineCut 开发
+# 参与 Locution Pro 开发
 
 小型修复可以直接提交 Pull Request。较大的功能、项目文件格式变化或依赖新模型、二进制的改动，先在 Issue 或 Discussions 中说明使用场景与设计。
 

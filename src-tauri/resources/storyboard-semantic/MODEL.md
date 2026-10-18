@@ -6,8 +6,9 @@ Selected frames are encoded with `vision_model_fp16.onnx` from
 `onnx-community/siglip2-base-patch16-256-ONNX`, pinned revision
 `d1114256522a37ffa257a0a58017348ab0058db2`. Queries use the paired
 `text_model_int8.onnx` and `tokenizer.json`. Assets live in the `siglip2/`
-subdirectory and are prepared by the same `npm run prepare:storyboard-semantic`
-command and installed by the existing semantic component choice.
+subdirectory, are verified against pinned SHA-256 digests, and are prepared by
+the same `npm run prepare:storyboard-semantic` command and installed by the
+existing semantic component choice.
 
 Vision input is RGB, bilinear resize to 256 × 256, NCHW float32,
 rescale 1/255 and mean/std 0.5. FP16 describes the model weights; the exported
@@ -135,6 +136,11 @@ Pinned revision: `81f43e32cbf964b3c284da6cfd3be9fcba6d82ef`.
 Run `npm run prepare:storyboard-semantic` to download the FP32 ONNX graph,
 external weights, configuration, preprocessing metadata and DINOv3 license,
 and apply the DirectML graph compatibility fix described below.
+Every asset is verified against its pinned upstream SHA-256 digest, both after
+downloading and when it already exists locally; a mismatch is re-downloaded.
+`model.onnx` accepts either the upstream digest or the digest of the prepared
+graph, so the check runs before and after the in-place DirectML patch. Change the
+pinned revisions and their digests together.
 The shared ONNX Runtime and DirectML binaries come from `npm run prepare:transnetv2`.
 The build prepares this component automatically; the existing installer semantic
 component choice controls both subtitle and storyboard models.
@@ -183,7 +189,7 @@ reshapes (`node_view_8` through `node_view_52`, step four). Their shared target
 shape is `[batch, tokens, -1]`, with positive batch/token counts, so this preserves
 the reshape semantics. All weights and other graph fields remain unchanged.
 The small graph is checked on every preparation run; existing downloads are
-upgraded too, without hashing or downloading the external weights again.
+upgraded too, without downloading the external weights again.
 If a larger accelerated batch fails, its size and larger sizes are excluded and
 the same real frames are retried in smaller batches. A failure at two rows uses
 the shared CPU recovery; after recovery, timing samples and GPU sessions are

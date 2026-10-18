@@ -33,7 +33,7 @@ const versions = new Map([
     "src-tauri/Cargo.lock",
     matchVersion(
       "src-tauri/Cargo.lock",
-      /^\[\[package\]\]\r?\nname = "linecut"\r?\nversion = "([^"]+)"/m,
+      /^\[\[package\]\]\r?\nname = "locution-pro"\r?\nversion = "([^"]+)"/m,
     ),
   ],
   ["src-tauri/tauri.conf.json", readJson("src-tauri/tauri.conf.json").version],

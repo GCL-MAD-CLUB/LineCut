@@ -43,7 +43,7 @@ export function SecondaryTopbar<WorkspaceId extends string>({
           <img src={appIconUrl} alt="" className="secondary-topbar-icon" />
           <TaskProgress>
             <div className="secondary-topbar-brand-copy">
-              <strong>LineCut</strong>
+              <strong>Locution Pro</strong>
               <span>对白检索与片段整理</span>
             </div>
           </TaskProgress>

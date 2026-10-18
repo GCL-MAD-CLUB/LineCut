@@ -176,7 +176,7 @@ pub(super) fn decode(bytes: &[u8]) -> AppResult<ProjectFile> {
     if bytes.len() < HEADER_LEN || !recognizes(bytes) {
         return Err(app_error(
             ErrorCode::ProjectFormatInvalid,
-            "Input is not a recognized LineCut V1 project file",
+            "Input is not a recognized Locution Pro V1 project file",
         ));
     }
     let version = u16::from_le_bytes([bytes[8], bytes[9]]);
@@ -184,7 +184,7 @@ pub(super) fn decode(bytes: &[u8]) -> AppResult<ProjectFile> {
     if version != VERSION || family != FORMAT_FAMILY {
         return Err(app_error(
             ErrorCode::ProjectVersionUnsupported,
-            "The legacy decoder only accepts LineCut V1 project files",
+            "The legacy decoder only accepts Locution Pro V1 project files",
         ));
     }
     let payload_len = u64::from_le_bytes(bytes[12..20].try_into().map_err(|_| {

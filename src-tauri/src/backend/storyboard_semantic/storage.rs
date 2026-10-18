@@ -775,7 +775,7 @@ mod tests {
     }
     impl Fixture {
         fn new() -> Self {
-            let root = env::temp_dir().join(format!("linecut-record-log-{}", Uuid::new_v4()));
+            let root = env::temp_dir().join(format!("locution-pro-record-log-{}", Uuid::new_v4()));
             let directory = directory(&root, &"a".repeat(64), b"recipe-model-media-v1").unwrap();
             Self { root, directory }
         }

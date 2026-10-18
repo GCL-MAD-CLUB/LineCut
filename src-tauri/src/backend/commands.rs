@@ -846,7 +846,7 @@ pub(crate) fn open_user_guide() -> CommandResult<()> {
     spawn_system_opener(command).map_err(|error| {
         app_error(
             ErrorCode::DocumentationOpenFailed,
-            format!("Failed to open the LineCut user guide with the system handler: {error}"),
+            format!("Failed to open the Locution Pro user guide with the system handler: {error}"),
         )
     })
 }
@@ -1206,7 +1206,7 @@ mod tests {
     #[test]
     fn media_browser_lists_directories_first_and_link_scan_filters_extensions() {
         let directory = std::env::temp_dir().join(format!(
-            "linecut-media-browser-test-{}",
+            "locution-pro-media-browser-test-{}",
             Uuid::new_v4().simple()
         ));
         fs::create_dir_all(directory.join("folder")).unwrap();

@@ -1,5 +1,5 @@
 // Compile and run only the real resource-copy blocks in an isolated, silent fixture.
-// This does not install LineCut or write its registry entries or shortcuts.
+// This does not install Locution Pro or write its registry entries or shortcuts.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -63,24 +63,24 @@ try {
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
 !include "${nsis(join(root, "src-tauri/windows/semantic-options.nsh"))}"
-Name "LineCut component test"
+Name "Locution Pro component test"
 OutFile "${nsis(executable)}"
 RequestExecutionLevel user
 SilentInstall silent
-Var LineCutBundleFfmpeg
+Var LocutionProBundleFfmpeg
 Function SkipIfPassive
   Abort
 FunctionEnd
 Function .onInit
-  ${template.match(/StrCpy \$LineCutBundleSemantic 1/u)[0]}
-  StrCpy $LineCutBundleFfmpeg 1
+  ${template.match(/StrCpy \$LocutionProBundleSemantic 1/u)[0]}
+  StrCpy $LocutionProBundleFfmpeg 1
   \${GetOptions} $CMDLINE "/SEMANTIC=" $0
   \${IfNot} \${Errors}
-    StrCpy $LineCutBundleSemantic $0
+    StrCpy $LocutionProBundleSemantic $0
   \${EndIf}
   \${GetOptions} $CMDLINE "/FFMPEG=" $0
   \${IfNot} \${Errors}
-    StrCpy $LineCutBundleFfmpeg $0
+    StrCpy $LocutionProBundleFfmpeg $0
   \${EndIf}
 FunctionEnd
 Section

@@ -1,6 +1,6 @@
 @font-face {
-  font-family: "Linecut UI Sans";
-  src: url("./assets/fonts/linecut-ui-sans-vf.woff2") format("woff2");
+  font-family: "Locution Pro UI Sans";
+  src: url("./assets/fonts/locution-pro-ui-sans-vf.woff2") format("woff2");
   font-style: normal;
   font-weight: 250 900;
   font-display: swap;
@@ -15,7 +15,7 @@
   -webkit-font-smoothing: antialiased;
 
   /* Typography */
-  --font-sans: "Linecut UI Sans", sans-serif;
+  --font-sans: "Locution Pro UI Sans", sans-serif;
   --font-song: 宋体;
   --font-mono: Consolas;
 

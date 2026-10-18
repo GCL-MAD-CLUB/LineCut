@@ -1,14 +1,15 @@
 import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
+import { readAppStorage } from "../../runtime/storage";
 import { getProjectExportContext } from "../ProjectSystem";
 import type { ExportClip, ExportResult, ExportSettings, ExportSource } from "./exportTypes";
 
-const exportDirStorageKey = "linecut:export-dir";
+const exportDirStorageKey = "locution-pro:export-dir";
 
 /** Reads the last export directory the user picked, if any. */
 export function readRememberedExportDir() {
   try {
-    return window.localStorage.getItem(exportDirStorageKey) ?? "";
+    return readAppStorage(exportDirStorageKey) ?? "";
   } catch {
     return "";
   }

@@ -21,13 +21,15 @@ const archiveSha256 = "e2aaeaa0fdbc397d4794828086424d4aaa2102cef1fb6874f6ffd29c0
 const maxDownloadAttempts = 4;
 const requestIdleTimeoutMilliseconds = 60_000;
 const downloadTimeoutMilliseconds = 15 * 60_000;
-const expectedArchiveSha256 = process.env.LINECUT_FFMPEG_ARCHIVE_SHA256 ?? archiveSha256;
+const expectedArchiveSha256 = process.env.LOCUTION_PRO_FFMPEG_ARCHIVE_SHA256 ?? archiveSha256;
 const cacheDir = resolve(
-  process.env.LINECUT_FFMPEG_CACHE_DIR ?? join(root, ".cache", "ffmpeg-assets", version),
+  process.env.LOCUTION_PRO_FFMPEG_CACHE_DIR ?? join(root, ".cache", "ffmpeg-assets", version),
 );
 const archivePath = join(cacheDir, archiveName);
 const extractDir = join(cacheDir, "extract");
-const outputDir = resolve(process.env.LINECUT_FFMPEG_OUTPUT_DIR ?? join(root, "src-tauri", "bin"));
+const outputDir = resolve(
+  process.env.LOCUTION_PRO_FFMPEG_OUTPUT_DIR ?? join(root, "src-tauri", "bin"),
+);
 const outputs = {
   "ffmpeg.exe": join(outputDir, "ffmpeg-x86_64-pc-windows-msvc.exe"),
   "ffprobe.exe": join(outputDir, "ffprobe-x86_64-pc-windows-msvc.exe"),
@@ -54,7 +56,7 @@ function download(url, outputPath, redirects = 0) {
       outputStream?.destroy(error);
       rejectOnce(error);
     }, downloadTimeoutMilliseconds);
-    request = https.get(url, { headers: { "User-Agent": "LineCut-build" } }, (response) => {
+    request = https.get(url, { headers: { "User-Agent": "Locution Pro-build" } }, (response) => {
       responseStream = response;
       const status = response.statusCode ?? 0;
       const location = response.headers.location;

@@ -583,7 +583,7 @@ mod tests {
     }
 
     fn root() -> PathBuf {
-        let root = env::temp_dir().join(format!("linecut-semantic-test-{}", Uuid::new_v4()));
+        let root = env::temp_dir().join(format!("locution-pro-semantic-test-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         root
     }
