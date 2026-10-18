@@ -273,7 +273,7 @@ pub(crate) fn init_logging(app: &tauri::AppHandle) -> AppResult<()> {
     })?;
     let file_appender = RollingFileAppender::builder()
         .rotation(Rotation::DAILY)
-        .filename_prefix("linecut")
+        .filename_prefix("locution-pro")
         .filename_suffix("log")
         .max_log_files(LOG_RETENTION_FILES)
         .build(&log_dir)

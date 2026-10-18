@@ -124,7 +124,7 @@ pub(super) fn open(bytes: &[u8]) -> AppResult<OpenedProject> {
     if bytes.len() < HEADER_LEN || !recognizes(bytes) {
         return Err(app_error(
             ErrorCode::ProjectFormatInvalid,
-            "Input is not a recognized encrypted LineCut project file",
+            "Input is not a recognized encrypted Locution Pro project file",
         ));
     }
 

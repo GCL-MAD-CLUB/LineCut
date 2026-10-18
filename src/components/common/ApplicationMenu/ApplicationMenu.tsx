@@ -74,7 +74,7 @@ export interface ApplicationMenuModel {
     history: ApplicationMenuWindowItem;
   };
   help: {
-    lineCutHelp: ApplicationMenuCommand;
+    locutionProHelp: ApplicationMenuCommand;
     showLogFiles: ApplicationMenuCommand;
   };
 }
@@ -524,10 +524,10 @@ export function ApplicationMenu({ model }: ApplicationMenuProps) {
           <PopupMenu className="application-menu-popup" enableMnemonics>
             <PopupMenuItem
               mnemonic="P"
-              disabled={!help.lineCutHelp.enabled}
-              onSelect={select(help.lineCutHelp.execute)}
+              disabled={!help.locutionProHelp.enabled}
+              onSelect={select(help.locutionProHelp.execute)}
             >
-              LineCut 帮助(P)...
+              Locution Pro 帮助(P)...
             </PopupMenuItem>
             <PopupMenuItem
               mnemonic="L"

@@ -14,7 +14,7 @@ function normalizeBase(value: string | undefined) {
 
 export default defineConfig({
   lang: "zh-CN",
-  title: "LineCut 帮助中心",
+  title: "Locution Pro 帮助中心",
   description: "从字幕出发，快速找到并整理视频内容。",
   base: normalizeBase(process.env.DOCS_BASE),
   cleanUrls: false,
@@ -24,7 +24,7 @@ export default defineConfig({
     ["meta", { property: "og:locale", content: "zh_CN" }],
   ],
   themeConfig: {
-    siteTitle: "LineCut 帮助中心",
+    siteTitle: "Locution Pro 帮助中心",
     nav: [
       { text: "新增功能", link: "/release-notes/v0.3.3" },
       { text: "开始使用", link: "/getting-started/first-project" },
@@ -32,7 +32,7 @@ export default defineConfig({
       { text: "项目主页", link: `https://github.com/${repository}` },
     ],
     sidebar: [
-      { text: "LineCut 帮助中心", items: [{ text: "概览", link: "/" }] },
+      { text: "Locution Pro 帮助中心", items: [{ text: "概览", link: "/" }] },
       {
         text: "新增功能",
         collapsed: false,

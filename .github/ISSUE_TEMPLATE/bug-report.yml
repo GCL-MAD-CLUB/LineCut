@@ -1,5 +1,5 @@
 name: Bug 报告
-description: 报告可复现的 LineCut 问题
+description: 报告可复现的 Locution Pro 问题
 title: "[Bug]: "
 labels: [bug]
 body:
@@ -9,7 +9,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: LineCut 版本
+      label: Locution Pro 版本
       description: 可在 GitHub Release 或应用信息中找到。
       placeholder: 例如 0.3.0-alpha.2
     validations:

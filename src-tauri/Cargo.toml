@@ -1,5 +1,5 @@
 [package]
-name = "linecut"
+name = "locution-pro"
 version = "0.3.3"
 description = "Subtitle indexing and media organization tool"
 authors = ["Kotodama"]
@@ -10,7 +10,7 @@ edition = "2021"
 rust-version = "1.85"
 
 [lib]
-name = "linecut_lib"
+name = "locution_pro_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

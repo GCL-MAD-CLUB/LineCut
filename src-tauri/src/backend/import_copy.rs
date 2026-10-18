@@ -133,7 +133,7 @@ mod tests {
     use super::*;
     #[test]
     fn copy_verifies_bytes_and_preserves_existing_names() {
-        let root = std::env::temp_dir().join(format!("linecut-copy-test-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("locution-pro-copy-test-{}", Uuid::new_v4()));
         let destination = root.join("destination");
         fs::create_dir_all(&destination).unwrap();
         let source = root.join("媒体.mp4");
@@ -146,7 +146,7 @@ mod tests {
     }
     #[test]
     fn cancelled_copy_removes_partial_destination() {
-        let root = std::env::temp_dir().join(format!("linecut-copy-test-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("locution-pro-copy-test-{}", Uuid::new_v4()));
         let destination = root.join("destination");
         fs::create_dir_all(&destination).unwrap();
         let source = root.join("clip.mp4");

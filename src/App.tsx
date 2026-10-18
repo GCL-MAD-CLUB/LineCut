@@ -73,7 +73,7 @@ import type {
 
 const projectFilters = [
   {
-    name: "LineCut Project",
+    name: "Locution Pro Project",
     extensions: ["lcp"],
   },
 ];
@@ -570,7 +570,7 @@ function AppContent() {
     }
 
     const projectTitle = projectFilePath ?? (project ? "未命名项目" : "");
-    const title = ` LineCut${projectTitle ? ` - ${projectTitle}${projectDirty ? " *" : ""}` : ""}`;
+    const title = ` Locution Pro${projectTitle ? ` - ${projectTitle}${projectDirty ? " *" : ""}` : ""}`;
     runBackgroundOperation("window.title", () => getCurrentWindow().setTitle(title));
   }, [project, projectDirty, projectFilePath]);
 
@@ -677,7 +677,7 @@ function AppContent() {
     await runOperation("project.close", () => getCurrentWindow().close());
   }
 
-  async function openLineCutHelp() {
+  async function openLocutionProHelp() {
     if (!isTauriRuntime()) {
       messagePublished("此功能仅在桌面版可用。");
       return;
@@ -750,7 +750,7 @@ function AppContent() {
       : await runOperation("project.open", () =>
           open({
             multiple: false,
-            title: "打开 LineCut 项目",
+            title: "打开 Locution Pro 项目",
             filters: projectFilters,
           }),
         );
@@ -1490,7 +1490,7 @@ function AppContent() {
       },
     },
     help: {
-      lineCutHelp: { enabled: true, execute: openLineCutHelp },
+      locutionProHelp: { enabled: true, execute: openLocutionProHelp },
       showLogFiles: { enabled: true, execute: showLogFiles },
     },
   };

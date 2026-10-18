@@ -26,7 +26,7 @@ npm run release:build -- 0.3.3
 合并版本 PR 后，在 `main` 对应提交创建并推送带 `v` 前缀的 tag：
 
 ```powershell
-git tag -a v0.3.3 -m "LineCut 0.3.3"
+git tag -a v0.3.3 -m "Locution Pro 0.3.3"
 git push origin v0.3.3
 ```
 
@@ -52,7 +52,7 @@ git push origin v0.3.3
 
 发布前确认文档主页、README、CHANGELOG、导航和对应版本的 release notes 与当前实现一致，运行 `npm run docs:build`；历史版本页面保留，不将历史说明中的版本全量替换。尚未发布时，更新日志标为发布准备，不编造正式发布时间。
 
-当前版本一致性检查覆盖 `package.json`、`package-lock.json` 顶层与根包字段、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 中 `linecut` 包，以及 `src-tauri/tauri.conf.json`。缩略图 Provider 的独立包版本不在这套应用版本检查中，不与主应用版本同步。
+当前版本一致性检查覆盖 `package.json`、`package-lock.json` 顶层与根包字段、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 中 `locution-pro` 包，以及 `src-tauri/tauri.conf.json`。缩略图 Provider 的独立包版本不在这套应用版本检查中，不与主应用版本同步。
 
 `release:build` 会验证正式构建密钥、改写应用版本文件、格式化其 JSON 和主应用 Rust、检查版本、准备 FFmpeg 并调用 Tauri 构建；不是纯检查命令。只更新文档时不需要运行它。密钥可通过已授权的环境或本地私密配置提供，禁止写入文档或日志。TransNetV2 和 Provider 的打包准备以当前 Tauri 构建钩子及工作流为准。
 

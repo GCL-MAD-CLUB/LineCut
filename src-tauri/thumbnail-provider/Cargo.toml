@@ -1,5 +1,5 @@
 [package]
-name = "linecut_thumbnail_provider"
+name = "locution_pro_thumbnail_provider"
 version = "0.1.0"
 edition = "2021"
 publish = false

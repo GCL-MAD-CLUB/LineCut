@@ -5,9 +5,9 @@ description: 汇总菜单、源播放器和字幕/分镜标注的可用快捷键
 
 # 键盘快捷键
 
-> 适用版本：LineCut 0.3.3。
+> 适用版本：Locution Pro 0.3.3。
 
-快捷键在焦点位于可编辑文字输入框时可能由输入控件优先处理。以下 `Ctrl` 在 macOS 语义中可由主修饰键替代；LineCut 当前主要面向 Windows。
+快捷键在焦点位于可编辑文字输入框时可能由输入控件优先处理。以下 `Ctrl` 在 macOS 语义中可由主修饰键替代；Locution Pro 当前主要面向 Windows。
 
 ## 项目与菜单
 

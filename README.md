@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="src-tauri\icons\icon.ico" width="180" alt="LineCut 图标" />
+  <img src="src-tauri\icons\icon.ico" width="180" alt="Locution Pro 图标" />
 </p>
 
-<h1 align="center">LineCut</h1>
+<h1 align="center">Locution Pro</h1>
 
 <p align="center">从字幕出发，快速找到并整理视频内容。</p>
 
@@ -23,11 +23,11 @@
 
 ## 这是什么？
 
-LineCut 是一款 Windows 桌面工具，帮助你从字幕或台词出发，在长视频中迅速找到并整理需要的段落。无需手动拖动时间轴反复试听：搜索一句台词，即可定位、筛选并标注结果。
+Locution Pro（简称 lc）是一款 Windows 桌面工具，帮助你从字幕或台词出发，在长视频中迅速找到并整理需要的段落。无需手动拖动时间轴反复试听：搜索一句台词，即可定位、筛选并标注结果。
 
 它尤其适合课程、访谈、直播回放、影视素材、播客视频和其他“先知道内容、再寻找画面”的整理场景。
 
-## 你可以用 LineCut 做什么？
+## 你可以用 Locution Pro 做什么？
 
 - 搜索字幕中的关键词，快速定位人物台词、知识点或高光片段。
 - 使用星级、旗标、色标和自定义标签筛选、标注字幕。
@@ -42,7 +42,7 @@ LineCut 是一款 Windows 桌面工具，帮助你从字幕或台词出发，在
 
 1. 从 [Releases](https://github.com/GCL-MAD-CLUB/LineCut/releases/latest) 下载并安装最新版。
 2. 首次安装时选择“内置 FFmpeg（推荐）”；如电脑已有 FFmpeg，也可指定现有路径。
-3. 启动 LineCut，新建项目后导入视频、音频或字幕文件。
+3. 启动 Locution Pro，新建项目后导入视频、音频或字幕文件。
 4. 在“字幕”面板搜索台词，使用过滤、星级、旗标和标签整理条目，并在源预览中确认内容。
 
 ## v0.3.3 版本亮点
@@ -99,7 +99,7 @@ LineCut 是一款 Windows 桌面工具，帮助你从字幕或台词出发，在
 - 自动保存项目快照；检测间隔和保留数量可在“首选项”中调整。
 - 历史记录面板会列出项目操作，支持撤销、重做和跳转到指定历史状态。
 - 面板可停靠、拆分和调整位置；你的工作区布局会在下次启动时自动恢复。
-- Windows 资源管理器可为 `.lcp` 项目显示 LineCut 缩略图，便于辨认项目文件。
+- Windows 资源管理器可为 `.lcp` 项目显示 Locution Pro 缩略图，便于辨认项目文件。
 
 ## 支持的媒体
 
@@ -109,7 +109,7 @@ LineCut 是一款 Windows 桌面工具，帮助你从字幕或台词出发，在
 
 ## 项目文件与素材
 
-LineCut 项目以 `.lcp` 文件保存。项目记录的是素材路径、字幕标注、分镜内容和相关设置，不会保存字幕的临时勾选，也不会将原始视频复制进项目文件。自 v0.3.0 起，应用会为项目补充稳定 ID，以便分别恢复各项目的导出设置。
+Locution Pro 项目以 `.lcp` 文件保存。项目记录的是素材路径、字幕标注、分镜内容和相关设置，不会保存字幕的临时勾选，也不会将原始视频复制进项目文件。自 v0.3.0 起，应用会为项目补充稳定 ID，以便分别恢复各项目的导出设置。
 
 如果要将项目交给另一台电脑继续编辑，请同时提供原始媒体文件；打开项目后如提示素材脱机，可在媒体箱中使用“重新链接”恢复路径。v0.3.0 可以打开并迁移 v0.2.0 项目，但经 v0.3.0 保存后旧版本无法再次打开；升级前请备份重要 `.lcp` 文件。
 
@@ -124,7 +124,7 @@ LineCut 项目以 `.lcp` 文件保存。项目记录的是素材路径、字幕�
 
 ## 数据与隐私
 
-LineCut 的媒体分析、分镜检测、预览、字幕处理和导出均在本机完成。你的源视频不会因为使用 LineCut 而自动上传到云端。
+Locution Pro 的媒体分析、分镜检测、预览、字幕处理和导出均在本机完成。你的源视频不会因为使用 Locution Pro 而自动上传到云端。
 
 请注意：项目文件不是媒体备份。请妥善保管原始素材和重要项目的副本。
 
@@ -148,7 +148,7 @@ LineCut 的媒体分析、分镜检测、预览、字幕处理和导出均在本
 
 如果你希望参与开发，请先阅读 [贡献指南](CONTRIBUTING.md)。安全漏洞请按照 [安全政策](SECURITY.md) 私下报告；版本发布与维护流程见 [发布指南](docs/releasing.md)。
 
-LineCut 应用代码采用 [Apache License 2.0](LICENSE) 发布。安装包中可选内置的 FFmpeg / FFprobe 及其许可信息请见 [第三方声明](THIRD_PARTY_NOTICES.md)。
+Locution Pro 应用代码采用 [Apache License 2.0](LICENSE) 发布。安装包中可选内置的 FFmpeg / FFprobe 及其许可信息请见 [第三方声明](THIRD_PARTY_NOTICES.md)。
 
 <p align="center">
   Made with ❤️ by GCL MAD CLUB · <a href="https://github.com/Inexplicable-YL">言ktdm</a>

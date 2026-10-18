@@ -366,7 +366,11 @@ pub(crate) async fn export_still_frame(
             "Still output already exists",
         ));
     }
-    let temporary = directory.join(format!(".linecut-still-{}.{}", Uuid::new_v4(), extension));
+    let temporary = directory.join(format!(
+        ".locution-pro-still-{}.{}",
+        Uuid::new_v4(),
+        extension
+    ));
     register_task_cleanup_paths(&task_id, std::slice::from_ref(&temporary), state.inner())?;
     emit_ffmpeg_progress(&app, &task_id, 0.0);
     let result = run_output_with_timeout(
@@ -498,7 +502,8 @@ mod tests {
             fs::metadata(&ffmpeg).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0),
             "Manual still encoder validation requires the real bundled FFmpeg executable"
         );
-        let directory = env::temp_dir().join(format!("linecut-still-encoders-{}", Uuid::new_v4()));
+        let directory =
+            env::temp_dir().join(format!("locution-pro-still-encoders-{}", Uuid::new_v4()));
         fs::create_dir(&directory).unwrap();
         let input = directory.join("original.ppm");
         fs::write(
@@ -567,7 +572,7 @@ mod tests {
 
     #[test]
     fn sequence_recovers_existing_stills_without_counting_other_media() {
-        let directory = env::temp_dir().join(format!("linecut-still-test-{}", Uuid::new_v4()));
+        let directory = env::temp_dir().join(format!("locution-pro-still-test-{}", Uuid::new_v4()));
         fs::create_dir(&directory).unwrap();
         for name in [
             "a.mov.00_00_00_00.Still001.png",

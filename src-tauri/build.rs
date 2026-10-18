@@ -5,6 +5,7 @@ const DEVELOPMENT_KEY_SOURCE: [u8; 32] = [
     0, 87, 223, 175, 225, 117, 69, 121, 189, 102, 69, 25, 165, 255, 167, 35, 98, 59, 156, 76, 67,
     239, 14, 79, 122, 44, 84, 81, 113, 53, 88, 6,
 ];
+// The release-secret source and derivation contexts are stable project-file contracts.
 const LOCAL_RELEASE_SECRET_FILE: &str = ".linecut-project-build-secret-v1.local";
 
 fn main() {
@@ -65,7 +66,7 @@ fn generate_project_key_material() {
         "const BUILD_KEY_MASK: [u8; 32] = {mask:?};\nconst BUILD_KEY_MASKED: [u8; 32] = {masked:?};\n"
     );
     let output = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR must be set"))
-        .join("linecut_project_key.rs");
+        .join("locution_pro_project_key.rs");
     fs::write(output, generated).expect("failed to write generated project key material");
 }
 

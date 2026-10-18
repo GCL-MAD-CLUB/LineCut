@@ -9,7 +9,7 @@ const KEY_ID_CONTEXT: &[u8] = b"LineCut/project-file/key-id/v1";
 
 // build.rs hashes the configured build secret and emits only split derived material. The original
 // secret is never embedded as a string in the application binary.
-include!(concat!(env!("OUT_DIR"), "/linecut_project_key.rs"));
+include!(concat!(env!("OUT_DIR"), "/locution_pro_project_key.rs"));
 
 pub(super) struct ApplicationKey {
     pub(super) id: [u8; 16],

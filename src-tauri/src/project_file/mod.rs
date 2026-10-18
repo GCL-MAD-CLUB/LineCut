@@ -116,7 +116,7 @@ pub(crate) fn read_project_file(path: &Path) -> AppResult<(ProjectWorkspace, Str
     } else {
         return Err(app_error(
             ErrorCode::ProjectFormatInvalid,
-            "Input is not a recognized LineCut project file",
+            "Input is not a recognized Locution Pro project file",
         ));
     };
     let (workspace, project_id) = models::into_runtime(current)?;

@@ -85,7 +85,7 @@ import {
 import { mediaBinPanelType } from "./panelTypes";
 import { usePanelManagerState } from "../../common/DockLayout";
 
-const mediaDragType = "application/x-linecut-media";
+const mediaDragType = "application/x-locution-pro-media";
 interface MediaBinClipboard {
   folders: MediaBinFolder[];
   items: MediaBinItem[];

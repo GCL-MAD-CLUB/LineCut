@@ -40,7 +40,7 @@ impl Default for Preferences {
             auto_save_enabled: true,
             auto_save_current_project: true,
             auto_save_dir: default_cache_root()
-                .join("LineCut Auto-Save")
+                .join("Locution Pro Auto-Save")
                 .to_string_lossy()
                 .into_owned(),
             cache_dir: default_cache_root().to_string_lossy().into_owned(),

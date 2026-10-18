@@ -1366,7 +1366,7 @@ fn create_timeline_thumbnail_temp_directory(temp_root: &Path) -> AppResult<PathB
         )
     })?;
     remove_stale_timeline_thumbnail_temp_directories(temp_root);
-    let directory = temp_root.join(format!("linecut-thumb-{}", Uuid::new_v4()));
+    let directory = temp_root.join(format!("locution-pro-thumb-{}", Uuid::new_v4()));
     fs::create_dir(&directory).map_err(|error| {
         app_error(
             ErrorCode::ThumbnailExtractionFailed,
@@ -1634,7 +1634,8 @@ mod tests {
 
     #[test]
     fn completed_legacy_cover_survives_a_different_sampling_schedule() {
-        let root = std::env::temp_dir().join(format!("linecut-legacy-test-{}", Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("locution-pro-legacy-test-{}", Uuid::new_v4()));
         let preferences = Preferences {
             cache_dir: root.to_string_lossy().into_owned(),
             ..Preferences::default()
@@ -1709,13 +1710,13 @@ mod tests {
         assert!(0.9 * COVER_POSITION_DECAY.powi(119) > 0.5);
     }
 
-    // Opt in with LINECUT_TEST_FFMPEG; uses the production graph and cache path.
+    // Opt in with LOCUTION_PRO_TEST_FFMPEG; uses the production graph and cache path.
     #[test]
     fn cover_batch_ffmpeg_regression() {
-        let Ok(program) = std::env::var("LINECUT_TEST_FFMPEG") else {
+        let Ok(program) = std::env::var("LOCUTION_PRO_TEST_FFMPEG") else {
             return;
         };
-        let root = std::env::temp_dir().join(format!("linecut-cover-test-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("locution-pro-cover-test-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let input = root.join("input.mkv");
         let status = std::process::Command::new(&program)

@@ -110,7 +110,7 @@ jobs:
           LINECUT_PROJECT_BUILD_SECRET_V1: ${{ secrets.LINECUT_PROJECT_BUILD_SECRET_V1 }}
         with:
           tagName: ${{ needs.validate.outputs.tag }}
-          releaseName: LineCut ${{ needs.validate.outputs.tag }}
+          releaseName: Locution Pro ${{ needs.validate.outputs.tag }}
           generateReleaseNotes: true
           releaseDraft: false
           prerelease: ${{ needs.validate.outputs.prerelease }}

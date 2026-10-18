@@ -271,7 +271,7 @@ export function ProjectHome({
           >
             <ChevronLeft size={18} />
           </button>
-          <img src={appIconUrl} alt="LineCut" />
+          <img src={appIconUrl} alt="Locution Pro" />
           <button
             type="button"
             className="project-home-search"
@@ -301,7 +301,7 @@ export function ProjectHome({
             </button>
           </aside>
           <main className="project-home-recent">
-            {showWelcome && <p className="project-home-welcome">欢迎使用 Linecut</p>}
+            {showWelcome && <p className="project-home-welcome">欢迎使用 Locution Pro</p>}
             <h2>最近使用项</h2>
             <label className="project-home-filter">
               <span>筛选</span>
@@ -382,7 +382,7 @@ export function ProjectHome({
                           {nameOf(entry.path)}
                         </button>
                       </td>
-                      <td>LineCut 项目</td>
+                      <td>Locution Pro 项目</td>
                       <td
                         title={
                           entry.lastUsedAt

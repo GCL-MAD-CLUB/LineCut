@@ -576,7 +576,7 @@ mod tests {
     }
 
     fn cache_directory() -> PathBuf {
-        env::temp_dir().join(format!("linecut-siglip-{}", Uuid::new_v4()))
+        env::temp_dir().join(format!("locution-pro-siglip-{}", Uuid::new_v4()))
     }
 
     fn encode_offsets(

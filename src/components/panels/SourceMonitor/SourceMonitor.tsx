@@ -1338,8 +1338,8 @@ export function SourceMonitor() {
   function handleVideoDragOver(event: DragEvent<HTMLDivElement>) {
     const hasSupportedDragType =
       Boolean(activeMediaDragVideoId()) ||
-      event.dataTransfer.types.includes("application/x-linecut-video") ||
-      event.dataTransfer.types.includes("application/x-linecut-media") ||
+      event.dataTransfer.types.includes("application/x-locution-pro-video") ||
+      event.dataTransfer.types.includes("application/x-locution-pro-media") ||
       event.dataTransfer.types.includes("text/plain");
     if (!hasSupportedDragType) {
       return;
@@ -1350,9 +1350,9 @@ export function SourceMonitor() {
   }
 
   function handleVideoDrop(event: DragEvent<HTMLDivElement>) {
-    const directVideoId = event.dataTransfer.getData("application/x-linecut-video");
+    const directVideoId = event.dataTransfer.getData("application/x-locution-pro-video");
     const serializedIds =
-      event.dataTransfer.getData("application/x-linecut-media") ||
+      event.dataTransfer.getData("application/x-locution-pro-media") ||
       event.dataTransfer.getData("text/plain");
     let draggedIds: string[] = [];
     if (serializedIds) {

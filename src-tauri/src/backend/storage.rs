@@ -61,6 +61,7 @@ pub(crate) fn now_millis() -> u128 {
 }
 
 pub(crate) fn config_root() -> PathBuf {
+    // Keep the existing storage identity so a product rename preserves preferences and caches.
     if let Some(value) = env::var_os("LINECUT_DATA_DIR") {
         return PathBuf::from(value);
     }
@@ -86,7 +87,7 @@ pub(crate) fn configured_cache_root(preferences: &Preferences) -> PathBuf {
 pub(crate) fn configured_auto_save_directory(preferences: &Preferences) -> PathBuf {
     path_or_default(
         &preferences.auto_save_dir,
-        configured_cache_root(preferences).join("LineCut Auto-Save"),
+        configured_cache_root(preferences).join("Locution Pro Auto-Save"),
     )
 }
 
@@ -452,14 +453,14 @@ mod tests {
         assert!(preferences.auto_save_current_project);
         assert_eq!(
             configured_auto_save_directory(&preferences),
-            PathBuf::from("cache").join("LineCut Auto-Save")
+            PathBuf::from("cache").join("Locution Pro Auto-Save")
         );
     }
 
     #[test]
     fn preferences_preserve_disabled_options_after_normalization_and_round_trip() {
         let cache_root =
-            std::env::temp_dir().join(format!("linecut-preferences-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("locution-pro-preferences-{}", uuid::Uuid::new_v4()));
         let preferences = normalize_preferences(Preferences {
             show_home_on_startup: false,
             auto_save_enabled: false,
@@ -489,7 +490,7 @@ mod tests {
     #[test]
     fn auto_save_directory_defaults_to_cache_then_stays_independent() {
         let root = std::env::temp_dir().join(format!(
-            "linecut-preferences-paths-{}",
+            "locution-pro-preferences-paths-{}",
             uuid::Uuid::new_v4()
         ));
         let preferences = normalize_preferences(Preferences {
@@ -500,7 +501,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             configured_auto_save_directory(&preferences),
-            root.join("cache-a").join("LineCut Auto-Save")
+            root.join("cache-a").join("Locution Pro Auto-Save")
         );
         let changed_cache = normalize_preferences(Preferences {
             cache_dir: root.join("cache-b").to_string_lossy().into_owned(),
@@ -509,7 +510,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             configured_auto_save_directory(&changed_cache),
-            root.join("cache-a").join("LineCut Auto-Save")
+            root.join("cache-a").join("Locution Pro Auto-Save")
         );
         fs::remove_dir_all(root).unwrap();
     }

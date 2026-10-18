@@ -2,7 +2,7 @@
 
 ## Our Pledge
 
-We pledge to make participation in the LineCut community a harassment-free experience for everyone, regardless of age, body size, disability, ethnicity, sex characteristics, gender identity and expression, experience level, education, socio-economic status, nationality, personal appearance, race, caste, color, religion, or sexual identity and orientation.
+We pledge to make participation in the Locution Pro community a harassment-free experience for everyone, regardless of age, body size, disability, ethnicity, sex characteristics, gender identity and expression, experience level, education, socio-economic status, nationality, personal appearance, race, caste, color, religion, or sexual identity and orientation.
 
 We pledge to act and interact in ways that contribute to an open, welcoming, diverse, inclusive, and healthy community.
 

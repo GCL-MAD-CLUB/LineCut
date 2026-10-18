@@ -199,7 +199,7 @@ export class RollingPcmAudioController {
     if (this.context !== context || context.state === "closed") {
       return null;
     }
-    const node = new AudioWorkletNode(context, "linecut-shuttle-audio", {
+    const node = new AudioWorkletNode(context, "locution-pro-shuttle-audio", {
       numberOfInputs: 0,
       numberOfOutputs: 1,
       outputChannelCount: [PCM_CHANNELS],

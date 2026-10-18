@@ -63,15 +63,17 @@ ${StrLoc}
 !define WEBVIEW2BOOTSTRAPPERPATH "{{webview2_bootstrapper_path}}"
 !define WEBVIEW2INSTALLERPATH "{{webview2_installer_path}}"
 !define MINIMUMWEBVIEW2VERSION "{{minimum_webview2_version}}"
-!define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCTNAME}"
+; Keep the installation identity across product renames so upgrades find the existing app.
+!define INSTALL_IDENTITY "LineCut"
+!define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${INSTALL_IDENTITY}"
 !define MANUKEY "Software\${MANUFACTURER}"
-!define MANUPRODUCTKEY "${MANUKEY}\${PRODUCTNAME}"
+!define MANUPRODUCTKEY "${MANUKEY}\${INSTALL_IDENTITY}"
 !define UNINSTALLERSIGNCOMMAND "{{uninstaller_sign_cmd}}"
 !define ESTIMATEDSIZE "{{estimated_size}}"
 !define STARTMENUFOLDER "{{start_menu_folder}}"
 !define LCP_THUMBNAIL_PROVIDER_CLSID "{4F4C9CF5-6463-4DF7-A2B4-7C3B0CC7E67D}"
 !define ITHUMBNAIL_PROVIDER_IID "{E357FCCD-A995-4576-B01F-234630154E96}"
-!define LCP_THUMBNAIL_PROVIDER_FILE "linecut_thumbnail_provider.dll"
+!define LCP_THUMBNAIL_PROVIDER_FILE "locution_pro_thumbnail_provider.dll"
 
 Var PassiveMode
 Var UpdateMode
@@ -394,11 +396,11 @@ FunctionEnd
 
 ; 6. Choose whether FFmpeg sidecars are installed
 !insertmacro MUI_PAGE_INIT
-Page custom LineCutFfmpegPageCreate LineCutFfmpegPageLeave
+Page custom LocutionProFfmpegPageCreate LocutionProFfmpegPageLeave
 
 ; 7. Choose whether subtitle semantic search resources are installed
 !insertmacro MUI_PAGE_INIT
-Page custom LineCutSemanticPageCreate LineCutSemanticPageLeave
+Page custom LocutionProSemanticPageCreate LocutionProSemanticPageLeave
 
 ; 8. Start menu shortcut page
 Var AppStartMenuFolder
@@ -488,8 +490,8 @@ FunctionEnd
 
 Function .onInit
   ; Bundled FFmpeg is the default, including passive installs.
-  StrCpy $LineCutBundleFfmpeg 1
-  StrCpy $LineCutBundleSemantic 1
+  StrCpy $LocutionProBundleFfmpeg 1
+  StrCpy $LocutionProBundleSemantic 1
   ${GetOptions} $CMDLINE "/P" $PassiveMode
   ${IfNot} ${Errors}
     StrCpy $PassiveMode 1
@@ -545,7 +547,7 @@ Function .onInit
     ReadRegDWORD $0 SHCTX "${MANUPRODUCTKEY}" "BundleSemanticSearch"
     ${IfNot} ${Errors}
     ${AndIf} $0 == 0
-      StrCpy $LineCutBundleSemantic 0
+      StrCpy $LocutionProBundleSemantic 0
     ${EndIf}
   ${EndIf}
 FunctionEnd
@@ -553,7 +555,7 @@ FunctionEnd
 
 ; A 0.2.0-or-newer installer only removes caches created by the 0.1 release line.
 ; SHCTX respects the selected per-user or per-machine installation context.
-Function ClearLegacyLineCutCache
+Function ClearLegacyLocutionProCache
   ReadRegStr $R0 SHCTX "${UNINSTKEY}" "DisplayVersion"
   StrCpy $R1 $R0 4
   ${If} $R1 == "0.1."
@@ -681,23 +683,29 @@ Section Install
   !endif
 
   !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
-  Call ClearLegacyLineCutCache
+  ; A renamed binary can coexist with a still-running previous installation.
+  ReadRegStr $OldMainBinaryName SHCTX "${UNINSTKEY}" "MainBinaryName"
+  ${If} $OldMainBinaryName != ""
+  ${AndIf} $OldMainBinaryName != "${MAINBINARYNAME}.exe"
+    !insertmacro CheckIfAppIsRunning "$OldMainBinaryName" "${PRODUCTNAME}"
+  ${EndIf}
+  Call ClearLegacyLocutionProCache
 
   ; Copy main executable
   File "${MAINBINARYSRCPATH}"
 
   ; Copy resources
   ; Deselecting the component during reinstallation removes previously bundled models.
-  ${If} $LineCutBundleSemantic == 0
+  ${If} $LocutionProBundleSemantic == 0
     RMDir /r "$INSTDIR\semantic-search"
     RMDir /r "$INSTDIR\storyboard-semantic"
   ${EndIf}
   {{#each resources_dirs}}
     StrCpy $0 "{{this}}\" 16
     StrCpy $1 "{{this}}\" 20
-    ${If} $LineCutBundleSemantic == 1
+    ${If} $LocutionProBundleSemantic == 1
     ${OrIf} $0 != "semantic-search\"
-      ${If} $LineCutBundleSemantic == 1
+      ${If} $LocutionProBundleSemantic == 1
       ${OrIf} $1 != "storyboard-semantic\"
         CreateDirectory "$INSTDIR\\{{this}}"
       ${EndIf}
@@ -706,9 +714,9 @@ Section Install
   {{#each resources}}
     StrCpy $0 "{{this.[1]}}" 16
     StrCpy $1 "{{this.[1]}}" 20
-    ${If} $LineCutBundleSemantic == 1
+    ${If} $LocutionProBundleSemantic == 1
     ${OrIf} $0 != "semantic-search\"
-      ${If} $LineCutBundleSemantic == 1
+      ${If} $LocutionProBundleSemantic == 1
       ${OrIf} $1 != "storyboard-semantic\"
         File /a "/oname={{this.[1]}}" "{{no-escape @key}}"
       ${EndIf}
@@ -716,7 +724,7 @@ Section Install
   {{/each}}
 
   ; Copy external binaries only when the user selected bundled FFmpeg.
-  ${If} $LineCutBundleFfmpeg == 1
+  ${If} $LocutionProBundleFfmpeg == 1
     {{#each binaries}}
       File /a "/oname={{this}}" "{{no-escape @key}}"
     {{/each}}
@@ -731,13 +739,13 @@ Section Install
 
   ; The thumbnail provider returns the embedded project-card artwork for `.lcp` files. It never
   ; opens project data, because `.lcp` payloads are encrypted and Explorer is not trusted with it.
-  WriteRegStr SHCTX "Software\Classes\CLSID\${LCP_THUMBNAIL_PROVIDER_CLSID}" "" "LineCut Project Thumbnail Provider"
+  WriteRegStr SHCTX "Software\Classes\CLSID\${LCP_THUMBNAIL_PROVIDER_CLSID}" "" "Locution Pro Project Thumbnail Provider"
   WriteRegStr SHCTX "Software\Classes\CLSID\${LCP_THUMBNAIL_PROVIDER_CLSID}\InprocServer32" "" "$INSTDIR\${LCP_THUMBNAIL_PROVIDER_FILE}"
   WriteRegStr SHCTX "Software\Classes\CLSID\${LCP_THUMBNAIL_PROVIDER_CLSID}\InprocServer32" "ThreadingModel" "Apartment"
-  WriteRegStr SHCTX "Software\Classes\LineCut.Project\shellex\${ITHUMBNAIL_PROVIDER_IID}" "" "${LCP_THUMBNAIL_PROVIDER_CLSID}"
+  WriteRegStr SHCTX "Software\Classes\LocutionPro.Project\shellex\${ITHUMBNAIL_PROVIDER_IID}" "" "${LCP_THUMBNAIL_PROVIDER_CLSID}"
   ; An absent TypeOverlay makes Explorer use the application's DefaultIcon as a lower-right
   ; thumbnail badge. An explicit empty value keeps the supplied project-card artwork unmodified.
-  WriteRegStr SHCTX "Software\Classes\LineCut.Project" "TypeOverlay" ""
+  WriteRegStr SHCTX "Software\Classes\LocutionPro.Project" "TypeOverlay" ""
   Call RefreshShellAssociations
 
   ; Register deep links
@@ -753,7 +761,7 @@ Section Install
 
   ; Save $INSTDIR in registry for future installations
   WriteRegStr SHCTX "${MANUPRODUCTKEY}" "" $INSTDIR
-  WriteRegDWORD SHCTX "${MANUPRODUCTKEY}" "BundleSemanticSearch" $LineCutBundleSemantic
+  WriteRegDWORD SHCTX "${MANUPRODUCTKEY}" "BundleSemanticSearch" $LocutionProBundleSemantic
 
   !if "${INSTALLMODE}" == "both"
     ; Save install mode to be selected by default for the next installation such as updating
@@ -765,6 +773,7 @@ Section Install
   ReadRegStr $OldMainBinaryName SHCTX "${UNINSTKEY}" "MainBinaryName"
   ${If} $OldMainBinaryName != ""
   ${AndIf} $OldMainBinaryName != "${MAINBINARYNAME}.exe"
+    Call RenameExistingProductShortcuts
     Delete "$INSTDIR\$OldMainBinaryName"
   ${EndIf}
 
@@ -880,8 +889,8 @@ Section Uninstall
   ; the DLL loaded, so schedule its deletion at reboot if a direct deletion is not possible.
   ReadRegStr $R7 SHCTX "Software\Classes\CLSID\${LCP_THUMBNAIL_PROVIDER_CLSID}\InprocServer32" ""
   ${If} $R7 == "$INSTDIR\${LCP_THUMBNAIL_PROVIDER_FILE}"
-    DeleteRegKey SHCTX "Software\Classes\LineCut.Project\shellex\${ITHUMBNAIL_PROVIDER_IID}"
-    DeleteRegValue SHCTX "Software\Classes\LineCut.Project" "TypeOverlay"
+    DeleteRegKey SHCTX "Software\Classes\LocutionPro.Project\shellex\${ITHUMBNAIL_PROVIDER_IID}"
+    DeleteRegValue SHCTX "Software\Classes\LocutionPro.Project" "TypeOverlay"
     DeleteRegKey SHCTX "Software\Classes\CLSID\${LCP_THUMBNAIL_PROVIDER_CLSID}"
   ${EndIf}
   Delete /REBOOTOK "$INSTDIR\${LCP_THUMBNAIL_PROVIDER_FILE}"
@@ -967,6 +976,7 @@ Section Uninstall
     RmDir /r "$APPDATA\${BUNDLEID}"
     RmDir /r "$LOCALAPPDATA\${BUNDLEID}"
     RmDir /r "$LOCALAPPDATA\${PRODUCTNAME}"
+    RmDir /r "$LOCALAPPDATA\${INSTALL_IDENTITY}"
   ${EndIf}
 
   !ifmacrodef NSIS_HOOK_POSTUNINSTALL
@@ -1003,6 +1013,24 @@ Function SkipIfPassive
 FunctionEnd
 Function un.SkipIfPassive
   ${IfThen} $PassiveMode = 1  ${|} Abort ${|}
+FunctionEnd
+
+; Rename only shortcuts that belong to this installation, including update/no-shortcut mode.
+!macro RenameProductShortcut DIRECTORY
+  !insertmacro IsShortcutTarget "${DIRECTORY}\${INSTALL_IDENTITY}.lnk" "$INSTDIR\$OldMainBinaryName"
+  Pop $0
+  ${If} $0 = 1
+    !insertmacro UnpinShortcut "${DIRECTORY}\${INSTALL_IDENTITY}.lnk"
+    !insertmacro SetShortcutTarget "${DIRECTORY}\${INSTALL_IDENTITY}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+    !insertmacro SetLnkAppUserModelId "${DIRECTORY}\${INSTALL_IDENTITY}.lnk"
+    Rename "${DIRECTORY}\${INSTALL_IDENTITY}.lnk" "${DIRECTORY}\${PRODUCTNAME}.lnk"
+  ${EndIf}
+!macroend
+
+Function RenameExistingProductShortcuts
+  !insertmacro RenameProductShortcut "$SMPROGRAMS\$AppStartMenuFolder"
+  !insertmacro RenameProductShortcut "$SMPROGRAMS"
+  !insertmacro RenameProductShortcut "$DESKTOP"
 FunctionEnd
 
 Function CreateOrUpdateStartMenuShortcut
