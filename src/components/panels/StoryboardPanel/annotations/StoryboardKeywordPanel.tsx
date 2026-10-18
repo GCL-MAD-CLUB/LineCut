@@ -33,6 +33,7 @@ import {
   visibleStoryboardKeywordIds,
   type StoryboardKeywordPath,
 } from "./storyboardKeywords";
+import { StoryboardSidebarHeading, StoryboardSidebarSection } from "../StoryboardSidebarSection";
 import { useStoryboardPanelState } from "../storyboardPanelState";
 import { usePanelInstanceId } from "../../../../runtime/systems/PanelState";
 
@@ -72,52 +73,6 @@ function isEditableKeyboardTarget(target: EventTarget | null) {
     element?.tagName === "TEXTAREA" ||
     element?.tagName === "SELECT" ||
     Boolean(element?.isContentEditable)
-  );
-}
-
-interface KeywordPanelSectionProps {
-  title: ReactNode;
-  control?: ReactNode;
-  open: boolean;
-  className?: string;
-  onToggle: () => void;
-  children: ReactNode;
-}
-
-function KeywordPanelSection({
-  title,
-  control,
-  open,
-  className = "",
-  onToggle,
-  children,
-}: KeywordPanelSectionProps) {
-  return (
-    <section className={`storyboard-keyword-section ${className}`.trim()}>
-      <header
-        className={`storyboard-keyword-section-header ${control ? "has-control" : ""}`.trim()}
-      >
-        <button
-          type="button"
-          className="storyboard-keyword-section-title"
-          onClick={onToggle}
-          aria-expanded={open}
-        >
-          <span>{title}</span>
-        </button>
-        {control}
-        <button
-          type="button"
-          className="storyboard-keyword-section-toggle"
-          onClick={onToggle}
-          aria-label={open ? `折叠${String(title)}` : `展开${String(title)}`}
-          aria-expanded={open}
-        >
-          <ChevronDown className={open ? "" : "is-collapsed"} aria-hidden="true" />
-        </button>
-      </header>
-      {open && <div className="storyboard-keyword-section-body">{children}</div>}
-    </section>
   );
 }
 
@@ -1124,29 +1079,20 @@ export function StoryboardKeywordPanel({
         data-storyboard-keyword-scroll-container=""
       >
         {topContent}
-        <header
-          className={`storyboard-keyword-panel-heading ${panelOpen ? "" : "is-collapsed"}`.trim()}
-        >
-          <button
-            type="button"
-            className="storyboard-keyword-panel-heading-title"
-            onClick={() => setPanelOpen((current) => !current)}
-            aria-expanded={panelOpen}
-          >
-            <span>关键字</span>
-            <ChevronDown className={panelOpen ? "" : "is-collapsed"} aria-hidden="true" />
-          </button>
-        </header>
+        <StoryboardSidebarHeading
+          title="关键字"
+          open={panelOpen}
+          onToggle={() => setPanelOpen((current) => !current)}
+        />
 
         {panelOpen && (
           <>
-            <section
-              className={`storyboard-keyword-section storyboard-keyword-assignment ${
-                assignmentOpen ? "" : "is-collapsed"
-              }`.trim()}
-            >
-              <header className="storyboard-keyword-assignment-header">
-                <span>关键字标记</span>
+            <StoryboardSidebarSection
+              title="关键字标记"
+              className="storyboard-keyword-assignment"
+              open={assignmentOpen}
+              onToggle={() => setAssignmentOpen((current) => !current)}
+              control={
                 <button
                   type="button"
                   className={`storyboard-keyword-dropdown-shell storyboard-keyword-mode-trigger ${
@@ -1177,121 +1123,106 @@ export function StoryboardKeywordPanel({
                     <ChevronsUpDown aria-hidden="true" />
                   </span>
                 </button>
-                <button
-                  type="button"
-                  className="storyboard-keyword-assignment-toggle"
-                  onClick={() => setAssignmentOpen((current) => !current)}
-                  aria-label={assignmentOpen ? "折叠关键字标记" : "展开关键字标记"}
-                  aria-expanded={assignmentOpen}
+              }
+            >
+              {keywordEditorMode === "withParents" ? (
+                <div className="storyboard-keyword-plain-editor storyboard-keyword-with-parents">
+                  <div className="storyboard-keyword-plain-editor-display">
+                    {renderStoryboardKeywordLabel(expandedKeywordText)}
+                  </div>
+                </div>
+              ) : (
+                <div
+                  className="storyboard-keyword-plain-editor"
+                  title={
+                    keywordEditError ??
+                    `星号（*）表示标记仅应用于某些选定的分镜。\n\n关键词数量：${keywordEditorKeywordCount}`
+                  }
                 >
-                  <ChevronDown
-                    className={assignmentOpen ? "" : "is-collapsed"}
-                    aria-hidden="true"
-                  />
-                </button>
-              </header>
-              {assignmentOpen && (
-                <div className="storyboard-keyword-section-body">
-                  {keywordEditorMode === "withParents" ? (
-                    <div className="storyboard-keyword-plain-editor storyboard-keyword-with-parents">
-                      <div className="storyboard-keyword-plain-editor-display">
-                        {renderStoryboardKeywordLabel(expandedKeywordText)}
-                      </div>
-                    </div>
-                  ) : (
+                  {!keywordEditorFocused && (
                     <div
-                      className="storyboard-keyword-plain-editor"
-                      title={
-                        keywordEditError ??
-                        `星号（*）表示标记仅应用于某些选定的分镜。\n\n关键词数量：${keywordEditorKeywordCount}`
-                      }
+                      className={`storyboard-keyword-plain-editor-display ${
+                        keywordEditError ? "is-error" : ""
+                      }`.trim()}
+                      onClick={() => {
+                        if (targetShotIds.length > 0) {
+                          setKeywordEditorFocused(true);
+                        }
+                      }}
                     >
-                      {!keywordEditorFocused && (
-                        <div
-                          className={`storyboard-keyword-plain-editor-display ${
-                            keywordEditError ? "is-error" : ""
-                          }`.trim()}
-                          onClick={() => {
-                            if (targetShotIds.length > 0) {
-                              setKeywordEditorFocused(true);
-                            }
-                          }}
-                        >
-                          {renderStoryboardKeywordLabel(keywordEditValue)}
-                        </div>
-                      )}
-                      <textarea
-                        ref={keywordEditorRef}
-                        className={keywordEditorFocused ? "" : "is-hidden"}
-                        value={keywordEditValue}
-                        disabled={targetShotIds.length === 0}
-                        placeholder=""
-                        aria-label="编辑当前分镜关键字"
-                        aria-invalid={Boolean(keywordEditError)}
-                        onFocus={() => {
-                          cancelKeywordEditRef.current = false;
-                        }}
-                        onChange={(event) => {
-                          const value = event.currentTarget.value;
-                          setKeywordEditValue(value);
-                          setKeywordEditError(parseStoryboardKeywordInput(value).error);
-                        }}
-                        onBlur={() => {
-                          setKeywordEditorFocused(false);
-                          if (cancelKeywordEditRef.current) {
-                            cancelKeywordEditRef.current = false;
-                            setKeywordEditValue(selectedKeywordText);
-                            setKeywordEditError(null);
-                            return;
-                          }
-                          commitKeywordEdit();
-                        }}
-                        onKeyDown={(event) => {
-                          event.stopPropagation();
-                          if (event.key === "Enter") {
-                            event.preventDefault();
-                            event.currentTarget.blur();
-                          } else if (event.key === "Escape") {
-                            event.preventDefault();
-                            cancelKeywordEditRef.current = true;
-                            event.currentTarget.blur();
-                          }
-                        }}
-                      />
+                      {renderStoryboardKeywordLabel(keywordEditValue)}
                     </div>
                   )}
-                  <form
-                    className="storyboard-keyword-inline-entry"
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      submitKeywordInput();
+                  <textarea
+                    ref={keywordEditorRef}
+                    className={keywordEditorFocused ? "" : "is-hidden"}
+                    value={keywordEditValue}
+                    disabled={targetShotIds.length === 0}
+                    placeholder=""
+                    aria-label="编辑当前分镜关键字"
+                    aria-invalid={Boolean(keywordEditError)}
+                    onFocus={() => {
+                      cancelKeywordEditRef.current = false;
                     }}
-                  >
-                    <input
-                      ref={inputRef}
-                      value={keywordInput}
-                      onChange={(event) => setKeywordInput(event.currentTarget.value)}
-                      placeholder="单击此处添加关键字"
-                      disabled={targetShotIds.length === 0}
-                      aria-label="添加分镜关键字"
-                      title={
-                        keywordParseResult.error ?? "支持 父>子、子<父、父|子；多个关键字用逗号分隔"
+                    onChange={(event) => {
+                      const value = event.currentTarget.value;
+                      setKeywordEditValue(value);
+                      setKeywordEditError(parseStoryboardKeywordInput(value).error);
+                    }}
+                    onBlur={() => {
+                      setKeywordEditorFocused(false);
+                      if (cancelKeywordEditRef.current) {
+                        cancelKeywordEditRef.current = false;
+                        setKeywordEditValue(selectedKeywordText);
+                        setKeywordEditError(null);
+                        return;
                       }
-                    />
-                  </form>
+                      commitKeywordEdit();
+                    }}
+                    onKeyDown={(event) => {
+                      event.stopPropagation();
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        event.currentTarget.blur();
+                      } else if (event.key === "Escape") {
+                        event.preventDefault();
+                        cancelKeywordEditRef.current = true;
+                        event.currentTarget.blur();
+                      }
+                    }}
+                  />
                 </div>
               )}
-            </section>
+              <form
+                className="storyboard-keyword-inline-entry"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  submitKeywordInput();
+                }}
+              >
+                <input
+                  ref={inputRef}
+                  value={keywordInput}
+                  onChange={(event) => setKeywordInput(event.currentTarget.value)}
+                  placeholder="单击此处添加关键字"
+                  disabled={targetShotIds.length === 0}
+                  aria-label="添加分镜关键字"
+                  title={
+                    keywordParseResult.error ?? "支持 父>子、子<父、父|子；多个关键字用逗号分隔"
+                  }
+                />
+              </form>
+            </StoryboardSidebarSection>
 
-            <KeywordPanelSection
+            <StoryboardSidebarSection
               title="建议关键字"
               open={suggestionsOpen}
               onToggle={() => setSuggestionsOpen((current) => !current)}
             >
               {renderKeywordGrid(suggestedIds)}
-            </KeywordPanelSection>
+            </StoryboardSidebarSection>
 
-            <KeywordPanelSection
+            <StoryboardSidebarSection
               title="关键字集"
               control={
                 <span className="storyboard-keyword-dropdown-shell">
@@ -1308,7 +1239,7 @@ export function StoryboardKeywordPanel({
                 altShortcutHintsVisible ? shortcutKeywordIds : visibleRecentIds,
                 true,
               )}
-            </KeywordPanelSection>
+            </StoryboardSidebarSection>
           </>
         )}
 

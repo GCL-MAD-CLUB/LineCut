@@ -132,10 +132,10 @@ TypeScript additionally requires complete operation policy and category-template
 5. Pass only safe public context such as a basename.
 6. Run `npm run check:errors`, `npm run build`, Rust tests, and formatting checks.
 
-## 0.3.3 media and panel-state operations
+## Media tasks and panel-state persistence
 
 The operation catalog includes `project.panelState.save` and `project.panelState.load`
-for the new application media workflow. Panel state is
+for panel persistence. Panel state is
 local configuration keyed by project and panel, not part of the `.lcp` payload.
 Persistence failures go through the same typed incident path; they must not be
 reported as successful document saves or reclassified by diagnostic text.

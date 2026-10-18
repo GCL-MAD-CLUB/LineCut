@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://127.0.0.1:1420",
-    "beforeBuildCommand": "npm run prepare:semantic && npm run build",
+    "beforeBuildCommand": "npm run prepare:semantic && npm run prepare:storyboard-semantic && npm run build",
     "beforeBundleCommand": "npm run prepare:transnetv2 && npm run build:thumbnail-provider",
     "frontendDist": "../dist"
   },
@@ -57,7 +57,8 @@
       "../src/assets/fonts/OFL.txt": "licenses/linecut-ui-sans-OFL.txt",
       "target/release/linecut_thumbnail_provider.dll": "linecut_thumbnail_provider.dll",
       "resources/transnetv2": "transnetv2",
-      "resources/semantic-search": "semantic-search"
+      "resources/semantic-search": "semantic-search",
+      "resources/storyboard-semantic": "storyboard-semantic"
     },
     "windows": {
       "nsis": {

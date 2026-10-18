@@ -5,7 +5,7 @@ description: 配置缓存路径、自动备份、FFmpeg 和 ffprobe，并了解�
 
 # 首选项
 
-> 适用版本：LineCut 0.3.3。本文以 `release/0.3.3` 分支实现为准。
+> 适用版本：LineCut 0.3.3。
 
 在 **编辑 → 首选项…** 打开“路径、自动备份与媒体工具”对话框。更改只会在点击**保存**后写入应用首选项。
 
@@ -45,8 +45,6 @@ description: 配置缓存路径、自动备份、FFmpeg 和 ffprobe，并了解�
 自动备份会按设置的间隔检查项目变化，并在缓存相关目录中维护快照。它是恢复意外退出或误操作的辅助，不是替代手动保存、项目副本或版本管理的机制。间隔越短、保留数越大，对磁盘写入和占用的需求越高；长视频项目和可用空间有限时，应在恢复能力与磁盘负担之间取舍。
 
 修改这些值后，建议完成一次手动保存，并在下次打开项目时确认自动备份目录可写。不要把缓存设为会被清理、脱机或无权限的目录。
-
-<GuideImage src="/images/projects/preferences.png" alt="首选项完整对话框" />
 
 常见错误见[FFmpeg、ffprobe 与工具路径](/troubleshooting/troubleshooting)及[性能、缓存与代理](/troubleshooting/troubleshooting)。
 

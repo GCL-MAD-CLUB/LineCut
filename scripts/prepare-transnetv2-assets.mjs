@@ -33,9 +33,6 @@ const downloads = {
 const localModelCandidates = [
   process.env.TRANSNETV2_ONNX_PATH,
   join(cacheDir, "transnetv2.onnx"),
-  process.env.TEMP
-    ? join(process.env.TEMP, "linecut-transnet-check", "transnetv2.onnx")
-    : undefined,
 ].filter(Boolean);
 
 function ensureDirectory(path) {

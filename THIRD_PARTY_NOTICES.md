@@ -61,7 +61,29 @@ separate license from Jina AI. The model is used without weight modifications.
 Semantic search shares the bundled ONNX Runtime and DirectML binaries described
 above. `npm run prepare:semantic` downloads the pinned INT8 model and tokenizer.
 
+## DINOv3 storyboard frame selection assets
+
+The paired SigLIP2 models used after frame selection are
+`vision_model_fp16.onnx` and `text_model_int8.onnx` from
+`onnx-community/siglip2-base-patch16-256-ONNX`, revision
+`d1114256522a37ffa257a0a58017348ab0058db2`, based on Google's
+`siglip2-base-patch16-256` (Apache-2.0). The model weights are unmodified.
+Their tokenizer and preprocessing metadata are distributed in
+`storyboard-semantic/siglip2/`; they share the ONNX runtime described above.
+
+- <https://huggingface.co/google/siglip2-base-patch16-256>
+- <https://huggingface.co/onnx-community/siglip2-base-patch16-256-ONNX>
+
+The optional `storyboard-semantic/model.onnx` and its external weights come from
+`onnx-community/dinov3-vits16plus-pretrain-lvd1689m-ONNX`, pinned to revision
+`81f43e32cbf964b3c284da6cfd3be9fcba6d82ef`. The unmodified DINOv3 weights are governed
+by the DINOv3 License, included at `storyboard-semantic/LICENSE.md`. This component
+shares the ONNX Runtime and DirectML binaries described above.
+
+- <https://huggingface.co/onnx-community/dinov3-vits16plus-pretrain-lvd1689m-ONNX>
+- <https://github.com/facebookresearch/dinov3/blob/main/LICENSE.md>
+
 The application code in this repository, excluding the bundled UI font, optional FFmpeg and
-FFprobe executables, optional TransNetV2/ONNX Runtime assets, Jina model assets, and their
+FFprobe executables, optional TransNetV2/ONNX Runtime assets, Jina and DINOv3 model assets, and their
 respective notices, is licensed under Apache License 2.0; see
 [LICENSE](LICENSE).

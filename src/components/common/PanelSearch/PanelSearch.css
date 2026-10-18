@@ -56,6 +56,16 @@
   );
 }
 
+.select-dropdown.panel-search-input {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.select-dropdown.panel-search-input.disabled {
+  opacity: 1;
+}
+
 .panel-search-row .panel-search-dropdown {
   display: grid;
   grid-template-columns: max-content max-content 12px;

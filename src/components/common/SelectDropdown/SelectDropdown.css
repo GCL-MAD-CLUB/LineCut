@@ -69,7 +69,7 @@
   box-shadow: var(--shadow-drawer);
   scrollbar-color: var(--color-scrollbar-thumb) var(--color-surface);
   scrollbar-width: thin;
-  scrollbar-gutter: stable;
+  scrollbar-gutter: auto;
 }
 
 .select-dropdown-menu::-webkit-scrollbar {
@@ -100,6 +100,15 @@
 }
 
 .select-dropdown-option:hover {
+  color: var(--color-text-highlight);
+  background: var(--color-surface-dropdown-hover);
+}
+
+.select-dropdown-menu.without-checks .select-dropdown-option {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.select-dropdown-menu.without-checks .select-dropdown-option.selected {
   color: var(--color-text-highlight);
   background: var(--color-surface-dropdown-hover);
 }

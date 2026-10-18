@@ -41,6 +41,12 @@ jobs:
       - name: Check formatting
         run: npm run format:check
 
+      - name: Check repository layout and script syntax
+        run: npm run check:layout
+
+      - name: Test frontend logic
+        run: npm test
+
       - name: Check release version consistency
         run: npm run check:versions
 

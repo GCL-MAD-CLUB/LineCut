@@ -4,24 +4,27 @@ use std::io::{BufReader, Read};
 use std::path::PathBuf;
 use std::process::{Child, Stdio};
 use std::sync::{
-    atomic::{AtomicBool, AtomicI32, Ordering},
+    atomic::{AtomicBool, Ordering},
     Arc, Mutex as StdMutex, OnceLock,
 };
 use std::{env, fmt};
 
 use ort::{
-    execution_providers::DirectMLExecutionProvider,
-    session::{
-        builder::GraphOptimizationLevel,
-        run_options::{HasSelectedOutputs, OutputSelector, RunOptions},
-        Session,
-    },
+    session::run_options::{HasSelectedOutputs, OutputSelector, RunOptions},
     value::Tensor,
 };
 use tauri::path::BaseDirectory;
 use uuid::Uuid;
 
+#[cfg(test)]
+pub(super) use super::onnx::{
+    cpu_thread_budget as storyboard_cpu_thread_budget, create_cpu_model_session,
+    create_directml_model_session, create_model_session,
+};
+use super::onnx::{OnnxModel, SessionProvider};
 use super::*;
+#[cfg(test)]
+use ort::session::Session;
 
 mod decision;
 mod pipeline;
@@ -48,13 +51,11 @@ const STORYBOARD_PROGRESS_PREDICT_END: f64 = 0.98;
 const STORYBOARD_PROGRESS_MIN_DELTA: f64 = 0.0025;
 const STORYBOARD_PROGRESS_FRAME_REPORT_INTERVAL: usize = 25;
 const DEFAULT_STORYBOARD_FRAME_RATE: f64 = 25.0;
-const MAX_DIRECTML_ADAPTERS_TO_PROBE: i32 = 8;
 const STORYBOARD_MAX_CONCURRENT_EXTRACTIONS: usize = 3;
 const STORYBOARD_MAX_EXTRACTION_THREADS: usize = 16;
 
 static ORT_INIT_LOCK: StdMutex<()> = StdMutex::new(());
 static ORT_ENV_READY: OnceLock<()> = OnceLock::new();
-static PREFERRED_DIRECTML_ADAPTER: AtomicI32 = AtomicI32::new(-1);
 static STORYBOARD_CONSUMER: OnceLock<Arc<StoryboardConsumer>> = OnceLock::new();
 static STORYBOARD_EXTRACTION_SCHEDULER: OnceLock<StoryboardExtractionScheduler> = OnceLock::new();
 
@@ -522,98 +523,6 @@ async fn run_storyboard_detection(
     })
 }
 
-pub(super) fn create_model_session(model_path: &PathBuf) -> AppResult<(Session, String)> {
-    let preferred_adapter = PREFERRED_DIRECTML_ADAPTER.load(Ordering::Relaxed);
-    let adapters = (0..MAX_DIRECTML_ADAPTERS_TO_PROBE)
-        .filter(|adapter| *adapter != preferred_adapter)
-        .collect::<Vec<_>>();
-    let adapters = (preferred_adapter >= 0)
-        .then_some(preferred_adapter)
-        .into_iter()
-        .chain(adapters);
-    let mut directml_errors = Vec::new();
-
-    for adapter in adapters {
-        match create_directml_model_session(model_path, adapter) {
-            Ok(session) => {
-                PREFERRED_DIRECTML_ADAPTER.store(adapter, Ordering::Relaxed);
-                tracing::info!(
-                    provider = "DirectML",
-                    adapter,
-                    "Selected ONNX inference provider"
-                );
-                return Ok((session, format!("DirectML (adapter {adapter})")));
-            }
-            Err(error) => {
-                tracing::warn!(
-                    adapter,
-                    model_path = %model_path.display(),
-                    error_code = ?error.code(),
-                    error_message = error.message(),
-                    "DirectML ONNX initialization failed for display adapter"
-                );
-                directml_errors.push(format!(
-                    "adapter {adapter}: {:?}: {}",
-                    error.code(),
-                    error.message()
-                ));
-            }
-        }
-    }
-
-    tracing::warn!(
-        attempted_adapters = MAX_DIRECTML_ADAPTERS_TO_PROBE,
-        "No usable DirectML display adapter was found; retrying with the CPU provider"
-    );
-    create_cpu_model_session(model_path)
-        .map(|session| {
-            tracing::info!(
-                provider = "CPU",
-                "Selected ONNX inference provider after DirectML fallback"
-            );
-            (session, "CPU".to_string())
-        })
-        .map_err(|cpu_error| {
-            let directml_detail = directml_errors.join("; ");
-            storyboard_ort_error(
-                "load ONNX model with DirectML or CPU",
-                format!(
-                    "DirectML initialization failed on all probed adapters ({directml_detail}); CPU fallback failed: {cpu_error}"
-                ),
-            )
-        })
-}
-
-fn create_directml_model_session(model_path: &PathBuf, adapter: i32) -> ort::Result<Session> {
-    Session::builder()?
-        // The DirectML execution provider requires sequential execution and
-        // memory-pattern optimization to be disabled. ort rc.9 does not apply
-        // these provider-specific session options automatically.
-        .with_parallel_execution(false)?
-        .with_memory_pattern(false)?
-        .with_execution_providers([DirectMLExecutionProvider::default()
-            .with_device_id(adapter)
-            .build()
-            .error_on_failure()])?
-        .with_optimization_level(GraphOptimizationLevel::Level3)?
-        .with_intra_threads(1)?
-        .commit_from_file(model_path)
-}
-
-pub(super) fn create_cpu_model_session(model_path: &PathBuf) -> ort::Result<Session> {
-    let threads = storyboard_cpu_thread_budget(available_cpu_threads());
-    tracing::info!(threads, "Configured storyboard CPU inference threads");
-    Session::builder()?
-        .with_optimization_level(GraphOptimizationLevel::Level3)?
-        .with_intra_threads(threads)?
-        .commit_from_file(model_path)
-}
-
-fn storyboard_cpu_thread_budget(available: usize) -> usize {
-    // Reserve CPU capacity for decoding and the UI; one session serves all tasks.
-    (available / 2).clamp(1, 8)
-}
-
 fn spawn_storyboard_ffmpeg(
     project: &Project,
     stream_index: i32,
@@ -900,7 +809,7 @@ fn wait_storyboard_extraction(
 }
 
 struct TransnetSession {
-    session: Session,
+    session: OnnxModel,
     input: Tensor<f32>,
     options: RunOptions<HasSelectedOutputs>,
     windows: usize,
@@ -909,7 +818,7 @@ struct TransnetSession {
 }
 
 impl TransnetSession {
-    fn new(session: Session) -> AppResult<Self> {
+    fn new(session: OnnxModel) -> AppResult<Self> {
         let input = Tensor::<f32>::from_array((
             [
                 1,
@@ -921,17 +830,18 @@ impl TransnetSession {
             vec![0.0; TRANSNET_WINDOW_FRAMES * STORYBOARD_FRAME_BYTES],
         ))
         .map_err(|error| storyboard_ort_error("create TransNetV2 input tensor", error))?;
-        let output = session.outputs.first().ok_or_else(|| {
-            app_error(
-                ErrorCode::StoryboardInferenceFailed,
-                "TransNetV2 has no prediction output",
-            )
+        let output_name = session.run(None, |session| {
+            session
+                .outputs
+                .first()
+                .map(|output| output.name.clone())
+                .ok_or_else(|| ort::Error::new("TransNetV2 has no prediction output"))
         })?;
         // The detector consumes only the first head. Do not request the unused
         // second head, or copy either entire output into an intermediate Vec.
         let options = RunOptions::new()
             .map_err(|error| storyboard_ort_error("create TransNetV2 run options", error))?
-            .with_outputs(OutputSelector::no_default().with(&output.name));
+            .with_outputs(OutputSelector::no_default().with(&output_name));
         Ok(Self {
             session,
             input,
@@ -978,6 +888,7 @@ fn fill_transnet_input(input: &mut [f32], window: &VecDeque<Vec<u8>>) -> AppResu
 fn run_transnet_window(
     model: &mut TransnetSession,
     window: &VecDeque<Vec<u8>>,
+    cancel: &AtomicBool,
 ) -> AppResult<Vec<f32>> {
     let packing_started = std::time::Instant::now();
     let (_, input) = model
@@ -987,41 +898,29 @@ fn run_transnet_window(
     fill_transnet_input(input, window)?;
     model.packing_time += packing_started.elapsed();
     let inference_started = std::time::Instant::now();
-    let outputs = model
-        .session
-        .run_with_options([model.input.view().into()], &model.options)
-        .map_err(|error| storyboard_ort_error("run TransNetV2 inference", error))?;
-    model.inference_time += inference_started.elapsed();
-    model.windows += 1;
-    if outputs.len() == 0 {
-        return Err(app_error(
-            ErrorCode::StoryboardInferenceFailed,
-            "TransNetV2 produced no output tensors",
-        ));
-    }
-    let (_, values) = outputs[0]
-        .try_extract_raw_tensor::<f32>()
-        .map_err(|error| storyboard_ort_error("extract TransNetV2 predictions", error))?;
-    if values.len() < TRANSNET_CENTER_END {
-        return Err(app_error(
-            ErrorCode::StoryboardInferenceFailed,
-            format!(
+    let predictions = model.session.run(Some(cancel), |session| {
+        let outputs = session.run_with_options([model.input.view().into()], &model.options)?;
+        if outputs.len() == 0 {
+            return Err(ort::Error::new("TransNetV2 produced no output tensors"));
+        }
+        let (_, values) = outputs[0].try_extract_raw_tensor::<f32>()?;
+        if values.len() < TRANSNET_CENTER_END {
+            return Err(ort::Error::new(format!(
                 "TransNetV2 output is too short: {} values, expected at least {TRANSNET_CENTER_END}",
                 values.len()
-            ),
-        ));
-    }
-    let needs_sigmoid = values.iter().any(|value| *value < 0.0 || *value > 1.0);
-    Ok(values[TRANSNET_CENTER_START..TRANSNET_CENTER_END]
-        .iter()
-        .map(|value| {
-            if needs_sigmoid {
-                1.0 / (1.0 + (-*value).exp())
-            } else {
-                value.clamp(0.0, 1.0)
-            }
-        })
-        .collect())
+            )));
+        }
+        let needs_sigmoid = values.iter().any(|value| *value < 0.0 || *value > 1.0);
+        Ok(values[TRANSNET_CENTER_START..TRANSNET_CENTER_END]
+            .iter()
+            .map(|value| {
+                if needs_sigmoid { 1.0 / (1.0 + (-*value).exp()) } else { value.clamp(0.0, 1.0) }
+            })
+            .collect())
+    })?;
+    model.inference_time += inference_started.elapsed();
+    model.windows += 1;
+    Ok(predictions)
 }
 
 struct StoryboardProgressReporter {
@@ -1324,6 +1223,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires packaged TransNetV2 and ONNX Runtime assets; run manually"]
     fn packaged_transnet_model_loads_with_cpu_provider() {
         let runtime_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("resources")
@@ -1346,7 +1246,10 @@ mod tests {
     }
 
     fn assert_transnet_reuse_matches_fresh_tensors(session: Session) {
-        let mut model = TransnetSession::new(session).unwrap();
+        let mut model = TransnetSession::new(OnnxModel::from_session(session, |detail| {
+            app_error(ErrorCode::StoryboardInferenceFailed, detail)
+        }))
+        .unwrap();
         let input_address = model.input.extract_raw_tensor().1.as_ptr();
         // Exercise unrelated windows as the shared session would when tasks
         // alternate. Compare with the former fresh-tensor, all-output path.
@@ -1373,22 +1276,29 @@ mod tests {
                     .collect::<Vec<_>>(),
             ))
             .unwrap();
-            let expected = {
-                let outputs = model.session.run(ort::inputs![tensor].unwrap()).unwrap();
-                let (_, values) = outputs[0].try_extract_raw_tensor::<f32>().unwrap();
-                let needs_sigmoid = values.iter().any(|value| *value < 0.0 || *value > 1.0);
-                values[TRANSNET_CENTER_START..TRANSNET_CENTER_END]
-                    .iter()
-                    .map(|value| {
-                        if needs_sigmoid {
-                            1.0 / (1.0 + (-*value).exp())
-                        } else {
-                            value.clamp(0.0, 1.0)
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            };
-            assert_eq!(run_transnet_window(&mut model, &window).unwrap(), expected);
+            let expected = model
+                .session
+                .run(None, |session| {
+                    let outputs = session.run([tensor.view().into()])?;
+                    let (_, values) = outputs[0].try_extract_raw_tensor::<f32>().unwrap();
+                    let needs_sigmoid = values.iter().any(|value| *value < 0.0 || *value > 1.0);
+                    let values = values[TRANSNET_CENTER_START..TRANSNET_CENTER_END]
+                        .iter()
+                        .map(|value| {
+                            if needs_sigmoid {
+                                1.0 / (1.0 + (-*value).exp())
+                            } else {
+                                value.clamp(0.0, 1.0)
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    Ok(values)
+                })
+                .unwrap();
+            assert_eq!(
+                run_transnet_window(&mut model, &window, &AtomicBool::new(false)).unwrap(),
+                expected
+            );
             assert_eq!(model.input.extract_raw_tensor().1.as_ptr(), input_address);
         }
     }

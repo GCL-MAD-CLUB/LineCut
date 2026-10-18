@@ -615,51 +615,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "manual before/after subtitle cleaning benchmark"]
-    fn benchmark_subtitle_cleaning() {
-        // Preserve the old per-cue compilation path as a performance baseline.
-        fn previous_clean_plain_text(raw: &str) -> String {
-            let mut text = raw
-                .replace("\\N", "\n")
-                .replace("\\n", "\n")
-                .replace("\\h", " ")
-                .replace("&nbsp;", " ");
-            text = Regex::new(r"\{[^}]*\}")
-                .unwrap()
-                .replace_all(&text, "")
-                .into_owned();
-            text = Regex::new(r"<[^>]+>")
-                .unwrap()
-                .replace_all(&text, "")
-                .into_owned();
-            text = text.replace("\r\n", "\n").replace('\r', "\n");
-            let whitespace = Regex::new(r"[ \t]+").unwrap();
-            text.lines()
-                .map(|line| whitespace.replace_all(line.trim(), " ").into_owned())
-                .filter(|line| !line.is_empty())
-                .collect::<Vec<_>>()
-                .join("\n")
-        }
-        let sample = "{\\an8}<i>Hello</i>  world\\N  next\t line &nbsp;\\h!\r\n";
-        assert_eq!(previous_clean_plain_text(sample), clean_plain_text(sample));
-        for pass in 1..=2 {
-            let start = std::time::Instant::now();
-            for _ in 0..2_000 {
-                std::hint::black_box(previous_clean_plain_text(std::hint::black_box(sample)));
-            }
-            let before = start.elapsed();
-            let start = std::time::Instant::now();
-            for _ in 0..2_000 {
-                std::hint::black_box(clean_plain_text(std::hint::black_box(sample)));
-            }
-            eprintln!(
-                "2000 cues, pass {pass}: before={before:?}, after={:?}",
-                start.elapsed()
-            );
-        }
-    }
-
-    #[test]
     fn shared_patterns_keep_srt_ass_and_cancellation_behavior() {
         let srt = "1\n00:00:01,000 --> 00:00:02,000\n<i>Hello</i>\\Nworld\n";
         for track in ["first", "second"] {

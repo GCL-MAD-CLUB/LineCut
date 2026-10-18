@@ -26,13 +26,18 @@ interface SelectDropdownProps<T extends string> {
   disabled?: boolean;
   items: Array<SelectDropdownItem<T>>;
   menuClassName?: string;
+  menuId?: string;
   menuMinWidth?: number;
   menuWidth?: "content" | "trigger";
   placement?: "auto" | "bottom" | "top";
   selectedLabel?: string;
   selectedValues?: readonly T[];
+  showCheck?: boolean;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   title?: string;
   trigger?: ReactNode;
+  triggerElement?: ReactNode;
   value: T;
   onChange: (value: T) => void;
 }
@@ -59,17 +64,27 @@ export function SelectDropdown<T extends string>({
   disabled = false,
   items,
   menuClassName,
+  menuId,
   menuMinWidth = 0,
   menuWidth = "trigger",
   placement = "auto",
   selectedLabel,
   selectedValues,
+  showCheck = true,
+  open: controlledOpen,
+  onOpenChange,
   title,
   trigger,
+  triggerElement,
   value,
   onChange,
 }: SelectDropdownProps<T>) {
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlledOpen ?? internalOpen;
+  function setOpen(next: boolean) {
+    setInternalOpen(next);
+    onOpenChange?.(next);
+  }
   const [menuStyle, setMenuStyle] = useState<CSSProperties>({});
   const rootRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -138,15 +153,18 @@ export function SelectDropdown<T extends string>({
     };
 
     const updatePosition = () => updateMenuPosition();
+    const closeOnBlur = () => setOpen(false);
     window.addEventListener("pointerdown", closeOnOutsidePointer);
     window.addEventListener("keydown", closeOnEscape);
     window.addEventListener("resize", updatePosition);
     window.addEventListener("scroll", updatePosition, true);
+    window.addEventListener("blur", closeOnBlur);
     return () => {
       window.removeEventListener("pointerdown", closeOnOutsidePointer);
       window.removeEventListener("keydown", closeOnEscape);
       window.removeEventListener("resize", updatePosition);
       window.removeEventListener("scroll", updatePosition, true);
+      window.removeEventListener("blur", closeOnBlur);
     };
   }, [open]);
 
@@ -158,8 +176,10 @@ export function SelectDropdown<T extends string>({
   const menu = (
     <div
       ref={menuRef}
-      className={`select-dropdown-menu ${menuClassName ?? ""}`}
+      id={menuId}
+      className={`select-dropdown-menu ${showCheck ? "" : "without-checks"} ${menuClassName ?? ""}`}
       role="listbox"
+      aria-label={ariaLabel}
       aria-multiselectable={selectedValues ? true : undefined}
       style={menuStyle}
     >
@@ -169,16 +189,21 @@ export function SelectDropdown<T extends string>({
         ) : (
           <button
             key={item.value}
+            id={menuId ? `${menuId}-${index}` : undefined}
             type="button"
             className={`select-dropdown-option ${resolvedSelectedValues.has(item.value) ? "selected" : ""}`}
+            title={item.label}
+            onPointerDown={(event) => event.preventDefault()}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => selectValue(item.value)}
             role="option"
             aria-selected={resolvedSelectedValues.has(item.value)}
           >
-            <span className="select-dropdown-check">
-              {resolvedSelectedValues.has(item.value) ? "✓" : ""}
-            </span>
+            {showCheck && (
+              <span className="select-dropdown-check">
+                {resolvedSelectedValues.has(item.value) ? "✓" : ""}
+              </span>
+            )}
             <span className="select-dropdown-option-label">{item.label}</span>
           </button>
         ),
@@ -191,22 +216,24 @@ export function SelectDropdown<T extends string>({
       ref={rootRef}
       className={`select-dropdown ${open ? "open" : ""} ${disabled ? "disabled" : ""} ${className ?? ""}`}
     >
-      <button
-        type="button"
-        className="select-dropdown-trigger"
-        aria-label={ariaLabel}
-        aria-expanded={open}
-        disabled={disabled}
-        title={title}
-        onClick={() => setOpen((current) => !current)}
-      >
-        {trigger ?? (
-          <>
-            <span>{resolvedSelectedLabel}</span>
-            <ChevronDown size={18} />
-          </>
-        )}
-      </button>
+      {triggerElement ?? (
+        <button
+          type="button"
+          className="select-dropdown-trigger"
+          aria-label={ariaLabel}
+          aria-expanded={open}
+          disabled={disabled}
+          title={title ?? resolvedSelectedLabel}
+          onClick={() => setOpen(!open)}
+        >
+          {trigger ?? (
+            <>
+              <span>{resolvedSelectedLabel}</span>
+              <ChevronDown size={18} />
+            </>
+          )}
+        </button>
+      )}
       {open && !disabled && createPortal(menu, document.body)}
     </div>
   );

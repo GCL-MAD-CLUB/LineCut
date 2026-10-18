@@ -87,6 +87,7 @@ define_error_codes! {
     SemanticModelMissing => ("SEMANTIC_MODEL_MISSING", Resource, true),
     SemanticInferenceFailed => ("SEMANTIC_INFERENCE_FAILED", Runtime, true),
     SemanticIndexWriteFailed => ("SEMANTIC_INDEX_WRITE_FAILED", Io, true),
+    StoryboardKeyframeWriteFailed => ("STORYBOARD_KEYFRAME_WRITE_FAILED", Io, true),
     TaskCancelled => ("TASK_CANCELLED", Cancelled, false),
     PreferencesInvalid => ("PREFERENCES_INVALID", Validation, false),
     TaskIdInvalid => ("TASK_ID_INVALID", Validation, false),

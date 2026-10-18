@@ -1,7 +1,10 @@
 //! Local subtitle retrieval. Content-addressed indexes survive source changes,
 //! but are invalidated by text, model revision, or embedding recipe changes.
+use super::onnx::OnnxModel;
 use super::*;
-use ort::{session::Session, value::Tensor};
+#[cfg(test)]
+use ort::session::Session;
+use ort::value::Tensor;
 use std::sync::{OnceLock, TryLockError};
 use tauri::{ipc::Channel, path::BaseDirectory};
 use tokenizers::{Tokenizer, TruncationParams};
@@ -48,7 +51,7 @@ pub(crate) struct SemanticMatch {
 }
 
 struct EmbeddingModel {
-    session: Session,
+    session: OnnxModel,
     tokenizer: Arc<Tokenizer>,
 }
 
@@ -103,13 +106,21 @@ impl EmbeddingModel {
     fn load(app: &tauri::AppHandle) -> AppResult<Self> {
         let directory = resource_directory(app)?;
         storyboard::init_shared_ort(app)?;
-        let (session, provider) =
-            storyboard::create_model_session(&directory.join("model_quantized.onnx"))?;
-        tracing::info!(%provider, "Selected subtitle semantic search provider");
-        Self::from_session(session, &directory)
+        let session = OnnxModel::load(
+            &directory.join("model_quantized.onnx"),
+            &[],
+            inference_error,
+        )?;
+        tracing::info!(provider = %session.provider(), "Selected subtitle semantic search provider");
+        Self::from_model(session, &directory)
     }
 
+    #[cfg(test)]
     fn from_session(session: Session, directory: &Path) -> AppResult<Self> {
+        Self::from_model(OnnxModel::from_session(session, inference_error), directory)
+    }
+
+    fn from_model(session: OnnxModel, directory: &Path) -> AppResult<Self> {
         let mut tokenizer =
             Tokenizer::from_file(directory.join("tokenizer.json")).map_err(inference_error)?;
         tokenizer.with_padding(None);
@@ -130,6 +141,15 @@ impl EmbeddingModel {
     }
 
     fn embed_tokens(&self, sequences: &[&[i64]], length: usize) -> AppResult<Vec<Vec<f32>>> {
+        self.embed_tokens_with_cancel(sequences, length, None)
+    }
+
+    fn embed_tokens_with_cancel(
+        &self,
+        sequences: &[&[i64]],
+        length: usize,
+        cancel: Option<&AtomicBool>,
+    ) -> AppResult<Vec<Vec<f32>>> {
         if sequences.is_empty() {
             return Ok(Vec::new());
         }
@@ -148,34 +168,32 @@ impl EmbeddingModel {
             .map_err(inference_error)?;
         let mask = Tensor::from_array(([batch, length], mask.into_boxed_slice()))
             .map_err(inference_error)?;
-        let outputs = self
-            .session
-            .run(
-                ort::inputs!["input_ids" => ids, "attention_mask" => mask]
-                    .map_err(inference_error)?,
-            )
-            .map_err(inference_error)?;
-        let output = outputs
-            .get("last_hidden_state")
-            .ok_or_else(|| inference_error("Missing last_hidden_state output"))?;
-        let (shape, values) = output
-            .try_extract_raw_tensor::<f32>()
-            .map_err(inference_error)?;
-        if shape != [batch as i64, length as i64, DIMENSIONS as i64] {
-            return Err(inference_error(format!(
-                "Unexpected Jina output shape: {shape:?}"
-            )));
-        }
-        sequences
-            .iter()
-            .enumerate()
-            .map(|(row, sequence)| {
-                // Right padding keeps real-token positions unchanged. Pool each
-                // row's last real token, never the last padded tensor position.
-                let offset = (row * length + sequence.len() - 1) * DIMENSIONS;
-                normalize_embedding(&values[offset..offset + DIMENSIONS])
-            })
-            .collect()
+        let rows = self.session.run(cancel, |session| {
+            let outputs = session.run(vec![
+                ("input_ids", ids.view()),
+                ("attention_mask", mask.view()),
+            ])?;
+            let output = outputs
+                .get("last_hidden_state")
+                .ok_or_else(|| ort::Error::new("Missing last_hidden_state output"))?;
+            let (shape, values) = output.try_extract_raw_tensor::<f32>()?;
+            if shape != [batch as i64, length as i64, DIMENSIONS as i64] {
+                return Err(ort::Error::new(format!(
+                    "Unexpected Jina output shape: {shape:?}"
+                )));
+            }
+            Ok(sequences
+                .iter()
+                .enumerate()
+                .map(|(row, sequence)| {
+                    // Right padding preserves real-token positions. Pool each
+                    // row's last real token, including on a CPU retry.
+                    let offset = (row * length + sequence.len() - 1) * DIMENSIONS;
+                    values[offset..offset + DIMENSIONS].to_vec()
+                })
+                .collect::<Vec<_>>())
+        })?;
+        rows.iter().map(|row| normalize_embedding(row)).collect()
     }
 
     fn embed(&self, text: &str, query: bool) -> AppResult<Vec<f32>> {
@@ -196,24 +214,8 @@ impl EmbeddingModel {
             batch,
             length,
             cancel,
-            &mut |tokens, padded| self.embed_tokens(tokens, padded),
+            &mut |tokens, padded| self.embed_tokens_with_cancel(tokens, padded, Some(cancel)),
             publish,
-        )
-    }
-
-    #[cfg(test)]
-    fn embed_documents(
-        &self,
-        texts: &[&str],
-        cancel: &AtomicBool,
-        publish: &mut dyn FnMut(Vec<(usize, Vec<f32>)>) -> AppResult<()>,
-    ) -> AppResult<()> {
-        embed_documents_with(
-            &self.tokenizer,
-            texts,
-            cancel,
-            publish,
-            |batch, length, publish| self.publish_batch(batch, length, cancel, publish),
         )
     }
 }
@@ -352,9 +354,33 @@ fn model_guard(
 }
 
 fn semantic_index_root(state: &tauri::State<'_, AppState>) -> AppResult<PathBuf> {
-    Ok(configured_cache_root(&preferences_clone(state)?)
-        .join("semantic-search")
-        .join(MODEL_REVISION))
+    prepare_subtitle_cache_root(&preferences_clone(state)?)
+}
+
+fn subtitle_cache_root(preferences: &Preferences) -> PathBuf {
+    configured_cache_root(preferences)
+        .join("Subtitle Semantic Search")
+        .join(format!("{:x}", Sha256::digest(MODEL_REVISION.as_bytes())))
+}
+
+fn prepare_subtitle_cache_root(preferences: &Preferences) -> AppResult<PathBuf> {
+    // Serialize the one-time rename across simultaneous preparation/search calls.
+    // Only the directory name changes; index identities and payloads stay valid.
+    static LAYOUT: Mutex<()> = Mutex::new(());
+    let _layout = LAYOUT.lock().map_err(inference_error)?;
+    let root = subtitle_cache_root(preferences);
+    let previous = configured_cache_root(preferences)
+        .join("Subtitle Semantic Search")
+        .join(MODEL_REVISION);
+    if !root.exists() && previous.is_dir() {
+        fs::rename(&previous, &root).map_err(|error| {
+            app_error(
+                ErrorCode::SemanticIndexWriteFailed,
+                format!("Cannot rename subtitle semantic cache directory: {error}"),
+            )
+        })?;
+    }
+    Ok(root)
 }
 
 // Indexing is query-independent and owns its cancellable background task.
@@ -506,6 +532,47 @@ pub(crate) async fn search_subtitles_semantic(
 mod tests {
     use super::index::{write_file_index, SubtitleFileIndex};
     use super::*;
+
+    #[test]
+    fn subtitle_cache_uses_new_directory_without_reusing_legacy_files() {
+        let cache_root = root();
+        let preferences = Preferences {
+            cache_dir: cache_root.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        let legacy = cache_root.join("semantic-search").join(MODEL_REVISION);
+        fs::create_dir_all(&legacy).unwrap();
+        let subtitles = [cue("source", "id", "hello")];
+        let files = subtitle_files(&subtitles);
+        let index = SubtitleFileIndex {
+            key: files[0].key.clone(),
+            embeddings: vec![Some(vector())],
+        };
+        write_file_index(&legacy, &index).unwrap();
+        let current = subtitle_cache_root(&preferences);
+        assert_eq!(
+            current,
+            cache_root
+                .join("Subtitle Semantic Search")
+                .join(format!("{:x}", Sha256::digest(MODEL_REVISION.as_bytes())))
+        );
+        let directory = current.file_name().unwrap().to_str().unwrap();
+        assert_eq!(directory.len(), 64);
+        assert!(directory.bytes().all(|c| c.is_ascii_hexdigit()));
+        assert!(read_file_index(&current, &files[0]).is_none());
+        assert!(read_file_index(&legacy, &files[0]).is_some());
+        let previous = cache_root
+            .join("Subtitle Semantic Search")
+            .join(MODEL_REVISION);
+        fs::create_dir_all(&previous).unwrap();
+        write_file_index(&previous, &index).unwrap();
+        assert_eq!(prepare_subtitle_cache_root(&preferences).unwrap(), current);
+        assert!(!previous.exists());
+        assert!(read_file_index(&current, &files[0]).is_some());
+        assert_eq!(prepare_subtitle_cache_root(&preferences).unwrap(), current);
+        assert_eq!(cache_root.parent(), Some(env::temp_dir().as_path()));
+        fs::remove_dir_all(cache_root).unwrap();
+    }
 
     fn cue(source: &str, id: &str, text: &str) -> SemanticSubtitle {
         SemanticSubtitle {
@@ -778,389 +845,6 @@ mod tests {
         }
         assert_eq!(padded_index_length(8192), 8192);
         assert_eq!(index_batch_capacity(8192), 1);
-    }
-
-    #[test]
-    #[ignore = "requires packaged assets; compares production indexing to the original scalar path"]
-    fn packaged_int8_optimized_indexing_smoke() {
-        use std::time::Instant;
-        let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
-        let runtime = resources.join("transnetv2");
-        let current = env::var_os("PATH").unwrap_or_default();
-        env::set_var(
-            "PATH",
-            env::join_paths(std::iter::once(runtime.clone()).chain(env::split_paths(&current)))
-                .unwrap(),
-        );
-        ort::init_from(
-            runtime
-                .join("onnxruntime.dll")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .with_telemetry(false)
-        .commit()
-        .unwrap();
-        let directory = resources.join("semantic-search");
-        let phrases = [
-            "我们明天出发。",
-            "请准备好行李，我们明天一早出发去海边，晚上回来。",
-            "明天一起去海边欣赏风景，请准备行李和相机，经过小镇后晚上回家。",
-            "日本語の字幕も同じ検索で使います。",
-            "Which planet is known as the Red Planet?",
-            "Mars is the Red Planet. We are traveling tomorrow and will return in the evening.",
-        ];
-        for automatic in [true, false] {
-            let (session, provider) = if automatic {
-                storyboard::create_model_session(&directory.join("model_quantized.onnx")).unwrap()
-            } else {
-                (
-                    storyboard::create_cpu_model_session(&directory.join("model_quantized.onnx"))
-                        .unwrap(),
-                    "CPU".to_string(),
-                )
-            };
-            let model = EmbeddingModel::from_session(session, &directory).unwrap();
-            let count = if automatic { 96 } else { 24 };
-            let subtitles = (0..count)
-                .map(|i| {
-                    cue(
-                        "A",
-                        &i.to_string(),
-                        &format!("{} {i}", phrases[i % phrases.len()]),
-                    )
-                })
-                .collect::<Vec<_>>();
-            let root = root();
-            model.embed(phrases[0], false).unwrap();
-            let started = Instant::now();
-            let references = subtitles
-                .iter()
-                .map(|cue| model.embed(&cue.text, false).unwrap())
-                .collect::<Vec<_>>();
-            let scalar_ms = started.elapsed().as_secs_f64() * 1000.0;
-            let started = Instant::now();
-            build_file_indexes(
-                &root,
-                &subtitle_files(&subtitles),
-                &AtomicBool::new(false),
-                |texts, publish| model.embed_documents(texts, &AtomicBool::new(false), publish),
-                |_, _| {},
-            )
-            .unwrap();
-            let optimized_ms = started.elapsed().as_secs_f64() * 1000.0;
-            let files = subtitle_files(&subtitles);
-            let index = read_file_index(&root, &files[0]).unwrap();
-            let minimum = index
-                .embeddings
-                .iter()
-                .zip(&references)
-                .map(|(actual, expected)| {
-                    actual
-                        .as_ref()
-                        .unwrap()
-                        .iter()
-                        .zip(expected)
-                        .map(|(a, b)| a * b)
-                        .sum::<f32>()
-                })
-                .fold(1.0, f32::min);
-            assert!(
-                minimum > 0.999,
-                "{provider}: batching changed embeddings: cosine={minimum}"
-            );
-            let started = Instant::now();
-            build_file_indexes(
-                &root,
-                &files,
-                &AtomicBool::new(false),
-                |_, _| panic!("A must remain cached in A+B"),
-                |_, _| {},
-            )
-            .unwrap();
-            let cached_ms = started.elapsed().as_secs_f64() * 1000.0;
-            eprintln!("OPTIMIZED {provider} unique_cues={count} scalar_ms={scalar_ms:.2} optimized_ms={optimized_ms:.2} speedup={:.2} cached_ms={cached_ms:.2} minimum_cosine={minimum:.6}", scalar_ms/optimized_ms);
-            // Validate actual reuse across A+B and after editing one cue.
-            let mut scope = subtitles;
-            scope.push(cue("B", "b", "One new document in the additional scope."));
-            let mut computed = 0;
-            build_file_indexes(
-                &root,
-                &subtitle_files(&scope),
-                &AtomicBool::new(false),
-                |texts, publish| {
-                    computed += texts.len();
-                    model.embed_documents(texts, &AtomicBool::new(false), publish)
-                },
-                |_, _| {},
-            )
-            .unwrap();
-            assert_eq!(computed, 1);
-            scope[0].text = "Edited document only.".into();
-            computed = 0;
-            build_file_indexes(
-                &root,
-                &subtitle_files(&scope),
-                &AtomicBool::new(false),
-                |texts, publish| {
-                    computed += texts.len();
-                    model.embed_documents(texts, &AtomicBool::new(false), publish)
-                },
-                |_, _| {},
-            )
-            .unwrap();
-            assert_eq!(computed, 1);
-            let tokens = model
-                .encode(&"word ".repeat(MAX_TOKENS * 2), false)
-                .unwrap();
-            assert_eq!(tokens.len(), MAX_TOKENS);
-            fs::remove_dir_all(root).unwrap();
-        }
-    }
-
-    #[test]
-    #[ignore = "requires packaged semantic and runtime assets; manual batching benchmark"]
-    fn packaged_int8_batch_probe() {
-        use std::time::Instant;
-        let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
-        let runtime = resources.join("transnetv2");
-        let current = env::var_os("PATH").unwrap_or_default();
-        env::set_var(
-            "PATH",
-            env::join_paths(std::iter::once(runtime.clone()).chain(env::split_paths(&current)))
-                .unwrap(),
-        );
-        ort::init_from(
-            runtime
-                .join("onnxruntime.dll")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .with_telemetry(false)
-        .commit()
-        .unwrap();
-        let directory = resources.join("semantic-search");
-        let texts = ["Tomorrow we travel.", "We will leave early tomorrow to visit the seaside and return home in the evening.", "Please bring your camera and luggage. Tomorrow we will travel together through several towns, enjoy the scenery on the coast, and come home after sunset."];
-        for automatic in [true, false] {
-            let (session, provider) = if automatic {
-                storyboard::create_model_session(&directory.join("model_quantized.onnx")).unwrap()
-            } else {
-                (
-                    storyboard::create_cpu_model_session(&directory.join("model_quantized.onnx"))
-                        .unwrap(),
-                    "CPU".to_string(),
-                )
-            };
-            let model = EmbeddingModel::from_session(session, &directory).unwrap();
-            let encoded = texts
-                .iter()
-                .map(|text| model.encode(text, false).unwrap())
-                .collect::<Vec<_>>();
-            let reference = texts
-                .iter()
-                .map(|text| model.embed(text, false).unwrap())
-                .collect::<Vec<_>>();
-            for batch in [1, 4, 8, 16, 32] {
-                let sequences = encoded
-                    .iter()
-                    .cycle()
-                    .take(batch)
-                    .map(Vec::as_slice)
-                    .collect::<Vec<_>>();
-                let length = sequences.iter().map(|ids| ids.len()).max().unwrap();
-                for padded in [length, padded_index_length(length)] {
-                    let vectors = model.embed_tokens(&sequences, padded).unwrap();
-                    let minimum = vectors
-                        .iter()
-                        .enumerate()
-                        .map(|(i, vector)| {
-                            vector
-                                .iter()
-                                .zip(&reference[i % texts.len()])
-                                .map(|(a, b)| a * b)
-                                .sum::<f32>()
-                        })
-                        .fold(1.0, f32::min);
-                    assert!(minimum > 0.99, "{provider} batch={batch} cosine={minimum}");
-                    let started = Instant::now();
-                    for _ in 0..3 {
-                        model.embed_tokens(&sequences, padded).unwrap();
-                    }
-                    eprintln!("BATCH {provider} rows={batch} tokens={padded} mean_ms={:.2} per_cue_ms={:.2} cosine={minimum:.6}", started.elapsed().as_secs_f64()*1000.0/3.0, started.elapsed().as_secs_f64()*1000.0/3.0/batch as f64);
-                }
-            }
-        }
-    }
-
-    #[test]
-    #[ignore = "manual performance probe; requires packaged semantic and ONNX Runtime assets"]
-    fn packaged_int8_indexing_profile() {
-        use ort::session::builder::GraphOptimizationLevel;
-        use std::time::Instant;
-
-        let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
-        let runtime = resources.join("transnetv2");
-        let current = env::var_os("PATH").unwrap_or_default();
-        env::set_var(
-            "PATH",
-            env::join_paths(std::iter::once(runtime.clone()).chain(env::split_paths(&current)))
-                .unwrap(),
-        );
-        ort::init_from(
-            runtime
-                .join("onnxruntime.dll")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .with_telemetry(false)
-        .commit()
-        .unwrap();
-        let directory = resources.join("semantic-search");
-        let model_path = directory.join("model_quantized.onnx");
-        let texts = [
-            "我们明天出发。",
-            "请准备好行李，我们明天一早出发去海边，晚上回来。",
-            "我们明天一早出发去海边，请准备好行李和相机，途中会经过几座小镇，大家可以一起欣赏风景，晚上再回家。",
-        ];
-        for kind in ["CPU-8", "CPU-1", "automatic"] {
-            let started = Instant::now();
-            let (session, provider) = match kind {
-                "CPU-8" => (
-                    storyboard::create_cpu_model_session(&model_path).unwrap(),
-                    kind.to_string(),
-                ),
-                "CPU-1" => (
-                    Session::builder()
-                        .unwrap()
-                        .with_optimization_level(GraphOptimizationLevel::Level3)
-                        .unwrap()
-                        .with_intra_threads(1)
-                        .unwrap()
-                        .commit_from_file(&model_path)
-                        .unwrap(),
-                    kind.to_string(),
-                ),
-                _ => storyboard::create_model_session(&model_path).unwrap(),
-            };
-            eprintln!(
-                "PROFILE {provider} session_load_ms={:.2}",
-                started.elapsed().as_secs_f64() * 1000.0
-            );
-            let started = Instant::now();
-            let model = EmbeddingModel::from_session(session, &directory).unwrap();
-            eprintln!(
-                "PROFILE {provider} tokenizer_load_ms={:.2}",
-                started.elapsed().as_secs_f64() * 1000.0
-            );
-            for text in texts {
-                let tokens = model
-                    .tokenizer
-                    .encode(format!("Document: {text}"), true)
-                    .unwrap()
-                    .len();
-                let started = Instant::now();
-                for _ in 0..20 {
-                    model
-                        .tokenizer
-                        .encode(format!("Document: {text}"), true)
-                        .unwrap();
-                }
-                let tokenize_ms = started.elapsed().as_secs_f64() * 1000.0 / 20.0;
-                let started = Instant::now();
-                model.embed(text, false).unwrap();
-                let first_ms = started.elapsed().as_secs_f64() * 1000.0;
-                let started = Instant::now();
-                for _ in 0..5 {
-                    model.embed(text, false).unwrap();
-                }
-                eprintln!("PROFILE {provider} tokens={tokens} tokenize_ms={tokenize_ms:.3} first_ms={first_ms:.2} warm_mean_ms={:.2}", started.elapsed().as_secs_f64() * 1000.0 / 5.0);
-            }
-            let started = Instant::now();
-            for text in texts.iter().cycle().take(9) {
-                model.embed(text, false).unwrap();
-            }
-            eprintln!(
-                "PROFILE {provider} alternating_lengths_mean_ms={:.2}",
-                started.elapsed().as_secs_f64() * 1000.0 / 9.0
-            );
-        }
-
-        // A separate trace avoids profiling overhead in the timing runs above.
-        let root = root();
-        let session = Session::builder()
-            .unwrap()
-            .with_parallel_execution(false)
-            .unwrap()
-            .with_memory_pattern(false)
-            .unwrap()
-            .with_execution_providers([
-                ort::execution_providers::DirectMLExecutionProvider::default()
-                    .with_device_id(0)
-                    .build()
-                    .error_on_failure(),
-            ])
-            .unwrap()
-            .with_optimization_level(GraphOptimizationLevel::Level3)
-            .unwrap()
-            .with_intra_threads(1)
-            .unwrap()
-            .with_profiling(root.join("ort-profile"))
-            .unwrap()
-            .commit_from_file(&model_path)
-            .unwrap();
-        let model = EmbeddingModel::from_session(session, &directory).unwrap();
-        model.embed(texts[1], false).unwrap();
-        let profile_path = model.session.end_profiling().unwrap();
-        let events: Vec<serde_json::Value> =
-            serde_json::from_slice(&fs::read(&profile_path).unwrap()).unwrap();
-        let mut providers = std::collections::BTreeMap::<String, (usize, u64)>::new();
-        let mut cpu_ops = std::collections::BTreeMap::<String, usize>::new();
-        for event in events {
-            if let Some(provider) = event["args"]["provider"].as_str() {
-                let entry = providers.entry(provider.to_string()).or_default();
-                entry.0 += 1;
-                entry.1 += event["dur"].as_u64().unwrap_or_default();
-                if provider == "CPUExecutionProvider" {
-                    *cpu_ops
-                        .entry(
-                            event["args"]["op_name"]
-                                .as_str()
-                                .unwrap_or("unknown")
-                                .to_string(),
-                        )
-                        .or_default() += 1;
-                }
-            }
-        }
-        eprintln!("PROFILE DirectML node_counts_and_total_us={providers:?} cpu_ops={cpu_ops:?}");
-        drop(model);
-
-        let subtitles = (0..1000)
-            .map(|id| cue("A", &id.to_string(), texts[1]))
-            .collect::<Vec<_>>();
-        let started = Instant::now();
-        let files = subtitle_files(&subtitles);
-        eprintln!(
-            "PROFILE 1000_cues_hash_ms={:.2}",
-            started.elapsed().as_secs_f64() * 1000.0
-        );
-        let index = SubtitleFileIndex {
-            key: files[0].key.clone(),
-            embeddings: vec![Some(vector()); 1000],
-        };
-        let started = Instant::now();
-        write_file_index(&root, &index).unwrap();
-        eprintln!(
-            "PROFILE 1000_cues_cache_write_ms={:.2}",
-            started.elapsed().as_secs_f64() * 1000.0
-        );
-        let started = Instant::now();
-        assert!(read_file_index(&root, &files[0]).is_some());
-        eprintln!(
-            "PROFILE 1000_cues_cache_read_validate_ms={:.2}",
-            started.elapsed().as_secs_f64() * 1000.0
-        );
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -80,7 +80,7 @@ function indexSubtitles(state: SearchState): IndexJob {
     const task = await createTaskProgress({
       operation: "subtitle.semanticIndex",
       resourceKey: state.scope,
-      label: "正在构建索引...",
+      label: "正在构建字幕索引...",
       current: 0,
       total: 1,
       on_cancel: async () => {
@@ -103,7 +103,7 @@ function indexSubtitles(state: SearchState): IndexJob {
           return;
         }
         task.update({
-          label: `正在构建 ${progress.total} 条索引...`,
+          label: `正在构建 ${progress.total} 条字幕索引...`,
           current: progress.total ? progress.completed / progress.total : 0,
         });
       });

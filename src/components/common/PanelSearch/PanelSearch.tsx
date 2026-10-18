@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, ChevronsUpDown, Search } from "lucide-react";
+import { ChevronLeft, ChevronRight, ChevronsUpDown } from "lucide-react";
 import { Fragment, useEffect, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -15,6 +15,8 @@ import {
   useCloseOnOutsidePointer,
 } from "../PopupMenu";
 import "./PanelSearch.css";
+import { SearchHistoryInput } from "./SearchHistoryInput";
+import type { SearchHistoryKind } from "./searchHistory";
 
 const ruleLabels: Record<SearchRule, string> = {
   contains: "包含",
@@ -31,6 +33,7 @@ type SearchScope = keyof typeof scopeLabels;
 
 interface PanelSearchProps {
   label: string;
+  historyKind: SearchHistoryKind;
   query: string;
   mode: SearchMode;
   rule: SearchRule;
@@ -46,11 +49,17 @@ interface PanelSearchProps {
   onScopeChange?: (scope: SearchScope) => void;
   onMatchNumberChange?: (matchNumber: number) => void;
   onNavigate: (direction: -1 | 1) => void;
-  semantic?: { threshold: number; onThresholdChange: (value: number) => void; available: boolean };
+  semantic?: {
+    threshold: number;
+    thresholdDecimals?: 2 | 3;
+    onThresholdChange: (value: number) => void;
+    available: boolean;
+  };
 }
 
 export function PanelSearch({
   label,
+  historyKind,
   query,
   mode,
   rule,
@@ -75,6 +84,8 @@ export function PanelSearch({
   } | null>(null);
   const [matchDraft, setMatchDraft] = useState<string | null>(null);
   const [thresholdDraft, setThresholdDraft] = useState<string | null>(null);
+  const thresholdDecimals = semantic?.thresholdDecimals ?? 2;
+  const thresholdScale = 10 ** thresholdDecimals;
   function commitThreshold() {
     if (!semantic?.available) {
       setThresholdDraft(null);
@@ -83,7 +94,9 @@ export function PanelSearch({
     if (thresholdDraft !== null && thresholdDraft.trim()) {
       const value = Number(thresholdDraft);
       if (Number.isFinite(value))
-        semantic?.onThresholdChange(Math.round(Math.min(1, Math.max(0, value)) * 100) / 100);
+        semantic.onThresholdChange(
+          Math.round(Math.min(1, Math.max(0, value)) * thresholdScale) / thresholdScale,
+        );
     }
     setThresholdDraft(null);
   }
@@ -140,16 +153,13 @@ export function PanelSearch({
 
   return (
     <div className="panel-search-row">
-      <label className="panel-search-input">
-        <Search aria-hidden="true" />
-        <input
-          value={query}
-          onChange={(event) => onQueryChange(event.currentTarget.value)}
-          placeholder={`搜索${label}`}
-          aria-label={`搜索${label}`}
-          disabled={disabled}
-        />
-      </label>
+      <SearchHistoryInput
+        label={label}
+        kind={historyKind}
+        query={query}
+        onQueryChange={onQueryChange}
+        disabled={disabled}
+      />
       <span className="panel-search-separator" aria-hidden="true" />
       {dropdown("mode", "模式", mode === "semantic" ? "语义" : mode === "filter" ? "过滤" : "高亮")}
       {mode === "semantic" && semantic ? (
@@ -159,7 +169,7 @@ export function PanelSearch({
             type="range"
             min={0}
             max={1}
-            step={0.01}
+            step={1 / thresholdScale}
             value={semantic.threshold}
             disabled={disabled || !semantic.available}
             aria-label="调整语义匹配度阈值"
@@ -170,12 +180,13 @@ export function PanelSearch({
           />
           <input
             className="panel-search-count-input panel-search-threshold-input"
-            value={thresholdDraft ?? semantic.threshold.toFixed(2)}
+            value={thresholdDraft ?? semantic.threshold.toFixed(thresholdDecimals)}
+            style={{ width: `${thresholdDecimals + 2}ch` }}
             inputMode="decimal"
             aria-label="语义匹配度阈值，范围 0 到 1"
             disabled={disabled || !semantic.available}
             onFocus={(event) => {
-              setThresholdDraft(semantic.threshold.toFixed(2));
+              setThresholdDraft(semantic.threshold.toFixed(thresholdDecimals));
               event.currentTarget.select();
             }}
             onChange={(event) => setThresholdDraft(event.currentTarget.value)}

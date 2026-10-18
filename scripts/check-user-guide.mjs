@@ -1,15 +1,11 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { userGuideOperationGroups } from "./user-guide-operations.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const guideRoot = path.join(repositoryRoot, "docs", "user-guide");
-const imagesRoot = path.join(guideRoot, "public", "images");
 const configPath = path.join(guideRoot, ".vitepress", "config.ts");
 const errors = [];
-const imageReferences = new Map();
-const markdownSources = new Map();
 
 async function listFiles(directory, extension) {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -17,6 +13,7 @@ async function listFiles(directory, extension) {
     entries.map(async (entry) => {
       const entryPath = path.join(directory, entry.name);
 
+      if (entry.name === ".vitepress") return [];
       if (entry.isDirectory()) {
         return listFiles(entryPath, extension);
       }
@@ -41,13 +38,10 @@ function report(filePath, message) {
   errors.push(`${relativeToGuide(filePath)}: ${message}`);
 }
 
-const markdownFiles = (await listFiles(guideRoot, ".md")).filter(
-  (filePath) => !relativeToGuide(filePath).startsWith(".vitepress/"),
-);
+const markdownFiles = await listFiles(guideRoot, ".md");
 
 for (const filePath of markdownFiles) {
   const source = await readFile(filePath, "utf8");
-  markdownSources.set(relativeToGuide(filePath), source);
   const route = pageRoute(filePath);
   const isHome = route === "/";
   const frontmatterMatch = source.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
@@ -81,70 +75,21 @@ for (const filePath of markdownFiles) {
     }
   }
 
-  if (source.includes("screenshot-placeholder")) {
-    report(filePath, "仍在使用废弃的 screenshot-placeholder");
+  if (/<GuideImage\b|screenshot-placeholder/u.test(source)) {
+    report(filePath, "禁止截图占位组件；只引用已存在的真实图片");
   }
-
-  for (const match of source.matchAll(/<GuideImage\b([^>]*)\/?\s*>/g)) {
-    const attributes = match[1];
-    const src = attributes.match(/\bsrc="([^"]+)"/)?.[1];
-    const alt = attributes.match(/\balt="([^"]+)"/)?.[1];
-
-    if (!src) {
-      report(filePath, "GuideImage 缺少 src");
-      continue;
+  for (const match of source.matchAll(/!\[([^\]]*)\]\(([^)]+)\)/gu)) {
+    const [, alt, image] = match;
+    if (!alt.trim()) report(filePath, `图片缺少替代文本：${image}`);
+    if (/^(?:https?:|data:)/u.test(image)) continue;
+    const target = image.startsWith("/")
+      ? path.join(guideRoot, "public", image)
+      : path.resolve(path.dirname(filePath), image);
+    try {
+      if (!(await stat(target)).isFile()) throw new Error("Not an image file");
+    } catch {
+      report(filePath, `图片不存在：${image}`);
     }
-    if (!/^\/images\/(?:[a-z0-9][a-z0-9._-]*\/)*[a-z0-9][a-z0-9._-]*\.png$/.test(src)) {
-      report(filePath, `截图路径必须是小写 PNG 绝对站点路径：${src}`);
-      continue;
-    }
-    if (!alt?.trim()) {
-      report(filePath, `截图 ${src} 缺少可访问的 alt 文本`);
-    } else if (alt.includes("截图占位")) {
-      report(filePath, `截图 ${src} 的 alt 应描述画面，不应包含“截图占位”`);
-    }
-    if (imageReferences.has(src)) {
-      report(filePath, `截图路径 ${src} 已被 ${imageReferences.get(src)} 引用`);
-    } else {
-      imageReferences.set(src, relativeToGuide(filePath));
-    }
-  }
-}
-
-const imageFiles = await listFiles(imagesRoot);
-const managedAssets = new Map();
-
-for (const filePath of imageFiles) {
-  const extension = path.extname(filePath).toLowerCase();
-  if (extension !== ".png" && extension !== ".txt") {
-    continue;
-  }
-
-  const relativePath = path.relative(imagesRoot, filePath).replaceAll(path.sep, "/");
-  const imagePath = `/images/${relativePath.replace(/\.(?:png|txt)$/i, ".png")}`;
-  const entry = managedAssets.get(imagePath) ?? {};
-  entry[extension.slice(1)] = filePath;
-  managedAssets.set(imagePath, entry);
-
-  if (!imageReferences.has(imagePath)) {
-    report(filePath, `资源未被任何 GuideImage 引用：${imagePath}`);
-  }
-
-  if (extension === ".txt") {
-    const prompt = await readFile(filePath, "utf8");
-    const firstLine = prompt.split(/\r?\n/, 1)[0];
-    if (firstLine !== `目标图片路径：${imagePath}`) {
-      report(filePath, `首行必须是“目标图片路径：${imagePath}”`);
-    }
-  }
-}
-
-for (const [imagePath, sourceFile] of imageReferences) {
-  const assets = managedAssets.get(imagePath);
-  if (!assets) {
-    errors.push(`${sourceFile}: ${imagePath} 既没有 PNG，也没有同名 TXT 说明`);
-  } else if (assets.png && assets.txt) {
-    errors.push(`${sourceFile}: ${imagePath} 已有 PNG，应删除同名 TXT 说明`);
   }
 }
 
@@ -167,42 +112,6 @@ for (const route of sidebarRoutes) {
   }
 }
 
-const operationIds = new Set();
-let operationCount = 0;
-
-for (const group of userGuideOperationGroups) {
-  const guideSource = markdownSources.get(group.guide);
-  if (!guideSource) {
-    errors.push(`scripts/user-guide-operations.mjs: ${group.id} 的页面不存在：${group.guide}`);
-    continue;
-  }
-  if (!guideSource.includes(group.heading)) {
-    errors.push(
-      `scripts/user-guide-operations.mjs: ${group.id} 的章节不存在：${group.guide} → ${group.heading}`,
-    );
-  }
-  for (const sourcePath of group.sources) {
-    const sourceTarget = path.join(repositoryRoot, sourcePath);
-    try {
-      await stat(sourceTarget);
-    } catch {
-      errors.push(`scripts/user-guide-operations.mjs: ${group.id} 的源码依据不存在：${sourcePath}`);
-    }
-  }
-  for (const [operationId, label, evidence = label] of group.operations) {
-    operationCount += 1;
-    if (operationIds.has(operationId)) {
-      errors.push(`scripts/user-guide-operations.mjs: 操作 id 重复：${operationId}`);
-    }
-    operationIds.add(operationId);
-    if (!guideSource.includes(evidence)) {
-      errors.push(
-        `scripts/user-guide-operations.mjs: ${group.guide} 缺少“${label}”的说明依据：${evidence}`,
-      );
-    }
-  }
-}
-
 if (errors.length > 0) {
   console.error(`用户指南检查失败（${errors.length} 项）：`);
   for (const error of errors) {
@@ -210,9 +119,5 @@ if (errors.length > 0) {
   }
   process.exitCode = 1;
 } else {
-  const placeholders = [...managedAssets.values()].filter((asset) => asset.txt).length;
-  const screenshots = [...managedAssets.values()].filter((asset) => asset.png).length;
-  console.log(
-    `用户指南检查通过：${markdownFiles.length} 个页面，${operationCount} 项用户操作，${screenshots} 张截图，${placeholders} 个待补截图。`,
-  );
+  console.log(`用户指南检查通过：${markdownFiles.length} 个页面。`);
 }

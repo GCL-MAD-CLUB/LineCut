@@ -65,6 +65,7 @@ export type StoryboardIconMetadataMode =
 interface StoryboardVideoSessionState {
   query: string;
   searchMode: SearchMode;
+  semanticThreshold: number;
   searchScope: StoryboardSearchScope;
   searchRule: StoryboardSearchRule;
   showOnlySelected: boolean;
@@ -91,6 +92,7 @@ interface StoryboardPanelUiState extends StoryboardVideoSessionState {
   syncVideoContext: (videoContext: string, workspaceId?: number | null) => void;
   setQuery: (query: string) => void;
   setSearchMode: (mode: SearchMode) => void;
+  setSemanticThreshold: (value: number) => void;
   setSearchScope: (scope: StoryboardSearchScope) => void;
   setSearchRule: (rule: StoryboardSearchRule) => void;
   setShowOnlySelected: (value: boolean) => void;
@@ -191,6 +193,7 @@ function defaultVideoSessionState(): StoryboardVideoSessionState {
   return {
     query: "",
     searchMode: "filter",
+    semanticThreshold: 0,
     searchScope: "any",
     searchRule: "contains",
     showOnlySelected: false,
@@ -210,6 +213,7 @@ function videoSessionFromState(state: StoryboardPanelUiState): StoryboardVideoSe
   return {
     query: state.query,
     searchMode: state.searchMode,
+    semanticThreshold: state.semanticThreshold,
     searchScope: state.searchScope,
     searchRule: state.searchRule,
     showOnlySelected: state.showOnlySelected,
@@ -371,6 +375,8 @@ const useStoryboardPanelUiState = createPanelState<StoryboardPanelUiState>(() =>
       };
     }),
   setQuery: (query) => set({ query }),
+  setSemanticThreshold: (value) =>
+    set({ semanticThreshold: Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0 }),
   setSearchMode: (searchMode) =>
     set((state) => ({
       searchMode,

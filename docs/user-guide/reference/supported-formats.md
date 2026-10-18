@@ -5,11 +5,9 @@ description: 查看 LineCut 支持导入、预览、分析和导出的媒体格�
 
 # 支持的格式与兼容性
 
-> 适用版本：LineCut 0.3.3。本文以 `release/0.3.3` 分支实现为准。
+> 适用版本：LineCut 0.3.3。
 
 LineCut 的导入、预览、分析和导出依赖媒体文件本身以及 FFmpeg/ffprobe 的解码能力。文件扩展名能帮助应用分类，但同一扩展名内部的编码差异仍可能影响是否能正常工作。
-
-<GuideImage src="/images/reference/supported-formats.png" alt="导入文件选择器的格式筛选" />
 
 ## 可导入的文件类型
 

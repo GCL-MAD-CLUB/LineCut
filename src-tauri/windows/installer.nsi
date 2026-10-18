@@ -690,19 +690,28 @@ Section Install
   ; Deselecting the component during reinstallation removes previously bundled models.
   ${If} $LineCutBundleSemantic == 0
     RMDir /r "$INSTDIR\semantic-search"
+    RMDir /r "$INSTDIR\storyboard-semantic"
   ${EndIf}
   {{#each resources_dirs}}
     StrCpy $0 "{{this}}\" 16
+    StrCpy $1 "{{this}}\" 20
     ${If} $LineCutBundleSemantic == 1
     ${OrIf} $0 != "semantic-search\"
-      CreateDirectory "$INSTDIR\\{{this}}"
+      ${If} $LineCutBundleSemantic == 1
+      ${OrIf} $1 != "storyboard-semantic\"
+        CreateDirectory "$INSTDIR\\{{this}}"
+      ${EndIf}
     ${EndIf}
   {{/each}}
   {{#each resources}}
     StrCpy $0 "{{this.[1]}}" 16
+    StrCpy $1 "{{this.[1]}}" 20
     ${If} $LineCutBundleSemantic == 1
     ${OrIf} $0 != "semantic-search\"
-      File /a "/oname={{this.[1]}}" "{{no-escape @key}}"
+      ${If} $LineCutBundleSemantic == 1
+      ${OrIf} $1 != "storyboard-semantic\"
+        File /a "/oname={{this.[1]}}" "{{no-escape @key}}"
+      ${EndIf}
     ${EndIf}
   {{/each}}
 
