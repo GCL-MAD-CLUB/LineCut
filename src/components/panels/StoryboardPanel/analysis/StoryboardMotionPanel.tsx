@@ -36,7 +36,6 @@ const motionEventSource = eventSource("storyboard-motion");
 interface Props {
   visible: boolean;
   shot?: StoryboardShot;
-  selectedFrames?: readonly number[];
   assetId?: string;
   fingerprint?: string;
   videoSource?: string;
@@ -88,7 +87,6 @@ function rememberTrace(cache: Map<string, FrameTraceData>, key: string, data: Fr
 export function StoryboardMotionPanel({
   visible,
   shot,
-  selectedFrames = [],
   assetId,
   fingerprint,
   videoSource,
@@ -503,28 +501,6 @@ export function StoryboardMotionPanel({
                   ))}
               </>
             )}
-            {shot &&
-              selectedFrames
-                .filter((frame) => frame >= shot.start_frame && frame <= shot.end_frame)
-                .map((frame) => {
-                  const x =
-                    shot.end_frame === shot.start_frame
-                      ? 0.5
-                      : (frame - shot.start_frame) / (shot.end_frame - shot.start_frame);
-                  return (
-                    <line
-                      key={frame}
-                      x1={x}
-                      x2={x}
-                      y1={0}
-                      y2={chartMaximum}
-                      stroke="#ff3030"
-                      strokeWidth={1.5}
-                      vectorEffect="non-scaling-stroke"
-                      pointerEvents="none"
-                    />
-                  );
-                })}
             {hoverProgress !== null && (
               <line
                 className="motion-hover-line"

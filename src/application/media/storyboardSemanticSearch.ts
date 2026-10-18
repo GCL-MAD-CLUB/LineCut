@@ -1,4 +1,3 @@
-import { publishSelectedFrames } from "./storyboardSelectedFrames";
 import { Channel } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invokeCommand, runOperation } from "../../errors";
@@ -153,15 +152,11 @@ function indexShots(state: SearchState): IndexJob {
           current: progress.total ? progress.completed / progress.total : 0,
         });
       });
-      const selected = await invokeCommand<{ id: string; frames: number[] }[]>(
-        "select_storyboard_frames",
-        {
-          shots: state.shots,
-          taskId,
-          onProgress,
-        },
-      );
-      if (!job.cancelled && !task.cancelled) publishSelectedFrames(state.shots, selected);
+      await invokeCommand("select_storyboard_frames", {
+        shots: state.shots,
+        taskId,
+        onProgress,
+      });
       return job.cancelled || task.cancelled ? ("cancelled" as const) : ("ready" as const);
     } catch (error) {
       if (job.cancelled || task.cancelled) return "cancelled" as const;

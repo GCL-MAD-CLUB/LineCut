@@ -65,12 +65,6 @@ pub(crate) struct SemanticShot {
 }
 
 #[derive(Serialize)]
-pub(crate) struct SelectedShotFrames {
-    id: String,
-    frames: Vec<usize>,
-}
-
-#[derive(Serialize)]
 pub(crate) struct StoryboardSemanticMatch {
     id: String,
     similarity: f32,
@@ -828,7 +822,7 @@ pub(crate) async fn select_storyboard_frames(
     on_progress: Channel<SelectionProgress>,
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
-) -> CommandResult<Vec<SelectedShotFrames>> {
+) -> CommandResult<()> {
     let task = register_task(&task_id, state.inner())?;
     let mut last_progress = None;
     let mut last_sent = std::time::Instant::now();
@@ -898,8 +892,7 @@ pub(crate) async fn select_storyboard_frames(
             // lets SigLIP2 for media A overlap selection/decoding for media B.
             std::thread::scope(|scope| {
                 let (sender, receiver) = std::sync::mpsc::sync_channel::<IndexWork>(1);
-                let worker = scope.spawn(|| -> AppResult<Vec<SelectedShotFrames>> {
-                    let mut output = Vec::with_capacity(total);
+                let worker = scope.spawn(|| -> AppResult<()> {
                     let mut processed = 0;
                     for work in receiver {
                         ensure_not_cancelled(cancel)?;
@@ -941,14 +934,8 @@ pub(crate) async fn select_storyboard_frames(
                             },
                         )?;
                         processed += work.group.len();
-                        for (&i, frames) in work.group.iter().zip(work.selections) {
-                            output.push(SelectedShotFrames {
-                                id: sources[i].shot.id.clone(),
-                                frames,
-                            });
-                        }
                     }
-                    Ok(output)
+                    Ok(())
                 });
                 let selected = (|| -> AppResult<()> {
                     let mut completed = 0;

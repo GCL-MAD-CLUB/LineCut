@@ -2,7 +2,6 @@ import {
   useStoryboardSemanticSearch,
   useStoryboardSemanticSearchAvailable,
 } from "../../../application/media/storyboardSemanticSearch";
-import { useStoryboardSelectedFrames } from "../../../application/media/storyboardSelectedFrames";
 import { panelSourceTitle } from "../../../core/editor/panelSourceSelection";
 import {
   sourceScope,
@@ -1468,9 +1467,6 @@ export function StoryboardPanel() {
     ? (playbackTraceShot ?? selectedMotionShot)
     : (selectedMotionShot ?? playbackTraceShot);
   const traceSource = traceShot ? sourceForShot(traceShot) : undefined;
-  const selectedFrames = useStoryboardSelectedFrames(
-    semanticShots.find((shot) => shot.id === traceShot?.id),
-  );
   const setActiveShotSort = viewMode === "grid" ? setGridShotSort : setShotSort;
   const sortedShots = useMemo(
     () =>
@@ -3886,7 +3882,6 @@ export function StoryboardPanel() {
               <StoryboardMotionPanel
                 visible={keywordPanelOpen}
                 shot={traceShot}
-                selectedFrames={selectedFrames}
                 assetId={traceSource?.assetId}
                 fingerprint={traceSource?.fingerprint}
                 videoSource={
