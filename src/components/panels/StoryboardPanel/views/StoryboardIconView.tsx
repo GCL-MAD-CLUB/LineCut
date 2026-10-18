@@ -3,6 +3,7 @@ import { Star } from "lucide-react";
 import {
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -13,6 +14,12 @@ import {
 import { createPortal } from "react-dom";
 import { formatMonitorFrame, formatMonitorTime } from "../../../../core/editor/time";
 import { frameToTimeUs } from "../../../../core/editor/timeline";
+import {
+  fitStoryboardGrid,
+  storyboardGridRenderRange,
+  type StoryboardGridLayout,
+} from "../../../../core/editor/storyboardGrid";
+import { usePanelActive } from "../../../../runtime/systems/PanelState";
 import {
   timelineThumbnails,
   timelineThumbnailResolutionForDisplay,
@@ -69,6 +76,7 @@ const storyboardIconMetadataOptions: Array<
 ];
 
 interface StoryboardIconViewProps {
+  sourceKey: string;
   sourceForRow: (row: StoryboardShot) => PanelRowSource;
   searchHighlight?: SearchHighlightOptions;
   semanticFrames?: ReadonlyMap<string, number>;
@@ -97,11 +105,6 @@ interface StoryboardIconViewProps {
   ) => void;
   shotTitle: (shot: StoryboardShot) => string;
   shotLabel: (shot: StoryboardShot) => string;
-}
-
-interface StoryboardGridLayout {
-  columns: number;
-  cardWidth: number;
 }
 
 interface StoryboardGridResizeAnchor {
@@ -208,6 +211,7 @@ function metadataText(
 }
 
 export function StoryboardIconView({
+  sourceKey,
   sourceForRow,
   searchHighlight,
   semanticFrames,
@@ -229,6 +233,7 @@ export function StoryboardIconView({
   shotTitle,
   shotLabel,
 }: StoryboardIconViewProps) {
+  const panelActive = usePanelActive();
   const {
     activeShotId,
     selectedShotIds,
@@ -255,22 +260,29 @@ export function StoryboardIconView({
   const previousGridCardWidthRef = useRef(gridCardWidth);
   const pendingGridResizeAnchorRef = useRef<StoryboardGridResizeAnchor | null>(null);
   const [metadataMenu, setMetadataMenu] = useState<{ x: number; y: number } | null>(null);
-  const stackMap = stacksByShotId(shotStacks);
+  const stackMap = useMemo(() => stacksByShotId(shotStacks), [shotStacks]);
+  const renderRange = storyboardGridRenderRange(
+    shots.length,
+    gridLayout.columns,
+    thumbnailVisibleRange,
+  );
   const gridStyle = {
     "--storyboard-icon-column-count": gridLayout.columns,
     "--storyboard-icon-card-render-width": `${gridLayout.cardWidth}px`,
     "--storyboard-icon-row-number-size": `${gridLayout.cardWidth * 0.295}px`,
     "--storyboard-row-height": `${gridLayout.cardWidth}px`,
+    height: Math.ceil(shots.length / gridLayout.columns) * gridLayout.cardWidth,
+    paddingTop: Math.floor(renderRange.startIndex / gridLayout.columns) * gridLayout.cardWidth,
   } as CSSProperties;
 
   useLayoutEffect(() => {
     const grid = gridRef.current;
-    if (!grid) {
+    if (!grid || !panelActive) {
       return;
     }
     const scrollContainer = scrollRef.current;
     const targetWidthChanged = previousGridCardWidthRef.current !== gridCardWidth;
-    const itemCount = grid.children.length;
+    const itemCount = shots.length;
     const centerPosition = scrollContainer
       ? (scrollContainer.scrollTop + scrollContainer.clientHeight / 2) /
         Math.max(1, gridLayout.cardWidth)
@@ -295,8 +307,7 @@ export function StoryboardIconView({
     const resizeAnchor =
       targetWidthChanged && scrollContainer && itemCount > 0
         ? {
-            shotId: (grid.children.item(anchorIndex) as HTMLElement | null)?.dataset
-              .storyboardShotId,
+            shotId: shots[anchorIndex]?.id,
             fallbackIndex: anchorIndex,
             rowFraction: clamp(centerPosition - centerRow, 0, 1),
           }
@@ -305,35 +316,20 @@ export function StoryboardIconView({
     let shouldRecordResizeAnchor = targetWidthChanged;
 
     const updateGridLayout = () => {
-      const currentItemCount = grid.children.length;
-      if (currentItemCount === 0) {
+      const currentItemCount = shots.length;
+      // display:none reports zero width. Keep the last valid layout while the tab is hidden.
+      if (currentItemCount === 0 || grid.clientWidth <= 0) {
         return;
       }
       const style = getComputedStyle(grid);
       const horizontalPadding =
         Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.paddingRight);
-      const columnGap = Number.parseFloat(style.columnGap) || 0;
       const availableWidth = Math.max(0, grid.clientWidth - horizontalPadding);
-      let columns = 1;
-      let minimumCardWidth = 0;
-      let fittedCardWidth = availableWidth;
-
-      for (let candidateColumns = currentItemCount; candidateColumns >= 1; candidateColumns -= 1) {
-        const candidateMinimumCardWidth =
-          (gridCardWidth * Math.max(0, candidateColumns - 1) +
-            columnGap * Math.max(0, candidateColumns - 2) -
-            Math.max(0, candidateColumns - 1)) /
-          candidateColumns;
-        const candidateFittedCardWidth =
-          (availableWidth - Math.max(0, candidateColumns - 1) * columnGap) / candidateColumns;
-        if (candidateFittedCardWidth >= candidateMinimumCardWidth) {
-          columns = candidateColumns;
-          minimumCardWidth = candidateMinimumCardWidth;
-          fittedCardWidth = candidateFittedCardWidth;
-          break;
-        }
-      }
-      const cardWidth = clamp(fittedCardWidth, minimumCardWidth, gridCardWidth);
+      const { columns, cardWidth } = fitStoryboardGrid(
+        currentItemCount,
+        availableWidth,
+        gridCardWidth,
+      );
       if (shouldRecordResizeAnchor) {
         shouldRecordResizeAnchor = false;
         pendingGridResizeAnchorRef.current =
@@ -355,7 +351,7 @@ export function StoryboardIconView({
     resizeObserver.observe(grid);
     updateGridLayout();
     return () => resizeObserver.disconnect();
-  }, [gridCardWidth, gridLayout.cardWidth, gridLayout.columns, scrollRef, shots.length]);
+  }, [gridCardWidth, gridLayout.cardWidth, gridLayout.columns, panelActive, scrollRef, shots]);
 
   useLayoutEffect(() => {
     const resizeAnchor = pendingGridResizeAnchorRef.current;
@@ -389,12 +385,14 @@ export function StoryboardIconView({
 
   useLayoutEffect(() => {
     const scrollContainer = scrollRef.current;
+    if (!panelActive) return;
     if (!scrollContainer || shots.length === 0) {
       setThumbnailVisibleRange({ startIndex: -1, endIndex: -1, centerIndex: -1 });
       return;
     }
 
     const updateVisibleRange = () => {
+      if (scrollContainer.clientHeight <= 0) return;
       const rowHeight = Math.max(1, gridLayout.cardWidth);
       const columnCount = Math.max(1, gridLayout.columns);
       const lastRow = Math.max(0, Math.ceil(shots.length / columnCount) - 1);
@@ -441,7 +439,7 @@ export function StoryboardIconView({
       resizeObserver.disconnect();
       scrollContainer.removeEventListener("scroll", updateVisibleRange);
     };
-  }, [gridLayout.cardWidth, gridLayout.columns, scrollRef, shots.length]);
+  }, [gridLayout.cardWidth, gridLayout.columns, panelActive, scrollRef, shots.length]);
 
   const thumbnailTargetResolution = timelineThumbnailResolutionForDisplay(
     gridLayout.cardWidth * 0.8,
@@ -454,8 +452,8 @@ export function StoryboardIconView({
       : frameToTimeUs(frame, sourceForRow(shot)?.frameRate ?? frameRate);
   }
   const thumbnailWindow = useTimelineThumbnailWindow({
-    enabled: Boolean(videoPath),
-    sourceKey: [...new Set(shots.map((shot) => sourceForRow(shot)?.context))].join("|"),
+    enabled: panelActive && Boolean(videoPath),
+    sourceKey,
     items: shots,
     getItemKey: (shot) => `${shot.id}:${getThumbnailTimeUs(shot)}`,
     visibleRange: thumbnailVisibleRange,
@@ -501,7 +499,8 @@ export function StoryboardIconView({
         onContextMenu={onContextMenu}
       >
         <div ref={gridRef} className="storyboard-icon-grid" style={gridStyle}>
-          {shots.map((shot, index) => {
+          {shots.slice(renderRange.startIndex, renderRange.endIndex).map((shot, localIndex) => {
+            const index = renderRange.startIndex + localIndex;
             const source = sourceForRow(shot);
             const selected = selectedShotIds.has(shot.id);
             const annotation = shotAnnotations[shot.id];
@@ -530,6 +529,8 @@ export function StoryboardIconView({
               <div
                 key={shot.id}
                 role="listitem"
+                aria-posinset={index + 1}
+                aria-setsize={shots.length}
                 tabIndex={0}
                 data-storyboard-shot-id={shot.id}
                 className={`storyboard-icon-card ${selected ? "is-selected" : ""} ${
@@ -565,7 +566,9 @@ export function StoryboardIconView({
                     previewVideoPath={source?.previewVideoPath ?? previewVideoPath}
                     frameRate={source?.frameRate ?? frameRate}
                     priority={Math.abs(index - thumbnailWindow.centerIndex)}
-                    requestEnabled={timelineThumbnailWindowContains(thumbnailWindow, index)}
+                    requestEnabled={
+                      panelActive && timelineThumbnailWindowContains(thumbnailWindow, index)
+                    }
                     targetResolution={thumbnailTargetResolution}
                     thumbnailTimeUs={getThumbnailTimeUs(shot)}
                     semanticFrame={semanticFrames?.get(shot.id)}

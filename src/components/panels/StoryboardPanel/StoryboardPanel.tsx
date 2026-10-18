@@ -60,6 +60,11 @@ import {
 import { frameToTimeUs, normalizeFrameRate } from "../../../core/editor/timeline";
 import { storyboardShotDefaultTitle } from "../../../core/editor/storyboard";
 import {
+  storyboardGridHitIndices,
+  storyboardGridScrollOffset,
+  type StoryboardGridLayout,
+} from "../../../core/editor/storyboardGrid";
+import {
   timelineThumbnails,
   timelineThumbnailVisibleRange,
   timelineThumbnailResolutionForDisplay,
@@ -671,6 +676,36 @@ function shotIndexAtFrame(shots: StoryboardShot[], currentFrame: number) {
   return -1;
 }
 
+function iconGridLayout(grid: HTMLElement): StoryboardGridLayout {
+  return {
+    columns: Math.max(1, Number(grid.style.getPropertyValue("--storyboard-icon-column-count"))),
+    cardWidth: Math.max(
+      1,
+      parseFloat(grid.style.getPropertyValue("--storyboard-icon-card-render-width")) || 200,
+    ),
+  };
+}
+
+function scrollToIconShot(
+  surface: HTMLElement | null,
+  index: number,
+  align: "center" | "nearest" = "nearest",
+  behavior: ScrollBehavior = "auto",
+) {
+  const grid = surface?.querySelector<HTMLElement>(".storyboard-icon-grid");
+  if (!surface || !grid || index < 0) return;
+  surface.scrollTo({
+    top: storyboardGridScrollOffset(
+      index,
+      iconGridLayout(grid),
+      surface.scrollTop,
+      surface.clientHeight,
+      align,
+    ),
+    behavior,
+  });
+}
+
 function nextShotIndexAfterFrame(shots: StoryboardShot[], currentFrame: number) {
   let low = 0;
   let high = shots.length;
@@ -1119,7 +1154,7 @@ function sortStoryboardShots(
 export function StoryboardPanel() {
   const panelInstanceId = usePanelInstanceId();
   const panelActive = usePanelActive();
-  const focusedPanelId = usePanelManagerState((state) => state.focusedPanelId);
+  const panelFocused = usePanelManagerState((state) => state.focusedPanelId === panelInstanceId);
   const identity = useStableIdentity("storyboard-panel", panelInstanceId);
   const {
     project,
@@ -1731,9 +1766,7 @@ export function StoryboardPanel() {
     if (viewMode === "list") {
       rowVirtualizer.scrollToIndex(targetIndex, { align: "center" });
     } else {
-      Array.from(listRef.current?.querySelectorAll<HTMLElement>("[data-storyboard-shot-id]") ?? [])
-        .find((element) => element.dataset.storyboardShotId === visibleShotId)
-        ?.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+      scrollToIconShot(listRef.current, targetIndex, "center", "smooth");
     }
     return "handled";
   });
@@ -1765,9 +1798,7 @@ export function StoryboardPanel() {
       rowVirtualizer.scrollToIndex(targetIndex, { align: "center" });
       return;
     }
-    Array.from(listRef.current?.querySelectorAll<HTMLElement>("[data-storyboard-shot-id]") ?? [])
-      .find((element) => element.dataset.storyboardShotId === shot.id)
-      ?.scrollIntoView({ block: "center", inline: "nearest" });
+    scrollToIconShot(listRef.current, targetIndex, "center");
   }
   useSearchNavigation(
     panelRef,
@@ -1826,7 +1857,7 @@ export function StoryboardPanel() {
         resolution,
       }),
   });
-  const isEditAuthority = panelActive && focusedPanelId === panelInstanceId;
+  const isEditAuthority = panelActive && panelFocused;
   const selectedAnnotationShotIds = useMemo(
     () => annotationShotIdsForSelection(selectedShotIds, shotStacksByShotId),
     [selectedShotIds, shotStacksByShotId],
@@ -2191,10 +2222,7 @@ export function StoryboardPanel() {
         return;
       }
       const grid = listRef.current?.querySelector<HTMLElement>(".storyboard-icon-grid");
-      const gridColumnCount =
-        viewMode === "grid" && grid
-          ? Math.max(1, getComputedStyle(grid).gridTemplateColumns.split(" ").length)
-          : 1;
+      const gridColumnCount = viewMode === "grid" && grid ? iconGridLayout(grid).columns : 1;
       const direction =
         event.key === "ArrowLeft"
           ? -1
@@ -2228,11 +2256,7 @@ export function StoryboardPanel() {
           rowVirtualizer.scrollToIndex(targetIndex, { align: "auto" });
           return;
         }
-        Array.from(
-          listRef.current?.querySelectorAll<HTMLElement>("[data-storyboard-shot-id]") ?? [],
-        )
-          .find((element) => element.dataset.storyboardShotId === targetId)
-          ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+        scrollToIconShot(listRef.current, targetIndex);
       };
 
       if (!event.shiftKey) {
@@ -2367,7 +2391,7 @@ export function StoryboardPanel() {
   );
 
   useEffect(() => {
-    if (!isPlaying) {
+    if (!isPlaying || !panelActive) {
       return;
     }
     const list = listRef.current;
@@ -2377,9 +2401,7 @@ export function StoryboardPanel() {
       return;
     }
     if (viewMode === "grid") {
-      Array.from(list.querySelectorAll<HTMLElement>("[data-storyboard-shot-id]"))
-        .find((element) => element.dataset.storyboardShotId === shot.id)
-        ?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+      scrollToIconShot(list, followShotIndex, "nearest", "smooth");
       return;
     }
     const offsetInfo = rowVirtualizer.getOffsetForIndex(followShotIndex, "center");
@@ -2436,6 +2458,7 @@ export function StoryboardPanel() {
     followShotIndex,
     frameRate,
     isPlaying,
+    panelActive,
     rowVirtualizer,
     sortedShots,
     viewMode,
@@ -2475,9 +2498,7 @@ export function StoryboardPanel() {
       rowVirtualizer.scrollToIndex(targetIndex, { align: "auto" });
       return;
     }
-    Array.from(listRef.current?.querySelectorAll<HTMLElement>("[data-storyboard-shot-id]") ?? [])
-      .find((element) => element.dataset.storyboardShotId === targetShot.id)
-      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    scrollToIconShot(listRef.current, targetIndex);
   }
 
   function deleteSelectedShots(ripple: boolean) {
@@ -2822,19 +2843,29 @@ export function StoryboardPanel() {
       const right = Math.max(startX, currentX);
       const top = Math.min(startY, currentY);
       const bottom = Math.max(startY, currentY);
+      const grid =
+        viewMode === "grid" ? surface.querySelector<HTMLElement>(".storyboard-icon-grid") : null;
+      const gridBounds = grid?.getBoundingClientRect();
       const hitIds = new Set(
-        Array.from(surface.querySelectorAll<HTMLElement>("[data-storyboard-shot-id]"))
-          .filter((element) => {
-            const rowBounds = element.getBoundingClientRect();
-            return (
-              rowBounds.right >= left &&
-              rowBounds.left <= right &&
-              rowBounds.bottom >= top &&
-              rowBounds.top <= bottom
-            );
-          })
-          .map((element) => element.dataset.storyboardShotId)
-          .filter((shotId): shotId is string => Boolean(shotId)),
+        grid && gridBounds
+          ? storyboardGridHitIndices(sortedShots.length, iconGridLayout(grid), {
+              left: left - gridBounds.left,
+              right: right - gridBounds.left,
+              top: top - gridBounds.top,
+              bottom: bottom - gridBounds.top,
+            }).map((index) => sortedShots[index].id)
+          : Array.from(surface.querySelectorAll<HTMLElement>("[data-storyboard-shot-id]"))
+              .filter((element) => {
+                const rowBounds = element.getBoundingClientRect();
+                return (
+                  rowBounds.right >= left &&
+                  rowBounds.left <= right &&
+                  rowBounds.bottom >= top &&
+                  rowBounds.top <= bottom
+                );
+              })
+              .map((element) => element.dataset.storyboardShotId)
+              .filter((shotId): shotId is string => Boolean(shotId)),
       );
       const nextSelection =
         togglesSelection || addsSelection ? new Set(initialSelection) : new Set<string>();
@@ -3848,6 +3879,7 @@ export function StoryboardPanel() {
             />
           ) : (
             <StoryboardIconView
+              sourceKey={videoContext}
               searchHighlight={searchScope !== "keywords" ? searchHighlight : undefined}
               semanticFrames={hasSemanticResults ? semantic.frames : undefined}
               shots={sortedShots}
@@ -3884,7 +3916,7 @@ export function StoryboardPanel() {
           topContent={
             <StoryboardFrameDataPanel
               histogramVisible={keywordPanelOpen && panelActive}
-              visible={keywordPanelOpen}
+              visible={keywordPanelOpen && panelActive}
               shot={traceShot}
               assetId={traceSource?.assetId}
               fingerprint={traceSource?.fingerprint}

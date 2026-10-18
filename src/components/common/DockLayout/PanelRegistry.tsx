@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, memo, useContext, useEffect, useState, type ReactNode } from "react";
 import { PanelInstanceProvider, usePublishedPanelTitle } from "../../../runtime/systems/PanelState";
 import { clientError } from "../../../errors";
 import {
@@ -117,13 +117,19 @@ function PanelDefinitionBoundary({ definition, instance, active }: PanelDefiniti
   );
 }
 
-export function PanelHost({ instanceId, active }: { instanceId: string; active: boolean }) {
+export const PanelHost = memo(function PanelHost({
+  instanceId,
+  active,
+}: {
+  instanceId: string;
+  active: boolean;
+}) {
   const { definition, instance } = useRegisteredPanel(instanceId);
   if (!definition || !instance) {
     return <div className="dock-empty-content">面板不可用</div>;
   }
   return <PanelDefinitionBoundary definition={definition} instance={instance} active={active} />;
-}
+});
 
 function PanelTitleContent({
   definition,
