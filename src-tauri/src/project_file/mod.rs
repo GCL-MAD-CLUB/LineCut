@@ -1,5 +1,6 @@
 use crate::{app_error, AppResult, ErrorCode, ProjectWorkspace};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -12,6 +13,9 @@ mod protocol;
 
 pub(crate) use io::write_atomic;
 
+// Keep manual saves from interleaving snapshot creation and document replacement.
+static PROJECT_SAVE_LOCK: Mutex<()> = Mutex::new(());
+
 pub(crate) fn normalize_project_path(path: &str) -> AppResult<PathBuf> {
     io::normalize_path(path)
 }
@@ -21,24 +25,69 @@ pub(crate) fn write_project_file(
     workspace: ProjectWorkspace,
     project_id: &str,
 ) -> AppResult<()> {
+    let _guard = PROJECT_SAVE_LOCK.lock().map_err(|error| {
+        app_error(
+            ErrorCode::ProjectWriteFailed,
+            format!("Project save lock is poisoned: {error}"),
+        )
+    })?;
+    write_current_project(path, workspace, project_id)
+}
+
+fn write_current_project(
+    path: &Path,
+    workspace: ProjectWorkspace,
+    project_id: &str,
+) -> AppResult<()> {
     let encrypted = encode_current_workspace(&workspace, project_id)?;
     io::write_atomic(path, &encrypted)
 }
 
 pub(crate) fn write_auto_save_snapshot(
-    cache_root: &Path,
+    directory: &Path,
     project_name: &str,
     workspace: ProjectWorkspace,
     project_id: &str,
     max_snapshots: usize,
 ) -> AppResult<Option<PathBuf>> {
     auto_save::write_snapshot(
-        cache_root,
+        directory,
         project_name,
         &workspace,
         project_id,
         max_snapshots,
     )
+}
+
+/// Always keep the recovery snapshot before replacing an existing project.
+/// An unchanged snapshot still permits saving the current project, for example
+/// when that option was enabled after the previous automatic save.
+pub(crate) fn auto_save_project(
+    directory: &Path,
+    project_name: &str,
+    workspace: ProjectWorkspace,
+    project_id: &str,
+    max_snapshots: usize,
+    current_project_path: Option<&Path>,
+) -> AppResult<bool> {
+    let _guard = PROJECT_SAVE_LOCK.lock().map_err(|error| {
+        app_error(
+            ErrorCode::AutoSaveWriteFailed,
+            format!("Project save lock is poisoned: {error}"),
+        )
+    })?;
+    write_auto_save_snapshot(
+        directory,
+        project_name,
+        workspace.clone(),
+        project_id,
+        max_snapshots,
+    )?;
+    if let Some(path) = current_project_path {
+        write_current_project(path, workspace, project_id)?;
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 fn encode_current_workspace(workspace: &ProjectWorkspace, project_id: &str) -> AppResult<Vec<u8>> {

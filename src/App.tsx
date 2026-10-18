@@ -53,6 +53,7 @@ import {
   type OperationKey,
 } from "./errors";
 import {
+  captureProjectAutoSave,
   getProjectWorkspaceSnapshot,
   loadProjectStates,
   mediaDisplayName,
@@ -371,6 +372,7 @@ function AppContent() {
     ],
   );
   const autoSaveIntervalMinutes = preferences.auto_save_interval_minutes;
+  const autoSaveEnabled = preferences.auto_save_enabled;
   const isMediaBinReadOnly = mediaBinReadOnly;
   const focusedPanel = focusedPanelId ? panelInstances[focusedPanelId] : undefined;
   const editCapabilities = useProjections<EditCapabilityProjection>(EDIT_CAPABILITY_PROJECTION);
@@ -451,13 +453,16 @@ function AppContent() {
       (outcome) => {
         if (outcome.status === "success") {
           preferencesLoaded(outcome.value);
+          if (!outcome.value.show_home_on_startup) {
+            setProjectHomeMode((current) => (current === "startup" ? null : current));
+          }
         }
       },
     );
   }, []);
 
   useEffect(() => {
-    if (!isTauriRuntime() || !hasProject) {
+    if (!isTauriRuntime() || !hasProject || !autoSaveEnabled) {
       return;
     }
 
@@ -467,22 +472,28 @@ function AppContent() {
         return;
       }
       snapshotRunning = true;
+      const snapshot = captureProjectAutoSave();
       void runOperation("project.autosave", () =>
-        invokeCommand<string | null>("auto_save_project_snapshot", {
+        invokeCommand<boolean>("auto_save_project_snapshot", {
           projectName: autoSaveProjectNameRef.current,
-          workspace: getProjectWorkspaceSnapshot(),
+          workspace: snapshot.workspace,
+          projectPath: snapshot.path,
           // A session that only imported media has no document id yet; an empty
           // id keeps auto-save snapshots content-deduplicated instead of minting
           // a fresh, ever-changing id every tick.
-          projectId: projectId ?? "",
+          projectId: snapshot.projectId ?? "",
         }),
-      ).finally(() => {
-        snapshotRunning = false;
-      });
+      )
+        .then((outcome) => {
+          if (outcome.status === "success" && outcome.value) snapshot.markSaved();
+        })
+        .finally(() => {
+          snapshotRunning = false;
+        });
     }, autoSaveIntervalMinutes * 60_000);
 
     return () => window.clearInterval(timer);
-  }, [autoSaveIntervalMinutes, hasProject, projectId]);
+  }, [autoSaveEnabled, autoSaveIntervalMinutes, hasProject, projectId]);
 
   useEffect(() => {
     if (!isTauriRuntime()) {

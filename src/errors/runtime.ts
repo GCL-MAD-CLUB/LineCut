@@ -249,7 +249,7 @@ const operationPolicies = {
   "media.revealProxy": modal("无法显示代理文件"),
   "preferences.load": modal("无法加载首选项"),
   "preferences.update": modal("无法保存首选项"),
-  "project.autosave": modal("自动备份失败"),
+  "project.autosave": modal("自动保存失败"),
   "project.close": modal("无法关闭项目"),
   "project.exportState.save": silent("保存项目导出设置失败"),
   "project.panelState.save": silent("保存面板状态失败"),

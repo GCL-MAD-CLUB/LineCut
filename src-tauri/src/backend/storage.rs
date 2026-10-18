@@ -83,6 +83,13 @@ pub(crate) fn configured_cache_root(preferences: &Preferences) -> PathBuf {
     path_or_default(&preferences.cache_dir, default_cache_root())
 }
 
+pub(crate) fn configured_auto_save_directory(preferences: &Preferences) -> PathBuf {
+    path_or_default(
+        &preferences.auto_save_dir,
+        configured_cache_root(preferences).join("LineCut Auto-Save"),
+    )
+}
+
 pub(crate) fn path_or_default(value: &str, default_path: PathBuf) -> PathBuf {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -241,7 +248,14 @@ pub(crate) fn normalize_preferences(preferences: Preferences) -> AppResult<Prefe
         ));
     }
     let default_preferences = Preferences::default();
+    let auto_save_dir = configured_auto_save_directory(&preferences)
+        .to_string_lossy()
+        .into_owned();
     let normalized = Preferences {
+        show_home_on_startup: preferences.show_home_on_startup,
+        auto_save_enabled: preferences.auto_save_enabled,
+        auto_save_current_project: preferences.auto_save_current_project,
+        auto_save_dir,
         cache_dir: if preferences.cache_dir.trim().is_empty() {
             default_preferences.cache_dir
         } else {
@@ -265,6 +279,12 @@ pub(crate) fn normalize_preferences(preferences: Preferences) -> AppResult<Prefe
         app_error(
             ErrorCode::PreferencesWriteFailed,
             format!("Failed to create the configured cache directory: {error}"),
+        )
+    })?;
+    fs::create_dir_all(configured_auto_save_directory(&normalized)).map_err(|error| {
+        app_error(
+            ErrorCode::PreferencesWriteFailed,
+            format!("Failed to create the configured auto-save directory: {error}"),
         )
     })?;
     Ok(normalized)
@@ -427,5 +447,70 @@ mod tests {
 
         assert_eq!(preferences.auto_save_interval_minutes, 5);
         assert_eq!(preferences.auto_save_max_snapshots, 20);
+        assert!(preferences.show_home_on_startup);
+        assert!(preferences.auto_save_enabled);
+        assert!(preferences.auto_save_current_project);
+        assert_eq!(
+            configured_auto_save_directory(&preferences),
+            PathBuf::from("cache").join("LineCut Auto-Save")
+        );
+    }
+
+    #[test]
+    fn preferences_preserve_disabled_options_after_normalization_and_round_trip() {
+        let cache_root =
+            std::env::temp_dir().join(format!("linecut-preferences-{}", uuid::Uuid::new_v4()));
+        let preferences = normalize_preferences(Preferences {
+            show_home_on_startup: false,
+            auto_save_enabled: false,
+            auto_save_current_project: false,
+            auto_save_dir: cache_root
+                .join("independent")
+                .to_string_lossy()
+                .into_owned(),
+            cache_dir: cache_root.to_string_lossy().into_owned(),
+            ..Preferences::default()
+        })
+        .unwrap();
+        let restored: Preferences =
+            serde_json::from_str(&serde_json::to_string(&preferences).unwrap()).unwrap();
+        assert!(!restored.show_home_on_startup);
+        assert!(!restored.auto_save_enabled);
+        assert!(!restored.auto_save_current_project);
+        assert_eq!(
+            configured_auto_save_directory(&restored),
+            cache_root.join("independent")
+        );
+        assert_eq!(restored.auto_save_interval_minutes, 5);
+        assert_eq!(restored.auto_save_max_snapshots, 20);
+        fs::remove_dir_all(cache_root).unwrap();
+    }
+
+    #[test]
+    fn auto_save_directory_defaults_to_cache_then_stays_independent() {
+        let root = std::env::temp_dir().join(format!(
+            "linecut-preferences-paths-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let preferences = normalize_preferences(Preferences {
+            cache_dir: root.join("cache-a").to_string_lossy().into_owned(),
+            auto_save_dir: String::new(),
+            ..Preferences::default()
+        })
+        .unwrap();
+        assert_eq!(
+            configured_auto_save_directory(&preferences),
+            root.join("cache-a").join("LineCut Auto-Save")
+        );
+        let changed_cache = normalize_preferences(Preferences {
+            cache_dir: root.join("cache-b").to_string_lossy().into_owned(),
+            ..preferences
+        })
+        .unwrap();
+        assert_eq!(
+            configured_auto_save_directory(&changed_cache),
+            root.join("cache-a").join("LineCut Auto-Save")
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 }

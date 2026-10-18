@@ -15,6 +15,7 @@ import {
   discardFutureProjectHistory,
   isProjectHistoryDirty,
   markProjectHistorySaved,
+  markProjectHistorySavedAt,
   type ProjectFileState,
   type ProjectHistoryCategory,
   type ProjectHistoryState,
@@ -744,6 +745,10 @@ function openedProjectState(workspace: ProjectWorkspace, projectId: string) {
 
 export function defaultPreferences(): Preferences {
   return {
+    show_home_on_startup: true,
+    auto_save_enabled: true,
+    auto_save_current_project: true,
+    auto_save_dir: "",
     cache_dir: "",
     ffmpeg_path: "ffmpeg",
     ffprobe_path: "ffprobe",
@@ -2238,6 +2243,36 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
 export function getProjectExportContext() {
   const state = projectState.getState();
   return { projectId: state.projectId, exportState: state.exportState };
+}
+
+/** Capture the exact file state so a late auto-save cannot clear newer edits. */
+export function captureProjectAutoSave() {
+  const captured = projectState.getState();
+  const fileState = projectFileStateFromStore(captured);
+  return {
+    projectId: captured.projectId,
+    path: captured.projectFilePath,
+    workspace: getProjectWorkspaceSnapshot(),
+    markSaved() {
+      projectState.setState((current) => {
+        if (
+          current.projectId !== captured.projectId ||
+          current.projectFilePath !== captured.projectFilePath ||
+          current.savedProjectFileState !== captured.savedProjectFileState
+        )
+          return current;
+        const projectHistory = markProjectHistorySavedAt(
+          current.projectHistory,
+          captured.projectHistory,
+        );
+        return {
+          savedProjectFileState: fileState,
+          projectHistory,
+          projectDirty: isProjectHistoryDirty(projectHistory),
+        };
+      });
+    },
+  };
 }
 
 /** Applies completed media imports through one media-bin and project-history operation. */

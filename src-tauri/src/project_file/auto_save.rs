@@ -1,11 +1,11 @@
 use crate::{app_error, AppResult, ErrorCode, ProjectWorkspace};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{encode_current_workspace, io, models};
 
-const AUTO_SAVE_DIRECTORY: &str = "LineCut Auto-Save";
 const MAX_PROJECT_NAME_CHARS: usize = 80;
 
 struct SnapshotEntry {
@@ -14,7 +14,7 @@ struct SnapshotEntry {
 }
 
 pub(super) fn write_snapshot(
-    cache_root: &Path,
+    directory: &Path,
     project_name: &str,
     workspace: &ProjectWorkspace,
     project_id: &str,
@@ -23,18 +23,23 @@ pub(super) fn write_snapshot(
     let max_snapshots = max_snapshots.max(1);
     let project_name = sanitized_project_name(project_name);
     let hash = models::content_hash(workspace, project_id)?;
-    let directory = cache_root.join(AUTO_SAVE_DIRECTORY);
-    fs::create_dir_all(&directory).map_err(|error| {
+    fs::create_dir_all(directory).map_err(|error| {
         app_error(
             ErrorCode::AutoSaveWriteFailed,
             format!("Failed to create the auto-save directory: {error}"),
         )
     })?;
 
-    let prefix = format!("{project_name}--");
-    let file_name = format!("{prefix}{hash}.lcp");
+    let identity = if project_id.is_empty() {
+        project_name.as_str()
+    } else {
+        project_id
+    };
+    let project_key = format!("{:x}", Sha256::digest(identity.as_bytes()));
+    let prefix = format!("{}--", &project_key[..16]);
+    let file_name = format!("{prefix}{project_name}--{hash}.lcp");
     let output_path = directory.join(&file_name);
-    let mut snapshots = snapshots(&directory, Some(&prefix))?;
+    let mut snapshots = snapshots(directory, Some(&prefix))?;
     sort_newest_first(&mut snapshots);
 
     if snapshots
@@ -42,22 +47,23 @@ pub(super) fn write_snapshot(
         .and_then(|snapshot| snapshot.path.file_name())
         .is_some_and(|name| name == file_name.as_str())
     {
-        prune_to_global_limit(&directory, max_snapshots, None)?;
+        prune_to_project_limit(directory, &prefix, max_snapshots, None)?;
         return Ok(None);
     }
 
     let encrypted = encode_current_workspace(workspace, project_id)?;
     io::write_atomic(&output_path, &encrypted)?;
-    prune_to_global_limit(&directory, max_snapshots, Some(&output_path))?;
+    prune_to_project_limit(directory, &prefix, max_snapshots, Some(&output_path))?;
     Ok(Some(output_path))
 }
 
-fn prune_to_global_limit(
+fn prune_to_project_limit(
     directory: &Path,
+    prefix: &str,
     max_snapshots: usize,
     current_path: Option<&Path>,
 ) -> AppResult<()> {
-    let mut snapshots = snapshots(directory, None)?;
+    let mut snapshots = snapshots(directory, Some(prefix))?;
     let current_snapshot = current_path.and_then(|current_path| {
         snapshots
             .iter()
@@ -169,7 +175,7 @@ fn sanitized_project_name(project_name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{sanitized_project_name, write_snapshot, AUTO_SAVE_DIRECTORY};
+    use super::{sanitized_project_name, write_snapshot};
     use crate::project_file::read_project_file;
     use crate::{ProjectEditorState, ProjectMediaBinState, ProjectPreviewState, ProjectWorkspace};
     use std::collections::HashMap;
@@ -201,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshots_only_changed_content_and_prunes_globally() {
+    fn snapshots_only_changed_content_and_keeps_versions_per_project() {
         let cache_root =
             std::env::temp_dir().join(format!("linecut-auto-save-test-{}", Uuid::new_v4()));
         fs::create_dir_all(&cache_root).unwrap();
@@ -217,21 +223,21 @@ mod tests {
         let second = write_snapshot(&cache_root, "Demo.lcp", &workspace("two"), "p-1", 2)
             .unwrap()
             .unwrap();
-        let third = write_snapshot(&cache_root, "Demo.lcp", &workspace("three"), "p-1", 2)
+        let third = write_snapshot(&cache_root, "Renamed.lcp", &workspace("three"), "p-1", 2)
             .unwrap()
             .unwrap();
-        let other = write_snapshot(&cache_root, "Other.lcp", &workspace("other"), "p-2", 2)
+        let other = write_snapshot(&cache_root, "Demo.lcp", &workspace("other"), "p-2", 2)
             .unwrap()
             .unwrap();
 
-        let files = fs::read_dir(cache_root.join(AUTO_SAVE_DIRECTORY))
+        let files = fs::read_dir(&cache_root)
             .unwrap()
             .filter_map(Result::ok)
             .filter(|entry| entry.path().extension().is_some_and(|value| value == "lcp"))
             .collect::<Vec<_>>();
-        assert_eq!(files.len(), 2);
+        assert_eq!(files.len(), 3);
         assert!(!first.exists());
-        assert!(!second.exists());
+        assert!(second.exists());
         assert!(third.exists());
         assert!(other.exists());
         assert_eq!(
@@ -241,5 +247,79 @@ mod tests {
         assert!(!read_project_file(&other).unwrap().1.is_empty());
 
         fs::remove_dir_all(cache_root).unwrap();
+    }
+
+    #[test]
+    fn independent_directory_and_optional_current_project_save() {
+        let root =
+            std::env::temp_dir().join(format!("linecut-auto-save-options-{}", Uuid::new_v4()));
+        let directory = root.join("custom-auto-save");
+        let current = root.join("Current.lcp");
+        crate::project_file::write_project_file(&current, workspace("original"), "p-1").unwrap();
+
+        assert!(!crate::project_file::auto_save_project(
+            &directory,
+            "Current",
+            workspace("changed"),
+            "p-1",
+            20,
+            None,
+        )
+        .unwrap());
+        assert_eq!(
+            read_project_file(&current)
+                .unwrap()
+                .0
+                .editor
+                .active_video_id,
+            "original"
+        );
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        assert!(!directory.join("LineCut Auto-Save").exists());
+
+        // The snapshot is unchanged, but enabling current-project saving must
+        // still write the document, preserving its identity.
+        assert!(crate::project_file::auto_save_project(
+            &directory,
+            "Current",
+            workspace("changed"),
+            "p-1",
+            20,
+            Some(&current),
+        )
+        .unwrap());
+        let (saved, id, _) = read_project_file(&current).unwrap();
+        assert_eq!(saved.editor.active_video_id, "changed");
+        assert_eq!(id, "p-1");
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_snapshot_does_not_replace_current_project() {
+        let root =
+            std::env::temp_dir().join(format!("linecut-auto-save-failure-{}", Uuid::new_v4()));
+        let current = root.join("Current.lcp");
+        crate::project_file::write_project_file(&current, workspace("original"), "p-1").unwrap();
+        let blocked = root.join("blocked");
+        fs::write(&blocked, b"not a directory").unwrap();
+        assert!(crate::project_file::auto_save_project(
+            &blocked,
+            "Current",
+            workspace("changed"),
+            "p-1",
+            20,
+            Some(&current),
+        )
+        .is_err());
+        assert_eq!(
+            read_project_file(&current)
+                .unwrap()
+                .0
+                .editor
+                .active_video_id,
+            "original"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 }

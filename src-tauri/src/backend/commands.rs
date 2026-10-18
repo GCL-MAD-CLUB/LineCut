@@ -1,6 +1,6 @@
 use super::*;
 use crate::project_file::{
-    normalize_project_path, read_project_file, write_auto_save_snapshot, write_project_file,
+    auto_save_project, normalize_project_path, read_project_file, write_project_file,
 };
 
 #[tauri::command]
@@ -135,29 +135,42 @@ pub(crate) async fn auto_save_project_snapshot(
     project_name: String,
     workspace: ProjectWorkspace,
     project_id: String,
+    project_path: Option<String>,
     state: tauri::State<'_, AppState>,
-) -> CommandResult<Option<String>> {
-    let (cache_root, max_snapshots) = {
+) -> CommandResult<bool> {
+    let (directory, max_snapshots, save_current) = {
         let preferences = state.preferences.lock().map_err(|_| {
             app_error(
                 ErrorCode::PreferencesStateUnavailable,
                 "Preferences state lock is poisoned",
             )
         })?;
+        if !preferences.auto_save_enabled {
+            return Ok(false);
+        }
         (
-            configured_cache_root(&preferences),
+            configured_auto_save_directory(&preferences),
             preferences.auto_save_max_snapshots as usize,
+            preferences.auto_save_current_project,
         )
     };
+    let current_path = if save_current {
+        project_path
+            .filter(|path| !path.trim().is_empty())
+            .map(|path| normalize_project_path(&path))
+            .transpose()?
+    } else {
+        None
+    };
     tokio::task::spawn_blocking(move || {
-        write_auto_save_snapshot(
-            &cache_root,
+        auto_save_project(
+            &directory,
             &project_name,
             workspace,
             &project_id,
             max_snapshots,
+            current_path.as_deref(),
         )
-        .map(|path| path.map(|path| path.to_string_lossy().into_owned()))
     })
     .await
     .map_err(|error| {
