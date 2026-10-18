@@ -1,4 +1,5 @@
-import { ChevronDown, ChevronsUpDown, RotateCw } from "lucide-react";
+import { StoryboardSidebarSection } from "../StoryboardSidebarSection";
+import { ChevronsUpDown, RotateCw } from "lucide-react";
 import {
   useEffect,
   useLayoutEffect,
@@ -405,8 +406,12 @@ export function StoryboardMotionPanel({
               : null;
 
   return (
-    <section className={`storyboard-motion-section ${open ? "" : "is-collapsed"}`.trim()}>
-      <header className="storyboard-keyword-panel-heading storyboard-frame-trace-heading">
+    <StoryboardSidebarSection
+      title="帧迹图"
+      className="storyboard-frame-data-section"
+      open={open}
+      onToggle={() => setOpen((value) => !value)}
+      control={
         <button
           type="button"
           className={`storyboard-keyword-dropdown-shell storyboard-keyword-mode-trigger ${modeMenu ? "is-open" : ""}`}
@@ -430,113 +435,103 @@ export function StoryboardMotionPanel({
             <ChevronsUpDown />
           </span>
         </button>
-        <button
-          type="button"
-          className="storyboard-keyword-panel-heading-title"
-          onClick={() => setOpen((value) => !value)}
-          aria-expanded={open}
+      }
+    >
+      <div
+        className="storyboard-motion-chart"
+        aria-busy={Boolean(!isPlaying && shot && assetId && !current?.failed && !data)}
+      >
+        <svg
+          ref={chartRef}
+          viewBox={`0 0 1 ${chartMaximum}`}
+          preserveAspectRatio="none"
+          role="img"
+          aria-label={`当前分镜的${modeLabel}帧迹图`}
+          onPointerEnter={updateHover}
+          onPointerMove={updateHover}
+          onPointerLeave={finishHover}
+          onPointerCancel={finishHover}
+          onClick={seekFromChart}
         >
-          <span>帧迹图</span>
-          <ChevronDown className={open ? "" : "is-collapsed"} aria-hidden="true" />
-        </button>
-      </header>
-      {open && (
-        <div
-          className="storyboard-motion-chart"
-          aria-busy={Boolean(!isPlaying && shot && assetId && !current?.failed && !data)}
-        >
-          <svg
-            ref={chartRef}
-            viewBox={`0 0 1 ${chartMaximum}`}
-            preserveAspectRatio="none"
-            role="img"
-            aria-label={`当前分镜的${modeLabel}帧迹图`}
-            onPointerEnter={updateHover}
-            onPointerMove={updateHover}
-            onPointerLeave={finishHover}
-            onPointerCancel={finishHover}
-            onClick={seekFromChart}
-          >
-            {mode === "motion" && hasTrace && curvePath && (
-              <>
-                <path className="motion-area" d={livePaths.motion.area} />
-                <path className="motion-line" d={curvePath} />
-              </>
-            )}
-            {mode === "sharpness" && hasTrace && sharpnessPath && (
-              <>
+          {mode === "motion" && hasTrace && curvePath && (
+            <>
+              <path className="motion-area" d={livePaths.motion.area} />
+              <path className="motion-line" d={curvePath} />
+            </>
+          )}
+          {mode === "sharpness" && hasTrace && sharpnessPath && (
+            <>
+              <path
+                className="frame-trace-area frame-trace-sharpness"
+                d={livePaths.sharpness.area}
+              />
+              <path className="frame-trace-line frame-trace-sharpness" d={sharpnessPath} />
+            </>
+          )}
+          {mode === "colors" && hasTrace && (
+            <>
+              {colorPaths.map(({ name, path, area }) => (
                 <path
-                  className="frame-trace-area frame-trace-sharpness"
-                  d={livePaths.sharpness.area}
+                  key={`fill-${name}`}
+                  className={`frame-trace-area frame-trace-${name}`}
+                  d={area ?? `${path} L1,2 L0,2 Z`}
                 />
-                <path className="frame-trace-line frame-trace-sharpness" d={sharpnessPath} />
-              </>
-            )}
-            {mode === "colors" && hasTrace && (
-              <>
-                {colorPaths.map(({ name, path, area }) => (
+              ))}
+              {colorPaths
+                .filter(({ name }) => name === "gray")
+                .map(({ name, path }) => (
                   <path
-                    key={`fill-${name}`}
-                    className={`frame-trace-area frame-trace-${name}`}
-                    d={area ?? `${path} L1,2 L0,2 Z`}
+                    key={`line-${name}`}
+                    className={`frame-trace-line frame-trace-${name}`}
+                    d={path}
                   />
                 ))}
-                {colorPaths
-                  .filter(({ name }) => name === "gray")
-                  .map(({ name, path }) => (
-                    <path
-                      key={`line-${name}`}
-                      className={`frame-trace-line frame-trace-${name}`}
-                      d={path}
-                    />
-                  ))}
-                {colorPaths
-                  .filter(({ name }) => name !== "gray")
-                  .map(({ name, path }) => (
-                    <path
-                      key={`line-${name}`}
-                      className={`frame-trace-line frame-trace-${name}`}
-                      d={path}
-                    />
-                  ))}
-              </>
-            )}
-            {hoverProgress !== null && (
-              <line
-                className="motion-hover-line"
-                x1={hoverProgress}
-                x2={hoverProgress}
-                y1="0"
-                y2={chartMaximum}
-              />
-            )}
-            {playbackProgress !== null && (
-              <line
-                className="frame-trace-playback-line"
-                x1={playbackProgress}
-                x2={playbackProgress}
-                y1="0"
-                y2={chartMaximum}
-              />
-            )}
-          </svg>
-          {status && (
-            <div className="storyboard-motion-status" role="status">
-              <span>{status}</span>
-              {current?.failed && (
-                <button
-                  type="button"
-                  title="重新计算"
-                  aria-label="重新计算"
-                  onClick={() => setRetry((value) => value + 1)}
-                >
-                  <RotateCw size={13} />
-                </button>
-              )}
-            </div>
+              {colorPaths
+                .filter(({ name }) => name !== "gray")
+                .map(({ name, path }) => (
+                  <path
+                    key={`line-${name}`}
+                    className={`frame-trace-line frame-trace-${name}`}
+                    d={path}
+                  />
+                ))}
+            </>
           )}
-        </div>
-      )}
+          {hoverProgress !== null && (
+            <line
+              className="motion-hover-line"
+              x1={hoverProgress}
+              x2={hoverProgress}
+              y1="0"
+              y2={chartMaximum}
+            />
+          )}
+          {playbackProgress !== null && (
+            <line
+              className="frame-trace-playback-line"
+              x1={playbackProgress}
+              x2={playbackProgress}
+              y1="0"
+              y2={chartMaximum}
+            />
+          )}
+        </svg>
+        {status && (
+          <div className="storyboard-motion-status" role="status">
+            <span>{status}</span>
+            {current?.failed && (
+              <button
+                type="button"
+                title="重新计算"
+                aria-label="重新计算"
+                onClick={() => setRetry((value) => value + 1)}
+              >
+                <RotateCw size={13} />
+              </button>
+            )}
+          </div>
+        )}
+      </div>
       {open &&
         modeMenu &&
         createPortal(
@@ -564,6 +559,6 @@ export function StoryboardMotionPanel({
           </PopupMenu>,
           document.body,
         )}
-    </section>
+    </StoryboardSidebarSection>
   );
 }

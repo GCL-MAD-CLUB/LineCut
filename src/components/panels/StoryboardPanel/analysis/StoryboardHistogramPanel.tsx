@@ -1,4 +1,4 @@
-import { ChevronDown } from "lucide-react";
+import { StoryboardSidebarSection } from "../StoryboardSidebarSection";
 import { useMemo, useState } from "react";
 import { usePlaybackStatus } from "../../../../runtime/capabilities/PlaybackCapability";
 import { usePanelInstanceId } from "../../../../runtime/systems/PanelState";
@@ -31,24 +31,19 @@ export function StoryboardHistogramPanel({ visible }: { visible: boolean }) {
     }));
   }, [histogram]);
   return (
-    <section
-      className={`storyboard-motion-section ${open ? "" : "is-collapsed"}`.trim()}
+    <div
       data-preserve-panel-focus
-      onPointerDown={(event) => event.stopPropagation()}
+      onPointerDown={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
     >
-      <header className="storyboard-keyword-panel-heading">
-        <button
-          type="button"
-          className="storyboard-keyword-panel-heading-title"
-          onPointerDown={(event) => event.preventDefault()}
-          onClick={() => setOpen((value) => !value)}
-          aria-expanded={open}
-        >
-          <span>直方图</span>
-          <ChevronDown className={open ? "" : "is-collapsed"} aria-hidden="true" />
-        </button>
-      </header>
-      {open && (
+      <StoryboardSidebarSection
+        title="直方图"
+        className="storyboard-frame-data-section"
+        open={open}
+        onToggle={() => setOpen((value) => !value)}
+      >
         <div className="storyboard-motion-chart">
           <svg
             viewBox="0 0 1 2"
@@ -72,7 +67,7 @@ export function StoryboardHistogramPanel({ visible }: { visible: boolean }) {
             ))}
           </svg>
         </div>
-      )}
-    </section>
+      </StoryboardSidebarSection>
+    </div>
   );
 }

@@ -103,9 +103,8 @@ import {
 } from "./annotations/StoryboardColorLabelButtons";
 import { StoryboardIconView } from "./views/StoryboardIconView";
 import { StoryboardKeywordPanel } from "./annotations/StoryboardKeywordPanel";
-import { StoryboardMotionPanel } from "./analysis/StoryboardMotionPanel";
+import { StoryboardFrameDataPanel } from "./analysis/StoryboardFrameDataPanel";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { StoryboardHistogramPanel } from "./analysis/StoryboardHistogramPanel";
 import {
   existingStoryboardKeywordIdsForPaths,
   formatStoryboardKeywordPath,
@@ -3881,41 +3880,39 @@ export function StoryboardPanel() {
         )}
         <StoryboardKeywordPanel
           topContent={
-            <>
-              <StoryboardHistogramPanel visible={keywordPanelOpen && panelActive} />
-              <StoryboardMotionPanel
-                visible={keywordPanelOpen}
-                shot={traceShot}
-                assetId={traceSource?.assetId}
-                fingerprint={traceSource?.fingerprint}
-                videoSource={
-                  traceSource
-                    ? traceSource.videoId === tracePlaybackStatus?.videoId
-                      ? (tracePlaybackStatus.videoSource ?? convertFileSrc(traceSource.videoPath))
-                      : convertFileSrc(traceSource.videoPath)
-                    : undefined
-                }
-                frameRate={traceSource?.frameRate}
-                isPlaying={tracePlaybackStatus?.isPlaying ?? false}
-                playbackFrame={
-                  traceSource && tracePlaybackStatus?.videoId === traceSource.videoId
-                    ? tracePlaybackStatus.currentFrame
-                    : undefined
-                }
-                onSeekFrame={(frame) => {
-                  if (!traceSource) return;
-                  previewSource(traceSource.videoId, traceSource.trackId, frame);
-                  publishEvent(
-                    "playback.seek.requested",
-                    {
-                      videoId: traceSource.videoId,
-                      timeUs: frameToTimeUs(frame, traceSource.frameRate),
-                    },
-                    storyboardEventSource,
-                  );
-                }}
-              />
-            </>
+            <StoryboardFrameDataPanel
+              histogramVisible={keywordPanelOpen && panelActive}
+              visible={keywordPanelOpen}
+              shot={traceShot}
+              assetId={traceSource?.assetId}
+              fingerprint={traceSource?.fingerprint}
+              videoSource={
+                traceSource
+                  ? traceSource.videoId === tracePlaybackStatus?.videoId
+                    ? (tracePlaybackStatus.videoSource ?? convertFileSrc(traceSource.videoPath))
+                    : convertFileSrc(traceSource.videoPath)
+                  : undefined
+              }
+              frameRate={traceSource?.frameRate}
+              isPlaying={tracePlaybackStatus?.isPlaying ?? false}
+              playbackFrame={
+                traceSource && tracePlaybackStatus?.videoId === traceSource.videoId
+                  ? tracePlaybackStatus.currentFrame
+                  : undefined
+              }
+              onSeekFrame={(frame) => {
+                if (!traceSource) return;
+                previewSource(traceSource.videoId, traceSource.trackId, frame);
+                publishEvent(
+                  "playback.seek.requested",
+                  {
+                    videoId: traceSource.videoId,
+                    timeUs: frameToTimeUs(frame, traceSource.frameRate),
+                  },
+                  storyboardEventSource,
+                );
+              }}
+            />
           }
           active={isEditAuthority && keywordPanelOpen && !sprayActive}
           draggedKeywordHoverId={shotKeywordDragPreview?.hoveredKeywordId ?? null}
