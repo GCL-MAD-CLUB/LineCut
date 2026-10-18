@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, ChevronsUpDown, Search } from "lucide-react";
+import { ChevronLeft, ChevronRight, ChevronsUpDown } from "lucide-react";
 import { Fragment, useEffect, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -15,6 +15,8 @@ import {
   useCloseOnOutsidePointer,
 } from "../PopupMenu";
 import "./PanelSearch.css";
+import { SearchHistoryInput } from "./SearchHistoryInput";
+import type { SearchHistoryKind } from "./searchHistory";
 
 const ruleLabels: Record<SearchRule, string> = {
   contains: "包含",
@@ -31,6 +33,7 @@ type SearchScope = keyof typeof scopeLabels;
 
 interface PanelSearchProps {
   label: string;
+  historyKind: SearchHistoryKind;
   query: string;
   mode: SearchMode;
   rule: SearchRule;
@@ -56,6 +59,7 @@ interface PanelSearchProps {
 
 export function PanelSearch({
   label,
+  historyKind,
   query,
   mode,
   rule,
@@ -149,16 +153,13 @@ export function PanelSearch({
 
   return (
     <div className="panel-search-row">
-      <label className="panel-search-input">
-        <Search aria-hidden="true" />
-        <input
-          value={query}
-          onChange={(event) => onQueryChange(event.currentTarget.value)}
-          placeholder={`搜索${label}`}
-          aria-label={`搜索${label}`}
-          disabled={disabled}
-        />
-      </label>
+      <SearchHistoryInput
+        label={label}
+        kind={historyKind}
+        query={query}
+        onQueryChange={onQueryChange}
+        disabled={disabled}
+      />
       <span className="panel-search-separator" aria-hidden="true" />
       {dropdown("mode", "模式", mode === "semantic" ? "语义" : mode === "filter" ? "过滤" : "高亮")}
       {mode === "semantic" && semantic ? (

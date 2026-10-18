@@ -3630,6 +3630,7 @@ export function StoryboardPanel() {
 
       <PanelSearch
         label="分镜"
+        historyKind="storyboard"
         semantic={
           semanticSearchAvailable
             ? {

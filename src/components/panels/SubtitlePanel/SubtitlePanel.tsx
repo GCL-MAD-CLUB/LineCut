@@ -2394,6 +2394,7 @@ export function SubtitlePanel() {
 
       <PanelSearch
         label="字幕"
+        historyKind="subtitle"
         query={query}
         mode={searchMode}
         rule={searchRule}
