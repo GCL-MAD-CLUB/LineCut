@@ -1137,12 +1137,21 @@ export function StoryboardPanel() {
     mediaItems,
     mediaFolders,
     projects,
+    projectId,
     detachedVideoIds,
     storyboards,
     exportState,
     messagePublished,
   } = useProjectPort(
-    ["mediaItems", "mediaFolders", "projects", "detachedVideoIds", "storyboards", "exportState"],
+    [
+      "mediaItems",
+      "mediaFolders",
+      "projects",
+      "projectId",
+      "detachedVideoIds",
+      "storyboards",
+      "exportState",
+    ],
     ["messagePublished"],
   );
   const {
@@ -1357,7 +1366,7 @@ export function StoryboardPanel() {
     searchMode === "semantic",
     query,
     semanticShots,
-    JSON.stringify([selection.projectId, selection.workspaceId, videoContext]),
+    JSON.stringify([projectId, selection.workspaceId, videoContext]),
     () => setQuery(""),
   );
   const showSimilarity = searchMode === "semantic" && Boolean(query.trim());

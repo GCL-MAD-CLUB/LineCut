@@ -85,6 +85,8 @@ pub(crate) struct SelectionProgress {
 
 // Both stages advance the same task. Fractional shots let inference batches
 // report progress even when a source contains only one long storyboard.
+const SELECTION_PROGRESS_WEIGHT: f64 = 0.75;
+
 struct BuildProgress<F> {
     total: usize,
     report: F,
@@ -95,12 +97,20 @@ struct BuildProgress<F> {
 impl<F: FnMut(f64, usize)> BuildProgress<F> {
     fn selection(&mut self, completed: f64) {
         self.selected = completed;
-        (self.report)((self.selected + self.indexed) * 0.5, self.total);
+        self.publish();
     }
 
     fn indexing(&mut self, completed: f64) {
         self.indexed = completed;
-        (self.report)((self.selected + self.indexed) * 0.5, self.total);
+        self.publish();
+    }
+
+    fn publish(&mut self) {
+        (self.report)(
+            self.selected * SELECTION_PROGRESS_WEIGHT
+                + self.indexed * (1.0 - SELECTION_PROGRESS_WEIGHT),
+            self.total,
+        );
     }
 }
 
@@ -827,7 +837,7 @@ pub(crate) async fn select_storyboard_frames(
             return;
         }
         if completed != total as f64
-            && completed != total as f64 * 0.5
+            && completed != total as f64 * SELECTION_PROGRESS_WEIGHT
             && last_progress.is_some_and(|(_, previous)| previous == total)
             && last_sent.elapsed() < Duration::from_millis(100)
         {
@@ -1129,6 +1139,20 @@ fn search_completed_shots(
 }
 
 #[tauri::command]
+pub(crate) async fn initialize_storyboard_semantic_search(
+    app: tauri::AppHandle,
+) -> CommandResult<()> {
+    tokio::task::spawn_blocking(move || siglip::initialize_text_model(&app))
+        .await
+        .map_err(|error| {
+            app_error(
+                ErrorCode::BlockingTaskFailed,
+                format!("Storyboard semantic initialization failed: {error}"),
+            )
+        })?
+}
+
+#[tauri::command]
 pub(crate) async fn search_storyboards_semantic(
     query: String,
     shots: Vec<SemanticShot>,
@@ -1210,7 +1234,7 @@ mod tests {
         progress.indexing(2.0);
         progress.selection(4.0);
         progress.indexing(4.0);
-        assert_eq!(updates, vec![1.0, 1.25, 1.5, 2.25, 3.0, 4.0]);
+        assert_eq!(updates, vec![1.5, 1.625, 2.0, 2.375, 3.5, 4.0]);
     }
 
     #[test]
@@ -1377,7 +1401,7 @@ mod tests {
     }
 
     #[test]
-    fn one_task_progress_advances_with_batches_in_both_equal_stages() {
+    fn one_task_progress_weights_selection_and_siglip_batches_three_to_one() {
         let mut updates = Vec::new();
         let mut progress = BuildProgress {
             total: 2,
@@ -1397,12 +1421,12 @@ mod tests {
         assert_eq!(
             updates,
             vec![
-                (0.25, 2),
-                (0.5, 2),
-                (1.0, 2),
-                (1.25, 2),
+                (0.375, 2),
+                (0.75, 2),
                 (1.5, 2),
+                (1.625, 2),
                 (1.75, 2),
+                (1.875, 2),
                 (2.0, 2)
             ]
         );

@@ -193,7 +193,7 @@ function defaultVideoSessionState(): StoryboardVideoSessionState {
   return {
     query: "",
     searchMode: "filter",
-    semanticThreshold: 0.5,
+    semanticThreshold: 0,
     searchScope: "any",
     searchRule: "contains",
     showOnlySelected: false,
@@ -376,7 +376,7 @@ const useStoryboardPanelUiState = createPanelState<StoryboardPanelUiState>(() =>
     }),
   setQuery: (query) => set({ query }),
   setSemanticThreshold: (value) =>
-    set({ semanticThreshold: Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0.5 }),
+    set({ semanticThreshold: Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0 }),
   setSearchMode: (searchMode) =>
     set((state) => ({
       searchMode,

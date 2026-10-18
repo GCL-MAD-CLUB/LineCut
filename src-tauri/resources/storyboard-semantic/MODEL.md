@@ -46,9 +46,16 @@ bounded media handoff. SigLIP2 for one media can overlap selection and decoding
 for the next media. Complete caches require neither decoding nor inference;
 when only a semantic index needs repair, only missing selected frames are decoded,
 coalescing nearby frames and seeking over gaps greater than two seconds.
-Windows requests D3D11VA decoding with up to 16 processing threads. If hardware
-decoding fails before emitting pixels, it retries once in software; a partial
-stream is never replayed into inference. Closing a consumer terminates and joins
+Windows requests D3D11VA decoding with up to 16 processing threads and checks
+`scale_d3d11` compilation once per FFmpeg program. When present, it requests
+`-hwaccel_output_format d3d11` and tries GPU resize to 256 before NV12 download
+and RGB conversion. Real work validates device/media compatibility. Before any
+pixels have been emitted, failures fall back through explicit NV12 download with
+software resize, the original automatic download path, and software decoding.
+Sparse `select` always precedes explicit download and resize. A bounded cache
+remembers failed paths per program/media/stream; later shots skip them. Closed
+consumers and partially emitted streams never retry or replay into inference.
+Closing a consumer terminates and joins
 its decoder. No inferred selection is committed until its merged decoder exits
 successfully; the semantic index likewise requires validated pixels.
 The query encoder runs on CPU in its own serialized session because DirectML can
@@ -59,7 +66,7 @@ diagnosis; it does not require a particular provider defect.
 
 Selection and vision encoding occupy one cancellable task. A storyboard counts
 as complete only after both stages succeed. The same progress bar adds the independent
-selection and SigLIP2 counters with 50% weight each, including overlapping media. Both stages report batch
+selection and SigLIP2 counters with 75% and 25% weights respectively, including overlapping media. Both stages report batch
 progress and cached shot completion; the last fraction of each shot is reserved
 for successful validation and persistence. Semantic indexes live in the configured
 cache root as
@@ -132,7 +139,8 @@ The shared ONNX Runtime and DirectML binaries come from `npm run prepare:transne
 The build prepares this component automatically; the existing installer semantic
 component choice controls both subtitle and storyboard models.
 
-Input: original stream bilinear-resized once to RGB 256 × 256, followed by a
+Input: original stream resized once to RGB 256 × 256 (D3D11 video processing when
+available, bilinear software fallback), followed by a
 center-aligned bilinear resize to 224 × 224 without center cropping, NCHW float32,
 rescale 1/255, mean `[0.485, 0.456, 0.406]`, std `[0.229, 0.224, 0.225]`.
 Output: `pooler_output`, 384-dimensional CLS feature, followed by L2 normalization.

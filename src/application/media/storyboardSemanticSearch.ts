@@ -2,6 +2,7 @@ import { publishSelectedFrames } from "./storyboardSelectedFrames";
 import { Channel } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invokeCommand, runOperation } from "../../errors";
+import { normalizeError } from "../../errors/runtime";
 import { createTaskProgress } from "../../systems/TaskSystem";
 import { isTauriRuntime } from "../../platform/tauri/runtime";
 
@@ -64,6 +65,47 @@ interface IndexJob {
 const emptyScores: ReadonlyMap<string, number> = new Map();
 // Same scope and storyboard content share one native job across panel instances.
 const indexJobs = new Map<string, IndexJob>();
+// The native text model lives for the process lifetime. Share its initialization
+// across panels, but allow another attempt if loading fails or is cancelled.
+let initialization: Promise<boolean> | undefined;
+
+export function initializeStoryboardSemanticSearch(): Promise<boolean> {
+  if (initialization) return initialization;
+  initialization = (async () => {
+    const task = await createTaskProgress({
+      operation: "storyboard.semanticSearch",
+      label: "正在初始化语义检索...",
+      current: 0,
+      total: 1,
+    });
+    let timer: ReturnType<typeof setInterval> | undefined;
+    try {
+      if (task.cancelled) return false;
+      let percent = 0;
+      timer = setInterval(() => {
+        // Estimated loading feedback; reserve completion for the native result.
+        if (percent >= 95) return;
+        percent = percent < 70 ? Math.min(70, percent + 15) : Math.min(95, percent + 5);
+        task.update({ current: percent / 100 });
+      }, 1000);
+      await invokeCommand("initialize_storyboard_semantic_search");
+      return true;
+    } finally {
+      if (timer !== undefined) clearInterval(timer);
+      task.remove();
+    }
+  })().then(
+    (ready) => {
+      if (!ready) initialization = undefined;
+      return ready;
+    },
+    (error) => {
+      initialization = undefined;
+      throw normalizeError(error);
+    },
+  );
+  return initialization;
+}
 
 function indexShots(state: SearchState): IndexJob {
   const existing = indexJobs.get(state.indexKey);
@@ -225,15 +267,21 @@ export function useStoryboardSemanticSearch(
           const current = latest.current;
           if (!mounted.current || !current.requestKey || current.indexKey !== start.indexKey)
             return;
-          const outcome = await runOperation("storyboard.semanticSearch", () =>
-            invokeCommand<SemanticMatch[]>("search_storyboards_semantic", {
+          const outcome = await runOperation("storyboard.semanticSearch", async () => {
+            if (!(await initializeStoryboardSemanticSearch())) {
+              cancelledRequest.current = current.requestKey;
+              return null;
+            }
+            if (!mounted.current || latest.current.requestKey !== current.requestKey) return null;
+            return invokeCommand<SemanticMatch[]>("search_storyboards_semantic", {
               query: current.query.trim(),
               shots: current.shots,
-            }),
-          );
+            });
+          });
           if (!mounted.current || latest.current.requestKey !== current.requestKey) return;
+          if (outcome.status === "success" && outcome.value === null) return;
           completedRequest.current = current.requestKey;
-          if (outcome.status === "success") {
+          if (outcome.status === "success" && outcome.value !== null) {
             setResult({
               key: current.requestKey,
               scores: new Map(outcome.value.map((match) => [match.id, match.similarity])),

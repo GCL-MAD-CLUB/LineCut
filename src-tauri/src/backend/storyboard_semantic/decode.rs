@@ -1,5 +1,6 @@
 //! Bounded RGB streaming: decode the next batch while the current one infers.
 use super::*;
+use std::collections::VecDeque;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 
@@ -29,24 +30,170 @@ struct StreamRequest {
     side: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DecodePath {
+    GpuScale,
+    HardwareFrames,
+    AutomaticDownload,
+    Software,
+}
+
+static SCALE_FILTERS: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
+static FAILED_PATHS: Mutex<VecDeque<(String, DecodePath)>> = Mutex::new(VecDeque::new());
+
+fn has_d3d11(args: &[String]) -> bool {
+    args.windows(2).any(|args| args == ["-hwaccel", "d3d11va"])
+}
+
+fn scale_filter_available(output: &[u8]) -> bool {
+    String::from_utf8_lossy(output)
+        .lines()
+        .any(|line| line.trim() == "Filter scale_d3d11")
+}
+
+async fn supports_gpu_scale(program: &str, cancel: &AtomicBool) -> AppResult<bool> {
+    ensure_not_cancelled(cancel)?;
+    let cache = SCALE_FILTERS.get_or_init(Default::default);
+    if let Some(&supported) = cache.lock().map_err(inference_error)?.get(program) {
+        return Ok(supported);
+    }
+    // A filter listing proves compilation only. The first real decode still
+    // validates the device/codec combination and can fall back before output.
+    let output = tokio::time::timeout(
+        Duration::from_secs(5),
+        hidden_command(program)
+            .args(["-hide_banner", "-h", "filter=scale_d3d11"])
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await;
+    ensure_not_cancelled(cancel)?;
+    let supported = output
+        .ok()
+        .and_then(Result::ok)
+        .is_some_and(|output| output.status.success() && scale_filter_available(&output.stdout));
+    cache
+        .lock()
+        .map_err(inference_error)?
+        .insert(program.to_owned(), supported);
+    tracing::debug!(program, supported, "Checked FFmpeg D3D11 scale filter");
+    Ok(supported)
+}
+
+fn decode_path_args(args: &[String], side: usize, path: DecodePath) -> Option<Vec<String>> {
+    let mut args = args.to_vec();
+    if path == DecodePath::AutomaticDownload {
+        return Some(args);
+    }
+    if path == DecodePath::Software {
+        return software_retry_args(&mut args, 0).then_some(args);
+    }
+    if !has_d3d11(&args) {
+        return None;
+    }
+    let filter = args.iter().position(|arg| arg == "-vf")? + 1;
+    let software_scale = format!("scale={side}:{side}:flags=bilinear,format=rgb24");
+    let select = args.get(filter)?.strip_suffix(&software_scale)?;
+    args[filter] = match path {
+        DecodePath::GpuScale => format!("{select}scale_d3d11=width={side}:height={side}:format=nv12,hwdownload,format=nv12,format=rgb24"),
+        DecodePath::HardwareFrames => format!("{select}hwdownload,format=nv12,{software_scale}"),
+        _ => return None,
+    };
+    let input = args.iter().position(|arg| arg == "-i")?;
+    args.splice(
+        input..input,
+        ["-hwaccel_output_format".into(), "d3d11".into()],
+    );
+    Some(args)
+}
+
+fn failure_key(program: &str, args: &[String]) -> String {
+    let value = |name| {
+        args.windows(2)
+            .find(|args| args[0] == name)
+            .map(|args| args[1].as_str())
+            .unwrap_or("")
+    };
+    format!("{program}\0{}\0{}", value("-i"), value("-map"))
+}
+
+fn remember_failed_path(key: &str, path: DecodePath) -> AppResult<()> {
+    let mut failed = FAILED_PATHS.lock().map_err(inference_error)?;
+    if !failed
+        .iter()
+        .any(|(source, mode)| source == key && *mode == path)
+    {
+        failed.push_back((key.to_owned(), path));
+        while failed.len() > 32 {
+            failed.pop_front();
+        }
+    }
+    Ok(())
+}
+
+fn can_retry(emitted: usize, receiver_closed: bool) -> bool {
+    emitted == 0 && !receiver_closed
+}
+
 async fn produce(
     app: tauri::AppHandle,
     mut request: StreamRequest,
     sender: mpsc::Sender<Vec<u8>>,
 ) -> AppResult<()> {
+    let original = request.args.clone();
+    let key = failure_key(&request.program, &original);
+    let gpu_scale = cfg!(windows)
+        && has_d3d11(&original)
+        && supports_gpu_scale(&request.program, &request.cancel).await?;
     let mut emitted = 0;
-    let result = produce_attempt(app.clone(), request.clone(), sender.clone(), &mut emitted).await;
-    if let Err(error) = result {
+    let mut last_error = None;
+    for path in [
+        DecodePath::GpuScale,
+        DecodePath::HardwareFrames,
+        DecodePath::AutomaticDownload,
+        DecodePath::Software,
+    ] {
         ensure_not_cancelled(&request.cancel)?;
-        // Unsupported hardware/codec combinations may fail before the first
-        // frame. Retrying is safe only before any pixels reached inference.
-        if !sender.is_closed() && software_retry_args(&mut request.args, emitted) {
-            tracing::warn!(%error, "Retrying storyboard decode without hardware acceleration");
-            return produce_attempt(app, request, sender, &mut emitted).await;
+        if (path == DecodePath::GpuScale && !gpu_scale)
+            || FAILED_PATHS
+                .lock()
+                .map_err(inference_error)?
+                .iter()
+                .any(|(source, mode)| source == &key && *mode == path)
+        {
+            continue;
         }
-        return Err(error);
+        let Some(args) = decode_path_args(&original, request.side, path) else {
+            continue;
+        };
+        request.args = args;
+        let started = std::time::Instant::now();
+        match produce_attempt(app.clone(), request.clone(), sender.clone(), &mut emitted).await {
+            Ok(()) => {
+                tracing::debug!(
+                    ?path,
+                    frames = emitted,
+                    elapsed_ms = started.elapsed().as_millis(),
+                    "Completed storyboard frame decode"
+                );
+                return Ok(());
+            }
+            Err(error) => {
+                ensure_not_cancelled(&request.cancel)?;
+                // Never replay a partially published stream, or retry after
+                // the consumer has stopped. Later jobs remember failed routes.
+                if !can_retry(emitted, sender.is_closed()) {
+                    return Err(error);
+                }
+                if path != DecodePath::Software {
+                    remember_failed_path(&key, path)?;
+                }
+                tracing::warn!(?path, %error, "Storyboard decode path failed before emitting pixels");
+                last_error = Some(error);
+            }
+        }
     }
-    Ok(())
+    Err(last_error.unwrap_or_else(|| inference_error("No usable storyboard decode path")))
 }
 
 fn software_retry_args(args: &mut Vec<String>, emitted: usize) -> bool {
@@ -428,6 +575,92 @@ fn consume(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hardware_args() -> Vec<String> {
+        [
+            "-hwaccel",
+            "d3d11va",
+            "-ss",
+            "1.000000000",
+            "-i",
+            "source.mov",
+            "-map",
+            "0:0",
+            "-vf",
+            "select='eq(n\\,0)+eq(n\\,24)',scale=256:256:flags=bilinear,format=rgb24",
+            "-frames:v",
+            "2",
+            "-f",
+            "rawvideo",
+            "pipe:1",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+    }
+
+    #[test]
+    fn hardware_paths_select_before_download_and_gpu_scale_downloads_only_small_frames() {
+        let original = hardware_args();
+        let gpu = decode_path_args(&original, 256, DecodePath::GpuScale).unwrap();
+        let filter = gpu.iter().position(|arg| arg == "-vf").unwrap() + 1;
+        assert_eq!(gpu[filter], "select='eq(n\\,0)+eq(n\\,24)',scale_d3d11=width=256:height=256:format=nv12,hwdownload,format=nv12,format=rgb24");
+        let hwout = gpu
+            .iter()
+            .position(|arg| arg == "-hwaccel_output_format")
+            .unwrap();
+        assert_eq!(gpu[hwout + 1], "d3d11");
+        assert!(hwout < gpu.iter().position(|arg| arg == "-i").unwrap());
+        let download = decode_path_args(&original, 256, DecodePath::HardwareFrames).unwrap();
+        let filter = download.iter().position(|arg| arg == "-vf").unwrap() + 1;
+        assert_eq!(download[filter], "select='eq(n\\,0)+eq(n\\,24)',hwdownload,format=nv12,scale=256:256:flags=bilinear,format=rgb24");
+        assert_eq!(
+            decode_path_args(&original, 256, DecodePath::AutomaticDownload).unwrap(),
+            original
+        );
+        let software = decode_path_args(&original, 256, DecodePath::Software).unwrap();
+        assert!(!has_d3d11(&software));
+        assert!(!software
+            .iter()
+            .any(|arg| arg == "-hwaccel_output_format" || arg.contains("hwdownload")));
+        assert_eq!(
+            original,
+            hardware_args(),
+            "fallback must start from unchanged original arguments"
+        );
+    }
+
+    #[test]
+    fn unavailable_filters_incompatible_arguments_and_partial_output_do_not_reprobe_or_replay() {
+        assert!(scale_filter_available(
+            b"Filter scale_d3d11\n  Scale video using Direct3D11\n"
+        ));
+        assert!(!scale_filter_available(b"Unknown filter 'scale_d3d11'.\n"));
+        assert!(!scale_filter_available(b"Filter scale\n"));
+        let mut args = hardware_args();
+        let filter = args.iter().position(|arg| arg == "-vf").unwrap() + 1;
+        args[filter] = "scale=224:224:flags=bilinear,format=rgb24".into();
+        assert!(decode_path_args(&args, 256, DecodePath::GpuScale).is_none());
+        assert!(decode_path_args(&args, 256, DecodePath::HardwareFrames).is_none());
+        let original = hardware_args();
+        let key = failure_key("test-ffmpeg", &original);
+        remember_failed_path(&key, DecodePath::GpuScale).unwrap();
+        remember_failed_path(&key, DecodePath::GpuScale).unwrap();
+        {
+            let failed = FAILED_PATHS.lock().unwrap();
+            assert_eq!(
+                failed
+                    .iter()
+                    .filter(|(source, mode)| source == &key && *mode == DecodePath::GpuScale)
+                    .count(),
+                1
+            );
+        }
+        assert_ne!(key, failure_key("another-ffmpeg", &original));
+        assert!(can_retry(0, false));
+        assert!(!can_retry(1, false));
+        assert!(!can_retry(0, true));
+    }
 
     #[test]
     fn shared_stream_reuses_chunks_across_shots_and_validates_process_exit_separately() {

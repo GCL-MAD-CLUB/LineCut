@@ -29,9 +29,29 @@ export interface PanelMediaWorkspaceState extends PanelSourceHistory {
   frame: number;
 }
 
-/** The current entry always reflects manual source changes and the latest playhead. */
+/** Keep the latest entry per source set, regardless of selection order or playback state. */
+function uniquePanelMediaWorkspaces(workspaces: PanelMediaWorkspace[]): PanelMediaWorkspace[] {
+  const scopes = new Set<string>();
+  return [...workspaces]
+    .reverse()
+    .filter((workspace) => {
+      const scope = JSON.stringify(
+        [
+          ...new Set(
+            workspace.sources.map(({ videoId, trackId }) => JSON.stringify([videoId, trackId])),
+          ),
+        ].sort(),
+      );
+      if (scopes.has(scope)) return false;
+      scopes.add(scope);
+      return true;
+    })
+    .reverse();
+}
+
+/** The current entry wins scope duplicates and reflects the latest selection and playhead. */
 export function panelMediaWorkspaces(state: PanelMediaWorkspaceState): PanelMediaWorkspace[] {
-  if (state.workspaceId === null) return state.workspaces;
+  if (state.workspaceId === null) return uniquePanelMediaWorkspaces(state.workspaces);
   const current = {
     id: state.workspaceId,
     sources: state.sources,
@@ -41,7 +61,10 @@ export function panelMediaWorkspaces(state: PanelMediaWorkspaceState): PanelMedi
     sourceHistory: state.sourceHistory,
     sourceHistoryIndex: state.sourceHistoryIndex,
   };
-  return [...state.workspaces.filter((workspace) => workspace.id !== current.id), current];
+  return uniquePanelMediaWorkspaces([
+    ...state.workspaces.filter((workspace) => workspace.id !== current.id),
+    current,
+  ]);
 }
 
 export const maximumSourceHistorySteps = 10;
@@ -138,14 +161,15 @@ export function readPanelMediaWorkspaces(value: unknown): PersistedPanelMediaWor
     sourceHistory[sourceHistoryIndex] = snapshot;
     workspaces.push({ ...snapshot, id: entry.id, sourceHistory, sourceHistoryIndex });
   }
+  const active =
+    saved.workspaceId === null
+      ? undefined
+      : (workspaces.find((entry) => entry.id === saved.workspaceId) ?? workspaces.at(-1));
   return {
-    workspaces,
-    workspaceId:
-      saved.workspaceId === null
-        ? null
-        : (workspaces.find((entry) => entry.id === saved.workspaceId)?.id ??
-          workspaces.at(-1)?.id ??
-          null),
+    workspaces: uniquePanelMediaWorkspaces(
+      active ? [...workspaces.filter((entry) => entry.id !== active.id), active] : workspaces,
+    ),
+    workspaceId: active?.id ?? null,
   };
 }
 

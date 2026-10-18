@@ -90,9 +90,9 @@ impl Drop for QueryPriority {
     }
 }
 
-pub(super) fn text_embedding(app: &tauri::AppHandle, query: &str) -> AppResult<Vec<f32>> {
-    QUERY_WAITERS.fetch_add(1, Ordering::SeqCst);
-    let _priority = QueryPriority;
+fn text_model(
+    app: &tauri::AppHandle,
+) -> AppResult<std::sync::MutexGuard<'static, Option<TextModel>>> {
     let mut guard = TEXT
         .get_or_init(|| Mutex::new(None))
         .lock()
@@ -117,6 +117,18 @@ pub(super) fn text_embedding(app: &tauri::AppHandle, query: &str) -> AppResult<V
         let tokenizer = text_tokenizer(directory.join("tokenizer.json"))?;
         *guard = Some(TextModel { runtime, tokenizer });
     }
+    Ok(guard)
+}
+
+pub(super) fn initialize_text_model(app: &tauri::AppHandle) -> AppResult<()> {
+    drop(text_model(app)?);
+    Ok(())
+}
+
+pub(super) fn text_embedding(app: &tauri::AppHandle, query: &str) -> AppResult<Vec<f32>> {
+    QUERY_WAITERS.fetch_add(1, Ordering::SeqCst);
+    let _priority = QueryPriority;
+    let guard = text_model(app)?;
     let model = guard
         .as_ref()
         .ok_or_else(|| inference_error("Missing SigLIP2 text model"))?;

@@ -77,7 +77,7 @@ function defaultTrackSessionState(): SubtitleTrackSessionState {
     query: "",
     searchMode: "filter",
     searchRule: "containsAll",
-    semanticThreshold: 0.5,
+    semanticThreshold: 0,
     showOnlySelected: false,
     minimumRating: 0,
     ratingComparator: "gte",
@@ -151,7 +151,7 @@ const useSubtitlePanelUiState = createPanelState<SubtitlePanelUiState>(() => (se
     }),
   setQuery: (query) => set({ query }),
   setSemanticThreshold: (value) =>
-    set({ semanticThreshold: Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0.5 }),
+    set({ semanticThreshold: Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0 }),
   setSearchMode: (searchMode) =>
     set((state) => ({
       searchMode,
