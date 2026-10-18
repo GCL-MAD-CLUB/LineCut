@@ -7,6 +7,7 @@ export {
   applyAnalyzedMediaResult,
   applyImportedMediaResults,
   getProjectExportContext,
+  captureProjectAutoSave,
   getProjectWorkspaceSnapshot,
   isMediaItemEnabled,
   isMediaItemHidden,

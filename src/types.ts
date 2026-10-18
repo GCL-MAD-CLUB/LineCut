@@ -337,6 +337,10 @@ export interface MediaAutoBindingBatch {
 }
 
 export interface Preferences {
+  show_home_on_startup: boolean;
+  auto_save_enabled: boolean;
+  auto_save_current_project: boolean;
+  auto_save_dir: string;
   cache_dir: string;
   ffmpeg_path: string;
   ffprobe_path: string;

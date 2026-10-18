@@ -608,6 +608,20 @@ export function markProjectHistorySaved(current: ProjectHistoryState): ProjectHi
   return current.active ? { ...current, savedCursor: current.cursor } : current;
 }
 
+/** Preserve edits made while a background save was writing an older state. */
+export function markProjectHistorySavedAt(
+  current: ProjectHistoryState,
+  saved: ProjectHistoryState,
+): ProjectHistoryState {
+  if (!current.active) return current;
+  const savedEntry = saved.entries[saved.cursor - 1];
+  const index = savedEntry ? current.entries.indexOf(savedEntry) : -1;
+  const savedCursor = saved.cursor === 0
+    ? (current.baseLabel === saved.baseLabel ? 0 : -1)
+    : (index >= 0 ? index + 1 : -1);
+  return { ...current, savedCursor };
+}
+
 export function discardFutureProjectHistory(current: ProjectHistoryState): ProjectHistoryState {
   if (!current.active || current.cursor >= current.entries.length) {
     return current;
