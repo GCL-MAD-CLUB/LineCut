@@ -39,6 +39,12 @@ import type {
 } from "../../types";
 import { readExportState } from "./ProjectStatesCache";
 import { mergeMediaAnalysis } from "./mediaAnalysisMerge";
+import {
+  preprocessProjectSubtitles,
+  preprocessProjectsSubtitles,
+  preprocessSubtitleCues,
+  subtitleSourceCueIds,
+} from "../../core/editor/subtitlePreprocessing";
 
 interface ProjectCommands {
   projectImported: (project: Project) => void;
@@ -537,7 +543,8 @@ export function subtitleTrackCues(
   trackId: string,
 ) {
   const context = subtitleTrackContext(project, projects, mediaItems, videoId, trackId);
-  return context?.project.cues[trackId] ?? [];
+  const cues = context?.project.cues[trackId];
+  return cues && context.track.kind === "text" ? preprocessSubtitleCues(cues).cues : (cues ?? []);
 }
 
 function subtitleCuesAfterDeletion(
@@ -1975,8 +1982,12 @@ const projectState = createStore<ProjectSystemState>()((set) => ({
             return state;
           }
           const sourceCues = context.project.cues[trackId] ?? [];
+          const sourceCueIds =
+            context.track.kind === "text"
+              ? subtitleSourceCueIds(sourceCues, requestedCueIds)
+              : requestedCueIds;
           const deletedCueIds = new Set(
-            sourceCues.filter((cue) => requestedCueIds.has(cue.id)).map((cue) => cue.id),
+            sourceCues.filter((cue) => sourceCueIds.has(cue.id)).map((cue) => cue.id),
           );
           if (deletedCueIds.size === 0) {
             return state;
@@ -2266,7 +2277,14 @@ export function useProjectPort<
       const port = {} as Pick<ProjectData, StateKey> & Pick<ProjectCommands, CommandKey>;
       const writablePort = port as Record<PropertyKey, unknown>;
       for (const key of stateKeys) {
-        writablePort[key] = project[key];
+        // All application consumers share the processed subtitle view. The store
+        // retains parsed data for project persistence and reversible edits.
+        writablePort[key] =
+          key === "projects"
+            ? preprocessProjectsSubtitles(project.projects)
+            : key === "project" && project.project
+              ? preprocessProjectSubtitles(project.project)
+              : project[key];
       }
       for (const key of commandKeys) {
         writablePort[key] = project.commands[key];
