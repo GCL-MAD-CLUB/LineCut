@@ -12,6 +12,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { formatMonitorFrame, formatMonitorTime } from "../../../../core/editor/time";
+import { frameToTimeUs } from "../../../../core/editor/timeline";
 import {
   timelineThumbnails,
   timelineThumbnailResolutionForDisplay,
@@ -70,6 +71,7 @@ const storyboardIconMetadataOptions: Array<
 interface StoryboardIconViewProps {
   sourceForRow: (row: StoryboardShot) => PanelRowSource;
   searchHighlight?: SearchHighlightOptions;
+  semanticFrames?: ReadonlyMap<string, number>;
   shots: StoryboardShot[];
   currentShotId: string | undefined;
   assetId: string;
@@ -208,6 +210,7 @@ function metadataText(
 export function StoryboardIconView({
   sourceForRow,
   searchHighlight,
+  semanticFrames,
   shots,
   currentShotId,
   assetId,
@@ -444,11 +447,17 @@ export function StoryboardIconView({
     gridLayout.cardWidth * 0.8,
     gridLayout.cardWidth * 0.45454545,
   );
+  function getThumbnailTimeUs(shot: StoryboardShot) {
+    const frame = semanticFrames?.get(shot.id);
+    return frame === undefined
+      ? shot.start_us
+      : frameToTimeUs(frame, sourceForRow(shot)?.frameRate ?? frameRate);
+  }
   const thumbnailWindow = useTimelineThumbnailWindow({
     enabled: Boolean(videoPath),
     sourceKey: [...new Set(shots.map((shot) => sourceForRow(shot)?.context))].join("|"),
     items: shots,
-    getItemKey: (shot) => `${shot.id}:${shot.start_us}`,
+    getItemKey: (shot) => `${shot.id}:${getThumbnailTimeUs(shot)}`,
     visibleRange: thumbnailVisibleRange,
     targetResolution: thumbnailTargetResolution,
     requestThumbnail: (shot, _index, resolution, priority) =>
@@ -457,7 +466,7 @@ export function StoryboardIconView({
         assetId: sourceForRow(shot).assetId,
         fingerprint: sourceForRow(shot).fingerprint,
         videoPath: sourceForRow(shot).videoPath,
-        timeUs: shot.start_us,
+        timeUs: getThumbnailTimeUs(shot),
         frameRate: sourceForRow(shot).frameRate,
         priority,
         resolution,
@@ -468,7 +477,7 @@ export function StoryboardIconView({
         assetId: sourceForRow(shot).assetId,
         fingerprint: sourceForRow(shot).fingerprint,
         videoPath: sourceForRow(shot).videoPath,
-        timeUs: shot.start_us,
+        timeUs: getThumbnailTimeUs(shot),
         frameRate: sourceForRow(shot).frameRate,
         priority,
         resolution,
@@ -558,6 +567,8 @@ export function StoryboardIconView({
                     priority={Math.abs(index - thumbnailWindow.centerIndex)}
                     requestEnabled={timelineThumbnailWindowContains(thumbnailWindow, index)}
                     targetResolution={thumbnailTargetResolution}
+                    thumbnailTimeUs={getThumbnailTimeUs(shot)}
+                    semanticFrame={semanticFrames?.get(shot.id)}
                     onSelectFrame={(event) => onSelectShot(event, shot, true)}
                     onStartKeywordDrag={(event) => onStartKeywordDrag(event, shot)}
                     onToggleStack={() => stack && setShotStackExpanded(shot.id, !stack.expanded)}

@@ -38,10 +38,12 @@ interface SemanticProgress {
 interface SemanticMatch {
   id: string;
   similarity: number;
+  frame: number;
 }
 interface SearchResult {
   key: string;
   scores: ReadonlyMap<string, number>;
+  frames: ReadonlyMap<string, number>;
   status: "ready" | "failed";
   version: number;
 }
@@ -249,6 +251,7 @@ export function useStoryboardSemanticSearch(
                 setResult({
                   key: latest.current.requestKey,
                   scores: emptyScores,
+                  frames: emptyScores,
                   status: "failed",
                   version: version.current,
                 });
@@ -280,6 +283,7 @@ export function useStoryboardSemanticSearch(
             setResult({
               key: current.requestKey,
               scores: new Map(outcome.value.map((match) => [match.id, match.similarity])),
+              frames: new Map(outcome.value.map((match) => [match.id, match.frame])),
               status: "ready",
               version: ++version.current,
             });
@@ -287,6 +291,7 @@ export function useStoryboardSemanticSearch(
             setResult({
               key: current.requestKey,
               scores: emptyScores,
+              frames: emptyScores,
               status: "failed",
               version: version.current,
             });
@@ -305,6 +310,7 @@ export function useStoryboardSemanticSearch(
   const current = requestKey && result?.key === requestKey ? result : null;
   return {
     scores: current?.scores ?? emptyScores,
+    frames: current?.frames ?? emptyScores,
     status: !requestKey ? "idle" : (current?.status ?? "pending"),
     resultVersion: current?.version ?? 0,
     retry: () => {

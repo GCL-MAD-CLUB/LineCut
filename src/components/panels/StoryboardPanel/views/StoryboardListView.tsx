@@ -13,6 +13,7 @@ import {
 } from "react";
 import { Star } from "lucide-react";
 import { formatMonitorFrame, formatMonitorTime } from "../../../../core/editor/time";
+import { frameToTimeUs } from "../../../../core/editor/timeline";
 import {
   timelineThumbnailWindowContains,
   type TimelineThumbnailResolution,
@@ -24,7 +25,7 @@ import {
   type SearchHighlightOptions,
 } from "../../../common/PanelSearch/PanelSearch";
 import { storyboardShotColorLabels } from "../annotations/StoryboardColorLabelButtons";
-import { StoryboardShotThumbnail } from "./StoryboardShotThumbnail";
+import { StoryboardSemanticThumbnail, StoryboardShotThumbnail } from "./StoryboardShotThumbnail";
 import {
   parseStoryboardKeywordInput,
   renderStoryboardKeywordLabel,
@@ -61,6 +62,7 @@ interface StoryboardListViewProps {
   sourceForRow: (row: StoryboardShot) => PanelRowSource;
   showSource: boolean;
   similarityScores?: ReadonlyMap<string, number>;
+  semanticFrames?: ReadonlyMap<string, number>;
   searchHighlight?: SearchHighlightOptions;
   searchScope: "any" | "title" | "keywords";
   shots: StoryboardShot[];
@@ -132,6 +134,7 @@ export function StoryboardListView({
   sourceForRow,
   showSource,
   similarityScores,
+  semanticFrames,
   searchHighlight,
   searchScope,
   shots,
@@ -408,6 +411,7 @@ export function StoryboardListView({
               if (!shot) return null;
               const source = sourceForRow(shot);
               const rowFrameRate = source?.frameRate ?? frameRate;
+              const semanticFrame = semanticFrames?.get(shot.id);
               const selected = selectedShotIds.has(shot.id);
               const annotation = shotAnnotations[shot.id];
               const rating = annotation?.rating ?? 0;
@@ -486,6 +490,7 @@ export function StoryboardListView({
                         virtualRow.index,
                       )}
                       targetResolution={thumbnailTargetResolution}
+                      semanticFrame={semanticFrame}
                       onSelectFrame={(event) => {
                         cancelPendingCellEdit();
                         setActiveCell(null);
@@ -498,6 +503,37 @@ export function StoryboardListView({
                       onOpenFlagMenu={(event) => onOpenAnnotationMenu(event, shot.id, "flag")}
                       onOpenColorMenu={(event) => onOpenAnnotationMenu(event, shot.id, "color")}
                     />
+                    {semanticFrames && (
+                      <div
+                        className="shot-semantic-thumbnail"
+                        onClick={(event) => event.stopPropagation()}
+                        onDoubleClick={(event) => event.stopPropagation()}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onContextMenu={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                        }}
+                      >
+                        {semanticFrame !== undefined && (
+                          <>
+                            <span className="shot-semantic-arrow" aria-hidden="true" />
+                            <StoryboardSemanticThumbnail
+                              assetId={source?.assetId ?? assetId}
+                              fingerprint={source?.fingerprint ?? fingerprint}
+                              videoPath={source?.videoPath ?? videoPath}
+                              frameRate={rowFrameRate}
+                              timeUs={frameToTimeUs(semanticFrame, rowFrameRate)}
+                              priority={Math.abs(virtualRow.index - thumbnailWindow.centerIndex)}
+                              requestEnabled={timelineThumbnailWindowContains(
+                                thumbnailWindow,
+                                virtualRow.index,
+                              )}
+                              resolution={thumbnailTargetResolution}
+                            />
+                          </>
+                        )}
+                      </div>
+                    )}
                   </div>
                   {showSource && (
                     <span className="shot-source-cell" role="cell" title={source?.name}>

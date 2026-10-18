@@ -65,9 +65,11 @@ pub(crate) struct SemanticShot {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct StoryboardSemanticMatch {
     id: String,
     similarity: f32,
+    frame: usize,
 }
 
 #[derive(Clone, Serialize)]
@@ -1113,12 +1115,12 @@ fn search_completed_shots(
         }
         let vectors = index::read(semantic_root, &sources[group[0]].identity, &requests)?;
         for (slot, &index) in group.iter().enumerate() {
+            let (frame_index, similarity) =
+                index::best_frame_similarity(&vectors[slot], &query_embedding)?;
             matches.push(StoryboardSemanticMatch {
                 id: sources[index].shot.id.clone(),
-                similarity: siglip::match_probability(index::max_similarity(
-                    &vectors[slot],
-                    &query_embedding,
-                )?),
+                similarity: siglip::match_probability(similarity),
+                frame: requests[slot].frames[frame_index],
             });
         }
     }

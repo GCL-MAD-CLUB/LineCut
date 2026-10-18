@@ -1664,7 +1664,9 @@ export function StoryboardPanel() {
     Math.max(
       storyboardColumnWidths.thumbnail,
       thumbnailWidth + STORYBOARD_THUMBNAIL_COLUMN_PADDING,
-    ) + STORYBOARD_STATUS_GUTTER_WIDTH;
+    ) +
+    STORYBOARD_STATUS_GUTTER_WIDTH +
+    (hasSemanticResults ? thumbnailWidth + 14 : 0);
   const tableMinWidth =
     thumbnailColumnWidth +
     (multipleSources ? storyboardColumnWidths.source : 0) +
@@ -3813,6 +3815,7 @@ export function StoryboardPanel() {
               currentShotIndex={currentShotIndex}
               tableStyle={tableStyle}
               similarityScores={showSimilarity ? semantic.scores : undefined}
+              semanticFrames={hasSemanticResults ? semantic.frames : undefined}
               headerContent={storyboardTableHeaders
                 .filter((header) => header.id !== "similarity" || showSimilarity)
                 .flatMap((header) =>
@@ -3845,6 +3848,7 @@ export function StoryboardPanel() {
           ) : (
             <StoryboardIconView
               searchHighlight={searchScope !== "keywords" ? searchHighlight : undefined}
+              semanticFrames={hasSemanticResults ? semantic.frames : undefined}
               shots={sortedShots}
               sourceForRow={sourceForShot}
               currentShotId={currentShotId}

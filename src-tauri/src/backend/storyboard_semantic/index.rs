@@ -465,20 +465,33 @@ pub(super) fn get_or_build(
     Ok(())
 }
 
-pub(super) fn max_similarity(vectors: &[Vec<f32>], query: &[f32]) -> AppResult<f32> {
+pub(super) fn best_frame_similarity(
+    vectors: &[Vec<f32>],
+    query: &[f32],
+) -> AppResult<(usize, f32)> {
     if vectors.is_empty() || query.len() != siglip::DIMENSIONS {
         return Err(inference_error("Invalid retrieval vectors"));
     }
     Ok(vectors
         .iter()
-        .map(|v| {
-            v.iter()
+        .enumerate()
+        .map(|(index, v)| {
+            let similarity = v
+                .iter()
                 .zip(query)
                 .map(|(a, b)| a * b)
                 .sum::<f32>()
-                .clamp(-1.0, 1.0)
+                .clamp(-1.0, 1.0);
+            (index, similarity)
         })
-        .fold(f32::NEG_INFINITY, f32::max))
+        // Keep the earliest selected frame when several frames share a score.
+        .fold((0, f32::NEG_INFINITY), |best, candidate| {
+            if candidate.1 > best.1 {
+                candidate
+            } else {
+                best
+            }
+        }))
 }
 
 #[cfg(test)]
@@ -583,11 +596,18 @@ mod tests {
         query[0] = 1.0;
         let negative: Vec<_> = query.iter().map(|v| -v).collect();
         assert_eq!(
-            max_similarity(&[negative.clone(), query.clone()], &query).unwrap(),
-            1.0
+            best_frame_similarity(&[negative.clone(), query.clone()], &query).unwrap(),
+            (1, 1.0)
         );
-        assert_eq!(max_similarity(&[negative], &query).unwrap(), -1.0);
-        assert!(max_similarity(&[], &query).is_err());
+        assert_eq!(
+            best_frame_similarity(&[negative], &query).unwrap(),
+            (0, -1.0)
+        );
+        assert_eq!(
+            best_frame_similarity(&[query.clone(), query.clone()], &query).unwrap(),
+            (0, 1.0)
+        );
+        assert!(best_frame_similarity(&[], &query).is_err());
     }
 
     #[test]

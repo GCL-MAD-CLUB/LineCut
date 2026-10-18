@@ -557,7 +557,8 @@ body.is-resizing-storyboard-keyword-panel * {
   background: transparent;
 }
 
-.storyboard-keyword-collapse-rail > button > span {
+.storyboard-keyword-collapse-rail > button > span,
+.shot-semantic-arrow {
   width: 0;
   height: 0;
   border-top: 4px solid transparent;
@@ -2652,7 +2653,8 @@ body.is-resizing-storyboard-keyword-panel * {
   display: inline;
 }
 
-.shot-frame-button {
+.shot-frame-button,
+.shot-semantic-frame {
   position: relative;
   box-sizing: border-box;
   display: grid;
@@ -2670,12 +2672,41 @@ body.is-resizing-storyboard-keyword-panel * {
   cursor: default;
 }
 
-.shot-row.is-selected .shot-frame-button {
+.shot-row.is-selected .shot-frame-button,
+.shot-row.is-selected .shot-semantic-frame {
   box-shadow: 0 0 0 1.2px #fff;
 }
 
 .shot-row.is-selected.has-color-label .shot-frame-button {
   box-shadow: 0 0 0 1.2px var(--storyboard-color-label);
+}
+
+.shot-semantic-thumbnail {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4.7px;
+  margin-left: 5.7px;
+}
+
+.shot-semantic-arrow {
+  flex: 0 0 auto;
+  color: #8e8e8e;
+}
+
+.shot-semantic-frame {
+  flex: 0 0 auto;
+}
+
+.shot-semantic-position {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 3;
+  width: 1.5px;
+  background: #459fff;
+  transform: translateX(-16.5%);
+  pointer-events: none;
 }
 
 .shot-frame {

@@ -88,34 +88,28 @@ function StoryboardStackBadge({ stack, shotIndex, onToggle }: StoryboardStackBad
   );
 }
 
-interface ShotFrameButtonProps {
-  shot: StoryboardShot;
+interface ShotFrameThumbnailProps {
   assetId: string;
   fingerprint: string;
   videoPath: string;
-  previewVideoPath: string;
   frameRate: number;
   priority: number;
   requestEnabled: boolean;
   resolution: TimelineThumbnailResolution;
-  onSelect: (event: ReactMouseEvent<HTMLButtonElement>) => void;
-  onStartKeywordDrag: (event: ReactPointerEvent<HTMLButtonElement>) => void;
+  timeUs: number;
 }
 
-function ShotFrameButton({
-  shot,
+function useShotFrameThumbnail({
   assetId,
   fingerprint,
   videoPath,
-  previewVideoPath,
   frameRate,
   priority,
   requestEnabled,
   resolution,
-  onSelect,
-  onStartKeywordDrag,
-}: ShotFrameButtonProps) {
-  const thumbnailIdentity = `${fingerprint}:${videoPath}:${shot.start_us}`;
+  timeUs,
+}: ShotFrameThumbnailProps) {
+  const thumbnailIdentity = `${fingerprint}:${videoPath}:${timeUs}`;
   const [thumbnail, setThumbnail] = useState<{
     identity: string;
     src: string;
@@ -123,18 +117,6 @@ function ShotFrameButton({
     height: number;
   } | null>(null);
   const thumbnailRequestRef = useRef<ReturnType<typeof timelineThumbnails.request> | null>(null);
-  const [hoverProgress, setHoverProgress] = useState<number | null>(null);
-  const [hoverFrameReady, setHoverFrameReady] = useState(false);
-  const hoverVideoRef = useRef<HTMLVideoElement | null>(null);
-  const hoverTargetTimeUs = useMemo(() => {
-    if (hoverProgress === null) {
-      return null;
-    }
-    const endTimeUs = Math.max(shot.start_us, frameToTimeUs(shot.end_frame, frameRate));
-    return Math.round(shot.start_us + (endTimeUs - shot.start_us) * clamp(hoverProgress, 0, 1));
-  }, [frameRate, hoverProgress, shot.end_frame, shot.start_us]);
-  const previewSrc = isTauriRuntime() ? convertFileSrc(previewVideoPath) : previewVideoPath;
-
   useEffect(() => {
     let active = true;
     const commonOptions = {
@@ -142,7 +124,7 @@ function ShotFrameButton({
       assetId,
       fingerprint,
       videoPath,
-      timeUs: shot.start_us,
+      timeUs,
       frameRate,
       priority,
     };
@@ -203,9 +185,11 @@ function ShotFrameButton({
   }, [
     assetId,
     fingerprint,
+    frameRate,
     requestEnabled,
     resolution.width,
-    shot.start_us,
+    resolution.height,
+    timeUs,
     thumbnailIdentity,
     videoPath,
   ]);
@@ -213,6 +197,82 @@ function ShotFrameButton({
   useEffect(() => {
     thumbnailRequestRef.current?.reprioritize(priority);
   }, [priority]);
+
+  return thumbnail?.identity === thumbnailIdentity ? thumbnail : null;
+}
+
+export function StoryboardSemanticThumbnail(props: ShotFrameThumbnailProps) {
+  const thumbnail = useShotFrameThumbnail(props);
+  return (
+    <div className="shot-semantic-frame" role="img" aria-label="语义检索最高得分帧">
+      {thumbnail && (
+        <img
+          className="shot-frame"
+          src={thumbnail.src}
+          alt=""
+          width={thumbnail.width}
+          height={thumbnail.height}
+          decoding="async"
+          draggable={false}
+        />
+      )}
+      <Film className="shot-frame-placeholder" aria-hidden="true" />
+    </div>
+  );
+}
+
+interface ShotFrameButtonProps {
+  shot: StoryboardShot;
+  assetId: string;
+  fingerprint: string;
+  videoPath: string;
+  previewVideoPath: string;
+  frameRate: number;
+  priority: number;
+  requestEnabled: boolean;
+  resolution: TimelineThumbnailResolution;
+  semanticFrame?: number;
+  thumbnailTimeUs?: number;
+  onSelect: (event: ReactMouseEvent<HTMLButtonElement>) => void;
+  onStartKeywordDrag: (event: ReactPointerEvent<HTMLButtonElement>) => void;
+}
+
+function ShotFrameButton({
+  shot,
+  assetId,
+  fingerprint,
+  videoPath,
+  previewVideoPath,
+  frameRate,
+  priority,
+  requestEnabled,
+  resolution,
+  semanticFrame,
+  thumbnailTimeUs,
+  onSelect,
+  onStartKeywordDrag,
+}: ShotFrameButtonProps) {
+  const visibleThumbnail = useShotFrameThumbnail({
+    assetId,
+    fingerprint,
+    videoPath,
+    frameRate,
+    priority,
+    requestEnabled,
+    resolution,
+    timeUs: thumbnailTimeUs ?? shot.start_us,
+  });
+  const [hoverProgress, setHoverProgress] = useState<number | null>(null);
+  const [hoverFrameReady, setHoverFrameReady] = useState(false);
+  const hoverVideoRef = useRef<HTMLVideoElement | null>(null);
+  const hoverTargetTimeUs = useMemo(() => {
+    if (hoverProgress === null) {
+      return null;
+    }
+    const endTimeUs = Math.max(shot.start_us, frameToTimeUs(shot.end_frame, frameRate));
+    return Math.round(shot.start_us + (endTimeUs - shot.start_us) * clamp(hoverProgress, 0, 1));
+  }, [frameRate, hoverProgress, shot.end_frame, shot.start_us]);
+  const previewSrc = isTauriRuntime() ? convertFileSrc(previewVideoPath) : previewVideoPath;
 
   useEffect(() => {
     if (hoverTargetTimeUs === null) {
@@ -253,8 +313,6 @@ function ShotFrameButton({
   function currentVideo(event: SyntheticEvent<HTMLVideoElement>) {
     return event.currentTarget;
   }
-
-  const visibleThumbnail = thumbnail?.identity === thumbnailIdentity ? thumbnail : null;
 
   return (
     <button
@@ -298,6 +356,15 @@ function ShotFrameButton({
           <span style={{ width: `${hoverProgress * 100}%` }} />
         </span>
       )}
+      {semanticFrame !== undefined && (
+        <span
+          className="shot-semantic-position"
+          aria-hidden="true"
+          style={{
+            left: `clamp(0px, calc(${clamp((semanticFrame - shot.start_frame) / Math.max(1, shot.end_frame - shot.start_frame), 0, 1) * 100}% - 0.5px), calc(100% - 1px))`,
+          }}
+        />
+      )}
       <Film className="shot-frame-placeholder" aria-hidden="true" />
     </button>
   );
@@ -320,6 +387,8 @@ export interface StoryboardShotThumbnailProps {
   priority: number;
   requestEnabled: boolean;
   targetResolution: TimelineThumbnailResolution;
+  semanticFrame?: number;
+  thumbnailTimeUs?: number;
   onSelectFrame: (event: ReactMouseEvent<HTMLButtonElement>) => void;
   onStartKeywordDrag: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   onToggleStack: () => void;
@@ -346,6 +415,8 @@ export function StoryboardShotThumbnail({
   priority,
   requestEnabled,
   targetResolution,
+  semanticFrame,
+  thumbnailTimeUs,
   onSelectFrame,
   onStartKeywordDrag,
   onToggleStack,
@@ -398,6 +469,8 @@ export function StoryboardShotThumbnail({
           priority={priority}
           requestEnabled={requestEnabled}
           resolution={targetResolution}
+          semanticFrame={semanticFrame}
+          thumbnailTimeUs={thumbnailTimeUs}
           onStartKeywordDrag={onStartKeywordDrag}
           onSelect={(event) => {
             event.stopPropagation();
