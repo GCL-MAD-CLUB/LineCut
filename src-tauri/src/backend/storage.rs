@@ -61,19 +61,7 @@ pub(crate) fn now_millis() -> u128 {
 }
 
 pub(crate) fn config_root() -> PathBuf {
-    // Keep the existing storage identity so a product rename preserves preferences and caches.
-    if let Some(value) = env::var_os("LINECUT_DATA_DIR") {
-        return PathBuf::from(value);
-    }
-    if cfg!(windows) {
-        if let Some(value) = env::var_os("LOCALAPPDATA") {
-            return PathBuf::from(value).join("LineCut");
-        }
-    }
-    if let Some(value) = env::var_os("HOME") {
-        return PathBuf::from(value).join(".linecut");
-    }
-    env::temp_dir().join("linecut")
+    crate::identity::data_roots().0
 }
 
 pub(crate) fn default_cache_root() -> PathBuf {

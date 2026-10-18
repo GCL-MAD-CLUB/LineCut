@@ -1,5 +1,7 @@
 use super::types::FrameTraceData;
-use crate::backend::cache::{hash_name, read_private_cache, write_private_cache};
+use crate::backend::cache::{
+    hash_name, promote_private_cache, read_private_cache, write_private_cache,
+};
 use crate::backend::configured_cache_root;
 use crate::{app_error, AppResult, ErrorCode, Preferences};
 use std::{
@@ -11,7 +13,8 @@ use std::{
 use uuid::Uuid;
 
 // Bump the context when scaling, color conversion, seek policy or any metric changes.
-const CACHE_CONTEXT: &[u8] = b"linecut-frame-trace-rgb96x54-area-weber11-laplacian305911-v2";
+const CACHE_CONTEXT: &[u8] = b"locution-pro-frame-trace-rgb96x54-area-weber11-laplacian305911-v2";
+const LEGACY_CACHE_CONTEXT: &[u8] = b"linecut-frame-trace-rgb96x54-area-weber11-laplacian305911-v2";
 const CACHE_FOLDER: &str = "Frame Trace Cache";
 const CACHE_BUDGET_BYTES: u64 = 256 * 1024 * 1024;
 static MAINTENANCE: Mutex<Option<std::time::Instant>> = Mutex::new(None);
@@ -23,6 +26,8 @@ pub(super) struct FrameTraceCache {
     root: PathBuf,
     path: PathBuf,
     key: String,
+    legacy_path: PathBuf,
+    legacy_key: String,
     frame_count: usize,
 }
 
@@ -44,12 +49,18 @@ impl FrameTraceCache {
         ))
         .expect("fixed cache identity is serializable");
         let key = hash_name(CACHE_CONTEXT, &identity);
+        let legacy_key = hash_name(LEGACY_CACHE_CONTEXT, &identity);
         let root = configured_cache_root(preferences).join(CACHE_FOLDER);
         let path = root.join(&key[..2]).join(format!("{key}.lcft"));
+        let legacy_path = root
+            .join(&legacy_key[..2])
+            .join(format!("{legacy_key}.lcft"));
         Self {
             root,
             path,
             key,
+            legacy_path,
+            legacy_key,
             frame_count: (end_frame - start_frame + 1) as usize,
         }
     }
@@ -72,18 +83,27 @@ impl FrameTraceCache {
     }
 
     pub(super) fn read(&self) -> Option<FrameTraceData> {
+        if let Some(data) = self.read_at(&self.path, &self.key, CACHE_CONTEXT) {
+            return Some(data);
+        }
+        let data = self.read_at(&self.legacy_path, &self.legacy_key, LEGACY_CACHE_CONTEXT)?;
+        promote_private_cache(&self.path, &self.key, CACHE_CONTEXT, &data);
+        Some(data)
+    }
+
+    fn read_at(&self, path: &Path, key: &str, context: &[u8]) -> Option<FrameTraceData> {
         // Bound the file before deserializing; each frame has six f64 samples.
         let expected_max = (self.frame_count as u64)
             .checked_mul(48)?
             .checked_add(1024)?;
-        if fs::metadata(&self.path).ok()?.len() > expected_max {
+        if fs::metadata(path).ok()?.len() > expected_max {
             return None;
         }
-        let data: FrameTraceData = read_private_cache(&self.path, &self.key, CACHE_CONTEXT)?;
+        let data: FrameTraceData = read_private_cache(path, key, context)?;
         if !data.is_valid(self.frame_count) {
             return None;
         }
-        if let Ok(file) = fs::OpenOptions::new().write(true).open(&self.path) {
+        if let Ok(file) = fs::OpenOptions::new().write(true).open(path) {
             let _ = file.set_times(fs::FileTimes::new().set_modified(SystemTime::now()));
         }
         Some(data)
@@ -183,6 +203,31 @@ fn prune_cache(root: &Path, budget: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_trace_is_reused_and_promoted_to_the_new_namespace() {
+        let root =
+            std::env::temp_dir().join(format!("locution-trace-migration-{}", Uuid::new_v4()));
+        let cache = cache(&root, "media", 0, 1);
+        let data = FrameTraceData {
+            motion: vec![0.25],
+            colors: vec![[0.0; 4]; 2],
+            sharpness: vec![0.0, 1.0],
+        };
+        write_private_cache(
+            &cache.legacy_path,
+            &cache.legacy_key,
+            LEGACY_CACHE_CONTEXT,
+            &data,
+        )
+        .unwrap();
+        assert_ne!(cache.path, cache.legacy_path);
+        assert_eq!(cache.read().unwrap().motion, data.motion);
+        assert!(cache.path.exists());
+        fs::remove_file(&cache.legacy_path).unwrap();
+        assert_eq!(cache.read().unwrap().sharpness, data.sharpness);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     fn cache(root: &Path, fingerprint: &str, start: i64, end: i64) -> FrameTraceCache {
         FrameTraceCache::new(

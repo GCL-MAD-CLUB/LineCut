@@ -1,4 +1,4 @@
-﻿import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { Loader2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -9,6 +9,7 @@ import {
   withAppPanelDefaults,
 } from "./application/appPanelRegistry";
 import { publishEvent, useBroadcastEvent } from "./runtime/events/react";
+import { readAppStorage } from "./runtime/storage";
 import { useProjections } from "./runtime/state/StateHub";
 import {
   EDIT_CAPABILITY_PROJECTION,
@@ -116,12 +117,12 @@ const mediaFilters = [
 ];
 
 const subtitleExtensions = new Set(subtitleFilters[0].extensions);
-const recentMediaStorageKey = "linecut:recent-media-paths";
-const recentProjectStorageKey = "linecut:recent-project-paths";
+const recentMediaStorageKey = "locution-pro:recent-media-paths";
+const recentProjectStorageKey = "locution-pro:recent-project-paths";
 const recentPathsLimit = 10;
 const warningDisplayDurationMs = 5000;
 const workspaceConfigSaveDelayMs = 120;
-const storyboardPanelDefaultMigrationKey = "linecut:workspace:storyboard-panel-default:v1";
+const storyboardPanelDefaultMigrationKey = "locution-pro:workspace:storyboard-panel-default:v1";
 
 function fileName(path: string) {
   return path.split(/[\\/]/).pop() ?? path;
@@ -173,7 +174,7 @@ function isEditableKeyboardTarget(target: EventTarget | null) {
 
 function readRecentPaths(storageKey: string) {
   try {
-    const stored = window.localStorage.getItem(storageKey);
+    const stored = readAppStorage(storageKey);
     if (!stored) {
       return [];
     }
@@ -194,7 +195,7 @@ function readRecentPaths(storageKey: string) {
  */
 function readRecentProjects(): RecentProjectEntry[] {
   try {
-    const stored = window.localStorage.getItem(recentProjectStorageKey);
+    const stored = readAppStorage(recentProjectStorageKey);
     if (!stored) {
       return [];
     }
@@ -230,7 +231,7 @@ function markStoryboardPanelDefaultMigrationApplied() {
 
 function storyboardPanelDefaultMigrationApplied() {
   try {
-    return window.localStorage.getItem(storyboardPanelDefaultMigrationKey) === "1";
+    return readAppStorage(storyboardPanelDefaultMigrationKey) === "1";
   } catch (error) {
     captureOperationError("workspace.load", error);
     return false;

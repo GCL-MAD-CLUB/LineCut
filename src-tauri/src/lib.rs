@@ -2,6 +2,7 @@ use tauri::Manager;
 
 mod backend;
 mod error;
+mod identity;
 mod models;
 mod project_file;
 
@@ -21,6 +22,28 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if let Err(error) = identity::prepare() {
+        app_error(
+            ErrorCode::ApplicationRunFailed,
+            format!("Failed to migrate application identity: {error}"),
+        );
+        #[cfg(windows)]
+        {
+            use windows::core::PCWSTR;
+            use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+            let title: Vec<u16> = "Locution Pro\0".encode_utf16().collect();
+            let message: Vec<u16> = format!("无法迁移旧版本数据。请关闭旧版本程序，检查数据目录的可用空间和访问权限后重试。原数据仍保留。\n\n{error}\0").encode_utf16().collect();
+            unsafe {
+                MessageBoxW(
+                    None,
+                    PCWSTR(message.as_ptr()),
+                    PCWSTR(title.as_ptr()),
+                    MB_OK | MB_ICONERROR,
+                );
+            }
+        }
+        return;
+    }
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {

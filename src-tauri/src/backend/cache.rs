@@ -117,6 +117,47 @@ where
     })
 }
 
+/// A legacy hit remains usable even when publishing the renamed cache fails.
+pub(super) fn read_renamed_private_cache<Value>(
+    path: &Path,
+    key: &str,
+    context: &[u8],
+    legacy_path: &Path,
+    legacy_key: &str,
+    legacy_context: &[u8],
+) -> Option<Value>
+where
+    Value: Serialize + for<'de> Deserialize<'de>,
+{
+    if let Some(value) = read_private_cache(path, key, context) {
+        return Some(value);
+    }
+    let value = read_private_cache(legacy_path, legacy_key, legacy_context)?;
+    promote_private_cache(path, key, context, &value);
+    Some(value)
+}
+
+pub(super) fn promote_private_cache<Value: Serialize>(
+    path: &Path,
+    key: &str,
+    context: &[u8],
+    value: &Value,
+) {
+    let staged = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+    let result = write_private_cache(&staged, key, context, value).and_then(|()| {
+        fs::rename(&staged, path).map_err(|error| {
+            app_error(
+                ErrorCode::ThumbnailCacheWriteFailed,
+                format!("Failed to publish renamed cache: {error}"),
+            )
+        })
+    });
+    if let Err(error) = result {
+        let _ = fs::remove_file(staged);
+        tracing::warn!(detail = %error, "cache namespace migration deferred");
+    }
+}
+
 fn private_cache_digest(bytes: &[u8], key: &str, context: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(context);
@@ -152,4 +193,48 @@ pub(super) fn hash_name(context: &[u8], value: &[u8]) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cache_namespace_migration_failure_still_returns_the_valid_legacy_payload() {
+        let root =
+            std::env::temp_dir().join(format!("locution-cache-migration-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let legacy = root.join("legacy");
+        write_private_cache(&legacy, "old-key", b"old-context", &vec![1u8, 2, 3]).unwrap();
+        let blocker = root.join("blocker");
+        fs::write(&blocker, b"file").unwrap();
+        let current = blocker.join("new");
+        let value: Vec<u8> = read_renamed_private_cache(
+            &current,
+            "new-key",
+            b"new-context",
+            &legacy,
+            "old-key",
+            b"old-context",
+        )
+        .unwrap();
+        assert_eq!(value, vec![1, 2, 3]);
+        assert!(!current.exists());
+        assert!(legacy.exists());
+        fs::remove_file(&blocker).unwrap();
+        assert!(read_renamed_private_cache::<Vec<u8>>(
+            &current,
+            "new-key",
+            b"new-context",
+            &legacy,
+            "old-key",
+            b"old-context"
+        )
+        .is_some());
+        assert_eq!(
+            read_private_cache::<Vec<u8>>(&current, "new-key", b"new-context").unwrap(),
+            value
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 }

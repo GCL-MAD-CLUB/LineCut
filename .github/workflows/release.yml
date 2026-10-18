@@ -94,10 +94,10 @@ jobs:
       - name: Require the official project build secret
         shell: pwsh
         env:
-          LINECUT_PROJECT_BUILD_SECRET_V1: ${{ secrets.LINECUT_PROJECT_BUILD_SECRET_V1 }}
+          LOCUTION_PRO_PROJECT_BUILD_SECRET_V1: ${{ secrets.LOCUTION_PRO_PROJECT_BUILD_SECRET_V1 || secrets.LINECUT_PROJECT_BUILD_SECRET_V1 }}
         run: |
-          if (-not $env:LINECUT_PROJECT_BUILD_SECRET_V1) {
-            throw "The release environment is missing LINECUT_PROJECT_BUILD_SECRET_V1"
+          if (-not $env:LOCUTION_PRO_PROJECT_BUILD_SECRET_V1) {
+            throw "The release environment is missing LOCUTION_PRO_PROJECT_BUILD_SECRET_V1"
           }
       - name: Prepare verified FFmpeg bundle assets
         run: npm run prepare:ffmpeg
@@ -107,7 +107,7 @@ jobs:
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # action-v0.6.2
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          LINECUT_PROJECT_BUILD_SECRET_V1: ${{ secrets.LINECUT_PROJECT_BUILD_SECRET_V1 }}
+          LOCUTION_PRO_PROJECT_BUILD_SECRET_V1: ${{ secrets.LOCUTION_PRO_PROJECT_BUILD_SECRET_V1 || secrets.LINECUT_PROJECT_BUILD_SECRET_V1 }}
         with:
           tagName: ${{ needs.validate.outputs.tag }}
           releaseName: Locution Pro ${{ needs.validate.outputs.tag }}

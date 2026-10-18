@@ -4,7 +4,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const localReleaseSecret = join(root, "src-tauri", ".linecut-project-build-secret-v1.local");
+const localReleaseSecret = join(root, "src-tauri", ".locution-pro-project-build-secret-v1.local");
+const legacyReleaseSecret = join(root, "src-tauri", ".linecut-project-build-secret-v1.local");
 const prettierCli = join(root, "node_modules", "prettier", "bin", "prettier.cjs");
 const tauriCli = join(root, "node_modules", "@tauri-apps", "cli", "tauri.js");
 const args = process.argv.slice(2);
@@ -24,9 +25,14 @@ if (version.includes("+")) {
   );
 }
 
-if (!process.env.LINECUT_PROJECT_BUILD_SECRET_V1 && !existsSync(localReleaseSecret)) {
+if (
+  !process.env.LOCUTION_PRO_PROJECT_BUILD_SECRET_V1 &&
+  !process.env.LINECUT_PROJECT_BUILD_SECRET_V1 &&
+  !existsSync(localReleaseSecret) &&
+  !existsSync(legacyReleaseSecret)
+) {
   throw new Error(
-    "Official release key is missing. Set LINECUT_PROJECT_BUILD_SECRET_V1 or restore src-tauri/.linecut-project-build-secret-v1.local.",
+    "Official release key is missing. Set LOCUTION_PRO_PROJECT_BUILD_SECRET_V1 or restore src-tauri/.locution-pro-project-build-secret-v1.local.",
   );
 }
 

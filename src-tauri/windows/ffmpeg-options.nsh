@@ -114,13 +114,13 @@ locution_pro_ffmpeg_page_done:
 FunctionEnd
 
 !macro NSIS_HOOK_PREINSTALL
-  ${If} $LocutionProBundleFfmpeg == 1
-    Delete "$LOCALAPPDATA\LineCut\installer-media-paths.ini"
-  ${Else}
-    CreateDirectory "$LOCALAPPDATA\LineCut"
-    FileOpen $0 "$LOCALAPPDATA\LineCut\installer-media-paths.ini" w
+  ; An empty current file records the bundled choice and prevents migration
+  ; from restoring the previous installer's external-tool selection.
+  CreateDirectory "$LOCALAPPDATA\Locution Pro"
+  FileOpen $0 "$LOCALAPPDATA\Locution Pro\installer-media-paths.ini" w
+  ${If} $LocutionProBundleFfmpeg != 1
     FileWrite $0 "ffmpeg_path=$LocutionProFfmpegPath$\r$\n"
     FileWrite $0 "ffprobe_path=$LocutionProFfprobePath$\r$\n"
-    FileClose $0
   ${EndIf}
+  FileClose $0
 !macroend

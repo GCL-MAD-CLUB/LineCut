@@ -5,7 +5,7 @@
 ## 一次性 GitHub 配置
 
 1. 创建名为 `release` 的 Environment，并只允许受信任维护者部署。稳定版可启用 required reviewers。
-2. 在该 Environment 中添加 `LINECUT_PROJECT_BUILD_SECRET_V1` Secret。
+2. 在该 Environment 中添加 `LOCUTION_PRO_PROJECT_BUILD_SECRET_V1` Secret。更名时复制原 Secret 的值，不能生成新值；工作流仍支持回退到旧名 `LINECUT_PROJECT_BUILD_SECRET_V1`。
 3. 启用 Private vulnerability reporting、Dependabot alerts 和 Dependabot security updates。
 4. 为 `main` 创建 ruleset：要求 Pull Request、至少一次批准、对新提交撤销旧批准、要求 conversation resolution，并只要求 `CI required` 这个稳定门禁。
 5. 建议只允许 squash merge，开启自动删除合并后的分支。
@@ -22,6 +22,8 @@ npm run release:build -- 0.3.3
 ```
 
 该命令会统一更新版本并在本地构建完整安装包，因此需要正式项目构建密钥和打包资源。也可以仅修改版本文件后运行 `npm run check:versions` 与常规 CI，再由云端完成正式构建。
+
+本地密钥文件的当前名称为 `src-tauri/.locution-pro-project-build-secret-v1.local`，仍可读取旧名文件；两者均禁止提交。环境变量、本地文件及新旧项目密钥的对应关系见[项目文件子系统](../src-tauri/src/project_file/README.md)。Windows 下可运行 `npm run test:installer-identity`，在隔离的临时文件和 HKCU 测试键中验证新安装、旧注册表升级、组件选择保留及新键优先；该测试不会安装应用或调用卸载程序。
 
 合并版本 PR 后，在 `main` 对应提交创建并推送带 `v` 前缀的 tag：
 

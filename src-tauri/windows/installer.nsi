@@ -63,8 +63,11 @@ ${StrLoc}
 !define WEBVIEW2BOOTSTRAPPERPATH "{{webview2_bootstrapper_path}}"
 !define WEBVIEW2INSTALLERPATH "{{webview2_installer_path}}"
 !define MINIMUMWEBVIEW2VERSION "{{minimum_webview2_version}}"
-; Keep the installation identity across product renames so upgrades find the existing app.
-!define INSTALL_IDENTITY "LineCut"
+; New installs write current keys; old keys are read only while upgrading.
+!define INSTALL_IDENTITY "Locution Pro"
+!define LEGACY_PRODUCTNAME "LineCut"
+!define LEGACY_UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${LEGACY_PRODUCTNAME}"
+!define LEGACY_MANUPRODUCTKEY "Software\${MANUFACTURER}\${LEGACY_PRODUCTNAME}"
 !define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${INSTALL_IDENTITY}"
 !define MANUKEY "Software\${MANUFACTURER}"
 !define MANUPRODUCTKEY "${MANUKEY}\${INSTALL_IDENTITY}"
@@ -80,6 +83,8 @@ Var UpdateMode
 Var NoShortcutMode
 Var WixMode
 Var OldMainBinaryName
+Var PreviousUninstallKey
+Var PreviousProductKey
 
 Name "${PRODUCTNAME}"
 BrandingText "${COPYRIGHT}"
@@ -221,8 +226,8 @@ Function PageReinstall
   wix_loop_done:
 
   ; Check if there is an existing installation, if not, abort the reinstall page
-  ReadRegStr $R0 SHCTX "${UNINSTKEY}" ""
-  ReadRegStr $R1 SHCTX "${UNINSTKEY}" "UninstallString"
+  ReadRegStr $R0 SHCTX "$PreviousUninstallKey" ""
+  ReadRegStr $R1 SHCTX "$PreviousUninstallKey" "UninstallString"
   ${IfThen} "$R0$R1" == "" ${|} Abort ${|}
 
   ; Compare this installar version with the existing installation
@@ -232,7 +237,7 @@ Function PageReinstall
   ${If} $WixMode = 1
     ReadRegStr $R0 HKLM "$R6" "DisplayVersion"
   ${Else}
-    ReadRegStr $R0 SHCTX "${UNINSTKEY}" "DisplayVersion"
+    ReadRegStr $R0 SHCTX "$PreviousUninstallKey" "DisplayVersion"
   ${EndIf}
   ${IfThen} $R0 == "" ${|} StrCpy $R4 "$(unknown)" ${|}
 
@@ -358,8 +363,8 @@ Function PageLeaveReinstall
       ReadRegStr $R1 HKLM "$R6" "UninstallString"
       ExecWait '$R1' $0
     ${Else}
-      ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""
-      ReadRegStr $R1 SHCTX "${UNINSTKEY}" "UninstallString"
+      ReadRegStr $4 SHCTX "$PreviousProductKey" ""
+      ReadRegStr $R1 SHCTX "$PreviousUninstallKey" "UninstallString"
       ${IfThen} $UpdateMode = 1 ${|} StrCpy $R1 "$R1 /UPDATE" ${|} ; append /UPDATE
       ${IfThen} $PassiveMode = 1 ${|} StrCpy $R1 "$R1 /P" ${|} ; append /P
       StrCpy $R1 "$R1 _?=$4" ; append uninstall directory
@@ -512,6 +517,7 @@ Function .onInit
   !endif
 
   !insertmacro SetContext
+  Call FindPreviousInstallation
 
   ${If} $INSTDIR == "${PLACEHOLDER_INSTALL_DIR}"
     ; Set default install location
@@ -541,10 +547,10 @@ Function .onInit
 
   ; Restore the component choice before an upgrade can uninstall the old version.
   ; Fresh installations (including silent ones) include semantic search by default.
-  ReadRegStr $1 SHCTX "${UNINSTKEY}" "InstallLocation"
+  ReadRegStr $1 SHCTX "$PreviousUninstallKey" "InstallLocation"
   ${If} $1 != ""
     ClearErrors
-    ReadRegDWORD $0 SHCTX "${MANUPRODUCTKEY}" "BundleSemanticSearch"
+    ReadRegDWORD $0 SHCTX "$PreviousProductKey" "BundleSemanticSearch"
     ${IfNot} ${Errors}
     ${AndIf} $0 == 0
       StrCpy $LocutionProBundleSemantic 0
@@ -556,7 +562,7 @@ FunctionEnd
 ; A 0.2.0-or-newer installer only removes caches created by the 0.1 release line.
 ; SHCTX respects the selected per-user or per-machine installation context.
 Function ClearLegacyLocutionProCache
-  ReadRegStr $R0 SHCTX "${UNINSTKEY}" "DisplayVersion"
+  ReadRegStr $R0 SHCTX "$PreviousUninstallKey" "DisplayVersion"
   StrCpy $R1 $R0 4
   ${If} $R1 == "0.1."
     RmDir /r "$LOCALAPPDATA\LineCut\cache"
@@ -684,7 +690,7 @@ Section Install
 
   !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
   ; A renamed binary can coexist with a still-running previous installation.
-  ReadRegStr $OldMainBinaryName SHCTX "${UNINSTKEY}" "MainBinaryName"
+  ReadRegStr $OldMainBinaryName SHCTX "$PreviousUninstallKey" "MainBinaryName"
   ${If} $OldMainBinaryName != ""
   ${AndIf} $OldMainBinaryName != "${MAINBINARYNAME}.exe"
     !insertmacro CheckIfAppIsRunning "$OldMainBinaryName" "${PRODUCTNAME}"
@@ -770,7 +776,7 @@ Section Install
   !endif
 
   ; Remove old main binary if it doesn't match new main binary name
-  ReadRegStr $OldMainBinaryName SHCTX "${UNINSTKEY}" "MainBinaryName"
+  ReadRegStr $OldMainBinaryName SHCTX "$PreviousUninstallKey" "MainBinaryName"
   ${If} $OldMainBinaryName != ""
   ${AndIf} $OldMainBinaryName != "${MAINBINARYNAME}.exe"
     Call RenameExistingProductShortcuts
@@ -800,6 +806,12 @@ Section Install
     WriteRegStr SHCTX "${UNINSTKEY}" "URLUpdateInfo" "${HOMEPAGE}"
     WriteRegStr SHCTX "${UNINSTKEY}" "HelpLink" "${HOMEPAGE}"
   !endif
+
+  ; Remove legacy registration only after the new registration has been published.
+  ${If} $PreviousUninstallKey == "${LEGACY_UNINSTKEY}"
+    DeleteRegKey SHCTX "${LEGACY_UNINSTKEY}"
+    DeleteRegKey SHCTX "${LEGACY_MANUPRODUCTKEY}"
+  ${EndIf}
 
   ; Create start menu shortcut
   !insertmacro MUI_STARTMENU_WRITE_BEGIN Application
@@ -976,7 +988,9 @@ Section Uninstall
     RmDir /r "$APPDATA\${BUNDLEID}"
     RmDir /r "$LOCALAPPDATA\${BUNDLEID}"
     RmDir /r "$LOCALAPPDATA\${PRODUCTNAME}"
-    RmDir /r "$LOCALAPPDATA\${INSTALL_IDENTITY}"
+    RmDir /r "$LOCALAPPDATA\${LEGACY_PRODUCTNAME}"
+    RmDir /r "$LOCALAPPDATA\com.linecut.desktop"
+    RmDir /r "$APPDATA\com.linecut.desktop"
   ${EndIf}
 
   !ifmacrodef NSIS_HOOK_POSTUNINSTALL
@@ -990,8 +1004,24 @@ Section Uninstall
   ${EndIf}
 SectionEnd
 
+Function FindPreviousInstallation
+  Push $R8
+  StrCpy $PreviousUninstallKey "${UNINSTKEY}"
+  StrCpy $PreviousProductKey "${MANUPRODUCTKEY}"
+  ReadRegStr $R8 SHCTX "${UNINSTKEY}" "UninstallString"
+  ${If} $R8 == ""
+    ReadRegStr $R8 SHCTX "${LEGACY_UNINSTKEY}" "UninstallString"
+    ${If} $R8 != ""
+      StrCpy $PreviousUninstallKey "${LEGACY_UNINSTKEY}"
+      StrCpy $PreviousProductKey "${LEGACY_MANUPRODUCTKEY}"
+    ${EndIf}
+  ${EndIf}
+  Pop $R8
+FunctionEnd
+
 Function RestorePreviousInstallLocation
-  ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""
+  Call FindPreviousInstallation
+  ReadRegStr $4 SHCTX "$PreviousProductKey" ""
   StrCmp $4 "" +2 0
     StrCpy $INSTDIR $4
 FunctionEnd
@@ -1017,13 +1047,13 @@ FunctionEnd
 
 ; Rename only shortcuts that belong to this installation, including update/no-shortcut mode.
 !macro RenameProductShortcut DIRECTORY
-  !insertmacro IsShortcutTarget "${DIRECTORY}\${INSTALL_IDENTITY}.lnk" "$INSTDIR\$OldMainBinaryName"
+  !insertmacro IsShortcutTarget "${DIRECTORY}\${LEGACY_PRODUCTNAME}.lnk" "$INSTDIR\$OldMainBinaryName"
   Pop $0
   ${If} $0 = 1
-    !insertmacro UnpinShortcut "${DIRECTORY}\${INSTALL_IDENTITY}.lnk"
-    !insertmacro SetShortcutTarget "${DIRECTORY}\${INSTALL_IDENTITY}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
-    !insertmacro SetLnkAppUserModelId "${DIRECTORY}\${INSTALL_IDENTITY}.lnk"
-    Rename "${DIRECTORY}\${INSTALL_IDENTITY}.lnk" "${DIRECTORY}\${PRODUCTNAME}.lnk"
+    !insertmacro UnpinShortcut "${DIRECTORY}\${LEGACY_PRODUCTNAME}.lnk"
+    !insertmacro SetShortcutTarget "${DIRECTORY}\${LEGACY_PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+    !insertmacro SetLnkAppUserModelId "${DIRECTORY}\${LEGACY_PRODUCTNAME}.lnk"
+    Rename "${DIRECTORY}\${LEGACY_PRODUCTNAME}.lnk" "${DIRECTORY}\${PRODUCTNAME}.lnk"
   ${EndIf}
 !macroend
 
@@ -1042,6 +1072,7 @@ Function CreateOrUpdateStartMenuShortcut
   Pop $0
   ${If} $0 = 1
     !insertmacro SetShortcutTarget "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+    !insertmacro SetLnkAppUserModelId "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk"
     StrCpy $R0 1
   ${EndIf}
 
@@ -1049,6 +1080,7 @@ Function CreateOrUpdateStartMenuShortcut
   Pop $0
   ${If} $0 = 1
     !insertmacro SetShortcutTarget "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+    !insertmacro SetLnkAppUserModelId "$SMPROGRAMS\${PRODUCTNAME}.lnk"
     StrCpy $R0 1
   ${EndIf}
 
@@ -1082,6 +1114,7 @@ Function CreateOrUpdateDesktopShortcut
   Pop $0
   ${If} $0 = 1
     !insertmacro SetShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+    !insertmacro SetLnkAppUserModelId "$DESKTOP\${PRODUCTNAME}.lnk"
     Return
   ${EndIf}
 

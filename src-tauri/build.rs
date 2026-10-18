@@ -5,12 +5,14 @@ const DEVELOPMENT_KEY_SOURCE: [u8; 32] = [
     0, 87, 223, 175, 225, 117, 69, 121, 189, 102, 69, 25, 165, 255, 167, 35, 98, 59, 156, 76, 67,
     239, 14, 79, 122, 44, 84, 81, 113, 53, 88, 6,
 ];
-// The release-secret source and derivation contexts are stable project-file contracts.
-const LOCAL_RELEASE_SECRET_FILE: &str = ".linecut-project-build-secret-v1.local";
+const LOCAL_RELEASE_SECRET_FILE: &str = ".locution-pro-project-build-secret-v1.local";
+const LEGACY_RELEASE_SECRET_FILE: &str = ".linecut-project-build-secret-v1.local";
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=LOCUTION_PRO_PROJECT_BUILD_SECRET_V1");
     println!("cargo:rerun-if-env-changed=LINECUT_PROJECT_BUILD_SECRET_V1");
     println!("cargo:rerun-if-changed={LOCAL_RELEASE_SECRET_FILE}");
+    println!("cargo:rerun-if-changed={LEGACY_RELEASE_SECRET_FILE}");
     generate_project_key_material();
     let mut attributes = tauri_build::Attributes::new();
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
@@ -37,8 +39,9 @@ fn generate_project_key_material() {
     // Development builds intentionally keep using the stable development key so they can open
     // existing development project files. Only release builds may use the release key.
     let configured_secret = if is_release_build {
-        env::var("LINECUT_PROJECT_BUILD_SECRET_V1")
+        env::var("LOCUTION_PRO_PROJECT_BUILD_SECRET_V1")
             .ok()
+            .or_else(|| env::var("LINECUT_PROJECT_BUILD_SECRET_V1").ok())
             .or_else(read_local_release_secret)
     } else {
         None
@@ -46,11 +49,11 @@ fn generate_project_key_material() {
     if let Some(secret) = configured_secret.as_deref() {
         assert!(
             secret.len() >= 32,
-            "LINECUT_PROJECT_BUILD_SECRET_V1 must contain at least 32 bytes"
+            "LOCUTION_PRO_PROJECT_BUILD_SECRET_V1 must contain at least 32 bytes"
         );
     } else if is_release_build {
         panic!(
-            "official release builds require LINECUT_PROJECT_BUILD_SECRET_V1 or {LOCAL_RELEASE_SECRET_FILE}"
+            "official release builds require LOCUTION_PRO_PROJECT_BUILD_SECRET_V1 or {LOCAL_RELEASE_SECRET_FILE}"
         );
     }
 
@@ -58,12 +61,16 @@ fn generate_project_key_material() {
         .as_deref()
         .map(str::as_bytes)
         .unwrap_or(&DEVELOPMENT_KEY_SOURCE);
-    let root = digest_with_context(b"LineCut/project-build/root/v1", source);
-    let mask = digest_with_context(b"LineCut/project-build/mask/v1", source);
+    let root = digest_with_context(b"LocutionPro/project-build/root/v1", source);
+    let mask = digest_with_context(b"LocutionPro/project-build/mask/v1", source);
     let masked = std::array::from_fn::<_, 32, _>(|index| root[index] ^ mask[index]);
+    let legacy_root = digest_with_context(b"LineCut/project-build/root/v1", source);
+    let legacy_mask = digest_with_context(b"LineCut/project-build/mask/v1", source);
+    let legacy_masked =
+        std::array::from_fn::<_, 32, _>(|index| legacy_root[index] ^ legacy_mask[index]);
 
     let generated = format!(
-        "const BUILD_KEY_MASK: [u8; 32] = {mask:?};\nconst BUILD_KEY_MASKED: [u8; 32] = {masked:?};\n"
+        "const BUILD_KEY_MASK: [u8; 32] = {mask:?};\nconst BUILD_KEY_MASKED: [u8; 32] = {masked:?};\nconst LEGACY_BUILD_KEY_MASK: [u8; 32] = {legacy_mask:?};\nconst LEGACY_BUILD_KEY_MASKED: [u8; 32] = {legacy_masked:?};\n"
     );
     let output = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR must be set"))
         .join("locution_pro_project_key.rs");
@@ -71,11 +78,15 @@ fn generate_project_key_material() {
 }
 
 fn read_local_release_secret() -> Option<String> {
-    let path = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR")?).join(LOCAL_RELEASE_SECRET_FILE);
-    fs::read_to_string(path)
-        .ok()
-        .map(|secret| secret.trim_end_matches(['\r', '\n']).to_string())
-        .filter(|secret| !secret.is_empty())
+    let root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR")?);
+    [LOCAL_RELEASE_SECRET_FILE, LEGACY_RELEASE_SECRET_FILE]
+        .into_iter()
+        .find_map(|name| {
+            fs::read_to_string(root.join(name))
+                .ok()
+                .map(|secret| secret.trim_end_matches(['\r', '\n']).to_string())
+                .filter(|secret| !secret.is_empty())
+        })
 }
 
 fn digest_with_context(context: &[u8], source: &[u8]) -> [u8; 32] {

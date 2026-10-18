@@ -110,6 +110,8 @@ pub(crate) fn read_project_file(path: &Path) -> AppResult<(ProjectWorkspace, Str
     let (current, migrated) = if protocol::recognizes(bytes) {
         let opened = protocol::open(bytes)?;
         let decoded = models::decode_current(opened.content_version, opened.plaintext.as_slice())?;
+        // Merely opening an old encryption envelope must not rewrite the original.
+        // The next explicit save uses the current envelope automatically.
         (decoded, opened.content_version != models::current_version())
     } else if handle_v1::recognizes(bytes) {
         (models::upgrade_v1(handle_v1::decode(bytes)?)?, true)

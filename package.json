@@ -21,6 +21,7 @@
   "scripts": {
     "test": "node --test tests/unit/*.test.mjs",
     "test:installer": "node tests/integration/installer-components.test.mjs",
+    "test:installer-identity": "node tests/integration/installer-identity.test.mjs",
     "check:layout": "node scripts/check-repository-layout.mjs",
     "dev": "vite --host 127.0.0.1 --port 1420",
     "docs:check": "node scripts/check-user-guide.mjs",
