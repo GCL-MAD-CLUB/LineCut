@@ -143,6 +143,8 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
   !include MultiUser.nsh
 !endif
 
+!include "${LOCUTION_INSTALLER_SOURCE_DIR}\migration-page.nsh"
+
 ; Installer icon
 !if "${INSTALLERICON}" != ""
   !define MUI_ICON "${INSTALLERICON}"
@@ -431,11 +433,11 @@ Var AppStartMenuFolder
 ; 9. Installation page
 !insertmacro MUI_PAGE_INSTFILES
 
-; 10. Finish page
-;
-; Don't auto jump to finish page after installation page,
-; because the installation page has useful info that can be used debug any issues with the installer.
-!define MUI_FINISHPAGE_NOAUTOCLOSE
+; 10. Migration uses the same wizard and advances automatically after verification.
+!insertmacro MUI_PAGE_INIT
+Page custom MigrationPageCreate MigrationPageLeave
+
+; 11. Finish page. MUI enables auto-advance from the installation page.
 ; Use show readme button in the finish page as a button create a desktop shortcut
 !define MUI_FINISHPAGE_SHOWREADME
 !define MUI_FINISHPAGE_SHOWREADME_TEXT "$(createDesktop)"
@@ -505,6 +507,8 @@ FunctionEnd
 {{/each}}
 
 Function .onInit
+  StrCpy $MigrationProcess 0
+  StrCpy $MigrationComplete 0
   ; Bundled FFmpeg is the default, including passive installs.
   StrCpy $LocutionProBundleFfmpeg 1
   StrCpy $LocutionProBundleSemantic 1
@@ -840,12 +844,13 @@ Section Install
     !insertmacro NSIS_HOOK_POSTINSTALL
   !endif
 
-  Call MigrateLegacyData
-
-  ; Auto close this page for passive mode
   ${If} $PassiveMode = 1
-    SetAutoClose true
+  ${OrIf} ${Silent}
+    Call MigrateLegacyData
   ${EndIf}
+
+  ; Continue to the migration page without asking the user to click Next.
+  SetAutoClose true
 SectionEnd
 
 Function .onInstSuccess
@@ -853,6 +858,9 @@ Function .onInstSuccess
   ; GUI installer has a toggle for the user to (re)start the app
   ${If} $PassiveMode = 1
   ${OrIf} ${Silent}
+    ${If} $MigrationComplete != 1
+      Return
+    ${EndIf}
     ${GetOptions} $CMDLINE "/R" $R0
     ${IfNot} ${Errors}
       ${GetOptions} $CMDLINE "/ARGS" $R0
@@ -1141,35 +1149,6 @@ Function UninstallLegacyInstallation
   DeleteRegKey SHCTX "${LEGACY_UNINSTKEY}"
   DeleteRegKey SHCTX "${LEGACY_MANUPRODUCTKEY}"
   DetailPrint "旧版 LineCut 卸载完成。"
-FunctionEnd
-
-Function MigrateLegacyData
-  ; An elevated, machine-wide installer must not copy the administrator's profile
-  ; as if it belonged to every user. Migration never runs on normal application startup.
-  !if "${INSTALLMODE}" == "perMachine"
-    DetailPrint "机器级安装不迁移用户数据。如需迁移旧数据，请使用当前用户安装。"
-    Return
-  !else if "${INSTALLMODE}" == "both"
-    ${If} $MultiUser.InstallMode == "AllUsers"
-      DetailPrint "机器级安装不迁移用户数据。如需迁移旧数据，请使用当前用户安装。"
-      Return
-    ${EndIf}
-  !endif
-  DetailPrint "正在迁移 LineCut 设置、缓存和浏览器数据…"
-  ClearErrors
-  IfSilent migration_silent migration_visible
-  migration_silent:
-    ExecWait '$\"$INSTDIR\${MAINBINARYNAME}.exe$\" --migrate-legacy-data --migration-silent' $0
-    Goto migration_result
-  migration_visible:
-    ExecWait '$\"$INSTDIR\${MAINBINARYNAME}.exe$\" --migrate-legacy-data' $0
-  migration_result:
-  ${If} ${Errors}
-  ${OrIf} $0 != 0
-    DetailPrint "数据迁移尚未完成。原数据已保留，请重新运行安装程序重试。"
-  ${Else}
-    DetailPrint "数据迁移完成。"
-  ${EndIf}
 FunctionEnd
 
 Function RefreshShellAssociations

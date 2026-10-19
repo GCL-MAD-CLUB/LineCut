@@ -1,229 +1,145 @@
-//! A native dialog is available before WebView2 opens the profile being migrated.
+//! Atomic progress snapshots consumed by the installer page; this worker never opens a window.
 use super::{migrate_all, MigrationProgress, MigrationUpdate};
 use std::{
-    io,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc::{self, Receiver, Sender},
-        Arc,
-    },
-    thread::JoinHandle,
-};
-use windows::{
-    core::{w, PCWSTR},
-    Win32::{
-        Foundation::{HWND, LPARAM, S_FALSE, S_OK, WPARAM},
-        UI::{
-            Controls::{
-                TaskDialogIndirect, TASKDIALOGCONFIG, TASKDIALOG_NOTIFICATIONS,
-                TDCBF_CANCEL_BUTTON, TDE_CONTENT, TDF_CALLBACK_TIMER,
-                TDF_SHOW_MARQUEE_PROGRESS_BAR, TDM_CLICK_BUTTON, TDM_SET_ELEMENT_TEXT,
-                TDM_SET_PROGRESS_BAR_MARQUEE, TDN_BUTTON_CLICKED, TDN_CREATED, TDN_TIMER,
-            },
-            WindowsAndMessaging::{SendMessageW, IDCANCEL},
-        },
-    },
+    fs, io,
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
-enum Event {
-    Update(MigrationUpdate),
-    Finished(io::Result<()>),
-}
-
-struct DialogState {
-    receiver: Receiver<Event>,
-    sender: Option<Sender<Event>>,
-    cancelled: Arc<AtomicBool>,
-    worker: Option<JoinHandle<()>>,
-    result: Option<io::Result<()>>,
-}
-
-pub(super) fn run() -> io::Result<()> {
-    let (sender, receiver) = mpsc::channel();
-    let mut state = DialogState {
-        receiver,
-        sender: Some(sender),
-        cancelled: Arc::default(),
-        worker: None,
-        result: None,
-    };
-    let config = TASKDIALOGCONFIG {
-        cbSize: std::mem::size_of::<TASKDIALOGCONFIG>() as u32,
-        pszWindowTitle: w!("Locution Pro — 数据迁移"),
-        pszMainInstruction: w!("正在迁移 LineCut 数据"),
-        pszContent: w!("正在准备迁移。原数据会保留，新位置的已有数据优先。"),
-        pszFooter: w!("数据较多时需要一些时间。取消后可重新运行安装程序继续迁移。"),
-        dwFlags: TDF_CALLBACK_TIMER | TDF_SHOW_MARQUEE_PROGRESS_BAR,
-        dwCommonButtons: TDCBF_CANCEL_BUTTON,
-        pfCallback: Some(callback),
-        lpCallbackData: &mut state as *mut DialogState as isize,
-        cxWidth: 360,
+pub(super) fn run(path: &Path, cancel_file: Option<PathBuf>) -> io::Result<()> {
+    write_snapshot(path, &MigrationUpdate::default(), "running", None)?;
+    let report_path = path.to_path_buf();
+    let mut last_report = Instant::now();
+    let mut progress = MigrationProgress {
+        cancel_file,
+        report: Box::new(move |update| {
+            if last_report.elapsed() >= Duration::from_millis(100) {
+                // A transient reader lock may delay an update. The terminal snapshot is mandatory.
+                let _ = write_snapshot(&report_path, &update, "running", None);
+                last_report = Instant::now();
+            }
+        }),
         ..Default::default()
     };
-    // The dialog pumps its own messages while the filesystem work runs on a worker.
-    let displayed = unsafe { TaskDialogIndirect(&config, None, None, None) };
-    state.cancelled.store(true, Ordering::Relaxed);
-    if let Some(worker) = state.worker.take() {
-        let _ = worker.join();
-    }
-    displayed.map_err(io::Error::other)?;
-    state.result.unwrap_or_else(|| {
-        Err(io::Error::new(
-            io::ErrorKind::Interrupted,
-            "Migration cancelled",
-        ))
-    })
+    let result = migrate_all(&mut progress);
+    let state = match &result {
+        Ok(()) => "complete",
+        Err(error) if error.kind() == io::ErrorKind::Interrupted => "cancelled",
+        Err(_) => "error",
+    };
+    let error = result.as_ref().err().map(ToString::to_string);
+    write_snapshot(path, &progress.update, state, error.as_deref())?;
+    result
 }
 
-unsafe extern "system" fn callback(
-    hwnd: HWND,
-    notification: TASKDIALOG_NOTIFICATIONS,
-    _wparam: WPARAM,
-    _lparam: LPARAM,
-    data: isize,
-) -> windows::core::HRESULT {
-    // lpCallbackData stays valid for the entire synchronous TaskDialogIndirect call.
-    let mut content = None;
-    let mut close = false;
-    let mut defer_cancel = false;
-    // Release the mutable state borrow before SendMessageW: dialog messages can
-    // synchronously re-enter this callback (in particular TDM_CLICK_BUTTON).
-    {
-        let state = &mut *(data as *mut DialogState);
-        match notification {
-            TDN_CREATED => {
-                if let Some(sender) = state.sender.take() {
-                    let cancelled = state.cancelled.clone();
-                    match std::thread::Builder::new()
-                        .name("identity-migration".into())
-                        .spawn(move || {
-                            let updates = sender.clone();
-                            let mut progress = MigrationProgress {
-                                cancelled,
-                                report: Box::new(move |update| {
-                                    let _ = updates.send(Event::Update(update));
-                                }),
-                                ..Default::default()
-                            };
-                            let result = migrate_all(&mut progress);
-                            let _ = sender.send(Event::Finished(result));
-                        }) {
-                        Ok(worker) => state.worker = Some(worker),
-                        Err(error) => state.result = Some(Err(error)),
-                    }
-                }
+fn inline(value: &str) -> String {
+    value
+        .chars()
+        .take(450)
+        .map(|c| {
+            if matches!(c, '\r' | '\n' | '\0') {
+                ' '
+            } else {
+                c
             }
-            TDN_TIMER => {
-                loop {
-                    match state.receiver.try_recv() {
-                        Ok(Event::Update(update)) if !state.cancelled.load(Ordering::Relaxed) => {
-                            content = Some(describe(&update));
-                        }
-                        Ok(Event::Update(_)) => {}
-                        Ok(Event::Finished(result)) => {
-                            state.result = Some(result);
-                            break;
-                        }
-                        Err(mpsc::TryRecvError::Disconnected) if state.result.is_none() => {
-                            state.result = Some(Err(io::Error::other(
-                                "Migration worker stopped unexpectedly",
-                            )));
-                            break;
-                        }
-                        Err(_) => break,
-                    }
-                }
-                close = state.result.is_some();
-            }
-            TDN_BUTTON_CLICKED if state.result.is_none() => {
-                state.cancelled.store(true, Ordering::Relaxed);
-                content =
-                    Some("正在停止迁移，请稍候。原数据仍保留，重新运行安装程序可继续。".to_owned());
-                defer_cancel = true;
-            }
-            _ => {}
-        }
-    }
-    if notification == TDN_CREATED {
-        SendMessageW(
-            hwnd,
-            TDM_SET_PROGRESS_BAR_MARQUEE.0 as u32,
-            Some(WPARAM(1)),
-            Some(LPARAM(30)),
-        );
-    }
-    if let Some(content) = content {
-        set_content(hwnd, &content);
-    }
-    if close {
-        SendMessageW(
-            hwnd,
-            TDM_CLICK_BUTTON.0 as u32,
-            Some(WPARAM(IDCANCEL.0 as usize)),
-            None,
-        );
-    }
-    if defer_cancel {
-        return S_FALSE;
-    }
-    S_OK
+        })
+        .collect()
 }
 
-unsafe fn set_content(hwnd: HWND, text: &str) {
-    let text: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
-    SendMessageW(
-        hwnd,
-        TDM_SET_ELEMENT_TEXT.0 as u32,
-        Some(WPARAM(TDE_CONTENT.0 as usize)),
-        Some(LPARAM(PCWSTR(text.as_ptr()).0 as isize)),
+fn write_snapshot(
+    path: &Path,
+    update: &MigrationUpdate,
+    state: &str,
+    error: Option<&str>,
+) -> io::Result<()> {
+    let phase = match state {
+        "complete" => "数据迁移和校验完成",
+        "cancelled" => "迁移已取消，原数据仍保留",
+        "error" => "迁移失败，原数据仍保留",
+        _ if update.verifying => "正在校验迁移文件",
+        _ => update.phase,
+    };
+    let error = if state == "cancelled" {
+        Some("迁移已取消，可点击重试继续。")
+    } else {
+        error
+    };
+    let document = format!(
+        "[Migration]\r\nState={}\r\nPhase={}\r\nCopied={} / {:.1} MiB\r\nVerified={} / {:.1} MiB\r\nFile={}\r\nError={}\r\n",
+        state, inline(phase), update.files, update.bytes as f64 / 1048576.0,
+        update.verified_files, update.verified_bytes as f64 / 1048576.0,
+        inline(&update.path.file_name().unwrap_or_default().to_string_lossy()), inline(error.unwrap_or_default()),
     );
-}
-
-fn describe(update: &MigrationUpdate) -> String {
-    format!(
-        "{}\n已复制 {} 个文件，共 {:.1} MiB\n已校验 {} 个文件，共 {:.1} MiB\n{}",
-        if update.verifying {
-            "正在校验迁移文件"
-        } else {
-            update.phase
-        },
-        update.files,
-        update.bytes as f64 / (1024.0 * 1024.0),
-        update.verified_files,
-        update.verified_bytes as f64 / (1024.0 * 1024.0),
-        update
-            .path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-    )
+    // ReadINIStr uses the Windows INI API. A UTF-16LE BOM preserves Chinese filenames and text.
+    let bytes: Vec<u8> = std::iter::once(0xfeff)
+        .chain(document.encode_utf16())
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    let staged = path.with_extension("tmp");
+    let result = fs::write(&staged, bytes).and_then(|()| {
+        for attempt in 0..25 {
+            match fs::rename(&staged, path) {
+                Err(error)
+                    if attempt < 24
+                        && matches!(
+                            error.kind(),
+                            io::ErrorKind::PermissionDenied | io::ErrorKind::WouldBlock
+                        ) =>
+                {
+                    // ReadINIStr may briefly hold a Windows handle that disallows deletion.
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                result => return result,
+            }
+        }
+        unreachable!()
+    });
+    if result.is_err() {
+        let _ = fs::remove_file(&staged);
+    }
+    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn read_snapshot(path: &Path) -> String {
+        let bytes = fs::read(path).unwrap();
+        assert_eq!(&bytes[..2], &[0xff, 0xfe]);
+        let words: Vec<u16> = bytes[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        String::from_utf16(&words).unwrap()
+    }
+
     #[test]
-    fn progress_displays_the_phase_files_bytes_and_current_file_without_fake_percentages() {
+    fn snapshots_replace_atomically_preserve_unicode_and_cannot_inject_status_fields() {
+        let root = std::env::temp_dir().join(format!("locution-progress-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("progress.ini");
         let update = MigrationUpdate {
-            phase: "复制缓存",
+            phase: "正在复制缓存",
+            path: "字幕缓存.bin".into(),
             files: 12,
-            bytes: 3 * 1024 * 1024,
-            path: "cache/current.bin".into(),
-            ..Default::default()
-        };
-        let text = describe(&update);
-        assert!(text.contains("复制缓存"));
-        assert!(text.contains("12 个文件"));
-        assert!(text.contains("3.0 MiB"));
-        assert!(text.contains("current.bin"));
-        let verifying = describe(&MigrationUpdate {
-            verifying: true,
+            bytes: 3 * 1048576,
             verified_files: 7,
-            verified_bytes: 2 * 1024 * 1024,
-            ..update
-        });
-        assert!(verifying.contains("正在校验迁移文件"));
-        assert!(verifying.contains("已校验 7 个文件，共 2.0 MiB"));
+            verified_bytes: 2 * 1048576,
+            verifying: true,
+        };
+        write_snapshot(&path, &update, "running", None).unwrap();
+        let text = read_snapshot(&path);
+        assert!(text.contains("State=running\r\n"));
+        assert!(text.contains("Phase=正在校验迁移文件"));
+        assert!(text.contains("File=字幕缓存.bin"));
+        assert!(text.contains("Copied=12 / 3.0 MiB"));
+        assert!(text.contains("Verified=7 / 2.0 MiB"));
+        write_snapshot(&path, &update, "error", Some("corrupt\r\nState=complete")).unwrap();
+        let text = read_snapshot(&path);
+        assert!(text.contains("State=error\r\n"));
+        assert!(!text.contains("\r\nState=complete"));
+        assert!(!path.with_extension("tmp").exists());
+        fs::remove_dir_all(root).unwrap();
     }
 }

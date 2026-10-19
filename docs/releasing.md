@@ -23,7 +23,7 @@ npm run release:build -- 0.3.3
 
 该命令会统一更新版本并在本地构建完整安装包，因此需要正式项目构建密钥和打包资源。也可以仅修改版本文件后运行 `npm run check:versions` 与常规 CI，再由云端完成正式构建。
 
-本地密钥文件的当前名称为 `src-tauri/.locution-pro-project-build-secret-v1.local`，仍可读取旧名文件；两者均禁止提交。环境变量、本地文件及新旧项目密钥的对应关系见[项目文件子系统](../src-tauri/src/project_file/README.md)。Windows 下可运行 `npm run test:installer-identity`，在隔离的临时文件和 HKCU 测试键中编译模拟卸载器与迁移程序，验证旧发布者键、带空格的目录、同版本与更新模式卸载、失败时保留记录、组件选择及安装阶段迁移调用；该测试不会安装应用或调用真实卸载器。
+本地密钥文件的当前名称为 `src-tauri/.locution-pro-project-build-secret-v1.local`，仍可读取旧名文件；两者均禁止提交。环境变量、本地文件及新旧项目密钥的对应关系见[项目文件子系统](../src-tauri/src/project_file/README.md)。Windows 下可运行 `npm run test:installer-identity`，在隔离的临时文件和 HKCU 测试键中编译模拟卸载器与迁移程序，验证旧发布者键、带空格的目录、同版本与更新模式卸载、失败时保留记录、组件选择及安装阶段迁移调用，并通过最小安装向导验证同窗口自动跳转、失败和取消时禁止前进、重试后自动完成；该测试不会安装应用或调用真实卸载器。
 
 合并版本 PR 后，在 `main` 对应提交创建并推送带 `v` 前缀的 tag：
 

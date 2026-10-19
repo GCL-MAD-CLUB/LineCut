@@ -12,7 +12,6 @@ use std::{
 };
 use uuid::Uuid;
 
-#[cfg(windows)]
 mod progress;
 
 #[derive(Clone, Default)]
@@ -32,6 +31,7 @@ struct MigrationProgress {
     update: MigrationUpdate,
     last_report: Instant,
     buffer: Vec<u8>,
+    cancel_file: Option<PathBuf>,
 }
 
 impl Default for MigrationProgress {
@@ -42,13 +42,16 @@ impl Default for MigrationProgress {
             update: MigrationUpdate::default(),
             last_report: Instant::now(),
             buffer: vec![0; 1024 * 1024],
+            cancel_file: None,
         }
     }
 }
 
 impl MigrationProgress {
     fn check_cancelled(&self) -> io::Result<()> {
-        if self.cancelled.load(Ordering::Relaxed) {
+        if self.cancelled.load(Ordering::Relaxed)
+            || self.cancel_file.as_ref().is_some_and(|path| path.is_file())
+        {
             return Err(io::Error::new(
                 io::ErrorKind::Interrupted,
                 "Migration cancelled",
@@ -123,26 +126,17 @@ fn default_data_roots() -> (PathBuf, PathBuf) {
     )
 }
 
-pub(crate) fn migrate_for_installer(visible: bool) -> io::Result<()> {
-    #[cfg(windows)]
-    if visible && migration_pending() {
-        return progress::run();
+pub(crate) fn migrate_for_installer(
+    progress_file: Option<&Path>,
+    cancel_file: Option<PathBuf>,
+) -> io::Result<()> {
+    if let Some(path) = progress_file {
+        return progress::run(path, cancel_file);
     }
-    #[cfg(not(windows))]
-    let _ = visible;
-    migrate_all(&mut MigrationProgress::default())
-}
-
-#[cfg(windows)]
-fn migration_pending() -> bool {
-    let (current, legacy) = data_roots();
-    (current != legacy && legacy.is_dir() && !current.join(MIGRATION_MARKER).exists())
-        || ["LOCALAPPDATA", "APPDATA"].iter().any(|variable| {
-            env::var_os(variable).is_some_and(|parent| {
-                let parent = PathBuf::from(parent);
-                parent.join(LEGACY_APPLICATION_ID).is_dir() && !parent.join(APPLICATION_ID).exists()
-            })
-        })
+    migrate_all(&mut MigrationProgress {
+        cancel_file,
+        ..Default::default()
+    })
 }
 
 fn migrate_all(progress: &mut MigrationProgress) -> io::Result<()> {

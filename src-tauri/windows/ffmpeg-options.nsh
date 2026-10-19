@@ -1,6 +1,7 @@
 !include "LogicLib.nsh"
 !include "nsDialogs.nsh"
 !include "${__FILEDIR__}\semantic-options.nsh"
+!define LOCUTION_INSTALLER_SOURCE_DIR "${__FILEDIR__}"
 
 Var LocutionProBundleFfmpeg
 Var LocutionProFfmpegPath
