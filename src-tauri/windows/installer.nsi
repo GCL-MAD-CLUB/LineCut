@@ -67,7 +67,8 @@ ${StrLoc}
 !define INSTALL_IDENTITY "Locution Pro"
 !define LEGACY_PRODUCTNAME "LineCut"
 !define LEGACY_UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${LEGACY_PRODUCTNAME}"
-!define LEGACY_MANUPRODUCTKEY "Software\${MANUFACTURER}\${LEGACY_PRODUCTNAME}"
+; Tauri derived the old publisher from com.linecut.desktop, independently of the new publisher.
+!define LEGACY_MANUPRODUCTKEY "Software\linecut\${LEGACY_PRODUCTNAME}"
 !define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${INSTALL_IDENTITY}"
 !define MANUKEY "Software\${MANUFACTURER}"
 !define MANUPRODUCTKEY "${MANUKEY}\${INSTALL_IDENTITY}"
@@ -85,6 +86,11 @@ Var WixMode
 Var OldMainBinaryName
 Var PreviousUninstallKey
 Var PreviousProductKey
+Var PreviousInstallDir
+Var PreviousMainBinaryName
+Var LegacyInstallDir
+Var LegacyUninstallCommand
+Var LegacyMainBinaryName
 
 Name "${PRODUCTNAME}"
 BrandingText "${COPYRIGHT}"
@@ -197,6 +203,11 @@ Var ReinstallPageCheck
 Page custom PageReinstall PageLeaveReinstall
 
 Function PageReinstall
+  ; A product rename always removes the old binary in the installation section,
+  ; including equal-version, silent, and /UPDATE installs.
+  ${If} $PreviousUninstallKey == "${LEGACY_UNINSTKEY}"
+    Abort
+  ${EndIf}
   ; Uninstall previous WiX installation if exists.
   ;
   ; A WiX installer stores the installation info in registry
@@ -363,7 +374,7 @@ Function PageLeaveReinstall
       ReadRegStr $R1 HKLM "$R6" "UninstallString"
       ExecWait '$R1' $0
     ${Else}
-      ReadRegStr $4 SHCTX "$PreviousProductKey" ""
+      StrCpy $4 $PreviousInstallDir
       ReadRegStr $R1 SHCTX "$PreviousUninstallKey" "UninstallString"
       ${IfThen} $UpdateMode = 1 ${|} StrCpy $R1 "$R1 /UPDATE" ${|} ; append /UPDATE
       ${IfThen} $PassiveMode = 1 ${|} StrCpy $R1 "$R1 /P" ${|} ; append /P
@@ -376,7 +387,7 @@ Function PageLeaveReinstall
     ${IfThen} ${Errors} ${|} StrCpy $0 2 ${|} ; ExecWait failed, set fake exit code
 
     ${If} $0 <> 0
-    ${OrIf} ${FileExists} "$INSTDIR\${MAINBINARYNAME}.exe"
+    ${OrIf} ${FileExists} "$PreviousInstallDir\$PreviousMainBinaryName"
       ; User cancelled wix uninstaller? return to select un/reinstall page
       ${If} $WixMode = 1
       ${AndIf} $0 = 1602
@@ -518,6 +529,7 @@ Function .onInit
 
   !insertmacro SetContext
   Call FindPreviousInstallation
+  Call ReadPreviousInstallLocation
 
   ${If} $INSTDIR == "${PLACEHOLDER_INSTALL_DIR}"
     ; Set default install location
@@ -684,6 +696,11 @@ SectionEnd
 Section Install
   SetOutPath $INSTDIR
 
+  !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
+  Call UninstallLegacyInstallation
+  ; The old uninstaller may have removed this directory.
+  SetOutPath $INSTDIR
+
   !ifmacrodef NSIS_HOOK_PREINSTALL
     !insertmacro NSIS_HOOK_PREINSTALL
   !endif
@@ -807,12 +824,6 @@ Section Install
     WriteRegStr SHCTX "${UNINSTKEY}" "HelpLink" "${HOMEPAGE}"
   !endif
 
-  ; Remove legacy registration only after the new registration has been published.
-  ${If} $PreviousUninstallKey == "${LEGACY_UNINSTKEY}"
-    DeleteRegKey SHCTX "${LEGACY_UNINSTKEY}"
-    DeleteRegKey SHCTX "${LEGACY_MANUPRODUCTKEY}"
-  ${EndIf}
-
   ; Create start menu shortcut
   !insertmacro MUI_STARTMENU_WRITE_BEGIN Application
     Call CreateOrUpdateStartMenuShortcut
@@ -828,6 +839,8 @@ Section Install
   !ifmacrodef NSIS_HOOK_POSTINSTALL
     !insertmacro NSIS_HOOK_POSTINSTALL
   !endif
+
+  Call MigrateLegacyData
 
   ; Auto close this page for passive mode
   ${If} $PassiveMode = 1
@@ -1021,9 +1034,142 @@ FunctionEnd
 
 Function RestorePreviousInstallLocation
   Call FindPreviousInstallation
+  Call ReadPreviousInstallLocation
+  ${If} $PreviousInstallDir != ""
+    StrCpy $INSTDIR $PreviousInstallDir
+  ${EndIf}
+FunctionEnd
+
+Function ReadPreviousInstallLocation
   ReadRegStr $4 SHCTX "$PreviousProductKey" ""
-  StrCmp $4 "" +2 0
-    StrCpy $INSTDIR $4
+  ${If} $4 == ""
+    ReadRegStr $4 SHCTX "$PreviousUninstallKey" "InstallLocation"
+  ${EndIf}
+  Push $4
+  Call StripPathQuotes
+  Pop $4
+  StrCpy $PreviousInstallDir $4
+  ReadRegStr $PreviousMainBinaryName SHCTX "$PreviousUninstallKey" "MainBinaryName"
+  ${If} $PreviousMainBinaryName == ""
+    StrCpy $PreviousMainBinaryName "${MAINBINARYNAME}.exe"
+    ${If} $PreviousUninstallKey == "${LEGACY_UNINSTKEY}"
+      StrCpy $PreviousMainBinaryName "linecut.exe"
+    ${EndIf}
+  ${EndIf}
+FunctionEnd
+
+Function StripPathQuotes
+  Exch $R8
+  Push $R9
+  StrCpy $R9 $R8 1
+  ${If} $R9 == '$\"'
+    StrCpy $R8 $R8 "" 1
+  ${EndIf}
+  StrCpy $R9 $R8 1 -1
+  ${If} $R9 == '$\"'
+    StrCpy $R8 $R8 -1
+  ${EndIf}
+  Pop $R9
+  Exch $R8
+FunctionEnd
+
+Function FindLegacyInstallation
+  ReadRegStr $LegacyUninstallCommand SHCTX "${LEGACY_UNINSTKEY}" "UninstallString"
+  ReadRegStr $LegacyInstallDir SHCTX "${LEGACY_MANUPRODUCTKEY}" ""
+  ${If} $LegacyInstallDir == ""
+    ReadRegStr $LegacyInstallDir SHCTX "${LEGACY_UNINSTKEY}" "InstallLocation"
+  ${EndIf}
+  Push $LegacyInstallDir
+  Call StripPathQuotes
+  Pop $LegacyInstallDir
+  ${If} $LegacyInstallDir == ""
+  ${AndIf} $LegacyUninstallCommand != ""
+    ; Original Tauri NSIS registrations contain the quoted uninstaller path, without arguments.
+    Push $LegacyUninstallCommand
+    Call StripPathQuotes
+    Pop $LegacyInstallDir
+    ${GetParent} "$LegacyInstallDir" $LegacyInstallDir
+  ${EndIf}
+  ; Recover an old default installation whose uninstall key was removed by an earlier rename.
+  ${If} $LegacyInstallDir == ""
+  ${AndIf} ${FileExists} "$LOCALAPPDATA\LineCut\linecut.exe"
+    StrCpy $LegacyInstallDir "$LOCALAPPDATA\LineCut"
+  ${EndIf}
+  ${If} $LegacyUninstallCommand == ""
+  ${AndIf} $LegacyInstallDir != ""
+  ${AndIf} ${FileExists} "$LegacyInstallDir\linecut.exe"
+  ${AndIf} ${FileExists} "$LegacyInstallDir\uninstall.exe"
+    StrCpy $LegacyUninstallCommand '$\"$LegacyInstallDir\uninstall.exe$\"'
+  ${EndIf}
+  ReadRegStr $LegacyMainBinaryName SHCTX "${LEGACY_UNINSTKEY}" "MainBinaryName"
+  ${If} $LegacyMainBinaryName == ""
+    StrCpy $LegacyMainBinaryName "linecut.exe"
+  ${EndIf}
+FunctionEnd
+
+Function UninstallLegacyInstallation
+  Call FindLegacyInstallation
+  ${If} $LegacyUninstallCommand == ""
+    Return
+  ${EndIf}
+  ${If} $LegacyInstallDir == ""
+    DetailPrint "无法确定 LineCut 的安装目录，未删除旧安装记录。"
+    SetErrorLevel 2
+    Abort
+  ${EndIf}
+  !insertmacro CheckIfAppIsRunning "$LegacyMainBinaryName" "LineCut"
+  DetailPrint "正在卸载旧版 LineCut（保留设置、项目和缓存）…"
+  ; /UPDATE suppresses data deletion; /S avoids an invisible secondary uninstall wizard.
+  ClearErrors
+  ExecWait '$LegacyUninstallCommand /S /UPDATE _?=$LegacyInstallDir' $0
+  ${If} ${Errors}
+  ${OrIf} $0 != 0
+  ${OrIf} ${FileExists} "$LegacyInstallDir\$LegacyMainBinaryName"
+    DetailPrint "旧版 LineCut 卸载失败，已保留旧安装记录。请关闭旧程序后重试。"
+    IfSilent +2
+      MessageBox MB_ICONEXCLAMATION|MB_OK "无法卸载旧版 LineCut。请关闭旧程序，检查旧安装目录的权限后重试。原数据和安装记录仍保留。"
+    SetErrorLevel 2
+    Abort
+  ${EndIf}
+  ; The old /UPDATE uninstaller leaves shortcuts. Retarget them before registering the new app.
+  Push $PreviousInstallDir
+  StrCpy $PreviousInstallDir $LegacyInstallDir
+  StrCpy $OldMainBinaryName $LegacyMainBinaryName
+  Call RenameExistingProductShortcuts
+  Pop $PreviousInstallDir
+  Delete "$LegacyInstallDir\uninstall.exe"
+  DeleteRegKey SHCTX "${LEGACY_UNINSTKEY}"
+  DeleteRegKey SHCTX "${LEGACY_MANUPRODUCTKEY}"
+  DetailPrint "旧版 LineCut 卸载完成。"
+FunctionEnd
+
+Function MigrateLegacyData
+  ; An elevated, machine-wide installer must not copy the administrator's profile
+  ; as if it belonged to every user. Migration never runs on normal application startup.
+  !if "${INSTALLMODE}" == "perMachine"
+    DetailPrint "机器级安装不迁移用户数据。如需迁移旧数据，请使用当前用户安装。"
+    Return
+  !else if "${INSTALLMODE}" == "both"
+    ${If} $MultiUser.InstallMode == "AllUsers"
+      DetailPrint "机器级安装不迁移用户数据。如需迁移旧数据，请使用当前用户安装。"
+      Return
+    ${EndIf}
+  !endif
+  DetailPrint "正在迁移 LineCut 设置、缓存和浏览器数据…"
+  ClearErrors
+  IfSilent migration_silent migration_visible
+  migration_silent:
+    ExecWait '$\"$INSTDIR\${MAINBINARYNAME}.exe$\" --migrate-legacy-data --migration-silent' $0
+    Goto migration_result
+  migration_visible:
+    ExecWait '$\"$INSTDIR\${MAINBINARYNAME}.exe$\" --migrate-legacy-data' $0
+  migration_result:
+  ${If} ${Errors}
+  ${OrIf} $0 != 0
+    DetailPrint "数据迁移尚未完成。原数据已保留，请重新运行安装程序重试。"
+  ${Else}
+    DetailPrint "数据迁移完成。"
+  ${EndIf}
 FunctionEnd
 
 Function RefreshShellAssociations
@@ -1047,7 +1193,7 @@ FunctionEnd
 
 ; Rename only shortcuts that belong to this installation, including update/no-shortcut mode.
 !macro RenameProductShortcut DIRECTORY
-  !insertmacro IsShortcutTarget "${DIRECTORY}\${LEGACY_PRODUCTNAME}.lnk" "$INSTDIR\$OldMainBinaryName"
+  !insertmacro IsShortcutTarget "${DIRECTORY}\${LEGACY_PRODUCTNAME}.lnk" "$PreviousInstallDir\$OldMainBinaryName"
   Pop $0
   ${If} $0 = 1
     !insertmacro UnpinShortcut "${DIRECTORY}\${LEGACY_PRODUCTNAME}.lnk"

@@ -22,25 +22,36 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    if let Err(error) = identity::prepare() {
-        app_error(
-            ErrorCode::ApplicationRunFailed,
-            format!("Failed to migrate application identity: {error}"),
-        );
-        #[cfg(windows)]
-        {
-            use windows::core::PCWSTR;
-            use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
-            let title: Vec<u16> = "Locution Pro\0".encode_utf16().collect();
-            let message: Vec<u16> = format!("无法迁移旧版本数据。请关闭旧版本程序，检查数据目录的可用空间和访问权限后重试。原数据仍保留。\n\n{error}\0").encode_utf16().collect();
-            unsafe {
-                MessageBoxW(
-                    None,
-                    PCWSTR(message.as_ptr()),
-                    PCWSTR(title.as_ptr()),
-                    MB_OK | MB_ICONERROR,
+    let migration_only = std::env::args_os().any(|arg| arg == "--migrate-legacy-data");
+    if migration_only {
+        let silent_migration = std::env::args_os().any(|arg| arg == "--migration-silent");
+        if let Err(error) = identity::migrate_for_installer(!silent_migration) {
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                app_error(
+                    ErrorCode::ApplicationRunFailed,
+                    format!("Failed to migrate application identity: {error}"),
                 );
             }
+            #[cfg(windows)]
+            if !silent_migration && error.kind() != std::io::ErrorKind::Interrupted {
+                use windows::core::PCWSTR;
+                use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+                let title: Vec<u16> = "Locution Pro\0".encode_utf16().collect();
+                let message: Vec<u16> = format!("无法迁移旧版本数据。请关闭旧版本程序，检查数据目录的可用空间和访问权限后，重新运行安装程序重试。原数据仍保留。\n\n{error}\0").encode_utf16().collect();
+                unsafe {
+                    MessageBoxW(
+                        None,
+                        PCWSTR(message.as_ptr()),
+                        PCWSTR(title.as_ptr()),
+                        MB_OK | MB_ICONERROR,
+                    );
+                }
+            }
+            std::process::exit(if error.kind() == std::io::ErrorKind::Interrupted {
+                2
+            } else {
+                1
+            });
         }
         return;
     }

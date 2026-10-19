@@ -1,9 +1,85 @@
-//! Product identity migration runs before Tauri creates the WebView or opens application state.
+//! Explicit installer migration; normal application startup never invokes this module's copy flow.
+use sha2::{Digest, Sha256};
 use std::{
-    env, fs, io,
+    env, fs,
+    io::{self, Read, Write},
     path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
 };
 use uuid::Uuid;
+
+#[cfg(windows)]
+mod progress;
+
+#[derive(Clone, Default)]
+struct MigrationUpdate {
+    phase: &'static str,
+    path: PathBuf,
+    files: u64,
+    bytes: u64,
+    verifying: bool,
+    verified_files: u64,
+    verified_bytes: u64,
+}
+
+struct MigrationProgress {
+    cancelled: Arc<AtomicBool>,
+    report: Box<dyn FnMut(MigrationUpdate) + Send>,
+    update: MigrationUpdate,
+    last_report: Instant,
+    buffer: Vec<u8>,
+}
+
+impl Default for MigrationProgress {
+    fn default() -> Self {
+        Self {
+            cancelled: Arc::default(),
+            report: Box::new(|_| {}),
+            update: MigrationUpdate::default(),
+            last_report: Instant::now(),
+            buffer: vec![0; 1024 * 1024],
+        }
+    }
+}
+
+impl MigrationProgress {
+    fn check_cancelled(&self) -> io::Result<()> {
+        if self.cancelled.load(Ordering::Relaxed) {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "Migration cancelled",
+            ));
+        }
+        Ok(())
+    }
+
+    fn phase(&mut self, phase: &'static str) -> io::Result<()> {
+        self.check_cancelled()?;
+        self.update.phase = phase;
+        self.update.path.clear();
+        self.update.verifying = false;
+        self.publish();
+        Ok(())
+    }
+
+    fn publish(&mut self) {
+        (self.report)(self.update.clone());
+        self.last_report = Instant::now();
+    }
+
+    fn copied(&mut self, bytes: usize) -> io::Result<()> {
+        self.check_cancelled()?;
+        self.update.bytes += bytes as u64;
+        if self.last_report.elapsed() >= Duration::from_millis(100) {
+            self.publish();
+        }
+        Ok(())
+    }
+}
 
 #[cfg(windows)]
 pub(crate) const APPLICATION_ID: &str = "com.locutionpro.desktop";
@@ -47,24 +123,53 @@ fn default_data_roots() -> (PathBuf, PathBuf) {
     )
 }
 
-pub(crate) fn prepare() -> io::Result<()> {
+pub(crate) fn migrate_for_installer(visible: bool) -> io::Result<()> {
+    #[cfg(windows)]
+    if visible && migration_pending() {
+        return progress::run();
+    }
+    #[cfg(not(windows))]
+    let _ = visible;
+    migrate_all(&mut MigrationProgress::default())
+}
+
+#[cfg(windows)]
+fn migration_pending() -> bool {
     let (current, legacy) = data_roots();
-    migrate_application_data(&legacy, &current)?;
+    (current != legacy && legacy.is_dir() && !current.join(MIGRATION_MARKER).exists())
+        || ["LOCALAPPDATA", "APPDATA"].iter().any(|variable| {
+            env::var_os(variable).is_some_and(|parent| {
+                let parent = PathBuf::from(parent);
+                parent.join(LEGACY_APPLICATION_ID).is_dir() && !parent.join(APPLICATION_ID).exists()
+            })
+        })
+}
+
+fn migrate_all(progress: &mut MigrationProgress) -> io::Result<()> {
+    let (current, legacy) = data_roots();
+    progress.phase("正在迁移设置、自动保存和缓存")?;
+    migrate_application_data(&legacy, &current, progress)?;
     // Tauri stores WebView2 profiles in LocalData/<identifier>; Roaming holds app logs/data.
     #[cfg(windows)]
     for variable in ["LOCALAPPDATA", "APPDATA"] {
         if let Some(parent) = env::var_os(variable) {
+            progress.phase("正在迁移浏览器历史和工作区数据")?;
             let parent = PathBuf::from(parent);
             migrate_identity_directory(
                 &parent.join(LEGACY_APPLICATION_ID),
                 &parent.join(APPLICATION_ID),
+                progress,
             )?;
         }
     }
-    Ok(())
+    progress.phase("数据迁移完成")
 }
 
-fn migrate_application_data(legacy: &Path, current: &Path) -> io::Result<()> {
+fn migrate_application_data(
+    legacy: &Path,
+    current: &Path,
+    progress: &mut MigrationProgress,
+) -> io::Result<()> {
     if current == legacy || current.join(MIGRATION_MARKER).exists() {
         return Ok(());
     }
@@ -84,7 +189,7 @@ fn migrate_application_data(legacy: &Path, current: &Path) -> io::Result<()> {
         } else {
             name
         };
-        copy_missing(&legacy.join(name), &current.join(new_name))?;
+        copy_missing(&legacy.join(name), &current.join(new_name), progress)?;
     }
     let preferences = legacy.join("preferences.json");
     let destination = current.join("preferences.json");
@@ -125,24 +230,37 @@ fn migrate_application_data(legacy: &Path, current: &Path) -> io::Result<()> {
         }
         publish_missing(&destination, &serde_json::to_vec_pretty(&document)?)?;
     }
+    progress.check_cancelled()?;
     publish_missing(&current.join(MIGRATION_MARKER), b"1")
 }
 
 #[cfg(any(windows, test))]
-fn migrate_identity_directory(legacy: &Path, current: &Path) -> io::Result<()> {
+fn migrate_identity_directory(
+    legacy: &Path,
+    current: &Path,
+    progress: &mut MigrationProgress,
+) -> io::Result<()> {
     // A WebView profile is a unit: merging individual Chromium database files is unsafe.
     if !legacy.is_dir() || current.exists() {
         return Ok(());
     }
     let staged = current.with_extension(format!("migration-{}", Uuid::new_v4()));
-    let result = copy_missing(legacy, &staged).and_then(|()| fs::rename(&staged, current));
+    let result = copy_missing(legacy, &staged, progress).and_then(|()| {
+        progress.check_cancelled()?;
+        fs::rename(&staged, current)
+    });
     if result.is_err() {
         let _ = fs::remove_dir_all(&staged);
     }
     result
 }
 
-fn copy_missing(source: &Path, destination: &Path) -> io::Result<()> {
+fn copy_missing(
+    source: &Path,
+    destination: &Path,
+    progress: &mut MigrationProgress,
+) -> io::Result<()> {
+    progress.check_cancelled()?;
     let metadata = match fs::symlink_metadata(source) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -162,24 +280,96 @@ fn copy_missing(source: &Path, destination: &Path) -> io::Result<()> {
             } else {
                 name
             };
-            copy_missing(&entry.path(), &destination.join(name))?;
+            copy_missing(&entry.path(), &destination.join(name), progress)?;
         }
     } else if !destination.exists() {
         let staged = destination.with_extension(format!("migration-{}", Uuid::new_v4()));
         let result = (|| {
             let mut input = fs::File::open(source)?;
             let mut output = fs::File::create(&staged)?;
-            io::copy(&mut input, &mut output)?;
+            let mut source_hash = Sha256::new();
+            progress.update.path = source.to_path_buf();
+            progress.update.verifying = false;
+            if progress.update.files == 0
+                || progress.last_report.elapsed() >= Duration::from_millis(100)
+            {
+                progress.publish();
+            }
+            loop {
+                progress.check_cancelled()?;
+                let count = input.read(&mut progress.buffer)?;
+                if count == 0 {
+                    break;
+                }
+                output.write_all(&progress.buffer[..count])?;
+                source_hash.update(&progress.buffer[..count]);
+                progress.copied(count)?;
+            }
             if let Ok(modified) = metadata.modified() {
                 output.set_times(fs::FileTimes::new().set_modified(modified))?;
             }
+            output.sync_all()?;
             drop(output);
-            publish_staged(&staged, destination)
+            let expected: [u8; 32] = source_hash.finalize().into();
+            verify_migrated_copy(&staged, &expected, progress)?;
+            let current_metadata = fs::metadata(source)?;
+            if metadata.len() != current_metadata.len()
+                || metadata.modified().ok() != current_metadata.modified().ok()
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "旧文件在迁移期间发生变化，请关闭旧软件后重试：{}",
+                        source.display()
+                    ),
+                ));
+            }
+            progress.check_cancelled()?;
+            publish_staged(&staged, destination)?;
+            progress.update.files += 1;
+            progress.update.verified_files += 1;
+            progress.update.verifying = false;
+            Ok::<_, io::Error>(())
         })();
         let _ = fs::remove_file(&staged);
         result?;
     }
     Ok(())
+}
+
+/// Hash the staged file by reading it back after sync, independently of the copy buffer.
+fn verify_migrated_copy(
+    staged: &Path,
+    expected: &[u8; 32],
+    progress: &mut MigrationProgress,
+) -> io::Result<()> {
+    progress.update.verifying = true;
+    progress.publish();
+    let mut input = fs::File::open(staged)?;
+    let mut digest = Sha256::new();
+    loop {
+        progress.check_cancelled()?;
+        let count = input.read(&mut progress.buffer)?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&progress.buffer[..count]);
+        progress.update.verified_bytes += count as u64;
+        if progress.last_report.elapsed() >= Duration::from_millis(100) {
+            progress.publish();
+        }
+    }
+    let actual: [u8; 32] = digest.finalize().into();
+    if actual != *expected {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "迁移文件 SHA-256 校验失败，原文件已保留，请重试：{}",
+                progress.update.path.display()
+            ),
+        ));
+    }
+    progress.check_cancelled()
 }
 
 fn publish_missing(destination: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -206,6 +396,186 @@ mod tests {
     use super::*;
 
     #[test]
+    fn corrupted_staged_cache_is_rejected_and_retry_verifies_every_chunk() {
+        let root = env::temp_dir().join(format!("locution-hash-{}", Uuid::new_v4()));
+        let old = root.join("old");
+        let new = root.join("new");
+        fs::create_dir_all(old.join("cache")).unwrap();
+        let bytes = vec![0xa5; 1024 * 1024 + 37];
+        fs::write(old.join("cache/data.bin"), &bytes).unwrap();
+        let cache = new.join("cache");
+        let mut progress = MigrationProgress {
+            report: Box::new(move |update| {
+                if update.verifying {
+                    use std::io::{Seek, SeekFrom};
+                    let staged = fs::read_dir(&cache)
+                        .unwrap()
+                        .next()
+                        .unwrap()
+                        .unwrap()
+                        .path();
+                    let mut file = fs::OpenOptions::new().write(true).open(staged).unwrap();
+                    file.seek(SeekFrom::End(-1)).unwrap();
+                    file.write_all(&[0]).unwrap();
+                    file.sync_all().unwrap();
+                }
+            }),
+            ..Default::default()
+        };
+        let error = migrate_application_data(&old, &new, &mut progress).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("SHA-256"));
+        assert!(!new.join("cache/data.bin").exists());
+        assert!(!new.join(MIGRATION_MARKER).exists());
+        assert_eq!(fs::read_dir(new.join("cache")).unwrap().count(), 0);
+        assert_eq!(fs::read(old.join("cache/data.bin")).unwrap(), bytes);
+        let mut progress = MigrationProgress::default();
+        migrate_application_data(&old, &new, &mut progress).unwrap();
+        assert_eq!(progress.update.verified_files, 1);
+        assert_eq!(progress.update.verified_bytes, bytes.len() as u64);
+        assert_eq!(progress.update.bytes, bytes.len() as u64);
+        assert_eq!(fs::read(new.join("cache/data.bin")).unwrap(), bytes);
+        assert!(new.join(MIGRATION_MARKER).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancellation_during_hashing_never_publishes_a_cache_or_completion_marker() {
+        let root = env::temp_dir().join(format!("locution-hash-cancel-{}", Uuid::new_v4()));
+        let old = root.join("old");
+        let new = root.join("new");
+        fs::create_dir_all(old.join("cache")).unwrap();
+        fs::write(old.join("cache/data"), b"legacy cache").unwrap();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancellation = cancelled.clone();
+        let mut progress = MigrationProgress {
+            cancelled,
+            report: Box::new(move |update| {
+                if update.verifying {
+                    cancellation.store(true, Ordering::Relaxed);
+                }
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            migrate_application_data(&old, &new, &mut progress)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::Interrupted
+        );
+        assert!(!new.join(MIGRATION_MARKER).exists());
+        assert_eq!(fs::read_dir(new.join("cache")).unwrap().count(), 0);
+        assert_eq!(fs::read(old.join("cache/data")).unwrap(), b"legacy cache");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_changed_source_is_rejected_even_when_the_staged_hash_matches() {
+        let root = env::temp_dir().join(format!("locution-hash-source-{}", Uuid::new_v4()));
+        let old = root.join("old");
+        let new = root.join("new");
+        fs::create_dir_all(old.join("cache")).unwrap();
+        let source = old.join("cache/data");
+        fs::write(&source, b"cache A").unwrap();
+        let modified = fs::metadata(&source).unwrap().modified().unwrap();
+        let mut progress = MigrationProgress {
+            report: Box::new(move |update| {
+                if update.verifying {
+                    fs::write(&source, b"cache B").unwrap();
+                    fs::OpenOptions::new()
+                        .write(true)
+                        .open(&source)
+                        .unwrap()
+                        .set_times(
+                            fs::FileTimes::new().set_modified(modified + Duration::from_secs(1)),
+                        )
+                        .unwrap();
+                }
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            migrate_application_data(&old, &new, &mut progress)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(fs::read(old.join("cache/data")).unwrap(), b"cache B");
+        assert!(!new.join(MIGRATION_MARKER).exists());
+        assert_eq!(fs::read_dir(new.join("cache")).unwrap().count(), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancellation_removes_the_unfinished_file_and_retry_preserves_the_source() {
+        let root = env::temp_dir().join(format!("locution-cancel-{}", Uuid::new_v4()));
+        let old = root.join("old");
+        let new = root.join("new");
+        fs::create_dir_all(old.join("cache")).unwrap();
+        fs::write(old.join("cache/data"), b"legacy cache").unwrap();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancellation = cancelled.clone();
+        let mut progress = MigrationProgress {
+            cancelled,
+            report: Box::new(move |update| {
+                if !update.path.as_os_str().is_empty() {
+                    cancellation.store(true, Ordering::Relaxed);
+                }
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            migrate_application_data(&old, &new, &mut progress)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::Interrupted
+        );
+        assert!(!new.join(MIGRATION_MARKER).exists());
+        assert_eq!(fs::read_dir(new.join("cache")).unwrap().count(), 0);
+        assert_eq!(fs::read(old.join("cache/data")).unwrap(), b"legacy cache");
+        let mut progress = MigrationProgress::default();
+        migrate_application_data(&old, &new, &mut progress).unwrap();
+        assert_eq!(progress.update.files, 1);
+        assert_eq!(progress.update.bytes, b"legacy cache".len() as u64);
+        assert_eq!(fs::read(new.join("cache/data")).unwrap(), b"legacy cache");
+        assert!(new.join(MIGRATION_MARKER).exists());
+        let old_profile = root.join("old-profile");
+        let new_profile = root.join("new-profile");
+        fs::create_dir_all(&old_profile).unwrap();
+        fs::write(old_profile.join("Local Storage"), b"browser history").unwrap();
+        progress.cancelled.store(false, Ordering::Relaxed);
+        let cancellation = progress.cancelled.clone();
+        progress.report = Box::new(move |_| cancellation.store(true, Ordering::Relaxed));
+        progress.update.files = 0;
+        assert_eq!(
+            migrate_identity_directory(&old_profile, &new_profile, &mut progress)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::Interrupted
+        );
+        assert!(
+            !new_profile.exists(),
+            "A cancelled browser profile is never published"
+        );
+        assert!(!fs::read_dir(&root).unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains("migration-")));
+        migrate_identity_directory(
+            &old_profile,
+            &new_profile,
+            &mut MigrationProgress::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(new_profile.join("Local Storage")).unwrap(),
+            b"browser history"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn migration_preserves_legacy_data_remaps_owned_paths_and_keeps_new_data() {
         let root = env::temp_dir().join(format!("locution-identity-{}", Uuid::new_v4()));
         let old = root.join("old");
@@ -224,8 +594,8 @@ mod tests {
         .unwrap();
         fs::write(new.join("installer-media-paths.ini"), b"").unwrap();
         fs::write(old.join("preferences.json"), serde_json::to_vec(&serde_json::json!({"cache_dir": old.join("cache"), "auto_save_dir": old.join("cache/LineCut Auto-Save"), "ffmpeg_path": "custom.exe"})).unwrap()).unwrap();
-        migrate_application_data(&old, &new).unwrap();
-        migrate_application_data(&old, &new).unwrap();
+        migrate_application_data(&old, &new, &mut MigrationProgress::default()).unwrap();
+        migrate_application_data(&old, &new, &mut MigrationProgress::default()).unwrap();
         assert_eq!(fs::read(new.join("cache/existing")).unwrap(), b"new");
         assert!(new
             .join("cache/Locution Pro Auto-Save/recovery.lcp")
@@ -271,11 +641,11 @@ mod tests {
         fs::write(old.join("preferences.json"), b"{}").unwrap();
         fs::write(new.join("preferences.json"), b"current preferences").unwrap();
         fs::write(new.join("cache"), b"blocking file").unwrap();
-        assert!(migrate_application_data(&old, &new).is_err());
+        assert!(migrate_application_data(&old, &new, &mut MigrationProgress::default()).is_err());
         assert!(!new.join(MIGRATION_MARKER).exists());
         assert_eq!(fs::read(old.join("cache/data")).unwrap(), b"old cache");
         fs::remove_file(new.join("cache")).unwrap();
-        migrate_application_data(&old, &new).unwrap();
+        migrate_application_data(&old, &new, &mut MigrationProgress::default()).unwrap();
         assert_eq!(fs::read(new.join("cache/data")).unwrap(), b"old cache");
         assert_eq!(
             fs::read(new.join("preferences.json")).unwrap(),
@@ -301,7 +671,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        migrate_application_data(&old, &new).unwrap();
+        migrate_application_data(&old, &new, &mut MigrationProgress::default()).unwrap();
         let prefs: serde_json::Value =
             serde_json::from_slice(&fs::read(new.join("preferences.json")).unwrap()).unwrap();
         assert_eq!(prefs["cache_dir"], "external/cache");
@@ -310,7 +680,7 @@ mod tests {
             old.join("custom-saves")
         );
         fs::write(new.join("preferences.json"), b"current preferences").unwrap();
-        migrate_application_data(&old, &new).unwrap();
+        migrate_application_data(&old, &new, &mut MigrationProgress::default()).unwrap();
         assert_eq!(
             fs::read(new.join("preferences.json")).unwrap(),
             b"current preferences"
@@ -319,10 +689,20 @@ mod tests {
         let new_profile = root.join("new-profile");
         fs::create_dir_all(&old_profile).unwrap();
         fs::write(old_profile.join("Local Storage"), b"history").unwrap();
-        migrate_identity_directory(&old_profile, &new_profile).unwrap();
+        migrate_identity_directory(
+            &old_profile,
+            &new_profile,
+            &mut MigrationProgress::default(),
+        )
+        .unwrap();
         fs::write(new_profile.join("Local Storage"), b"current history").unwrap();
         fs::write(old_profile.join("other db"), b"do not merge").unwrap();
-        migrate_identity_directory(&old_profile, &new_profile).unwrap();
+        migrate_identity_directory(
+            &old_profile,
+            &new_profile,
+            &mut MigrationProgress::default(),
+        )
+        .unwrap();
         assert!(!new_profile.join("other db").exists());
         assert_eq!(
             fs::read(new_profile.join("Local Storage")).unwrap(),
