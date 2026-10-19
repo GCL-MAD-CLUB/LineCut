@@ -24,7 +24,6 @@ ManifestDPIAwareness PerMonitorV2
 !include x64.nsh
 !include WordFunc.nsh
 !include "utils.nsh"
-!include "FileAssociation.nsh"
 !include "Win\COM.nsh"
 !include "Win\Propkey.nsh"
 !include "StrFunc.nsh"
@@ -63,19 +62,15 @@ ${StrLoc}
 !define WEBVIEW2BOOTSTRAPPERPATH "{{webview2_bootstrapper_path}}"
 !define WEBVIEW2INSTALLERPATH "{{webview2_installer_path}}"
 !define MINIMUMWEBVIEW2VERSION "{{minimum_webview2_version}}"
-; New installs write current keys; old keys are read only while upgrading.
+; Only Locution Pro participates in installation and maintenance.
 !define INSTALL_IDENTITY "Locution Pro"
-!define LEGACY_PRODUCTNAME "LineCut"
-!define LEGACY_UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${LEGACY_PRODUCTNAME}"
-; Tauri derived the old publisher from com.linecut.desktop, independently of the new publisher.
-!define LEGACY_MANUPRODUCTKEY "Software\linecut\${LEGACY_PRODUCTNAME}"
 !define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${INSTALL_IDENTITY}"
 !define MANUKEY "Software\${MANUFACTURER}"
 !define MANUPRODUCTKEY "${MANUKEY}\${INSTALL_IDENTITY}"
 !define UNINSTALLERSIGNCOMMAND "{{uninstaller_sign_cmd}}"
 !define ESTIMATEDSIZE "{{estimated_size}}"
 !define STARTMENUFOLDER "{{start_menu_folder}}"
-!define LCP_THUMBNAIL_PROVIDER_CLSID "{4F4C9CF5-6463-4DF7-A2B4-7C3B0CC7E67D}"
+!define LCP_THUMBNAIL_PROVIDER_CLSID "{A7DE0A72-4952-4ED8-8F2E-BAE3AAB48B59}"
 !define ITHUMBNAIL_PROVIDER_IID "{E357FCCD-A995-4576-B01F-234630154E96}"
 !define LCP_THUMBNAIL_PROVIDER_FILE "locution_pro_thumbnail_provider.dll"
 
@@ -83,14 +78,10 @@ Var PassiveMode
 Var UpdateMode
 Var NoShortcutMode
 Var WixMode
-Var OldMainBinaryName
 Var PreviousUninstallKey
 Var PreviousProductKey
 Var PreviousInstallDir
 Var PreviousMainBinaryName
-Var LegacyInstallDir
-Var LegacyUninstallCommand
-Var LegacyMainBinaryName
 
 Name "${PRODUCTNAME}"
 BrandingText "${COPYRIGHT}"
@@ -144,6 +135,7 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
 !endif
 
 !include "${LOCUTION_INSTALLER_SOURCE_DIR}\migration-page.nsh"
+!include "${LOCUTION_INSTALLER_SOURCE_DIR}\independent-install.nsh"
 
 ; Installer icon
 !if "${INSTALLERICON}" != ""
@@ -205,9 +197,7 @@ Var ReinstallPageCheck
 Page custom PageReinstall PageLeaveReinstall
 
 Function PageReinstall
-  ; A product rename always removes the old binary in the installation section,
-  ; including equal-version, silent, and /UPDATE installs.
-  ${If} $PreviousUninstallKey == "${LEGACY_UNINSTKEY}"
+  ${If} $PreviousInstallDir == ""
     Abort
   ${EndIf}
   ; Uninstall previous WiX installation if exists.
@@ -377,8 +367,7 @@ Function PageLeaveReinstall
       ExecWait '$R1' $0
     ${Else}
       StrCpy $4 $PreviousInstallDir
-      ReadRegStr $R1 SHCTX "$PreviousUninstallKey" "UninstallString"
-      ${IfThen} $UpdateMode = 1 ${|} StrCpy $R1 "$R1 /UPDATE" ${|} ; append /UPDATE
+      StrCpy $R1 '$\"$PreviousInstallDir\uninstall.exe$\" /UPDATE' ; only our validated installation
       ${IfThen} $PassiveMode = 1 ${|} StrCpy $R1 "$R1 /P" ${|} ; append /P
       StrCpy $R1 "$R1 _?=$4" ; append uninstall directory
       ExecWait '$R1' $0
@@ -527,6 +516,9 @@ Function .onInit
     StrCpy $UpdateMode 1
   ${EndIf}
 
+  !insertmacro SetContext
+  Call CaptureMigrationEligibility
+
   !if "${DISPLAYLANGUAGESELECTOR}" == "true"
     !insertmacro MUI_LANGDLL_DISPLAY
   !endif
@@ -574,16 +566,17 @@ Function .onInit
   ${EndIf}
 FunctionEnd
 
-
-; A 0.2.0-or-newer installer only removes caches created by the 0.1 release line.
-; SHCTX respects the selected per-user or per-machine installation context.
-Function ClearLegacyLocutionProCache
-  ReadRegStr $R0 SHCTX "$PreviousUninstallKey" "DisplayVersion"
-  StrCpy $R1 $R0 4
-  ${If} $R1 == "0.1."
-    RmDir /r "$LOCALAPPDATA\LineCut\cache"
+Function .onVerifyInstDir
+  Push $4
+  StrCpy $4 $INSTDIR
+  Call CheckIndependentInstallLocation
+  Pop $4
+  ${If} $IndependentInstallLocation != 1
+    Abort
   ${EndIf}
 FunctionEnd
+
+
 
 
 Section EarlyChecks
@@ -698,25 +691,14 @@ Section WebView2
 SectionEnd
 
 Section Install
-  SetOutPath $INSTDIR
-
-  !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
-  Call UninstallLegacyInstallation
-  ; The old uninstaller may have removed this directory.
+  Call EnsureIndependentInstallLocation
+  Call BeginMigrationSession
   SetOutPath $INSTDIR
 
   !ifmacrodef NSIS_HOOK_PREINSTALL
     !insertmacro NSIS_HOOK_PREINSTALL
   !endif
-
   !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
-  ; A renamed binary can coexist with a still-running previous installation.
-  ReadRegStr $OldMainBinaryName SHCTX "$PreviousUninstallKey" "MainBinaryName"
-  ${If} $OldMainBinaryName != ""
-  ${AndIf} $OldMainBinaryName != "${MAINBINARYNAME}.exe"
-    !insertmacro CheckIfAppIsRunning "$OldMainBinaryName" "${PRODUCTNAME}"
-  ${EndIf}
-  Call ClearLegacyLocutionProCache
 
   ; Copy main executable
   File "${MAINBINARYSRCPATH}"
@@ -760,7 +742,7 @@ Section Install
   ; Create file associations
   {{#each file_associations as |association| ~}}
     {{#each association.ext as |ext| ~}}
-       !insertmacro APP_ASSOCIATE "{{ext}}" "{{or association.name ext}}" "{{association-description association.description ext}}" "$INSTDIR\${MAINBINARYNAME}.exe,0" "Open with ${PRODUCTNAME}" "$INSTDIR\${MAINBINARYNAME}.exe $\"%1$\""
+       !insertmacro LOCUTION_ASSOCIATE "{{ext}}" "{{or association.name ext}}" "{{association-description association.description ext}}" "$INSTDIR\${MAINBINARYNAME}.exe,0" "Open with ${PRODUCTNAME}" "$INSTDIR\${MAINBINARYNAME}.exe $\"%1$\""
     {{/each}}
   {{/each}}
 
@@ -795,14 +777,6 @@ Section Install
     ; or when uninstalling
     WriteRegStr SHCTX "${UNINSTKEY}" $MultiUser.InstallMode 1
   !endif
-
-  ; Remove old main binary if it doesn't match new main binary name
-  ReadRegStr $OldMainBinaryName SHCTX "$PreviousUninstallKey" "MainBinaryName"
-  ${If} $OldMainBinaryName != ""
-  ${AndIf} $OldMainBinaryName != "${MAINBINARYNAME}.exe"
-    Call RenameExistingProductShortcuts
-    Delete "$INSTDIR\$OldMainBinaryName"
-  ${EndIf}
 
   ; Save current MAINBINARYNAME for future updates
   WriteRegStr SHCTX "${UNINSTKEY}" "MainBinaryName" "${MAINBINARYNAME}.exe"
@@ -914,7 +888,7 @@ Section Uninstall
   ; Delete app associations
   {{#each file_associations as |association| ~}}
     {{#each association.ext as |ext| ~}}
-      !insertmacro APP_UNASSOCIATE "{{ext}}" "{{or association.name ext}}"
+      !insertmacro LOCUTION_UNASSOCIATE "{{ext}}" "{{or association.name ext}}"
     {{/each}}
   {{/each}}
 
@@ -1009,9 +983,6 @@ Section Uninstall
     RmDir /r "$APPDATA\${BUNDLEID}"
     RmDir /r "$LOCALAPPDATA\${BUNDLEID}"
     RmDir /r "$LOCALAPPDATA\${PRODUCTNAME}"
-    RmDir /r "$LOCALAPPDATA\${LEGACY_PRODUCTNAME}"
-    RmDir /r "$LOCALAPPDATA\com.linecut.desktop"
-    RmDir /r "$APPDATA\com.linecut.desktop"
   ${EndIf}
 
   !ifmacrodef NSIS_HOOK_POSTUNINSTALL
@@ -1026,18 +997,8 @@ Section Uninstall
 SectionEnd
 
 Function FindPreviousInstallation
-  Push $R8
   StrCpy $PreviousUninstallKey "${UNINSTKEY}"
   StrCpy $PreviousProductKey "${MANUPRODUCTKEY}"
-  ReadRegStr $R8 SHCTX "${UNINSTKEY}" "UninstallString"
-  ${If} $R8 == ""
-    ReadRegStr $R8 SHCTX "${LEGACY_UNINSTKEY}" "UninstallString"
-    ${If} $R8 != ""
-      StrCpy $PreviousUninstallKey "${LEGACY_UNINSTKEY}"
-      StrCpy $PreviousProductKey "${LEGACY_MANUPRODUCTKEY}"
-    ${EndIf}
-  ${EndIf}
-  Pop $R8
 FunctionEnd
 
 Function RestorePreviousInstallLocation
@@ -1057,12 +1018,10 @@ Function ReadPreviousInstallLocation
   Call StripPathQuotes
   Pop $4
   StrCpy $PreviousInstallDir $4
-  ReadRegStr $PreviousMainBinaryName SHCTX "$PreviousUninstallKey" "MainBinaryName"
-  ${If} $PreviousMainBinaryName == ""
-    StrCpy $PreviousMainBinaryName "${MAINBINARYNAME}.exe"
-    ${If} $PreviousUninstallKey == "${LEGACY_UNINSTKEY}"
-      StrCpy $PreviousMainBinaryName "linecut.exe"
-    ${EndIf}
+  StrCpy $PreviousMainBinaryName "${MAINBINARYNAME}.exe"
+  Call CheckIndependentInstallLocation
+  ${If} $IndependentInstallLocation != 1
+    StrCpy $PreviousInstallDir ""
   ${EndIf}
 FunctionEnd
 
@@ -1079,76 +1038,6 @@ Function StripPathQuotes
   ${EndIf}
   Pop $R9
   Exch $R8
-FunctionEnd
-
-Function FindLegacyInstallation
-  ReadRegStr $LegacyUninstallCommand SHCTX "${LEGACY_UNINSTKEY}" "UninstallString"
-  ReadRegStr $LegacyInstallDir SHCTX "${LEGACY_MANUPRODUCTKEY}" ""
-  ${If} $LegacyInstallDir == ""
-    ReadRegStr $LegacyInstallDir SHCTX "${LEGACY_UNINSTKEY}" "InstallLocation"
-  ${EndIf}
-  Push $LegacyInstallDir
-  Call StripPathQuotes
-  Pop $LegacyInstallDir
-  ${If} $LegacyInstallDir == ""
-  ${AndIf} $LegacyUninstallCommand != ""
-    ; Original Tauri NSIS registrations contain the quoted uninstaller path, without arguments.
-    Push $LegacyUninstallCommand
-    Call StripPathQuotes
-    Pop $LegacyInstallDir
-    ${GetParent} "$LegacyInstallDir" $LegacyInstallDir
-  ${EndIf}
-  ; Recover an old default installation whose uninstall key was removed by an earlier rename.
-  ${If} $LegacyInstallDir == ""
-  ${AndIf} ${FileExists} "$LOCALAPPDATA\LineCut\linecut.exe"
-    StrCpy $LegacyInstallDir "$LOCALAPPDATA\LineCut"
-  ${EndIf}
-  ${If} $LegacyUninstallCommand == ""
-  ${AndIf} $LegacyInstallDir != ""
-  ${AndIf} ${FileExists} "$LegacyInstallDir\linecut.exe"
-  ${AndIf} ${FileExists} "$LegacyInstallDir\uninstall.exe"
-    StrCpy $LegacyUninstallCommand '$\"$LegacyInstallDir\uninstall.exe$\"'
-  ${EndIf}
-  ReadRegStr $LegacyMainBinaryName SHCTX "${LEGACY_UNINSTKEY}" "MainBinaryName"
-  ${If} $LegacyMainBinaryName == ""
-    StrCpy $LegacyMainBinaryName "linecut.exe"
-  ${EndIf}
-FunctionEnd
-
-Function UninstallLegacyInstallation
-  Call FindLegacyInstallation
-  ${If} $LegacyUninstallCommand == ""
-    Return
-  ${EndIf}
-  ${If} $LegacyInstallDir == ""
-    DetailPrint "无法确定 LineCut 的安装目录，未删除旧安装记录。"
-    SetErrorLevel 2
-    Abort
-  ${EndIf}
-  !insertmacro CheckIfAppIsRunning "$LegacyMainBinaryName" "LineCut"
-  DetailPrint "正在卸载旧版 LineCut（保留设置、项目和缓存）…"
-  ; /UPDATE suppresses data deletion; /S avoids an invisible secondary uninstall wizard.
-  ClearErrors
-  ExecWait '$LegacyUninstallCommand /S /UPDATE _?=$LegacyInstallDir' $0
-  ${If} ${Errors}
-  ${OrIf} $0 != 0
-  ${OrIf} ${FileExists} "$LegacyInstallDir\$LegacyMainBinaryName"
-    DetailPrint "旧版 LineCut 卸载失败，已保留旧安装记录。请关闭旧程序后重试。"
-    IfSilent +2
-      MessageBox MB_ICONEXCLAMATION|MB_OK "无法卸载旧版 LineCut。请关闭旧程序，检查旧安装目录的权限后重试。原数据和安装记录仍保留。"
-    SetErrorLevel 2
-    Abort
-  ${EndIf}
-  ; The old /UPDATE uninstaller leaves shortcuts. Retarget them before registering the new app.
-  Push $PreviousInstallDir
-  StrCpy $PreviousInstallDir $LegacyInstallDir
-  StrCpy $OldMainBinaryName $LegacyMainBinaryName
-  Call RenameExistingProductShortcuts
-  Pop $PreviousInstallDir
-  Delete "$LegacyInstallDir\uninstall.exe"
-  DeleteRegKey SHCTX "${LEGACY_UNINSTKEY}"
-  DeleteRegKey SHCTX "${LEGACY_MANUPRODUCTKEY}"
-  DetailPrint "旧版 LineCut 卸载完成。"
 FunctionEnd
 
 Function RefreshShellAssociations
@@ -1170,30 +1059,11 @@ Function un.SkipIfPassive
   ${IfThen} $PassiveMode = 1  ${|} Abort ${|}
 FunctionEnd
 
-; Rename only shortcuts that belong to this installation, including update/no-shortcut mode.
-!macro RenameProductShortcut DIRECTORY
-  !insertmacro IsShortcutTarget "${DIRECTORY}\${LEGACY_PRODUCTNAME}.lnk" "$PreviousInstallDir\$OldMainBinaryName"
-  Pop $0
-  ${If} $0 = 1
-    !insertmacro UnpinShortcut "${DIRECTORY}\${LEGACY_PRODUCTNAME}.lnk"
-    !insertmacro SetShortcutTarget "${DIRECTORY}\${LEGACY_PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
-    !insertmacro SetLnkAppUserModelId "${DIRECTORY}\${LEGACY_PRODUCTNAME}.lnk"
-    Rename "${DIRECTORY}\${LEGACY_PRODUCTNAME}.lnk" "${DIRECTORY}\${PRODUCTNAME}.lnk"
-  ${EndIf}
-!macroend
-
-Function RenameExistingProductShortcuts
-  !insertmacro RenameProductShortcut "$SMPROGRAMS\$AppStartMenuFolder"
-  !insertmacro RenameProductShortcut "$SMPROGRAMS"
-  !insertmacro RenameProductShortcut "$DESKTOP"
-FunctionEnd
-
 Function CreateOrUpdateStartMenuShortcut
-  ; We used to use product name as MAINBINARYNAME
-  ; migrate old shortcuts to target the new MAINBINARYNAME
+  ; Update only shortcuts named for Locution Pro.
   StrCpy $R0 0
 
-  !insertmacro IsShortcutTarget "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$INSTDIR\$OldMainBinaryName"
+  !insertmacro IsShortcutTarget "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$PreviousInstallDir\${MAINBINARYNAME}.exe"
   Pop $0
   ${If} $0 = 1
     !insertmacro SetShortcutTarget "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
@@ -1201,7 +1071,7 @@ Function CreateOrUpdateStartMenuShortcut
     StrCpy $R0 1
   ${EndIf}
 
-  !insertmacro IsShortcutTarget "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\$OldMainBinaryName"
+  !insertmacro IsShortcutTarget "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$PreviousInstallDir\${MAINBINARYNAME}.exe"
   Pop $0
   ${If} $0 = 1
     !insertmacro SetShortcutTarget "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
@@ -1233,9 +1103,8 @@ Function CreateOrUpdateStartMenuShortcut
 FunctionEnd
 
 Function CreateOrUpdateDesktopShortcut
-  ; We used to use product name as MAINBINARYNAME
-  ; migrate old shortcuts to target the new MAINBINARYNAME
-  !insertmacro IsShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\$OldMainBinaryName"
+  ; Update only shortcuts named for Locution Pro.
+  !insertmacro IsShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$PreviousInstallDir\${MAINBINARYNAME}.exe"
   Pop $0
   ${If} $0 = 1
     !insertmacro SetShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"

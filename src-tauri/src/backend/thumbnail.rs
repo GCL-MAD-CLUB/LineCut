@@ -1,6 +1,5 @@
 use super::cache::{
-    hash_name, promote_private_cache, read_private_cache, read_renamed_private_cache,
-    write_private_cache,
+    hash_name, read_private_cache, read_renamed_private_cache, write_private_cache,
 };
 use super::*;
 
@@ -1685,11 +1684,6 @@ fn read_media_thumbnail_cache(
         LEGACY_CACHE_KEY_CONTEXT,
         LEGACY_INDEX_KEY_CONTEXT,
     )?;
-    if let Err(error) = register_thumbnail_cache_unlocked(layout) {
-        tracing::warn!(detail = %error, "thumbnail index namespace migration deferred");
-    } else {
-        promote_private_cache(&layout.cache_path, fingerprint, CACHE_KEY_CONTEXT, &cached);
-    }
     Some(cached)
 }
 
@@ -1756,7 +1750,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn old_cover_subtitle_and_storyboard_caches_are_reused_in_new_namespaces() {
+    fn copied_legacy_thumbnail_caches_are_read_without_runtime_migration() {
         let root = env::temp_dir().join(format!("locution-thumbnail-migration-{}", Uuid::new_v4()));
         let preferences = Preferences {
             cache_dir: root.to_string_lossy().into_owned(),
@@ -1798,8 +1792,9 @@ mod tests {
             read_media_thumbnail_cache(&layout, "media").unwrap().cover,
             Some(vec![1, 2, 3])
         );
+        assert!(!layout.cache_path.exists());
         fs::remove_file(&legacy.cache_path).unwrap();
-        assert!(read_media_thumbnail_cache(&layout, "media").is_some());
+        assert!(read_media_thumbnail_cache(&layout, "media").is_none());
 
         let jpeg = vec![0xff, 0xd8, 0xff, 0xd9];
         let (old_subtitle, key) = subtitle_thumbnail_cache_layout_with_context(
@@ -1828,7 +1823,7 @@ mod tests {
         assert!(
             read_subtitle_thumbnail_cache(&preferences, "media", 100_000, 1_000_000, 160)
                 .bytes
-                .is_some()
+                .is_none()
         );
 
         let (old_storyboard, key) = storyboard_thumbnail_cache_layout_with_context(
@@ -1857,7 +1852,7 @@ mod tests {
         assert!(
             read_storyboard_thumbnail_cache(&preferences, "media", 200_000, 1_000_000, 160)
                 .bytes
-                .is_some()
+                .is_none()
         );
         fs::remove_dir_all(root).unwrap();
     }

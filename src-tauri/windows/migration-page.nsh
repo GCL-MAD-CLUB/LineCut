@@ -5,6 +5,116 @@
 Var MigrationProcess
 Var MigrationComplete
 Var MigrationAllowed
+Var MigrationEligible
+Var MigrationDataRoot
+Var MigrationLegacyRoot
+Var MigrationHasSource
+!ifndef LOCUTION_MIGRATION_LOCAL_ROOT
+  !define LOCUTION_MIGRATION_LOCAL_ROOT "$LOCALAPPDATA"
+  !define LOCUTION_MIGRATION_ROAMING_ROOT "$APPDATA"
+!endif
+
+; Capture before language selection, file extraction, hooks or registration write new data.
+Function CaptureMigrationEligibility
+  StrCpy $MigrationEligible 1
+  ReadEnvStr $MigrationDataRoot "LOCUTION_PRO_DATA_DIR"
+  ${If} $MigrationDataRoot == ""
+    StrCpy $MigrationDataRoot "${LOCUTION_MIGRATION_LOCAL_ROOT}\Locution Pro"
+  ${EndIf}
+  ReadEnvStr $MigrationLegacyRoot "LINECUT_DATA_DIR"
+  ${If} $MigrationLegacyRoot == ""
+    StrCpy $MigrationLegacyRoot "${LOCUTION_MIGRATION_LOCAL_ROOT}\LineCut"
+  ${EndIf}
+  ${If} ${FileExists} "$MigrationDataRoot"
+  ${OrIf} ${FileExists} "${LOCUTION_MIGRATION_LOCAL_ROOT}\Locution Pro"
+  ${OrIf} ${FileExists} "${LOCUTION_MIGRATION_LOCAL_ROOT}\com.locutionpro.desktop"
+  ${OrIf} ${FileExists} "${LOCUTION_MIGRATION_ROAMING_ROOT}\com.locutionpro.desktop"
+    StrCpy $MigrationEligible 0
+  ${EndIf}
+  !macro CheckLocutionRegistration ROOT KEY
+    ClearErrors
+    EnumRegValue $0 ${ROOT} "${KEY}" 0
+    ${IfNot} ${Errors}
+      StrCpy $MigrationEligible 0
+    ${EndIf}
+  !macroend
+  ; Both registry views and scopes count as evidence, regardless of selected install mode.
+  !macro CheckLocutionRegistrations
+    !insertmacro CheckLocutionRegistration HKCU "${UNINSTKEY}"
+    !insertmacro CheckLocutionRegistration HKLM "${UNINSTKEY}"
+    !insertmacro CheckLocutionRegistration HKCU "${MANUPRODUCTKEY}"
+    !insertmacro CheckLocutionRegistration HKLM "${MANUPRODUCTKEY}"
+  !macroend
+  SetRegView 64
+  !insertmacro CheckLocutionRegistrations
+  SetRegView 32
+  !insertmacro CheckLocutionRegistrations
+  SetRegView lastused
+  ${If} $MigrationEligible = 1
+    StrCpy $MigrationHasSource 0
+    StrCpy $4 $MigrationLegacyRoot
+    Call CheckLegacyDataDirectory
+    StrCpy $4 "${LOCUTION_MIGRATION_LOCAL_ROOT}\com.linecut.desktop"
+    Call CheckLegacyDataDirectory
+    StrCpy $4 "${LOCUTION_MIGRATION_ROAMING_ROOT}\com.linecut.desktop"
+    Call CheckLegacyDataDirectory
+    ${If} $MigrationHasSource = 0
+      StrCpy $MigrationEligible 0
+    ${EndIf}
+  ${EndIf}
+FunctionEnd
+
+; An empty directory or just an old executable is not user data.
+Function CheckLegacyDataDirectory
+  FindFirst $0 $1 "$4\*"
+  legacy_data_next:
+    ${If} $1 == ""
+      Goto legacy_data_done
+    ${EndIf}
+    ${GetFileExt} "$1" $2
+    ${If} $1 != "."
+    ${AndIf} $1 != ".."
+    ${AndIf} $1 != "cache-version"
+    ${AndIf} $1 != "installer-media-paths.ini"
+    ${AndIf} $1 != "transnetv2"
+    ${AndIf} $1 != "semantic-search"
+    ${AndIf} $1 != "storyboard-semantic"
+    ${AndIf} $1 != "licenses"
+    ${AndIf} $1 != "LICENSE"
+    ${AndIf} $1 != "THIRD_PARTY_NOTICES.md"
+    ${AndIf} $2 != "exe"
+    ${AndIf} $2 != "dll"
+      StrCpy $MigrationHasSource 1
+      Goto legacy_data_done
+    ${EndIf}
+    FindNext $0 $1
+    Goto legacy_data_next
+  legacy_data_done:
+    FindClose $0
+FunctionEnd
+
+Function BeginMigrationSession
+  ${If} ${FileExists} "$INSTDIR\${MAINBINARYNAME}.exe"
+    StrCpy $MigrationEligible 0
+  ${EndIf}
+  Call CheckMigrationAllowed
+  ${If} $MigrationAllowed = 1
+    InitPluginsDir
+    CreateDirectory "$MigrationDataRoot"
+    ClearErrors
+    FileOpen $0 "$MigrationDataRoot\.locution-pro-install-session" w
+    ${If} ${Errors}
+      SetErrorLevel 2
+      Abort
+    ${EndIf}
+    FileWriteUTF16LE /BOM $0 "$PLUGINSDIR"
+    FileClose $0
+    ${If} ${Errors}
+      SetErrorLevel 2
+      Abort
+    ${EndIf}
+  ${EndIf}
+FunctionEnd
 Var MigrationProgressFile
 Var MigrationCancelFile
 Var MigrationState
@@ -19,7 +129,7 @@ Var MigrationActionButton
 Var MigrationNextButton
 
 Function CheckMigrationAllowed
-  StrCpy $MigrationAllowed 1
+  StrCpy $MigrationAllowed $MigrationEligible
   ; Do not mistake an elevated administrator profile for every machine-wide user.
   !if "${INSTALLMODE}" == "perMachine"
     StrCpy $MigrationAllowed 0
@@ -40,7 +150,7 @@ Function StartMigration
   StrCpy $MigrationComplete 0
   StrCpy $MigrationState "running"
   StrCpy $MigrationError ""
-  StrCpy $0 '$\"$INSTDIR\${MAINBINARYNAME}.exe$\" --migrate-legacy-data --migration-silent --migration-progress $\"$MigrationProgressFile$\" --migration-cancel $\"$MigrationCancelFile$\"'
+  StrCpy $0 '$\"$INSTDIR\${MAINBINARYNAME}.exe$\" --migrate-legacy-data --migration-session $\"$PLUGINSDIR$\" --migration-silent --migration-progress $\"$MigrationProgressFile$\" --migration-cancel $\"$MigrationCancelFile$\"'
   ; The NSIS engine is 32-bit even when installing a 64-bit application.
   ; STARTUPINFOW is 68 bytes; PROCESS_INFORMATION is 16 bytes.
   System::Call '*(i68, p0, p0, p0, i0, i0, i0, i0, i0, i0, i0, i0, &i2 0, &i2 0, p0, p0, p0, p0) p.r1'
@@ -109,7 +219,7 @@ Function MigrateLegacyData
   Call CheckMigrationAllowed
   ${If} $MigrationAllowed = 0
     StrCpy $MigrationComplete 1
-    DetailPrint "机器级安装不迁移用户数据。如需迁移旧数据，请使用当前用户安装。"
+    DetailPrint "跳过旧数据迁移：仅首次当前用户安装且存在 LineCut 数据时执行。"
     Return
   ${EndIf}
   DetailPrint "正在迁移并校验 LineCut 数据…"

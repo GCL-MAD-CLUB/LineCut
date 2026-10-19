@@ -1,7 +1,5 @@
 use super::types::FrameTraceData;
-use crate::backend::cache::{
-    hash_name, promote_private_cache, read_private_cache, write_private_cache,
-};
+use crate::backend::cache::{hash_name, read_private_cache, write_private_cache};
 use crate::backend::configured_cache_root;
 use crate::{app_error, AppResult, ErrorCode, Preferences};
 use std::{
@@ -86,9 +84,7 @@ impl FrameTraceCache {
         if let Some(data) = self.read_at(&self.path, &self.key, CACHE_CONTEXT) {
             return Some(data);
         }
-        let data = self.read_at(&self.legacy_path, &self.legacy_key, LEGACY_CACHE_CONTEXT)?;
-        promote_private_cache(&self.path, &self.key, CACHE_CONTEXT, &data);
-        Some(data)
+        self.read_at(&self.legacy_path, &self.legacy_key, LEGACY_CACHE_CONTEXT)
     }
 
     fn read_at(&self, path: &Path, key: &str, context: &[u8]) -> Option<FrameTraceData> {
@@ -205,7 +201,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn legacy_trace_is_reused_and_promoted_to_the_new_namespace() {
+    fn copied_legacy_trace_is_read_without_runtime_migration() {
         let root =
             std::env::temp_dir().join(format!("locution-trace-migration-{}", Uuid::new_v4()));
         let cache = cache(&root, "media", 0, 1);
@@ -223,9 +219,9 @@ mod tests {
         .unwrap();
         assert_ne!(cache.path, cache.legacy_path);
         assert_eq!(cache.read().unwrap().motion, data.motion);
-        assert!(cache.path.exists());
+        assert!(!cache.path.exists());
         fs::remove_file(&cache.legacy_path).unwrap();
-        assert_eq!(cache.read().unwrap().sharpness, data.sharpness);
+        assert!(cache.read().is_none());
         fs::remove_dir_all(root).unwrap();
     }
 

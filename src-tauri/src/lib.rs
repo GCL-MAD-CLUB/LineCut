@@ -32,7 +32,10 @@ pub fn run() {
         };
         let progress_file = argument_path("--migration-progress");
         let cancel_file = argument_path("--migration-cancel");
-        if let Err(error) = identity::migrate_for_installer(progress_file.as_deref(), cancel_file) {
+        let session = argument_path("--migration-session");
+        if let Err(error) =
+            identity::migrate_for_installer(progress_file.as_deref(), cancel_file, session)
+        {
             if error.kind() != std::io::ErrorKind::Interrupted {
                 app_error(
                     ErrorCode::ApplicationRunFailed,

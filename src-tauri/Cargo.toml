@@ -1,6 +1,6 @@
 [package]
 name = "locution-pro"
-version = "0.3.3"
+version = "0.4.0-preview"
 description = "Subtitle indexing and media organization tool"
 authors = ["Kotodama"]
 license = "Apache-2.0"

@@ -6,12 +6,17 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(super) fn run(path: &Path, cancel_file: Option<PathBuf>) -> io::Result<()> {
+pub(super) fn run(
+    path: &Path,
+    cancel_file: Option<PathBuf>,
+    session: Option<PathBuf>,
+) -> io::Result<()> {
     write_snapshot(path, &MigrationUpdate::default(), "running", None)?;
     let report_path = path.to_path_buf();
     let mut last_report = Instant::now();
     let mut progress = MigrationProgress {
         cancel_file,
+        session,
         report: Box::new(move |update| {
             if last_report.elapsed() >= Duration::from_millis(100) {
                 // A transient reader lock may delay an update. The terminal snapshot is mandatory.

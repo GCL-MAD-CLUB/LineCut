@@ -117,7 +117,7 @@ where
     })
 }
 
-/// A legacy hit remains usable even when publishing the renamed cache fails.
+/// Read older formats only inside our copied cache tree, without a runtime migration.
 pub(super) fn read_renamed_private_cache<Value>(
     path: &Path,
     key: &str,
@@ -132,30 +132,7 @@ where
     if let Some(value) = read_private_cache(path, key, context) {
         return Some(value);
     }
-    let value = read_private_cache(legacy_path, legacy_key, legacy_context)?;
-    promote_private_cache(path, key, context, &value);
-    Some(value)
-}
-
-pub(super) fn promote_private_cache<Value: Serialize>(
-    path: &Path,
-    key: &str,
-    context: &[u8],
-    value: &Value,
-) {
-    let staged = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
-    let result = write_private_cache(&staged, key, context, value).and_then(|()| {
-        fs::rename(&staged, path).map_err(|error| {
-            app_error(
-                ErrorCode::ThumbnailCacheWriteFailed,
-                format!("Failed to publish renamed cache: {error}"),
-            )
-        })
-    });
-    if let Err(error) = result {
-        let _ = fs::remove_file(staged);
-        tracing::warn!(detail = %error, "cache namespace migration deferred");
-    }
+    read_private_cache(legacy_path, legacy_key, legacy_context)
 }
 
 fn private_cache_digest(bytes: &[u8], key: &str, context: &[u8]) -> [u8; 32] {
@@ -200,7 +177,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cache_namespace_migration_failure_still_returns_the_valid_legacy_payload() {
+    fn copied_legacy_cache_is_read_without_runtime_writes() {
         let root =
             std::env::temp_dir().join(format!("locution-cache-migration-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
@@ -231,9 +208,10 @@ mod tests {
             b"old-context"
         )
         .is_some());
+        assert!(!current.exists());
         assert_eq!(
-            read_private_cache::<Vec<u8>>(&current, "new-key", b"new-context").unwrap(),
-            value
+            fs::read(&blocker).err().unwrap().kind(),
+            std::io::ErrorKind::NotFound
         );
         fs::remove_dir_all(root).unwrap();
     }

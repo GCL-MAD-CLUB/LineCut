@@ -32,6 +32,7 @@ struct MigrationProgress {
     last_report: Instant,
     buffer: Vec<u8>,
     cancel_file: Option<PathBuf>,
+    session: Option<PathBuf>,
 }
 
 impl Default for MigrationProgress {
@@ -43,6 +44,7 @@ impl Default for MigrationProgress {
             last_report: Instant::now(),
             buffer: vec![0; 1024 * 1024],
             cancel_file: None,
+            session: None,
         }
     }
 }
@@ -88,21 +90,20 @@ impl MigrationProgress {
 pub(crate) const APPLICATION_ID: &str = "com.locutionpro.desktop";
 #[cfg(windows)]
 const LEGACY_APPLICATION_ID: &str = "com.linecut.desktop";
-const MIGRATION_MARKER: &str = ".locution-pro-migration-v1";
+const MIGRATION_MARKER: &str = ".locution-pro-migration-v2";
+const INSTALL_SESSION: &str = ".locution-pro-install-session";
+const IMPORT_COMPLETE: &str = ".locution-pro-import-complete";
 
 pub(crate) fn data_roots() -> (PathBuf, PathBuf) {
-    if let Some(current) = env::var_os("LOCUTION_PRO_DATA_DIR") {
-        let legacy = env::var_os("LINECUT_DATA_DIR")
+    let (current, legacy) = default_data_roots();
+    (
+        env::var_os("LOCUTION_PRO_DATA_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|| default_data_roots().1);
-        return (PathBuf::from(current), legacy);
-    }
-    // An explicitly configured directory is user-owned; retain it even for the old alias.
-    if let Some(value) = env::var_os("LINECUT_DATA_DIR") {
-        let path = PathBuf::from(value);
-        return (path.clone(), path);
-    }
-    default_data_roots()
+            .unwrap_or(current),
+        env::var_os("LINECUT_DATA_DIR")
+            .map(PathBuf::from)
+            .unwrap_or(legacy),
+    )
 }
 
 fn default_data_roots() -> (PathBuf, PathBuf) {
@@ -129,33 +130,76 @@ fn default_data_roots() -> (PathBuf, PathBuf) {
 pub(crate) fn migrate_for_installer(
     progress_file: Option<&Path>,
     cancel_file: Option<PathBuf>,
+    session: Option<PathBuf>,
 ) -> io::Result<()> {
     if let Some(path) = progress_file {
-        return progress::run(path, cancel_file);
+        return progress::run(path, cancel_file, session);
     }
     migrate_all(&mut MigrationProgress {
         cancel_file,
+        session,
         ..Default::default()
     })
 }
 
 fn migrate_all(progress: &mut MigrationProgress) -> io::Result<()> {
     let (current, legacy) = data_roots();
-    progress.phase("正在迁移设置、自动保存和缓存")?;
-    migrate_application_data(&legacy, &current, progress)?;
-    // Tauri stores WebView2 profiles in LocalData/<identifier>; Roaming holds app logs/data.
+    #[allow(unused_mut)]
+    let mut profiles = Vec::new();
     #[cfg(windows)]
     for variable in ["LOCALAPPDATA", "APPDATA"] {
         if let Some(parent) = env::var_os(variable) {
-            progress.phase("正在迁移浏览器历史和工作区数据")?;
             let parent = PathBuf::from(parent);
-            migrate_identity_directory(
-                &parent.join(LEGACY_APPLICATION_ID),
-                &parent.join(APPLICATION_ID),
-                progress,
-            )?;
+            profiles.push((
+                parent.join(LEGACY_APPLICATION_ID),
+                parent.join(APPLICATION_ID),
+            ));
         }
     }
+    migrate_fresh_install(&legacy, &current, &profiles, progress)
+}
+
+fn migrate_fresh_install(
+    legacy: &Path,
+    current: &Path,
+    profiles: &[(PathBuf, PathBuf)],
+    progress: &mut MigrationProgress,
+) -> io::Result<()> {
+    // The installer grants this session before writing its payload. Retaining this file also
+    // prevents re-import after uninstalling without deleting application data.
+    let admitted = progress.session.as_ref().is_some_and(|session| {
+        session.is_dir()
+            && fs::read(current.join(INSTALL_SESSION)).is_ok_and(|bytes| {
+                let expected: Vec<u8> = std::iter::once(0xfeff)
+                    .chain(session.to_string_lossy().encode_utf16())
+                    .flat_map(u16::to_le_bytes)
+                    .collect();
+                bytes == expected
+            })
+    });
+    if current.join(IMPORT_COMPLETE).exists()
+        || (!admitted && (current.exists() || profiles.iter().any(|(_, target)| target.exists())))
+    {
+        return Ok(());
+    }
+    // Even an explicit worker invocation cannot import without an installer admission.
+    if !admitted {
+        return Ok(());
+    }
+    ensure_disjoint_roots(legacy, current)?;
+    for (source, target) in profiles {
+        ensure_disjoint_roots(source, current)?;
+        ensure_disjoint_roots(legacy, target)?;
+        ensure_disjoint_roots(source, target)?;
+    }
+    progress.phase("正在迁移设置、自动保存和缓存")?;
+    migrate_application_data(legacy, current, progress)?;
+    for (source, target) in profiles {
+        progress.phase("正在迁移浏览器历史和工作区数据")?;
+        migrate_identity_directory(source, target, progress)?;
+    }
+    progress.check_cancelled()?;
+    publish_missing(&current.join(IMPORT_COMPLETE), b"1")?;
     progress.phase("数据迁移完成")
 }
 
@@ -164,76 +208,169 @@ fn migrate_application_data(
     current: &Path,
     progress: &mut MigrationProgress,
 ) -> io::Result<()> {
-    if current == legacy || current.join(MIGRATION_MARKER).exists() {
+    ensure_disjoint_roots(legacy, current)?;
+    if current.join(MIGRATION_MARKER).exists() {
         return Ok(());
     }
+    let source_preferences = legacy.join("preferences.json");
+    let mut imported: Option<serde_json::Value> = if source_preferences.is_file() {
+        Some(serde_json::from_slice(&fs::read(&source_preferences)?)?)
+    } else {
+        None
+    };
+    let old_cache = preference_path(imported.as_ref(), "cache_dir", legacy.join("cache"));
+    let old_saves = preference_path(
+        imported.as_ref(),
+        "auto_save_dir",
+        old_cache.join("LineCut Auto-Save"),
+    );
+    let new_cache = current.join("cache");
+    let new_saves = new_cache.join("Locution Pro Auto-Save");
+    // Source custom caches and recovery snapshots are copied too. Never keep writable source aliases.
+    ensure_disjoint_roots(&old_cache, &new_cache)?;
+    ensure_disjoint_roots(&old_saves, &new_saves)?;
     fs::create_dir_all(current)?;
-    // The old data root can also be the installation directory. Never copy executables/models.
-    for name in [
-        "cache",
-        "cache-version",
-        "WorkspaceConfig.xml",
-        "StillExport.json",
-        "installer-media-paths.ini",
-        "LineCut Auto-Save",
-        "Locution Pro Auto-Save",
-    ] {
-        let new_name = if name == "LineCut Auto-Save" {
-            "Locution Pro Auto-Save"
-        } else {
-            name
-        };
-        copy_missing(&legacy.join(name), &current.join(new_name), progress)?;
+    // Follow only the explicitly configured root; descendants remain link-free copies.
+    copy_missing(&canonical_location(&old_cache)?, &new_cache, progress)?;
+    copy_missing(&canonical_location(&old_saves)?, &new_saves, progress)?;
+    if legacy.is_dir() {
+        for entry in fs::read_dir(legacy)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            if distribution_entry(&name)
+                || (name == "cache"
+                    && canonical_location(&old_cache)?
+                        == canonical_location(&legacy.join("cache"))?)
+            {
+                continue;
+            }
+            let name = if name == "LineCut Auto-Save" {
+                "Locution Pro Auto-Save".into()
+            } else {
+                name
+            };
+            copy_missing(&entry.path(), &current.join(name), progress)?;
+        }
     }
-    let preferences = legacy.join("preferences.json");
     let destination = current.join("preferences.json");
-    if !destination.exists() && preferences.is_file() {
-        let mut document: serde_json::Value = serde_json::from_slice(&fs::read(&preferences)?)?;
-        for field in ["cache_dir", "auto_save_dir"] {
-            if let Some(value) = document.get_mut(field) {
-                if let Some(path) = value.as_str() {
-                    if let Ok(suffix) = Path::new(path).strip_prefix(legacy) {
-                        // Only remap trees copied above. A custom directory under the old
-                        // installation, or a symlink into external storage, stays user-owned.
-                        let owned = suffix.components().next().is_some_and(|part| {
-                            ["cache", "LineCut Auto-Save", "Locution Pro Auto-Save"]
-                                .iter()
-                                .any(|name| part.as_os_str() == *name)
-                        });
-                        let mut source = legacy.to_path_buf();
-                        let linked = suffix.components().any(|part| {
-                            source.push(part);
-                            fs::symlink_metadata(&source)
-                                .is_ok_and(|metadata| metadata.file_type().is_symlink())
-                        });
-                        if !owned || linked {
-                            continue;
-                        }
-                        let mut remapped = current.to_path_buf();
-                        for part in suffix.components() {
-                            remapped.push(if part.as_os_str() == "LineCut Auto-Save" {
-                                std::ffi::OsStr::new("Locution Pro Auto-Save")
-                            } else {
-                                part.as_os_str()
-                            });
-                        }
-                        *value = serde_json::Value::String(remapped.to_string_lossy().into_owned());
-                    }
+    if !destination.exists() {
+        if let Some(document) = imported.as_mut() {
+            if let Some(object) = document.as_object_mut() {
+                object.insert(
+                    "cache_dir".into(),
+                    new_cache.to_string_lossy().into_owned().into(),
+                );
+                object.insert(
+                    "auto_save_dir".into(),
+                    new_saves.to_string_lossy().into_owned().into(),
+                );
+                // Bundled tools belong to the successor's own installation.
+                for (field, default) in [("ffmpeg_path", "ffmpeg"), ("ffprobe_path", "ffprobe")] {
+                    object.insert(field.into(), default.into());
                 }
             }
+            publish_missing(&destination, &serde_json::to_vec_pretty(document)?)?;
         }
-        publish_missing(&destination, &serde_json::to_vec_pretty(&document)?)?;
     }
     progress.check_cancelled()?;
-    publish_missing(&current.join(MIGRATION_MARKER), b"1")
+    publish_missing(&current.join(MIGRATION_MARKER), b"2")
 }
 
-#[cfg(any(windows, test))]
+fn preference_path(
+    document: Option<&serde_json::Value>,
+    field: &str,
+    fallback: PathBuf,
+) -> PathBuf {
+    document
+        .and_then(|v| v.get(field))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or(fallback)
+}
+
+fn distribution_entry(name: &std::ffi::OsStr) -> bool {
+    let name = name.to_string_lossy().to_ascii_lowercase();
+    matches!(
+        name.as_str(),
+        "preferences.json"
+            | "cache-version"
+            | "installer-media-paths.ini"
+            | "transnetv2"
+            | "semantic-search"
+            | "storyboard-semantic"
+            | "licenses"
+            | "license"
+            | "third_party_notices.md"
+    ) || name.ends_with(".exe")
+        || name.ends_with(".dll")
+        || name.starts_with(".locution-pro-")
+}
+
+fn canonical_location(path: &Path) -> io::Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        env::current_dir()?.join(path)
+    };
+    let mut normalized = PathBuf::new();
+    for part in absolute.components() {
+        match part {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            part => normalized.push(part),
+        }
+    }
+    let mut existing = normalized;
+    let mut suffix = Vec::new();
+    loop {
+        match fs::canonicalize(&existing) {
+            Ok(mut result) => {
+                for name in suffix.iter().rev() {
+                    result.push(name);
+                }
+                #[cfg(windows)]
+                {
+                    result = PathBuf::from(result.to_string_lossy().to_lowercase());
+                }
+                return Ok(result);
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let name = existing
+                    .file_name()
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "Invalid migration path")
+                    })?
+                    .to_owned();
+                suffix.push(name);
+                existing.pop();
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn ensure_disjoint_roots(source: &Path, destination: &Path) -> io::Result<()> {
+    let source = canonical_location(source)?;
+    let destination = canonical_location(destination)?;
+    if source.starts_with(&destination) || destination.starts_with(&source) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Migration source and destination must be separate directories",
+        ));
+    }
+    Ok(())
+}
+
 fn migrate_identity_directory(
     legacy: &Path,
     current: &Path,
     progress: &mut MigrationProgress,
 ) -> io::Result<()> {
+    ensure_disjoint_roots(legacy, current)?;
     // A WebView profile is a unit: merging individual Chromium database files is unsafe.
     if !legacy.is_dir() || current.exists() {
         return Ok(());
@@ -388,6 +525,128 @@ fn publish_staged(staged: &Path, destination: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn admit_install(current: &Path, session: &Path) -> MigrationProgress {
+        fs::create_dir_all(current).unwrap();
+        fs::create_dir_all(session).unwrap();
+        let bytes: Vec<u8> = std::iter::once(0xfeff)
+            .chain(session.to_string_lossy().encode_utf16())
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        fs::write(current.join(INSTALL_SESSION), bytes).unwrap();
+        MigrationProgress {
+            session: Some(session.to_path_buf()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn existing_data_or_profiles_skip_the_entire_import_before_reading_linecut() {
+        let root = env::temp_dir().join(format!("locution-skip-{}", Uuid::new_v4()));
+        let old = root.join("old");
+        let new = root.join("new");
+        let old_profile = root.join("old-profile");
+        let new_profile = root.join("new-profile");
+        fs::create_dir_all(&old).unwrap();
+        fs::create_dir_all(&old_profile).unwrap();
+        fs::write(old.join("preferences.json"), b"invalid old preferences").unwrap();
+        fs::write(old_profile.join("Local Storage"), b"old history").unwrap();
+        let profiles = [(old_profile.clone(), new_profile.clone())];
+        fs::create_dir_all(&new).unwrap();
+        fs::write(new.join("unknown-user-data"), b"keep").unwrap();
+        migrate_fresh_install(&old, &new, &profiles, &mut MigrationProgress::default()).unwrap();
+        assert!(!new_profile.exists());
+        assert_eq!(fs::read(new.join("unknown-user-data")).unwrap(), b"keep");
+        assert!(!new.join(MIGRATION_MARKER).exists());
+        fs::remove_dir_all(&new).unwrap();
+        fs::create_dir_all(&new_profile).unwrap();
+        fs::write(new_profile.join("own-history"), b"keep history").unwrap();
+        migrate_fresh_install(&old, &new, &profiles, &mut MigrationProgress::default()).unwrap();
+        assert!(!new.exists());
+        assert!(!new_profile.join("Local Storage").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn only_the_admitted_install_session_can_retry_and_cleanup_allows_a_new_import() {
+        let root = env::temp_dir().join(format!("locution-session-{}", Uuid::new_v4()));
+        let old = root.join("old");
+        let new = root.join("new");
+        let external = root.join("external-cache");
+        let saves = root.join("external-saves");
+        let old_profile = root.join("old-profile");
+        let new_profile = root.join("new-profile");
+        let profiles = [(old_profile.clone(), new_profile.clone())];
+        for path in [&old, &external, &saves, &old_profile] {
+            fs::create_dir_all(path).unwrap();
+        }
+        fs::write(old.join("preferences.json"), b"invalid preferences").unwrap();
+        fs::write(external.join("cache.bin"), b"cache content").unwrap();
+        fs::write(saves.join("recovery.lcp"), b"project content").unwrap();
+        fs::write(old_profile.join("Local Storage"), b"history").unwrap();
+        let mut first = admit_install(&new, &root.join("installer-one"));
+        assert!(migrate_fresh_install(&old, &new, &profiles, &mut first).is_err());
+        let other_session = root.join("installer-two");
+        fs::create_dir_all(&other_session).unwrap();
+        let mut later = MigrationProgress {
+            session: Some(other_session.clone()),
+            ..Default::default()
+        };
+        migrate_fresh_install(&old, &new, &profiles, &mut later).unwrap();
+        assert!(!new_profile.exists());
+        assert!(!new.join(IMPORT_COMPLETE).exists());
+        fs::write(
+            old.join("preferences.json"),
+            serde_json::to_vec(&serde_json::json!({"cache_dir": external, "auto_save_dir": saves}))
+                .unwrap(),
+        )
+        .unwrap();
+        migrate_fresh_install(&old, &new, &profiles, &mut first).unwrap();
+        assert_eq!(
+            fs::read(new.join("cache/cache.bin")).unwrap(),
+            b"cache content"
+        );
+        assert_eq!(
+            fs::read(new.join("cache/Locution Pro Auto-Save/recovery.lcp")).unwrap(),
+            b"project content"
+        );
+        assert_eq!(
+            fs::read(new_profile.join("Local Storage")).unwrap(),
+            b"history"
+        );
+        fs::write(new.join("cache/cache.bin"), b"independent changes").unwrap();
+        assert_eq!(
+            fs::read(external.join("cache.bin")).unwrap(),
+            b"cache content"
+        );
+        fs::write(old.join("late-data"), b"do not sync").unwrap();
+        migrate_fresh_install(&old, &new, &profiles, &mut first).unwrap();
+        assert!(!new.join("late-data").exists());
+        // Complete removal of our data and profiles permits a newly admitted installation.
+        fs::remove_dir_all(&new).unwrap();
+        fs::remove_dir_all(&new_profile).unwrap();
+        later = admit_install(&new, &other_session);
+        migrate_fresh_install(&old, &new, &profiles, &mut later).unwrap();
+        assert!(new.join("late-data").exists());
+        assert!(new.join(IMPORT_COMPLETE).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn source_roots_cannot_overlap_destination_even_through_parent_components() {
+        let root = env::temp_dir().join(format!("locution-paths-{}", Uuid::new_v4()));
+        fs::create_dir_all(root.join("old")).unwrap();
+        for destination in [
+            root.join("old"),
+            root.join("old/child"),
+            root.clone(),
+            root.join("other/../old"),
+        ] {
+            assert!(ensure_disjoint_roots(&root.join("old"), &destination).is_err());
+        }
+        ensure_disjoint_roots(&root.join("old"), &root.join("new")).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn corrupted_staged_cache_is_rejected_and_retry_verifies_every_chunk() {
@@ -620,7 +879,7 @@ mod tests {
             Path::new(prefs["auto_save_dir"].as_str().unwrap()),
             new.join("cache").join("Locution Pro Auto-Save")
         );
-        assert_eq!(prefs["ffmpeg_path"], "custom.exe");
+        assert_eq!(prefs["ffmpeg_path"], "ffmpeg");
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -650,7 +909,7 @@ mod tests {
     }
 
     #[test]
-    fn existing_preferences_and_profiles_win_and_custom_paths_are_unchanged() {
+    fn custom_writable_paths_are_copied_and_profiles_are_not_merged() {
         let root = env::temp_dir().join(format!("locution-identity-{}", Uuid::new_v4()));
         let old = root.join("old");
         let new = root.join("new");
@@ -668,10 +927,13 @@ mod tests {
         migrate_application_data(&old, &new, &mut MigrationProgress::default()).unwrap();
         let prefs: serde_json::Value =
             serde_json::from_slice(&fs::read(new.join("preferences.json")).unwrap()).unwrap();
-        assert_eq!(prefs["cache_dir"], "external/cache");
+        assert_eq!(
+            Path::new(prefs["cache_dir"].as_str().unwrap()),
+            new.join("cache")
+        );
         assert_eq!(
             Path::new(prefs["auto_save_dir"].as_str().unwrap()),
-            old.join("custom-saves")
+            new.join("cache/Locution Pro Auto-Save")
         );
         fs::write(new.join("preferences.json"), b"current preferences").unwrap();
         migrate_application_data(&old, &new, &mut MigrationProgress::default()).unwrap();

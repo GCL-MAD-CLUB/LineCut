@@ -40,6 +40,8 @@ Locution Pro（简称 lc）是一款 Windows 桌面工具，帮助你从字幕�
 
 ## 快速开始
 
+Locution Pro 是 LineCut 的独立续作，两者可共存。仅首次安装且没有 Locution Pro 既有记录或数据时，安装器会复制并校验 LineCut 数据；后续安装与软件运行均不执行迁移。`.lcp` 项目继续兼容，其他数据各自独立。详见[安装与首次启动](docs/user-guide/getting-started/install.md)。
+
 1. 从 [Releases](https://github.com/GCL-MAD-CLUB/LineCut/releases/latest) 下载并安装最新版。
 2. 首次安装时选择“内置 FFmpeg（推荐）”；如电脑已有 FFmpeg，也可指定现有路径。
 3. 启动 Locution Pro，新建项目后导入视频、音频或字幕文件。

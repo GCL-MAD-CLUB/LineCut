@@ -8,7 +8,6 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -61,23 +60,31 @@ const query = (key) =>
   spawnSync("reg.exe", ["query", `HKCU\\${registry}\\${key}`], { windowsHide: true }).status;
 
 try {
-  const uninstaller = compile(
-    "mock uninstall",
-    `Section
-  \${GetOptions} $CMDLINE "_?=" $R0
-  FileOpen $0 "$R0\\uninstall-args.txt" w
-  FileWrite $0 $CMDLINE
-  FileClose $0
-  \${GetOptions} $CMDLINE "/FAIL" $1
-  \${IfNot} \${Errors}
-    SetErrorLevel 1
-    Quit
-  \${EndIf}
-  \${GetOptions} $CMDLINE "/KEEP" $1
-  \${If} \${Errors}
-    Delete "$R0\\linecut.exe"
-  \${EndIf}
-SectionEnd`,
+  assert(!template.includes("UninstallLegacyInstallation"));
+  assert(!template.includes("LEGACY_UNINSTKEY"));
+  assert(!template.includes("com.linecut.desktop"));
+  const providerId = template
+    .match(/!define LCP_THUMBNAIL_PROVIDER_CLSID "\{([^}]+)\}"/u)[1]
+    .replaceAll("-", "")
+    .toLowerCase();
+  const provider = readFileSync(join(root, "src-tauri/thumbnail-provider/src/lib.rs"), "utf8");
+  assert(
+    provider.includes(
+      `0x${providerId.slice(0, 8)}_${providerId.slice(8, 12)}_${providerId.slice(12, 16)}_${providerId.slice(16, 20)}_${providerId.slice(20)}`,
+    ),
+  );
+  assert.notEqual(
+    providerId,
+    "4f4c9cf564634df7a2b47c3b0cc7e67d",
+    "The successor owns a separate COM class",
+  );
+  const isolatedIndependent = join(temporary, "independent-install.nsh");
+  writeFileSync(
+    isolatedIndependent,
+    readFileSync(join(root, "src-tauri/windows/independent-install.nsh"), "utf8").replaceAll(
+      "Software\\Classes\\",
+      `${registry}\\Classes\\`,
+    ),
   );
   const migration = compile(
     "mock migration",
@@ -89,49 +96,53 @@ SectionEnd`,
   WriteINIStr $1 "Migration" "State" "complete"
 SectionEnd`,
   );
-  // Retain the production publisher definition, only relocating its root to the test namespace.
-  const legacyProductDefine = template
-    .match(/^!define LEGACY_MANUPRODUCTKEY .+$/mu)[0]
-    .replace("Software\\", `${registry}\\`);
   const cases = [
     { name: "fresh" },
-    { name: "legacy-equal-version", legacy: true },
-    { name: "current", current: true },
-    { name: "both-update", legacy: true, current: true },
-    { name: "missing-product-key", legacy: true, noProduct: true },
-    { name: "uninstall-path-fallback", legacy: true, noProduct: true, noLocation: true },
-    { name: "orphan-product-key", legacy: true, noUninstall: true },
-    { name: "uninstaller-failure", legacy: true, fail: "/FAIL" },
-    { name: "uninstaller-keeps-binary", legacy: true, fail: "/KEEP" },
+    { name: "linecut-present", legacy: true },
+    { name: "empty-linecut-directory", legacy: true, empty: true },
+    { name: "linecut-program-only", legacy: true, empty: true, programOnly: true },
+    { name: "locution-update", current: true },
+    { name: "coexist", legacy: true, current: true },
+    { name: "retained-data", legacy: true, data: true },
+    { name: "retained-profile", legacy: true, profile: true },
+    { name: "retained-registration", legacy: true, history: true },
+    { name: "previous-shared-location", legacy: true, current: true, shared: true },
+    { name: "reject-linecut-directory", legacy: true, unsafe: "root" },
+    { name: "reject-nested-directory", legacy: true, unsafe: "nested" },
   ];
   for (const entry of cases) {
     const directory = join(temporary, entry.name);
-    const old = join(directory, "old LineCut");
-    const current = join(directory, "new Locution Pro");
+    const old = join(directory, "LineCut");
+    const current = join(directory, "application");
+    const data = join(directory, "data");
+    const oldData = join(data, "LineCut");
+    if (entry.legacy) {
+      mkdirSync(oldData, { recursive: true });
+      if (!entry.empty) writeFileSync(join(oldData, "preferences.json"), "{}");
+      if (entry.programOnly) writeFileSync(join(oldData, "linecut.exe"), "program only");
+    }
+    if (entry.data) {
+      mkdirSync(join(data, "Locution Pro"), { recursive: true });
+      writeFileSync(join(data, "Locution Pro", "retained"), "own data");
+    }
+    if (entry.profile) mkdirSync(join(data, "com.locutionpro.desktop"), { recursive: true });
+    const logs = join(directory, "result");
     mkdirSync(old, { recursive: true });
     mkdirSync(current, { recursive: true });
+    mkdirSync(logs);
     if (entry.legacy) {
-      copyFileSync(uninstaller, join(old, "uninstall.exe"));
-      writeFileSync(join(old, "linecut.exe"), "old executable");
-      writeFileSync(join(old, "preferences.json"), "preserve old settings");
+      writeFileSync(join(old, "linecut.exe"), "LineCut executable");
+      writeFileSync(join(old, "uninstall.exe"), "LineCut uninstaller");
+      writeFileSync(join(old, "preferences.json"), "original preferences");
     }
     copyFileSync(migration, join(current, "locution-pro.exe"));
-    const seedLegacy = entry.legacy
-      ? `
-  ${entry.noProduct ? "" : `WriteRegStr SHCTX "${registry}\\linecut\\LineCut" "" "${nsis(old)}"\nWriteRegDWORD SHCTX "${registry}\\linecut\\LineCut" "BundleSemanticSearch" 0`}
-  ${entry.noUninstall ? "" : `WriteRegStr SHCTX "\${LEGACY_UNINSTKEY}" "UninstallString" '$\\"${nsis(old)}\\uninstall.exe$\\"${entry.fail ? ` ${entry.fail}` : ""}'`}
-  ${entry.noLocation || entry.noUninstall ? "" : `WriteRegStr SHCTX "\${LEGACY_UNINSTKEY}" "InstallLocation" '$\\"${nsis(old)}$\\"'`}
-  ${entry.noUninstall ? "" : `WriteRegStr SHCTX "\${LEGACY_UNINSTKEY}" "MainBinaryName" "linecut.exe"\nWriteRegStr SHCTX "\${LEGACY_UNINSTKEY}" "DisplayVersion" "0.3.3"`}
-`
-      : "";
     const executable = compile(
       entry.name,
       `
 !define UNINSTKEY "${registry}\\current-uninstall"
 !define MANUPRODUCTKEY "${registry}\\locutionpro\\Locution Pro"
-!define LEGACY_UNINSTKEY "${registry}\\legacy-uninstall"
-!define LEGACY_PRODUCTNAME "LineCut"
-${legacyProductDefine}
+!define LOCUTION_MIGRATION_LOCAL_ROOT "${nsis(data)}"
+!define LOCUTION_MIGRATION_ROAMING_ROOT "${nsis(data)}"
 !define INSTALLMODE "currentUser"
 !define MAINBINARYNAME "locution-pro"
 !define PRODUCTNAME "Locution Pro"
@@ -139,89 +150,118 @@ ${legacyProductDefine}
 !define VERSION "0.3.3"
 !define ESTIMATEDSIZE 1
 !define HOMEPAGE ""
-!macro CheckIfAppIsRunning BINARY NAME
-!macroend
 Var PreviousUninstallKey
 Var PreviousProductKey
 Var PreviousInstallDir
 Var PreviousMainBinaryName
-Var LegacyInstallDir
-Var LegacyUninstallCommand
-Var LegacyMainBinaryName
-Var OldMainBinaryName
 Var LocutionProBundleSemantic
-Var SavedTarget
 Var PassiveMode
+!include "${nsis(isolatedIndependent)}"
 !include "${nsis(join(root, "src-tauri/windows/migration-page.nsh"))}"
-${[
-  "FindPreviousInstallation",
-  "ReadPreviousInstallLocation",
-  "RestorePreviousInstallLocation",
-  "StripPathQuotes",
-  "FindLegacyInstallation",
-  "UninstallLegacyInstallation",
-]
-  .map(functionSource)
-  .join("\n")
-  .replaceAll("$LOCALAPPDATA\\LineCut", nsis(join(directory, "default LineCut")))}
-Function RenameExistingProductShortcuts
-FunctionEnd
+${["FindPreviousInstallation", "ReadPreviousInstallLocation", "RestorePreviousInstallLocation", "StripPathQuotes"].map(functionSource).join("\n")}
 Section
   SetShellVarContext current
   DeleteRegKey HKCU "${registry}"
-  StrCpy $SavedTarget $INSTDIR
   StrCpy $LocutionProBundleSemantic 1
-${seedLegacy}
-  ${entry.current ? `WriteRegStr SHCTX "\${UNINSTKEY}" "UninstallString" "current-uninstaller"\nWriteRegStr SHCTX "\${UNINSTKEY}" "InstallLocation" "$INSTDIR"\nWriteRegStr SHCTX "\${MANUPRODUCTKEY}" "" "$INSTDIR"\nWriteRegDWORD SHCTX "\${MANUPRODUCTKEY}" "BundleSemanticSearch" 1` : ""}
+  ${entry.legacy ? `WriteRegStr SHCTX "${registry}\\linecut-uninstall" "UninstallString" '$\\"${nsis(old)}\\uninstall.exe$\\"'\nWriteRegStr SHCTX "${registry}\\linecut-uninstall" "InstallLocation" "${nsis(old)}"\nWriteRegDWORD SHCTX "${registry}\\linecut\\LineCut" "BundleSemanticSearch" 0\nWriteRegStr SHCTX "${registry}\\Classes\\.lcp" "" "LineCut.Project"\nWriteRegStr SHCTX "${registry}\\Classes\\.lcp\\OpenWithProgids" "LineCut.Project" ""\nWriteRegStr SHCTX "${registry}\\Classes\\LineCut.Project" "" "LineCut project"` : ""}
+  ${entry.current ? `WriteRegStr SHCTX "\${UNINSTKEY}" "UninstallString" "current-uninstaller"\nWriteRegStr SHCTX "\${UNINSTKEY}" "InstallLocation" '$\\"${nsis(entry.shared ? old : current)}$\\"'\nWriteRegStr SHCTX "\${MANUPRODUCTKEY}" "" "${nsis(entry.shared ? old : current)}"\nWriteRegDWORD SHCTX "\${MANUPRODUCTKEY}" "BundleSemanticSearch" 0` : ""}
+  ${entry.history ? `WriteRegDWORD SHCTX "\${MANUPRODUCTKEY}" "BundleSemanticSearch" 1` : ""}
+  Call CaptureMigrationEligibility
   Call FindPreviousInstallation
   Call RestorePreviousInstallLocation
-  FileOpen $5 "$SavedTarget\\resolved.txt" w
-  FileWrite $5 $PreviousInstallDir
+  FileOpen $5 "${nsis(join(logs, "location.txt"))}" w
+  FileWrite $5 $INSTDIR
   FileClose $5
-  StrCpy $INSTDIR $SavedTarget
 ${componentChoice}
+  ${entry.unsafe ? `StrCpy $INSTDIR "${nsis(entry.unsafe === "nested" ? join(old, "Locution Pro") : old)}"` : ""}
+  Call EnsureIndependentInstallLocation
+  Rename "$INSTDIR\\locution-pro.exe" "$INSTDIR\\worker.tmp"
+  Call BeginMigrationSession
+  Rename "$INSTDIR\\worker.tmp" "$INSTDIR\\locution-pro.exe"
   FileOpen $5 "$INSTDIR\\choice.txt" w
   FileWrite $5 $LocutionProBundleSemantic
   FileClose $5
-  Call UninstallLegacyInstallation
 ${registration}
+  !insertmacro LOCUTION_ASSOCIATE "lcp" "LocutionPro.Project" "Locution project" "own.ico" "Open" "own-command"
+  ReadRegStr $0 SHCTX "${registry}\\Classes\\.lcp" ""
+  FileOpen $5 "${nsis(join(logs, "association.txt"))}" w
+  FileWrite $5 $0
+  FileClose $5
+  !insertmacro LOCUTION_UNASSOCIATE "lcp" "LocutionPro.Project"
+  ReadRegStr $0 SHCTX "${registry}\\Classes\\.lcp" ""
+  FileOpen $5 "${nsis(join(logs, "after-uninstall.txt"))}" w
+  FileWrite $5 $0
+  FileClose $5
   Call MigrateLegacyData
   FileOpen $5 "$INSTDIR\\complete.txt" w
   FileWrite $5 "Locution Pro"
   FileClose $5
 SectionEnd`,
     );
-    run(executable, ["/S", "/UPDATE", `/D=${current}`], entry.fail ? 2 : 0, true);
+    run(executable, ["/S", "/UPDATE", `/D=${current}`], entry.unsafe ? 2 : 0, true);
+    assert.equal(
+      readFileSync(join(logs, "location.txt"), "utf8"),
+      current,
+      `${entry.name}: independent installation path`,
+    );
     if (entry.legacy) {
-      const args = readFileSync(join(old, "uninstall-args.txt"), "utf8");
-      assert(args.includes("/S /UPDATE"), `${entry.name}: no hidden wizard or data deletion`);
-      assert(args.endsWith(`_?=${old}`), `${entry.name}: full path including spaces`);
-      assert.equal(readFileSync(join(old, "preferences.json"), "utf8"), "preserve old settings");
-      assert.equal(existsSync(join(old, "linecut.exe")), !!entry.fail, entry.name);
+      assert.equal(readFileSync(join(old, "linecut.exe"), "utf8"), "LineCut executable");
+      assert.equal(readFileSync(join(old, "uninstall.exe"), "utf8"), "LineCut uninstaller");
+      assert.equal(readFileSync(join(old, "preferences.json"), "utf8"), "original preferences");
+      assert.equal(query("linecut-uninstall"), 0, "LineCut uninstall registration is untouched");
+      assert.equal(query("linecut\\LineCut"), 0, "LineCut configuration is untouched");
     }
-    if (entry.fail) {
-      assert.equal(query("legacy-uninstall"), 0, "Uninstall failure retains registration");
+    if (entry.unsafe) {
       assert(!existsSync(join(current, "complete.txt")));
-      assert(!existsSync(join(current, "migration-args.txt")));
       continue;
     }
-    assert.equal(query("legacy-uninstall"), 1, `${entry.name}: legacy registration removed`);
-    assert.equal(query("linecut\\LineCut"), 1, `${entry.name}: old publisher key removed`);
-    assert(
-      existsSync(join(current, "complete.txt")),
-      JSON.stringify(readdirSync(directory, { recursive: true })),
+    assert.equal(
+      readFileSync(join(current, "choice.txt"), "utf8"),
+      entry.current ? "0" : "1",
+      "Only Locution Pro component choices are restored",
     );
     assert.equal(readFileSync(join(current, "complete.txt"), "utf8"), "Locution Pro");
-    assert(
-      readFileSync(join(current, "migration-args.txt"), "utf8").includes(
-        "--migrate-legacy-data --migration-silent --migration-progress",
-      ),
+    assert.equal(
+      readFileSync(join(logs, "association.txt"), "utf8"),
+      entry.legacy ? "LineCut.Project" : "LocutionPro.Project",
     );
-    if (entry.name === "legacy-equal-version") {
-      assert.equal(readFileSync(join(current, "resolved.txt"), "utf8"), old);
-      assert.equal(readFileSync(join(current, "choice.txt"), "utf8"), "0");
+    assert.equal(
+      readFileSync(join(logs, "after-uninstall.txt"), "utf8"),
+      entry.legacy ? "LineCut.Project" : "",
+    );
+    if (entry.legacy)
+      assert.equal(
+        query("Classes\\LineCut.Project"),
+        0,
+        "LineCut file association survives Locution Pro removal",
+      );
+    const shouldMigrate = Boolean(
+      entry.legacy &&
+      !entry.empty &&
+      !entry.current &&
+      !entry.data &&
+      !entry.profile &&
+      !entry.history,
+    );
+    assert.equal(
+      existsSync(join(current, "migration-args.txt")),
+      shouldMigrate,
+      `${entry.name}: first-install gate`,
+    );
+    if (shouldMigrate) {
+      const args = readFileSync(join(current, "migration-args.txt"), "utf8");
+      assert(args.includes("--migration-progress"));
+      assert(args.includes("--migration-session"));
+      const token = readFileSync(
+        join(data, "Locution Pro", ".locution-pro-install-session"),
+        "utf16le",
+      );
+      assert.equal(token[0], "\ufeff");
+      assert(
+        args.includes(token.slice(1)),
+        "The real NSIS session marker matches the worker argument",
+      );
     }
-    if (entry.current) assert.equal(readFileSync(join(current, "choice.txt"), "utf8"), "1");
   }
   // Run a minimal real wizard: the actual embedded migration page must advance
   // automatically in the same HWND, and must remain blocked on error/cancellation.
@@ -275,6 +315,8 @@ SectionEnd`,
     const wizard = compile(
       `wizard-${mode}`,
       `
+!define UNINSTKEY "${registry}\\wizard-uninstall"
+!define MANUPRODUCTKEY "${registry}\\wizard-product"
 !define INSTALLMODE "currentUser"
 !define MAINBINARYNAME "locution-pro"
 Var PassiveMode
@@ -321,6 +363,7 @@ Function TestFinishPage
   Quit
 FunctionEnd
 Section
+  StrCpy $MigrationEligible 1
   StrCpy $TestWindow $HWNDPARENT
   SetAutoClose true
 SectionEnd`,
@@ -333,7 +376,7 @@ SectionEnd`,
     );
   }
   console.log(
-    "Passed: legacy uninstall scenarios, embedded migration page, automatic page transitions, same HWND, failure/cancellation gates, retry, silent migration.",
+    "Passed: independent installs, LineCut preservation, file associations, embedded migration page, automatic page transitions, same HWND, failure/cancellation gates, retry, silent migration.",
   );
 } finally {
   assert(/^Software\\LocutionProIdentityTests\\[a-f0-9-]+$/u.test(registry));
