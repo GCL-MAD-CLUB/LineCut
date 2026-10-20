@@ -24,7 +24,6 @@ ManifestDPIAwareness PerMonitorV2
 !include x64.nsh
 !include WordFunc.nsh
 !include "utils.nsh"
-!include "FileAssociation.nsh"
 !include "Win\COM.nsh"
 !include "Win\Propkey.nsh"
 !include "StrFunc.nsh"
@@ -63,18 +62,15 @@ ${StrLoc}
 !define WEBVIEW2BOOTSTRAPPERPATH "{{webview2_bootstrapper_path}}"
 !define WEBVIEW2INSTALLERPATH "{{webview2_installer_path}}"
 !define MINIMUMWEBVIEW2VERSION "{{minimum_webview2_version}}"
-; New installs write current keys; old keys are read only while upgrading.
+; Only Locution Pro participates in installation and maintenance.
 !define INSTALL_IDENTITY "Locution Pro"
-!define LEGACY_PRODUCTNAME "LineCut"
-!define LEGACY_UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${LEGACY_PRODUCTNAME}"
-!define LEGACY_MANUPRODUCTKEY "Software\${MANUFACTURER}\${LEGACY_PRODUCTNAME}"
 !define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${INSTALL_IDENTITY}"
 !define MANUKEY "Software\${MANUFACTURER}"
 !define MANUPRODUCTKEY "${MANUKEY}\${INSTALL_IDENTITY}"
 !define UNINSTALLERSIGNCOMMAND "{{uninstaller_sign_cmd}}"
 !define ESTIMATEDSIZE "{{estimated_size}}"
 !define STARTMENUFOLDER "{{start_menu_folder}}"
-!define LCP_THUMBNAIL_PROVIDER_CLSID "{4F4C9CF5-6463-4DF7-A2B4-7C3B0CC7E67D}"
+!define LCP_THUMBNAIL_PROVIDER_CLSID "{A7DE0A72-4952-4ED8-8F2E-BAE3AAB48B59}"
 !define ITHUMBNAIL_PROVIDER_IID "{E357FCCD-A995-4576-B01F-234630154E96}"
 !define LCP_THUMBNAIL_PROVIDER_FILE "locution_pro_thumbnail_provider.dll"
 
@@ -82,9 +78,10 @@ Var PassiveMode
 Var UpdateMode
 Var NoShortcutMode
 Var WixMode
-Var OldMainBinaryName
 Var PreviousUninstallKey
 Var PreviousProductKey
+Var PreviousInstallDir
+Var PreviousMainBinaryName
 
 Name "${PRODUCTNAME}"
 BrandingText "${COPYRIGHT}"
@@ -136,6 +133,9 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
   !define MULTIUSER_EXECUTIONLEVEL Highest
   !include MultiUser.nsh
 !endif
+
+!include "${LOCUTION_INSTALLER_SOURCE_DIR}\migration-page.nsh"
+!include "${LOCUTION_INSTALLER_SOURCE_DIR}\independent-install.nsh"
 
 ; Installer icon
 !if "${INSTALLERICON}" != ""
@@ -197,6 +197,9 @@ Var ReinstallPageCheck
 Page custom PageReinstall PageLeaveReinstall
 
 Function PageReinstall
+  ${If} $PreviousInstallDir == ""
+    Abort
+  ${EndIf}
   ; Uninstall previous WiX installation if exists.
   ;
   ; A WiX installer stores the installation info in registry
@@ -363,9 +366,8 @@ Function PageLeaveReinstall
       ReadRegStr $R1 HKLM "$R6" "UninstallString"
       ExecWait '$R1' $0
     ${Else}
-      ReadRegStr $4 SHCTX "$PreviousProductKey" ""
-      ReadRegStr $R1 SHCTX "$PreviousUninstallKey" "UninstallString"
-      ${IfThen} $UpdateMode = 1 ${|} StrCpy $R1 "$R1 /UPDATE" ${|} ; append /UPDATE
+      StrCpy $4 $PreviousInstallDir
+      StrCpy $R1 '$\"$PreviousInstallDir\uninstall.exe$\" /UPDATE' ; only our validated installation
       ${IfThen} $PassiveMode = 1 ${|} StrCpy $R1 "$R1 /P" ${|} ; append /P
       StrCpy $R1 "$R1 _?=$4" ; append uninstall directory
       ExecWait '$R1' $0
@@ -376,7 +378,7 @@ Function PageLeaveReinstall
     ${IfThen} ${Errors} ${|} StrCpy $0 2 ${|} ; ExecWait failed, set fake exit code
 
     ${If} $0 <> 0
-    ${OrIf} ${FileExists} "$INSTDIR\${MAINBINARYNAME}.exe"
+    ${OrIf} ${FileExists} "$PreviousInstallDir\$PreviousMainBinaryName"
       ; User cancelled wix uninstaller? return to select un/reinstall page
       ${If} $WixMode = 1
       ${AndIf} $0 = 1602
@@ -420,11 +422,11 @@ Var AppStartMenuFolder
 ; 9. Installation page
 !insertmacro MUI_PAGE_INSTFILES
 
-; 10. Finish page
-;
-; Don't auto jump to finish page after installation page,
-; because the installation page has useful info that can be used debug any issues with the installer.
-!define MUI_FINISHPAGE_NOAUTOCLOSE
+; 10. Migration uses the same wizard and advances automatically after verification.
+!insertmacro MUI_PAGE_INIT
+Page custom MigrationPageCreate MigrationPageLeave
+
+; 11. Finish page. MUI enables auto-advance from the installation page.
 ; Use show readme button in the finish page as a button create a desktop shortcut
 !define MUI_FINISHPAGE_SHOWREADME
 !define MUI_FINISHPAGE_SHOWREADME_TEXT "$(createDesktop)"
@@ -494,6 +496,8 @@ FunctionEnd
 {{/each}}
 
 Function .onInit
+  StrCpy $MigrationProcess 0
+  StrCpy $MigrationComplete 0
   ; Bundled FFmpeg is the default, including passive installs.
   StrCpy $LocutionProBundleFfmpeg 1
   StrCpy $LocutionProBundleSemantic 1
@@ -512,12 +516,18 @@ Function .onInit
     StrCpy $UpdateMode 1
   ${EndIf}
 
+  !insertmacro SetContext
+  Call CaptureMigrationEligibility
+  !insertmacro SetContext
+  Call RecordPendingMigration
+
   !if "${DISPLAYLANGUAGESELECTOR}" == "true"
     !insertmacro MUI_LANGDLL_DISPLAY
   !endif
 
   !insertmacro SetContext
   Call FindPreviousInstallation
+  Call ReadPreviousInstallLocation
 
   ${If} $INSTDIR == "${PLACEHOLDER_INSTALL_DIR}"
     ; Set default install location
@@ -558,16 +568,17 @@ Function .onInit
   ${EndIf}
 FunctionEnd
 
-
-; A 0.2.0-or-newer installer only removes caches created by the 0.1 release line.
-; SHCTX respects the selected per-user or per-machine installation context.
-Function ClearLegacyLocutionProCache
-  ReadRegStr $R0 SHCTX "$PreviousUninstallKey" "DisplayVersion"
-  StrCpy $R1 $R0 4
-  ${If} $R1 == "0.1."
-    RmDir /r "$LOCALAPPDATA\LineCut\cache"
+Function .onVerifyInstDir
+  Push $4
+  StrCpy $4 $INSTDIR
+  Call CheckIndependentInstallLocation
+  Pop $4
+  ${If} $IndependentInstallLocation != 1
+    Abort
   ${EndIf}
 FunctionEnd
+
+
 
 
 Section EarlyChecks
@@ -682,20 +693,14 @@ Section WebView2
 SectionEnd
 
 Section Install
+  Call EnsureIndependentInstallLocation
+  Call PrepareMigrationInstall
   SetOutPath $INSTDIR
 
   !ifmacrodef NSIS_HOOK_PREINSTALL
     !insertmacro NSIS_HOOK_PREINSTALL
   !endif
-
   !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
-  ; A renamed binary can coexist with a still-running previous installation.
-  ReadRegStr $OldMainBinaryName SHCTX "$PreviousUninstallKey" "MainBinaryName"
-  ${If} $OldMainBinaryName != ""
-  ${AndIf} $OldMainBinaryName != "${MAINBINARYNAME}.exe"
-    !insertmacro CheckIfAppIsRunning "$OldMainBinaryName" "${PRODUCTNAME}"
-  ${EndIf}
-  Call ClearLegacyLocutionProCache
 
   ; Copy main executable
   File "${MAINBINARYSRCPATH}"
@@ -739,7 +744,7 @@ Section Install
   ; Create file associations
   {{#each file_associations as |association| ~}}
     {{#each association.ext as |ext| ~}}
-       !insertmacro APP_ASSOCIATE "{{ext}}" "{{or association.name ext}}" "{{association-description association.description ext}}" "$INSTDIR\${MAINBINARYNAME}.exe,0" "Open with ${PRODUCTNAME}" "$INSTDIR\${MAINBINARYNAME}.exe $\"%1$\""
+       !insertmacro LOCUTION_ASSOCIATE "{{ext}}" "{{or association.name ext}}" "{{association-description association.description ext}}" "$INSTDIR\${MAINBINARYNAME}.exe,0" "Open with ${PRODUCTNAME}" "$INSTDIR\${MAINBINARYNAME}.exe $\"%1$\""
     {{/each}}
   {{/each}}
 
@@ -775,14 +780,6 @@ Section Install
     WriteRegStr SHCTX "${UNINSTKEY}" $MultiUser.InstallMode 1
   !endif
 
-  ; Remove old main binary if it doesn't match new main binary name
-  ReadRegStr $OldMainBinaryName SHCTX "$PreviousUninstallKey" "MainBinaryName"
-  ${If} $OldMainBinaryName != ""
-  ${AndIf} $OldMainBinaryName != "${MAINBINARYNAME}.exe"
-    Call RenameExistingProductShortcuts
-    Delete "$INSTDIR\$OldMainBinaryName"
-  ${EndIf}
-
   ; Save current MAINBINARYNAME for future updates
   WriteRegStr SHCTX "${UNINSTKEY}" "MainBinaryName" "${MAINBINARYNAME}.exe"
 
@@ -807,12 +804,6 @@ Section Install
     WriteRegStr SHCTX "${UNINSTKEY}" "HelpLink" "${HOMEPAGE}"
   !endif
 
-  ; Remove legacy registration only after the new registration has been published.
-  ${If} $PreviousUninstallKey == "${LEGACY_UNINSTKEY}"
-    DeleteRegKey SHCTX "${LEGACY_UNINSTKEY}"
-    DeleteRegKey SHCTX "${LEGACY_MANUPRODUCTKEY}"
-  ${EndIf}
-
   ; Create start menu shortcut
   !insertmacro MUI_STARTMENU_WRITE_BEGIN Application
     Call CreateOrUpdateStartMenuShortcut
@@ -829,10 +820,13 @@ Section Install
     !insertmacro NSIS_HOOK_POSTINSTALL
   !endif
 
-  ; Auto close this page for passive mode
   ${If} $PassiveMode = 1
-    SetAutoClose true
+  ${OrIf} ${Silent}
+    Call MigrateLegacyData
   ${EndIf}
+
+  ; Continue to the migration page without asking the user to click Next.
+  SetAutoClose true
 SectionEnd
 
 Function .onInstSuccess
@@ -840,6 +834,9 @@ Function .onInstSuccess
   ; GUI installer has a toggle for the user to (re)start the app
   ${If} $PassiveMode = 1
   ${OrIf} ${Silent}
+    ${If} $MigrationComplete != 1
+      Return
+    ${EndIf}
     ${GetOptions} $CMDLINE "/R" $R0
     ${IfNot} ${Errors}
       ${GetOptions} $CMDLINE "/ARGS" $R0
@@ -893,7 +890,7 @@ Section Uninstall
   ; Delete app associations
   {{#each file_associations as |association| ~}}
     {{#each association.ext as |ext| ~}}
-      !insertmacro APP_UNASSOCIATE "{{ext}}" "{{or association.name ext}}"
+      !insertmacro LOCUTION_UNASSOCIATE "{{ext}}" "{{or association.name ext}}"
     {{/each}}
   {{/each}}
 
@@ -988,9 +985,6 @@ Section Uninstall
     RmDir /r "$APPDATA\${BUNDLEID}"
     RmDir /r "$LOCALAPPDATA\${BUNDLEID}"
     RmDir /r "$LOCALAPPDATA\${PRODUCTNAME}"
-    RmDir /r "$LOCALAPPDATA\${LEGACY_PRODUCTNAME}"
-    RmDir /r "$LOCALAPPDATA\com.linecut.desktop"
-    RmDir /r "$APPDATA\com.linecut.desktop"
   ${EndIf}
 
   !ifmacrodef NSIS_HOOK_POSTUNINSTALL
@@ -1005,25 +999,52 @@ Section Uninstall
 SectionEnd
 
 Function FindPreviousInstallation
-  Push $R8
   StrCpy $PreviousUninstallKey "${UNINSTKEY}"
   StrCpy $PreviousProductKey "${MANUPRODUCTKEY}"
-  ReadRegStr $R8 SHCTX "${UNINSTKEY}" "UninstallString"
-  ${If} $R8 == ""
-    ReadRegStr $R8 SHCTX "${LEGACY_UNINSTKEY}" "UninstallString"
-    ${If} $R8 != ""
-      StrCpy $PreviousUninstallKey "${LEGACY_UNINSTKEY}"
-      StrCpy $PreviousProductKey "${LEGACY_MANUPRODUCTKEY}"
-    ${EndIf}
-  ${EndIf}
-  Pop $R8
 FunctionEnd
 
 Function RestorePreviousInstallLocation
   Call FindPreviousInstallation
+  Call ReadPreviousInstallLocation
+  ${If} $PreviousInstallDir != ""
+    StrCpy $INSTDIR $PreviousInstallDir
+  ${EndIf}
+FunctionEnd
+
+Function ReadPreviousInstallLocation
   ReadRegStr $4 SHCTX "$PreviousProductKey" ""
-  StrCmp $4 "" +2 0
-    StrCpy $INSTDIR $4
+  ${If} $4 == ""
+    ReadRegStr $4 SHCTX "$PreviousUninstallKey" "InstallLocation"
+  ${EndIf}
+  ${If} $4 == ""
+  ${AndIf} $MigrationRetry = 1
+  ${AndIf} $MigrationEligible = 1
+    StrCpy $4 $MigrationPendingInstallDir
+  ${EndIf}
+  Push $4
+  Call StripPathQuotes
+  Pop $4
+  StrCpy $PreviousInstallDir $4
+  StrCpy $PreviousMainBinaryName "${MAINBINARYNAME}.exe"
+  Call CheckIndependentInstallLocation
+  ${If} $IndependentInstallLocation != 1
+    StrCpy $PreviousInstallDir ""
+  ${EndIf}
+FunctionEnd
+
+Function StripPathQuotes
+  Exch $R8
+  Push $R9
+  StrCpy $R9 $R8 1
+  ${If} $R9 == '$\"'
+    StrCpy $R8 $R8 "" 1
+  ${EndIf}
+  StrCpy $R9 $R8 1 -1
+  ${If} $R9 == '$\"'
+    StrCpy $R8 $R8 -1
+  ${EndIf}
+  Pop $R9
+  Exch $R8
 FunctionEnd
 
 Function RefreshShellAssociations
@@ -1045,30 +1066,11 @@ Function un.SkipIfPassive
   ${IfThen} $PassiveMode = 1  ${|} Abort ${|}
 FunctionEnd
 
-; Rename only shortcuts that belong to this installation, including update/no-shortcut mode.
-!macro RenameProductShortcut DIRECTORY
-  !insertmacro IsShortcutTarget "${DIRECTORY}\${LEGACY_PRODUCTNAME}.lnk" "$INSTDIR\$OldMainBinaryName"
-  Pop $0
-  ${If} $0 = 1
-    !insertmacro UnpinShortcut "${DIRECTORY}\${LEGACY_PRODUCTNAME}.lnk"
-    !insertmacro SetShortcutTarget "${DIRECTORY}\${LEGACY_PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
-    !insertmacro SetLnkAppUserModelId "${DIRECTORY}\${LEGACY_PRODUCTNAME}.lnk"
-    Rename "${DIRECTORY}\${LEGACY_PRODUCTNAME}.lnk" "${DIRECTORY}\${PRODUCTNAME}.lnk"
-  ${EndIf}
-!macroend
-
-Function RenameExistingProductShortcuts
-  !insertmacro RenameProductShortcut "$SMPROGRAMS\$AppStartMenuFolder"
-  !insertmacro RenameProductShortcut "$SMPROGRAMS"
-  !insertmacro RenameProductShortcut "$DESKTOP"
-FunctionEnd
-
 Function CreateOrUpdateStartMenuShortcut
-  ; We used to use product name as MAINBINARYNAME
-  ; migrate old shortcuts to target the new MAINBINARYNAME
+  ; Update only shortcuts named for Locution Pro.
   StrCpy $R0 0
 
-  !insertmacro IsShortcutTarget "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$INSTDIR\$OldMainBinaryName"
+  !insertmacro IsShortcutTarget "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$PreviousInstallDir\${MAINBINARYNAME}.exe"
   Pop $0
   ${If} $0 = 1
     !insertmacro SetShortcutTarget "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
@@ -1076,7 +1078,7 @@ Function CreateOrUpdateStartMenuShortcut
     StrCpy $R0 1
   ${EndIf}
 
-  !insertmacro IsShortcutTarget "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\$OldMainBinaryName"
+  !insertmacro IsShortcutTarget "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$PreviousInstallDir\${MAINBINARYNAME}.exe"
   Pop $0
   ${If} $0 = 1
     !insertmacro SetShortcutTarget "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
@@ -1108,9 +1110,8 @@ Function CreateOrUpdateStartMenuShortcut
 FunctionEnd
 
 Function CreateOrUpdateDesktopShortcut
-  ; We used to use product name as MAINBINARYNAME
-  ; migrate old shortcuts to target the new MAINBINARYNAME
-  !insertmacro IsShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\$OldMainBinaryName"
+  ; Update only shortcuts named for Locution Pro.
+  !insertmacro IsShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$PreviousInstallDir\${MAINBINARYNAME}.exe"
   Pop $0
   ${If} $0 = 1
     !insertmacro SetShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"

@@ -40,6 +40,8 @@ Locution Pro（简称 lc）是一款 Windows 桌面工具，帮助你从字幕�
 
 ## 快速开始
 
+Locution Pro 是 LineCut 的独立续作，两者可共存。仅首次安装且没有 Locution Pro 既有记录或数据时，安装器会复制并校验 LineCut 数据；后续安装与软件运行均不执行迁移。`.lcp` 项目继续兼容，其他数据各自独立。详见[安装与首次启动](docs/user-guide/getting-started/install.md)。
+
 1. 从 [Releases](https://github.com/GCL-MAD-CLUB/LineCut/releases/latest) 下载并安装最新版。
 2. 首次安装时选择“内置 FFmpeg（推荐）”；如电脑已有 FFmpeg，也可指定现有路径。
 3. 启动 Locution Pro，新建项目后导入视频、音频或字幕文件。
@@ -153,9 +155,3 @@ Locution Pro 应用代码采用 [Apache License 2.0](LICENSE) 发布。安装包
 <p align="center">
   Made with ❤️ by GCL MAD CLUB · <a href="https://github.com/Inexplicable-YL">言ktdm</a>
 </p>
-
-## 0.3.3 数据保存与操作边界
-
-`.lcp` 使用 V4 内容模型，保存媒体组织、绑定、字幕标注、分镜与关键字。来源工作区、播放位置和可复用导出设置另存本机配置；搜索词、过滤器、临时勾选和导出范围历史不写入 `.lcp`。移交项目时必须另外提供原始素材与需要的代理，并在接收电脑重新建立来源视图。
-
-编辑工作区的撤销处理项目历史，导出工作区的撤销处理分镜导出范围，来源前后按钮处理来源组合。取消后台任务或撤销范围都不能恢复已覆盖的磁盘成品。详细说明见[项目管理](docs/user-guide/projects/projects.md)、[工作区与任务](docs/user-guide/workspace/workspace.md)和[导出](docs/user-guide/export/exporting.md)。

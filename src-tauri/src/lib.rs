@@ -22,25 +22,31 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    if let Err(error) = identity::prepare() {
-        app_error(
-            ErrorCode::ApplicationRunFailed,
-            format!("Failed to migrate application identity: {error}"),
-        );
-        #[cfg(windows)]
+    let migration_only = std::env::args_os().any(|arg| arg == "--migrate-legacy-data");
+    if migration_only {
+        let argument_path = |flag: &str| {
+            std::env::args_os()
+                .skip_while(|arg| arg != flag)
+                .nth(1)
+                .map(std::path::PathBuf::from)
+        };
+        let progress_file = argument_path("--migration-progress");
+        let cancel_file = argument_path("--migration-cancel");
+        let session = argument_path("--migration-session");
+        if let Err(error) =
+            identity::migrate_for_installer(progress_file.as_deref(), cancel_file, session)
         {
-            use windows::core::PCWSTR;
-            use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
-            let title: Vec<u16> = "Locution Pro\0".encode_utf16().collect();
-            let message: Vec<u16> = format!("无法迁移旧版本数据。请关闭旧版本程序，检查数据目录的可用空间和访问权限后重试。原数据仍保留。\n\n{error}\0").encode_utf16().collect();
-            unsafe {
-                MessageBoxW(
-                    None,
-                    PCWSTR(message.as_ptr()),
-                    PCWSTR(title.as_ptr()),
-                    MB_OK | MB_ICONERROR,
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                app_error(
+                    ErrorCode::ApplicationRunFailed,
+                    format!("Failed to migrate application identity: {error}"),
                 );
             }
+            std::process::exit(if error.kind() == std::io::ErrorKind::Interrupted {
+                2
+            } else {
+                1
+            });
         }
         return;
     }

@@ -27,7 +27,7 @@ use windows::Win32::{
 use windows_core::{implement, ComObject, IUnknown, Interface, Result, GUID, HRESULT};
 
 /// Must stay in sync with `src-tauri/windows/installer.nsi`.
-const LCP_THUMBNAIL_PROVIDER_CLSID: GUID = GUID::from_u128(0x4f4c9cf5_6463_4df7_a2b4_7c3b0cc7e67d);
+const LCP_THUMBNAIL_PROVIDER_CLSID: GUID = GUID::from_u128(0xa7de0a72_4952_4ed8_8f2e_bae3aab48b59);
 const EMBEDDED_THUMBNAIL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/lcp-thumbnail.png"));
 const MAX_THUMBNAIL_EDGE: u32 = 2_048;
 const MAX_SOURCE_PIXELS: u64 = 16 * 1_024 * 1_024;

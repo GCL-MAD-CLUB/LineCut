@@ -1,7 +1,7 @@
 {
   "name": "locution-pro",
   "private": true,
-  "version": "0.3.3",
+  "version": "0.4.0-preview",
   "description": "Subtitle indexing and media organization tool",
   "license": "Apache-2.0",
   "repository": {
