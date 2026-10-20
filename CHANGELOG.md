@@ -2,7 +2,7 @@
 
 本文件记录产品变化与升级注意事项。使用说明见[用户指南](docs/user-guide/index.md)，安装包与实际发布状态以[下载页面](https://github.com/GCL-MAD-CLUB/LineCut/releases)为准。
 
-## 0.4.0（产品基线，发布准备）
+## 0.4.0（正式版）
 
 ### 产品能力
 
@@ -17,6 +17,8 @@
 ### 安装与项目
 
 Locution Pro 使用独立安装位置和用户数据，可与 LineCut 共存。符合首次安装条件时，安装程序提供旧数据复制；重试、继续和跳过方式见[安装说明](docs/user-guide/getting-started/install.md)。
+
+修复安装目录校验错误，允许选择尚未创建的新目录，同时继续阻止安装到 LineCut 目录及其子目录。
 
 升级前保留重要项目副本；当前应用重新保存的项目可能无法在较早应用打开。项目不包含原始媒体，移交时应一并提供素材。具体步骤见[项目管理](docs/user-guide/projects/projects.md)。
 

@@ -33,7 +33,7 @@ Function NormalizeInstallPath
     IntOp $R7 $R7 + 1
     Goto normalize_install_character
   normalize_install_api:
-    System::Call 'kernel32::GetFullPathNameW(w rR8, i ${NSIS_MAX_STRLEN}, w .rR8, p0) i.rR9'
+    System::Call 'kernel32::GetFullPathNameW(w R8, i ${NSIS_MAX_STRLEN}, w .R8, p0) i.R9'
     ${If} $R9 = 0
     ${OrIf} $R9 >= ${NSIS_MAX_STRLEN}
     ${OrIf} $R8 == ""

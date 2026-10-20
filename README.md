@@ -4,7 +4,6 @@
 
 <h1 align="center">Locution Pro</h1>
 
-
 <p align="center">面向视频创作者的媒体管理与镜头检索工作软件</p>
 
 <p align="center">

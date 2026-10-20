@@ -112,7 +112,7 @@ jobs:
           tagName: ${{ needs.validate.outputs.tag }}
           releaseName: Locution Pro ${{ needs.validate.outputs.tag }}
           generateReleaseNotes: true
-          releaseDraft: false
+          releaseDraft: true
           prerelease: ${{ needs.validate.outputs.prerelease }}
           includeUpdaterJson: false
           retryAttempts: 2
