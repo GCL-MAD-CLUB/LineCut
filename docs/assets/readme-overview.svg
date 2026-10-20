@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="340" viewBox="0 0 1280 340" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">发现画面，连接创作</title>
+  <desc id="desc">蓝紫色背景上的三幅抽象风景画面，表示从丰富素材中寻找和整理镜头的创作过程。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="340" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#101B3C"/>
+      <stop offset=".52" stop-color="#172049"/>
+      <stop offset="1" stop-color="#33235A"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="translate(946 120) rotate(90) scale(310 420)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7567E8" stop-opacity=".28"/>
+      <stop offset="1" stop-color="#7567E8" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="sky" x1="780" y1="75" x2="930" y2="245" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A8BFFF"/>
+      <stop offset=".55" stop-color="#E2BBD9"/>
+      <stop offset="1" stop-color="#F2C4A0"/>
+    </linearGradient>
+    <linearGradient id="sea" x1="650" y1="140" x2="790" y2="280" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6DBDC5"/>
+      <stop offset="1" stop-color="#2E5E8A"/>
+    </linearGradient>
+    <linearGradient id="night" x1="1020" y1="100" x2="1130" y2="270" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7778B9"/>
+      <stop offset="1" stop-color="#303D73"/>
+    </linearGradient>
+    <clipPath id="left"><rect x="576" y="127" width="192" height="124" rx="10"/></clipPath>
+    <clipPath id="center"><rect x="758" y="69" width="256" height="166" rx="12"/></clipPath>
+    <clipPath id="right"><rect x="1004" y="132" width="192" height="124" rx="10"/></clipPath>
+  </defs>
+  <rect width="1280" height="340" rx="20" fill="url(#bg)"/>
+  <rect width="1280" height="340" rx="20" fill="url(#glow)"/>
+  <path d="M540 33H1238M540 307H1238" stroke="#B6C5F5" stroke-opacity=".09"/>
+  <path d="M614 34V306M886 34V306M1158 34V306" stroke="#B6C5F5" stroke-opacity=".06"/>
+  <rect x="54" y="65" width="32" height="4" rx="2" fill="#8FA8FF"/>
+  <text x="54" y="119" fill="#A8B9EE" font-family="Segoe UI,Arial,sans-serif" font-size="15" font-weight="600" letter-spacing="4">SEE THE POSSIBILITIES</text>
+  <text x="52" y="182" fill="#F5F7FF" font-family="Microsoft YaHei,PingFang SC,sans-serif" font-size="42" font-weight="700">让每一帧，</text>
+  <text x="52" y="239" fill="#F5F7FF" font-family="Microsoft YaHei,PingFang SC,sans-serif" font-size="42" font-weight="700">成为创作的起点。</text>
+  <text x="55" y="285" fill="#AFBCDD" font-family="Microsoft YaHei,PingFang SC,sans-serif" font-size="17">浏览素材　 /　 发现镜头　 /　 交付灵感</text>
+  <rect x="568" y="119" width="208" height="157" rx="16" fill="#152645" stroke="#7195B5" stroke-opacity=".45"/>
+  <g clip-path="url(#left)">
+    <rect x="576" y="127" width="192" height="124" fill="url(#sea)"/>
+    <path d="M576 202L619 173L659 192L705 153L768 201V251H576Z" fill="#3B7584"/>
+    <path d="M576 226C633 201 684 246 768 216V251H576Z" fill="#214E6B"/>
+    <path d="M576 240C635 217 708 257 768 234" stroke="#AFDCD4" stroke-opacity=".5" stroke-width="2"/>
+  </g>
+  <circle cx="589" cy="264" r="3" fill="#7AB8CB"/>
+  <path d="M600 264H644" stroke="#A3BDD8" stroke-opacity=".5" stroke-width="3" stroke-linecap="round"/>
+  <rect x="996" y="124" width="208" height="157" rx="16" fill="#202547" stroke="#9C92CC" stroke-opacity=".45"/>
+  <g clip-path="url(#right)">
+    <rect x="1004" y="132" width="192" height="124" fill="url(#night)"/>
+    <circle cx="1146" cy="163" r="16" fill="#D6D2F2"/>
+    <path d="M1004 227H1020V191H1042V209H1062V175H1089V220H1114V192H1144V204H1171V180H1196V256H1004Z" fill="#26345E"/>
+    <path d="M1070 190H1079M1070 201H1079M1121 210H1130M1179 196H1187" stroke="#E5C7A4" stroke-width="3" stroke-linecap="round"/>
+    <path d="M1004 245H1196" stroke="#ACB1D3" stroke-opacity=".35"/>
+  </g>
+  <circle cx="1017" cy="269" r="3" fill="#B4A1EA"/>
+  <path d="M1028 269H1072" stroke="#B3AED4" stroke-opacity=".5" stroke-width="3" stroke-linecap="round"/>
+  <rect x="748" y="59" width="276" height="207" rx="19" fill="#202F58" stroke="#9BADFF" stroke-width="1.5"/>
+  <g clip-path="url(#center)">
+    <rect x="758" y="69" width="256" height="166" fill="url(#sky)"/>
+    <circle cx="931" cy="116" r="24" fill="#FFF0CD"/>
+    <path d="M758 184L811 138L859 178L909 152L960 184L1014 158V235H758Z" fill="#8F88BC"/>
+    <path d="M758 211L814 177L875 201L930 173L1014 214V235H758Z" fill="#4D658F"/>
+    <path d="M758 229C832 205 926 246 1014 221V235H758Z" fill="#304F78"/>
+    <path d="M800 221L846 218M858 224L909 221M920 227L973 224" stroke="#E8CECD" stroke-opacity=".65" stroke-width="2" stroke-linecap="round"/>
+  </g>
+  <circle cx="773" cy="250" r="4" fill="#A9BBFF"/>
+  <path d="M787 250H851" stroke="#BECBF3" stroke-width="3" stroke-linecap="round"/>
+  <path d="M966 248L971 253L981 243" stroke="#B9CBFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -1,7 +1,7 @@
 [package]
 name = "locution-pro"
-version = "0.4.0-preview"
-description = "Subtitle indexing and media organization tool"
+version = "0.4.0"
+description = "Media management, visual search, shot organization, and clip delivery"
 authors = ["Kotodama"]
 license = "Apache-2.0"
 repository = "https://github.com/GCL-MAD-CLUB/LineCut"

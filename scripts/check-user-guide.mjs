@@ -38,10 +38,50 @@ function report(filePath, message) {
   errors.push(`${relativeToGuide(filePath)}: ${message}`);
 }
 
+function checkUserContent(source, label, { readme = false } = {}) {
+  const rules = [
+    [/(?:系统设计|模块划分|内部逻辑|实现细节|架构原理|前端|后端|源码)/u, "包含开发说明"],
+    [
+      /\b(?:API|DTO|ONNX|DirectML|D3D11VA|TransNetV2|DINOv3|SigLIP2|EventHub|StateHub)\b/iu,
+      "包含内部技术标识",
+    ],
+    [/(?:```|~~~)/u, "用户文档不应包含代码块"],
+    [
+      /(?:src-tauri|src\/|\.tsx?\b|\.rs\b|bootstrap_uncalibrated|project_id|media_modified_ns)/u,
+      "包含源码或内部数据引用",
+    ],
+  ];
+  for (const [pattern, message] of rules) {
+    if (pattern.test(source)) errors.push(`${label}: ${message}`);
+  }
+  if (readme) {
+    // Media names such as H.264 and system names such as Windows 11 remain valid.
+    if (/\bv?\d+\.\d+\.\d+(?:-[\w.-]+)?\b/iu.test(source)) {
+      errors.push(`${label}: 产品介绍不得出现版本号`);
+    }
+    if (
+      /更新说明|变更日志|更新日志|版本亮点|新增功能|changelog|release-notes|github\/v\/release/iu.test(
+        source,
+      )
+    ) {
+      errors.push(`${label}: 产品介绍不得包含更新记录或版本徽章`);
+    }
+  } else {
+    const versions = source.match(/\b\d+\.\d+\.\d+(?:-[\w.-]+)?\b/gu) ?? [];
+    if (versions.some((version) => version !== "0.4.0")) {
+      errors.push(`${label}: 用户指南应统一到 0.4.0 基线`);
+    }
+    if (/release-notes|^#{1,6}\s+.*(?:新增功能|更新说明|变更日志)/mu.test(source)) {
+      errors.push(`${label}: 历史更新记录应放在 CHANGELOG`);
+    }
+  }
+}
+
 const markdownFiles = await listFiles(guideRoot, ".md");
 
 for (const filePath of markdownFiles) {
   const source = await readFile(filePath, "utf8");
+  checkUserContent(source, relativeToGuide(filePath));
   const route = pageRoute(filePath);
   const isHome = route === "/";
   const frontmatterMatch = source.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
@@ -92,6 +132,12 @@ for (const filePath of markdownFiles) {
     }
   }
 }
+
+const readmeSource = await readFile(path.join(repositoryRoot, "README.md"), "utf8");
+// Strip the product icon URL before checking source-path references.
+checkUserContent(readmeSource.replaceAll("src-tauri/icons/icon.ico", "product-icon"), "README.md", {
+  readme: true,
+});
 
 const config = await readFile(configPath, "utf8");
 const sidebarRoutes = new Set(

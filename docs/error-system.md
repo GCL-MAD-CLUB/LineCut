@@ -1,149 +1,65 @@
-# Error system
+# Error handling contracts
 
-Locution Pro has one typed error pipeline. Classification is declared where an error is created; no
-layer is allowed to infer a category from an error message.
+This maintainer reference describes the Locution Pro 0.4.0 baseline. User recovery steps belong in the user guide; diagnostic formats and implementation details belong here.
 
-The application implementation intentionally stays compact:
+## Classify at the source
 
-- `model.ts`: closed categories, public types, and the client error catalog;
-- `runtime.ts`: native command boundary, normalization, policies, incident state, and operations;
-- `ErrorUI.tsx`: the React error boundary and shared modal outlet;
-- `index.ts`: an explicit public facade that exposes no internal storage or classification API.
+Every recoverable native failure is an `AppError` with a literal `ErrorCode` from `src-tauri/src/error.rs`. The catalog defines a stable public code, category and retryability. Internal functions return `AppResult<T>`; Tauri commands return `CommandResult<T>`.
 
-## Native source contract
+Diagnostic detail is written in English and logged with the assigned error ID. Do not infer categories from text, wrap errors as strings or introduce implicit string conversion.
 
-Every recoverable native failure is an `AppError` created with:
+Only allow-listed public fields cross the native boundary: `errorId`, `code`, `category` and `retryable`. Native detail, full paths, tool stderr and secret material must not be serialized as public errors.
 
-```rust
-app_error(
-    ErrorCode::ProjectReadFailed,
-    format!("Failed to read project file {}: {error}", path.display()),
-)
-```
+## Normalize at one boundary
 
-`ErrorCode` is an enum generated from the single catalog in `src-tauri/src/error.rs`. Every entry
-declares all public metadata at compile time:
+`invokeCommand` is the application command boundary. It accepts categories only from the shared closed set. Malformed failures become the explicitly classified `UNEXPECTED_ERROR/runtime` fallback, without inspecting diagnostic text.
 
-```text
-Rust variant -> stable public code -> category -> retryable
-```
+Application failures use `clientError` with a typed entry in `src/errors/model.ts`. The application catalog also declares category and retryability. Do not throw raw `Error`, `DOMException` or unclassified values.
 
-The private `detail` is authored in English and contains the diagnostic context needed by logs.
-`AppError::new` assigns an error ID and records the ID, code, category, and detail immediately.
-There is deliberately no `From<String>`, text classifier, generic string fallback, or implicit
-conversion into `AppError`.
+`src/errors/runtime.ts` owns normalization, operation policy, incident state and global handling. `ErrorUI.tsx` provides the React boundary and shared modal outlet; the facade must not expose internal storage.
 
-Internal functions return `AppResult<T>`. Tauri commands return `CommandResult<T>`. At the Tauri
-boundary, `AppError` uses an explicit public serialization allow-list:
+## Present safe recovery information
 
-```json
-{
-  "errorId": "ERR-...",
-  "code": "PROJECT_READ_FAILED",
-  "category": "io",
-  "retryable": true
-}
-```
+The visible body comes from the exhaustive category template, rather than the native code or diagnostic text.
 
-The native diagnostic detail is never serialized. A regression test verifies that secrets in a
-detail cannot cross this boundary.
+| Category     | Recovery topic                             |
+| ------------ | ------------------------------------------ |
+| cancelled    | Normal cancellation, normally silent       |
+| validation   | Invalid input or settings                  |
+| resource     | Missing required resource                  |
+| state        | Operation unavailable in the current state |
+| io           | File read or write failure                 |
+| format       | Unrecognized content                       |
+| security     | Failed security verification               |
+| externalTool | Media component failure                    |
+| media        | Media processing failure                   |
+| platform     | Operating system failure                   |
+| runtime      | Unexpected application failure             |
+| unsupported  | Unsupported operation or content           |
 
-Two deliberately infallible commands are kept in an explicit repository-gate allow-list:
-`path_is_file` performs a boolean existence probe, and `record_frontend_incident` is the terminal
-best-effort logging sink. Every other Tauri command must positively declare `CommandResult<T>`.
+Operation policy selects silence and title. Safe context may include a basename; an opaque error ID links the report to private logs. Full diagnostics must never become modal text.
 
-## Application contract
+Successful operations may return sanitized `UserNotice` values with code, severity and public message. Private warning details are logged separately.
 
-`invokeCommand` is the only application command boundary. It accepts the native `category` only
-when it belongs to the shared closed category set. A malformed or non-structured boundary failure
-becomes the explicitly classified application fallback `UNEXPECTED_ERROR/runtime`; it is never
-classified by inspecting text.
+## Aggregate and isolate incidents
 
-Application-originated failures select a typed catalog entry from `src/errors/model.ts` with
-`clientError(stableCode, englishDiagnostic)`. The catalog declares category and retryability for
-every client code, mirroring Rust's `ErrorCode` design. Raw `Error`, `DOMException`, and
-unclassified `throw` sites are forbidden by the repository gate.
+Operations, task progress and the React boundary route normalized failures through `IncidentCenter`. Repeated operation/code pairs aggregate within the logging window, retaining count and last occurrence.
 
-`src/errors/runtime.ts` owns command normalization, operation policies, incident state, and global
-handlers. `runOperation`, task progress, and the React error boundary all send their
-normalized error to `IncidentCenter`. The center records the private frontend diagnostic in the
-native log, suppresses cancellation and configured background fallbacks, and sends every visible
-error to the shared modal outlet. Repeated incidents with the same operation and code are aggregated
-inside a 30-second logging window; the aggregate records its occurrence count and last-seen time.
+Cancellation is an expected outcome. `TASK_NOT_RUNNING` during cancellation of completed native work is handled at that boundary. Detection or extraction failure must not fail unrelated queued media.
 
-## User presentation
+Panel persistence failures use their own load/save operation policies and must not be reported as successful project saves. Background cache maintenance can log a failure while retaining usable records; it must not turn a successful append into an unrelated warning.
 
-The UI never chooses content from the error code or diagnostic. It uses only the category to read
-the exhaustive internal `categoryMessages` table:
+## Enforce the contract
 
-| Category       | Meaning of the public template                         |
-| -------------- | ------------------------------------------------------ |
-| `cancelled`    | The operation was cancelled; normally not displayed    |
-| `validation`   | Input or settings are invalid                          |
-| `resource`     | A required file or resource is unavailable             |
-| `state`        | Current application state cannot perform the operation |
-| `io`           | A file read or write failed                            |
-| `format`       | File content or format cannot be recognized            |
-| `security`     | File security information cannot be verified           |
-| `externalTool` | A media-processing component failed                    |
-| `media`        | Media content could not be processed                   |
-| `platform`     | The operating system could not perform the operation   |
-| `runtime`      | The application encountered a runtime failure          |
-| `unsupported`  | The content or operation is not supported              |
+`npm run check:errors` checks command boundaries, typed creation sites, English diagnostics and forbidden raw errors. The explicit infallible command allow-list covers `path_is_file` and the terminal `record_frontend_incident` sink.
 
-Operation policy controls only whether an error is silent and the modal title. Safe public context
-may add a basename such as `clip.mp4` to the title, so an import failure can still identify the
-media. Full paths, native details, external-tool stderr, keys, and parsed source messages are never
-used in the modal body. The modal may show the opaque error ID so support can correlate it with the
-private log.
+For a new failure:
 
-Successful operations may return `UserNotice` values. They are a separate public channel for safe,
-non-fatal information and warnings. `UserNotice` contains only `code`, `severity`, and an already
-sanitized user message. A private warning detail can be logged through `warning_with_detail`, but
-it is not serialized with the notice. Filenames are allowed where useful; private diagnostics and
-full paths are not.
+1. Add a typed catalog code with category and retryability.
+2. Construct the error at its source with useful private context.
+3. Propagate without reclassification.
+4. Add an operation policy only for a new workflow.
+5. Keep visible recovery text in category templates and user instructions in the guide.
+6. Run the error gate, applicable tests and build checks.
 
-## Enforcement
-
-`npm run check:errors` uses the TypeScript syntax tree for frontend imports and calls, and rejects:
-
-- direct frontend Tauri invocation outside the command boundary;
-- awaiting or aggregating the fire-and-forget `runBackgroundOperation` helper;
-- legacy `publishError`/`reportError`, console diagnostics, and string warning arrays;
-- raw frontend `Error`/`DOMException`, unclassified throws, or invalid `clientError` categories;
-- client diagnostics authored with CJK text;
-- raw Rust `Result<_, String>`, string `Err(...)`, and string-to-`AppError` conversions;
-- `classify_error` or any equivalent text-classification entry point;
-- `app_error` calls without a literal `ErrorCode` or with diagnostics authored in CJK text;
-- direct `AppError::new` outside the error module;
-- Tauri commands that bypass `CommandResult`.
-
-TypeScript additionally requires complete operation policy and category-template coverage. Rust's
-`ErrorCode::definition` match requires every native code to declare category and retryability.
-
-## Adding a failure
-
-1. Add a stable `ErrorCode` catalog entry with category and retryability.
-2. Construct it at the exact native failure site with a precise English diagnostic, then propagate
-   `AppResult`; never wrap it again by message.
-3. For an application-originated failure, create it with `clientError` at its source.
-4. Add an operation key/policy only when the workflow itself is new. Do not add error-specific user
-   text; reuse the category template.
-5. Pass only safe public context such as a basename.
-6. Run `npm run check:errors`, `npm run build`, Rust tests, and formatting checks.
-
-## Media tasks and panel-state persistence
-
-The operation catalog includes `project.panelState.save` and `project.panelState.load`
-for panel persistence. Panel state is
-local configuration keyed by project and panel, not part of the `.lcp` payload.
-Persistence failures go through the same typed incident path; they must not be
-reported as successful document saves or reclassified by diagnostic text.
-
-The task scheduler registers queued work before execution. Cancellation is a
-normal outcome: an already-finished native task returning `TASK_NOT_RUNNING`
-during cancellation is handled at the cancellation boundary, rather than shown
-as a new user failure. An extraction/inference failure belongs to that detection
-task, and must not cause unrelated queued videos to fail. Stale project or media
-results are checked before mutation. See [media processing](./media-processing.md)
-for ownership and release ordering.
+See [system contracts](system-architecture.md), [media processing](media-processing.md) and [contribution guidance](../CONTRIBUTING.md).

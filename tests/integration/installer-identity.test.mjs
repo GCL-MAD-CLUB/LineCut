@@ -569,6 +569,9 @@ Quit
 FunctionEnd
 Section
   SetShellVarContext current
+  ; Match the process/completion state initialized by the real installer's .onInit.
+  StrCpy $MigrationProcess 0
+  StrCpy $MigrationComplete 0
   DeleteRegValue SHCTX "\${MANUPRODUCTKEY}" "MigrationSkipped"
   WriteRegDWORD SHCTX "\${MANUPRODUCTKEY}" "MigrationPending" 1
   StrCpy $MigrationEligible ${mode === "skip-blocked" ? "0" : "1"}

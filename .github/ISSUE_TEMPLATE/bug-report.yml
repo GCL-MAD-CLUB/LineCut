@@ -11,7 +11,7 @@ body:
     attributes:
       label: Locution Pro 版本
       description: 可在 GitHub Release 或应用信息中找到。
-      placeholder: 例如 0.3.0-alpha.2
+      placeholder: 例如 0.4.0-preview
     validations:
       required: true
   - type: input

@@ -1,156 +1,103 @@
 <p align="center">
-  <img src="src-tauri\icons\icon.ico" width="180" alt="Locution Pro 图标" />
+  <img src="src-tauri/icons/icon.ico" width="112" alt="Locution Pro 图标" />
 </p>
 
 <h1 align="center">Locution Pro</h1>
 
-<p align="center">从字幕出发，快速找到并整理视频内容。</p>
+<p align="center">面向视频创作者的媒体管理与镜头检索工作软件</p>
 
 <p align="center">
-  <a href="https://github.com/GCL-MAD-CLUB/LineCut/releases"><img src="https://img.shields.io/github/v/release/GCL-MAD-CLUB/LineCut?display_name=tag&label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC" alt="最新版本" /></a>
-  <a href="https://github.com/GCL-MAD-CLUB/LineCut/actions/workflows/ci.yml"><img src="https://github.com/GCL-MAD-CLUB/LineCut/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <img src="https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows%2010%2F11-0078D4" alt="支持 Windows 10 和 Windows 11" />
-  <a href="LICENSE"><img src="https://img.shields.io/badge/%E5%BC%80%E6%BA%90%E8%AE%B8%E5%8F%AF-Apache--2.0-6A4C93" alt="Apache-2.0 许可证" /></a>
+  <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-315EFB?style=flat-square" height="20" alt="支持 Windows 10 和 Windows 11" />
+  <img src="https://img.shields.io/badge/Workflow-Local-6E56CF?style=flat-square" height="20" alt="本地处理素材" />
+  <img src="https://img.shields.io/badge/Search-Visual-15856B?style=flat-square" height="20" alt="按画面检索镜头" />
+  <a href="https://github.com/GCL-MAD-CLUB/LineCut/releases/latest"><img src="https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD-Windows%20%E5%AE%89%E8%A3%85%E7%A8%8B%E5%BA%8F-315EFB?style=flat-square" height="20" alt="下载 Windows 安装程序" /></a>
+  <a href="https://linecut.lycoreco.dpdns.org/"><img src="https://img.shields.io/badge/%E9%98%85%E8%AF%BB-%E7%94%A8%E6%88%B7%E6%8C%87%E5%8D%97-6E56CF?style=flat-square" height="20" alt="阅读用户指南" /></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/GCL-MAD-CLUB/LineCut/releases/latest">下载最新版</a>
-  ·
-  <a href="#快速开始">快速开始</a>
-  ·
-  <a href="#常见问题">常见问题</a>
+  <a href="#发现每一个值得保留的镜头">产品亮点</a> ·
+  <a href="#开始创作">开始使用</a> ·
+  <a href="#运行环境">运行环境</a> ·
+  <a href="https://github.com/GCL-MAD-CLUB/LineCut/issues">获取支持</a>
 </p>
 
-## 这是什么？
+<p align="center">
+  <img src="docs/assets/readme-overview.svg" width="100%" alt="从浏览素材、查找画面到整理镜头与导出交付的产品视觉示意" />
+</p>
 
-Locution Pro（简称 lc）是一款 Windows 桌面工具，帮助你从字幕或台词出发，在长视频中迅速找到并整理需要的段落。无需手动拖动时间轴反复试听：搜索一句台词，即可定位、筛选并标注结果。
+## 发现每一个值得保留的镜头
 
-它尤其适合课程、访谈、直播回放、影视素材、播客视频和其他“先知道内容、再寻找画面”的整理场景。
+Locution Pro 将**媒体管理、画面检索、镜头整理与片段导出**汇集在一个工作空间中。从海量拍摄素材到精选镜头，让查找更直观，让整理更有序。
 
-## 你可以用 Locution Pro 做什么？
+风景空镜、活动现场、访谈长片，都可以直接开始。**无需字幕，也能浏览、检索和整理画面。** 已有字幕时，还可按对白文字或含义查找片段。
 
-- 搜索字幕中的关键词，快速定位人物台词、知识点或高光片段。
-- 使用星级、旗标、色标和自定义标签筛选、标注字幕。
-- 在分镜中整理镜头、堆叠相关画面并记录镜头标注。
-- 将选中的媒体逐项导出或合并输出，按需要配置视频、音频和文件命名。
-- 导入外部字幕，或直接使用视频内嵌的字幕流。
-- 在一个项目中整理多个视频、音频与字幕，并将音频、字幕绑定到对应视频。
-- 为性能较弱的设备生成代理文件，获得更流畅的预览体验。
-- 保存 `.lcp` 项目、记录编辑历史，并在素材移动后重新链接媒体。
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>以画面寻找素材</h3>
+      <p>自动识别镜头切点，用分镜列表或缩略图网格浏览长视频。安装语义检索组件后，输入画面描述，即可跨视频寻找相关镜头。</p>
+      <p><a href="docs/user-guide/workflows/find-visuals.md">探索画面检索 →</a></p>
+    </td>
+    <td width="50%" valign="top">
+      <h3>为灵感建立秩序</h3>
+      <p>用媒体箱组织素材，以星级、旗标、色标和层级关键字筛选镜头。将相关镜头组成堆叠，让素材库保持清晰。</p>
+      <p><a href="docs/user-guide/storyboard/storyboards.md">了解镜头整理 →</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>逐帧审看，精确选择</h3>
+      <p>检查画面与镜头衔接，调整切点，导出原始分辨率静帧。配合代理预览与可调整的面板布局，专注每一次选择。</p>
+      <p><a href="docs/user-guide/source/source-monitor.md">了解审片工具 →</a></p>
+    </td>
+    <td width="50%" valign="top">
+      <h3>让精选片段走向交付</h3>
+      <p>预览并微调入点与出点，逐项输出或合并为一个文件。按需要设置画面、音频、文件命名与输出位置。</p>
+      <p><a href="docs/user-guide/export/exporting.md">了解导出方式 →</a></p>
+    </td>
+  </tr>
+</table>
 
-## 快速开始
+## 从素材到作品，保持专注
 
-Locution Pro 是 LineCut 的独立续作，两者可共存。仅首次安装且没有 Locution Pro 既有记录或数据时，安装器会复制并校验 LineCut 数据；后续安装与软件运行均不执行迁移。`.lcp` 项目继续兼容，其他数据各自独立。详见[安装与首次启动](docs/user-guide/getting-started/install.md)。
+| 汇集素材                           | 查找画面                         | 整理镜头                     | 导出交付                     |
+| :--------------------------------- | :------------------------------- | :--------------------------- | :--------------------------- |
+| 视频、音频、图像与可选字幕集中管理 | 浏览分镜，用自然语言描述所需场景 | 标记候选，按关键字分类和筛选 | 核对范围，独立输出或合并成片 |
 
-1. 从 [Releases](https://github.com/GCL-MAD-CLUB/LineCut/releases/latest) 下载并安装最新版。
-2. 首次安装时选择“内置 FFmpeg（推荐）”；如电脑已有 FFmpeg，也可指定现有路径。
-3. 启动 Locution Pro，新建项目后导入视频、音频或字幕文件。
-4. 在“字幕”面板搜索台词，使用过滤、星级、旗标和标签整理条目，并在源预览中确认内容。
+**为不同创作场景准备**
 
-## v0.3.3 版本亮点
+- **拍摄素材整理** — 集中浏览多段视频，挑选可用画面，建立可复用的镜头分类。
+- **空镜与场景查找** — 描述人物、动作或环境，从长视频中寻找符合意图的画面。
+- **访谈与课程选段** — 配合已有字幕，按对白或主题定位值得保留的内容。
 
-本文与当前用户指南以 `release/0.3.3` 分支为基准；安装包发布状态以 GitHub Releases 为准。
+## 本地创作，从容继续
 
-- **统一搜索与高亮导航**：字幕和分镜均支持过滤/高亮模式、八种匹配规则、循环前后导航和序号跳转。高亮保留上下文，过滤用于缩小集合。
-- **多来源整理**：同时浏览多个视频的字幕或分镜，按来源分组排序，跨来源评分、标记、喷涂、删除和导出。同一视频一次选择一条字幕轨，分镜合并与堆叠按视频分别执行。
-- **来源工作区与历史**：面板菜单可以返回先前来源组合及播放位置，前后按钮恢复最多十步来源选择变化；来源列宽和方向按项目与面板保存在本机。
-- **分镜识别保护**：支持媒体箱批量识别、缺失时自动识别、合并切点或覆盖重建；检测期间又有编辑时再次确认结果处理，避免覆盖新工作。
-- **分镜导出范围**：在导出预览拖动入点、出点或整体范围，用独立历史撤销/重做；不会改动项目切点。字幕文本与时间范围保持只读。
-- **非阻塞后台队列**：处理期间可继续切换工作区和浏览；分镜检测最多三项并行，其他任务独占执行，任务取消等待底层清理后释放资源。
-- **分析与缩略图改进**：在线素材缺失封面或内嵌文本字幕时自动补充分析并复用已有轨道；缩略图处理控制缓冲、临时文件和缓存写入，修正分镜边界取帧。
-- **分镜检测性能**：有界队列重叠解码与推理、共享模型会话并短暂保温；Windows 请求 D3D11VA 硬件解码，DirectML 可用时用于推理，CPU 作为推理回退。
+**素材留在本机。** 媒体分析、镜头检测、语义检索、预览和导出均在本机完成，日常素材处理无需上传文件。
 
-完整操作、迁移边界和已知限制见 [0.3.3 新增功能](docs/user-guide/release-notes/v0.3.3.md)。0.3.2 的导入浏览器、复制校验、自动绑定和时间线切点功能继续保留，历史变化见 [0.3.2 新增功能](docs/user-guide/release-notes/v0.3.2.md)。
+**工作随时接续。** 使用 `.lcp` 项目保留素材组织与镜头标注，配合自动保存和项目副本继续创作。移交项目时，请同时提供原始素材。
 
-## 核心功能
+**按所需规格交付。** 支持 H.264、HEVC、Apple ProRes、VP9，以及 MP3 和 AAC 音频输出，满足片段交付、审核与后期交换需求。
 
-### 用字幕定位视频内容
+## 开始创作
 
-- 支持关键词搜索、字幕切换、组合过滤、全选与仅查看已选字幕。
-- 字幕列表会跟随播放进度定位当前条目并显示对应缩略图，支持调整缩略图大小，以及按时间、星级和标签排序。
-- 字幕列只读，可为每条字幕设置星级、留用/排除旗标、色标和自定义标签。
-- 点击字幕即可跳转并播放对应位置。
-- 支持视频内嵌字幕，以及 `SRT`、`ASS`、`SSA`、`VTT` 等外挂字幕。
+1. 下载并安装 Locution Pro，首次安装建议保留内置媒体工具和语义检索组件。
+2. 新建项目，导入视频或其他素材；无需先准备字幕。
+3. 在分镜面板浏览镜头，搜索画面、添加标记并选出所需片段。
+4. 进入导出工作区，确认范围和输出设置，生成交付文件。
 
-### 用分镜整理镜头
+从[创建第一个项目](docs/user-guide/getting-started/first-project.md)开始，或访问[用户指南](https://linecut.lycoreco.dpdns.org/)探索完整操作。
 
-- 使用本机模型自动检测镜头切点；DirectML 可用时优先进行 GPU 推理，否则回退到 CPU；Windows 帧提取另外请求 D3D11VA，支持情况取决于媒体工具、驱动和编码。
-- 通过列表或图标网格浏览镜头，按搜索、星级、旗标、色标、标签及选中状态进行组合筛选。
-- 可将相关镜头堆叠、展开、折叠或拆分，并为镜头记录标题、备注与结构化关键字。
-- 分镜和时间线缩略图会根据显示尺寸选择不同分辨率，兼顾浏览清晰度与内存占用。
+## 运行环境
 
-### 配置并导出成片
+- Windows 10 或 Windows 11，64 位。
+- 可用窗口至少为 1080 × 700，建议使用 1920 × 1080 或更高分辨率显示器。
+- 为原始素材、媒体缓存、可选语义检索组件、代理和导出文件预留充足磁盘空间。
 
-- 支持 H.264/MP4、HEVC/H.265、Apple ProRes/MOV、VP9/WebM、MP3 和 AAC 输出。
-- 可匹配源画面或指定分辨率、帧率、质量与编码速度，并配置音频格式、采样率、比特率和声道。
-- 支持逐项输出或合并为一个文件，可自定义目标目录、文件命名规则和冲突处理方式。
-- 导出完成后可自动把结果导入媒体箱；“快速导出”会复用当前项目最近一次设置。
+更多信息见[系统要求](docs/user-guide/getting-started/system-requirements.md)与[格式兼容性](docs/user-guide/reference/supported-formats.md)。
 
-### 媒体箱与项目管理
+---
 
-- 使用多级媒体箱整理视频、音频与字幕，支持列表和图标两种视图。
-- 支持搜索、排序、重命名、复制、粘贴、移动、隐藏、禁用和删除媒体。
-- 可分解视频中的音轨和字幕流，也可将外部音频、字幕绑定到目标视频。
-- 素材移动、替换或丢失后，可通过重新链接恢复项目。
-- 支持连接、分离和生成代理媒体；原始媒体脱机时仍可继续使用已连接的代理预览。
-- 可将自动保存快照恢复为项目，并通过文件菜单执行替换、重新链接和脱机媒体操作。
-
-### 为持续编辑而设计
-
-- `.lcp` 项目文件保存媒体组织、字幕标注、分镜内容与工作状态；临时勾选不会写入项目文件。
-- 自动保存项目快照；检测间隔和保留数量可在“首选项”中调整。
-- 历史记录面板会列出项目操作，支持撤销、重做和跳转到指定历史状态。
-- 面板可停靠、拆分和调整位置；你的工作区布局会在下次启动时自动恢复。
-- Windows 资源管理器可为 `.lcp` 项目显示 Locution Pro 缩略图，便于辨认项目文件。
-
-## 支持的媒体
-
-常见视频容器包括 `MP4`、`MKV`、`MOV`、`WebM`、`AVI`、`TS`、`M2TS` 等。实际可用性还取决于视频所使用的编解码器及当前 FFmpeg 配置。
-
-对于大型、高分辨率或高码率素材，建议先创建代理文件，再进行浏览、检索和剪辑确认。
-
-## 项目文件与素材
-
-Locution Pro 项目以 `.lcp` 文件保存。项目记录的是素材路径、字幕标注、分镜内容和相关设置，不会保存字幕的临时勾选，也不会将原始视频复制进项目文件。自 v0.3.0 起，应用会为项目补充稳定 ID，以便分别恢复各项目的导出设置。
-
-如果要将项目交给另一台电脑继续编辑，请同时提供原始媒体文件；打开项目后如提示素材脱机，可在媒体箱中使用“重新链接”恢复路径。v0.3.0 可以打开并迁移 v0.2.0 项目，但经 v0.3.0 保存后旧版本无法再次打开；升级前请备份重要 `.lcp` 文件。
-
-## 系统要求
-
-- Windows 10 或 Windows 11（64 位）
-- 最低窗口可用尺寸：1080 × 700
-- 建议使用 1920 × 1080 或更高分辨率的显示器
-- 足够的磁盘空间用于缓存和代理文件
-
-安装程序默认可安装内置 FFmpeg。若选择使用系统已有的 FFmpeg，可稍后在“编辑 → 首选项”中调整 `FFmpeg` 与 `ffprobe` 路径。
-
-## 数据与隐私
-
-Locution Pro 的媒体分析、分镜检测、预览、字幕处理和导出均在本机完成。你的源视频不会因为使用 Locution Pro 而自动上传到云端。
-
-请注意：项目文件不是媒体备份。请妥善保管原始素材和重要项目的副本。
-
-## 常见问题
-
-### 导入、分镜检测或导出失败怎么办？
-
-先确认 FFmpeg 可用。若安装时未选择内置 FFmpeg，或系统中的 FFmpeg 路径发生变化，请前往“编辑 → 首选项”重新指定 `FFmpeg` 和 `ffprobe`。
-
-### 素材移动后项目打不开或无法预览？
-
-在媒体箱中选中脱机素材，使用右键菜单中的“重新链接”或“重新连接完整分辨率媒体”，选择移动后的文件即可。多个同名文件位于同一目录时，可使用自动重新链接加快恢复。
-
-### 用 v0.3.0 保存项目后还能由旧版本打开吗？
-
-不能。v0.3.0 可以打开 v0.2.0 项目，但保存时会升级项目内容模型并写入分镜、字幕标注和项目 ID；旧版本无法读取升级后的文件。首次升级前请备份重要 `.lcp` 文件。
-
-## 反馈与许可
-
-欢迎通过 [GitHub Issues](https://github.com/GCL-MAD-CLUB/LineCut/issues) 提交问题、建议或使用反馈。
-
-如果你希望参与开发，请先阅读 [贡献指南](CONTRIBUTING.md)。安全漏洞请按照 [安全政策](SECURITY.md) 私下报告；版本发布与维护流程见 [发布指南](docs/releasing.md)。
-
-Locution Pro 应用代码采用 [Apache License 2.0](LICENSE) 发布。安装包中可选内置的 FFmpeg / FFprobe 及其许可信息请见 [第三方声明](THIRD_PARTY_NOTICES.md)。
+<p align="center"><strong>看见素材的价值，让每一个镜头触手可及。</strong></p>
 
 <p align="center">
   Made with ❤️ by GCL MAD CLUB · <a href="https://github.com/Inexplicable-YL">言ktdm</a>

@@ -15,7 +15,7 @@ function normalizeBase(value: string | undefined) {
 export default defineConfig({
   lang: "zh-CN",
   title: "Locution Pro 帮助中心",
-  description: "从字幕出发，快速找到并整理视频内容。",
+  description: "管理媒体，按画面查找镜头，整理并交付所需片段。",
   base: normalizeBase(process.env.DOCS_BASE),
   cleanUrls: false,
   lastUpdated: true,
@@ -26,22 +26,13 @@ export default defineConfig({
   themeConfig: {
     siteTitle: "Locution Pro 帮助中心",
     nav: [
-      { text: "新增功能", link: "/release-notes/v0.3.3" },
       { text: "开始使用", link: "/getting-started/first-project" },
-      { text: "学习与支持", link: "/workflows/find-dialogue" },
-      { text: "项目主页", link: `https://github.com/${repository}` },
+      { text: "按任务学习", link: "/workflows/find-visuals" },
+      { text: "故障排查", link: "/troubleshooting/troubleshooting" },
+      { text: "下载", link: `https://github.com/${repository}/releases/latest` },
     ],
     sidebar: [
       { text: "Locution Pro 帮助中心", items: [{ text: "概览", link: "/" }] },
-      {
-        text: "新增功能",
-        collapsed: false,
-        items: [
-          { text: "0.3.3 新增功能", link: "/release-notes/v0.3.3" },
-          { text: "0.3.2 新增功能", link: "/release-notes/v0.3.2" },
-          { text: "0.3.1 更新说明", link: "/release-notes/v0.3.1" },
-        ],
-      },
       {
         text: "开始使用",
         collapsed: false,
@@ -77,17 +68,17 @@ export default defineConfig({
         items: [{ text: "使用源监视器", link: "/source/source-monitor" }],
       },
       {
-        text: "字幕",
-        collapsed: true,
-        items: [{ text: "使用字幕", link: "/subtitles/subtitles" }],
-      },
-      {
         text: "整理分镜和关键字",
         collapsed: true,
         items: [
           { text: "使用分镜", link: "/storyboard/storyboards" },
           { text: "使用关键字", link: "/storyboard/use-keywords" },
         ],
+      },
+      {
+        text: "按对白查找",
+        collapsed: true,
+        items: [{ text: "使用字幕", link: "/subtitles/subtitles" }],
       },
       {
         text: "导出",
@@ -98,8 +89,9 @@ export default defineConfig({
         text: "按任务学习",
         collapsed: true,
         items: [
-          { text: "通过字幕找到片段", link: "/workflows/find-dialogue" },
+          { text: "按画面查找镜头", link: "/workflows/find-visuals" },
           { text: "整理分镜并建立关键字", link: "/workflows/organize-storyboard" },
+          { text: "通过字幕找到片段", link: "/workflows/find-dialogue" },
           { text: "生成代理以流畅预览", link: "/workflows/create-proxy" },
           { text: "导出所选片段或成片", link: "/workflows/export-video" },
         ],
@@ -109,7 +101,7 @@ export default defineConfig({
         collapsed: true,
         items: [
           { text: "支持的媒体与输出格式", link: "/reference/supported-formats" },
-          { text: "使用限制与数据说明", link: "/reference/limitations" },
+          { text: "当前限制与使用边界", link: "/reference/limitations" },
         ],
       },
       {
@@ -146,14 +138,10 @@ export default defineConfig({
       },
     },
     outline: { level: [2, 3], label: "本页内容" },
-    editLink: {
-      pattern: `https://github.com/${repository}/edit/main/docs/user-guide/:path`,
-      text: "在 GitHub 上修改此页",
-    },
     lastUpdated: { text: "最后更新于" },
     docFooter: { prev: "上一篇", next: "下一篇" },
     footer: {
-      message: "以 Apache-2.0 许可证发布。",
+      message: "Locution Pro 用户指南 · 媒体管理、画面检索与镜头整理",
       copyright: "Copyright © GCL MAD CLUB",
     },
     socialLinks: [{ icon: "github", link: `https://github.com/${repository}` }],
