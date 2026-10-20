@@ -1,5 +1,8 @@
 # Bundled UI font
 
+Maintainer resource reference for Locution Pro 0.4.0. The upstream font version
+and license below describe the font itself, independently of the application.
+
 `locution-pro-ui-sans-vf.woff2` comes from face 2 (Source Han Sans SC VF) of
 `SourceHanSans-VF.ttf.ttc`, version 2.005. It is converted with FontTools to WOFF2
 without subsetting or changing outlines. The variable `wght` axis spans 250–900.

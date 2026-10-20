@@ -1,5 +1,10 @@
 # Storyboard selection and semantic retrieval
 
+Maintainer reference for the Locution Pro 0.4.0 baseline. This document specifies
+resource and inference contracts; the user guide describes visual search tasks
+without exposing these implementation details. Visual retrieval is independent
+of subtitle availability.
+
 ## SigLIP2 semantic retrieval
 
 Selected frames are encoded with `vision_model_fp16.onnx` from

@@ -1,61 +1,63 @@
 # 发布流程
 
-源码版本先在受审查的提交中统一，发布工作流只接受 tag，先验证 tag 与清单一致，再构建并上传 GitHub Release。发布工作流不会在构建过程中回写版本文件。
+本文面向发布维护者，以 Locution Pro 0.4.0 为文档基线。仓库中的应用清单当前使用预发布标识；编写文档不代表已经发布，也不自动改变应用版本。
 
-## 一次性 GitHub 配置
+## 准备发布环境
 
-1. 创建名为 `release` 的 Environment，并只允许受信任维护者部署。稳定版可启用 required reviewers。
-2. 在该 Environment 中添加 `LOCUTION_PRO_PROJECT_BUILD_SECRET_V1` Secret。更名时复制原 Secret 的值，不能生成新值；工作流仍支持回退到旧名 `LINECUT_PROJECT_BUILD_SECRET_V1`。
-3. 启用 Private vulnerability reporting、Dependabot alerts 和 Dependabot security updates。
-4. 为 `main` 创建 ruleset：要求 Pull Request、至少一次批准、对新提交撤销旧批准、要求 conversation resolution，并只要求 `CI required` 这个稳定门禁。
-5. 建议只允许 squash merge，开启自动删除合并后的分支。
+使用受保护的 release Environment，仅允许受信任维护者发布。配置 main 的 PR 审查与 CI required 门禁，启用私密漏洞报告和依赖安全更新。
 
-若配置 Windows 代码签名，证书及密码也应放在 `release` Environment，并按 Tauri 的 Windows signing 文档把签名变量接入工作流。未签名安装包会触发 Windows SmartScreen 警告。
+正式构建使用 `LOCUTION_PRO_PROJECT_BUILD_SECRET_V1`，工作流仍支持旧名称 `LINECUT_PROJECT_BUILD_SECRET_V1`。名称迁移必须保留原值，禁止重新生成已有项目所需的密钥。具体读取优先级见[项目文件契约](../src-tauri/src/project_file/README.md)。
 
-## 准备版本
+证书和密码保存在发布环境中，不写入源码、文档或日志。
 
-从最新 `main` 创建发布准备分支，然后运行：
+## 统一版本与检查
+
+从最新 main 创建发布准备分支。检查 package、锁文件、Cargo 主包和 Tauri 配置的应用版本一致；缩略图提供程序的独立版本不随主应用同步。
 
 ```powershell
 npm ci
-npm run release:build -- 0.3.3
+npm run check:versions
+npm run check
 ```
 
-该命令会统一更新版本并在本地构建完整安装包，因此需要正式项目构建密钥和打包资源。也可以仅修改版本文件后运行 `npm run check:versions` 与常规 CI，再由云端完成正式构建。
-
-本地密钥文件的当前名称为 `src-tauri/.locution-pro-project-build-secret-v1.local`，仍可读取旧名文件；两者均禁止提交。环境变量、本地文件及新旧项目密钥的对应关系见[项目文件子系统](../src-tauri/src/project_file/README.md)。Windows 下可运行 `npm run test:installer-identity`，在临时文件和隔离 HKCU 测试键中验证独立安装位置、新旧共存、LineCut 文件与注册记录保留、文件关联隔离，以及既有安装、残留数据和浏览器配置阻止迁移。最小安装向导验证同窗口自动跳转、失败和取消阻止前进、重试后自动完成；测试不安装应用或调用真实卸载器。
-
-合并版本 PR 后，在 `main` 对应提交创建并推送带 `v` 前缀的 tag：
+准备正式 0.4.0 时，应在审查后的改动中统一相应版本；不能仅创建 tag 来绕过清单检查。需要本地统一版本并生成完整安装包时使用：
 
 ```powershell
-git tag -a v0.3.3 -m "Locution Pro 0.3.3"
-git push origin v0.3.3
+npm run release:build -- 0.4.0
 ```
 
-预发布版本遵循 SemVer，例如 `v0.3.3-alpha.1`。工作流会自动标记包含 `-` 的版本为 prerelease。
+该命令会修改版本文件、检查密钥、格式化相关文件、准备 FFmpeg 并启动构建，不是只读检查。仅更新文档时不运行它。
+
+安装器相关改动按需要手动执行 `npm run test:installer` 和 `npm run test:installer-identity`。真实模型、GPU 和媒体验证不进入普通 CI。
+
+## 核对文档与资源
+
+- README 只介绍产品，不添加版本徽章、更新段落或发布记录。
+- 用户指南核对实际功能与操作，不写实现原理；语义检索为可选组件，画面工作流不依赖字幕。
+- CHANGELOG 标明发布状态与兼容注意事项；未发布时不填写虚构发布日期。
+- 资源、许可证与第三方声明和实际包内容一致。
+- 运行 `npm run docs:build`，检查导航和链接。
+- 保留旧项目读取兼容与正式密钥，说明重存后可能无法降级打开。
+
+## 创建发布 tag
+
+版本 PR 合并后，在对应 main 提交创建 tag。以下命令仅用于已准备好正式版本的提交：
+
+```powershell
+git tag -a v0.4.0 -m "Locution Pro 0.4.0"
+git push origin v0.4.0
+```
+
+预发布 tag 应与清单完整一致，例如 `v0.4.0-preview`。包含连字符的 tag 由工作流标记为 prerelease。
 
 ## 自动发布内容
 
-`.github/workflows/release.yml` 将：
+发布工作流先检查 tag 和版本清单，再准备校验后的媒体工具、模型与运行资源，构建缩略图提供程序和 Windows 安装包，上传 GitHub Release 并生成补充发布说明。
 
-1. 验证 tag 格式以及所有版本字段；
-2. 从固定 URL 下载 FFmpeg 8.0.1 并校验 SHA-256；
-3. 准备 TransNetV2/ONNX Runtime 资源；
-4. 构建缩略图 Provider 与 Tauri NSIS 安装包；
-5. 创建 GitHub Release、生成 release notes 并上传安装包。
+应用 tag 和文档站部署分别核对。文档站由 main 上的工作流部署；本地文件变化或构建成功不表示公开站点已经更新。
 
-## 失败处理
+## 处理发布失败
 
-- tag 校验失败：删除远端错误 tag，修正版本 PR 后重新创建；不要对同一 tag 强推不同源码。
-- 构建失败：修复源码后发布新 tag；已公开的 tag 与安装包应保持不可变。
-- Release 已创建但附件上传失败：可从同一 tag 手动重新运行工作流。`concurrency` 会阻止同一 release 并发构建。
+tag 与清单不一致时，在发布前修正，不对已公开 tag 强推不同源码。构建代码需要变化时使用新 tag；附件上传失败可从同一提交重试对应工作流。
 
-## 文档与版本清单
-
-发布前确认文档主页、README、CHANGELOG、导航和对应版本的 release notes 与当前实现一致，运行 `npm run docs:build`；历史版本页面保留，不将历史说明中的版本全量替换。尚未发布时，更新日志标为发布准备，不编造正式发布时间。
-
-当前版本一致性检查覆盖 `package.json`、`package-lock.json` 顶层与根包字段、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 中 `locution-pro` 包，以及 `src-tauri/tauri.conf.json`。缩略图 Provider 的独立包版本不在这套应用版本检查中，不与主应用版本同步。
-
-`release:build` 会验证正式构建密钥、改写应用版本文件、格式化其 JSON 和主应用 Rust、检查版本、准备 FFmpeg 并调用 Tauri 构建；不是纯检查命令。只更新文档时不需要运行它。密钥可通过已授权的环境或本地私密配置提供，禁止写入文档或日志。TransNetV2 和 Provider 的打包准备以当前 Tauri 构建钩子及工作流为准。
-
-GitHub 用户指南部署由 `main` 上工作流触发，发布分支本地修改不表示站点已经上线。确认文档构建产物后，按项目审查与合并流程发布；应用 tag 与文档部署分别核对。当前 V4 项目模型与本机来源工作区配置的迁移边界应随版本说明保留。
+确认安装包、可选组件、升级路径和项目兼容性后，再对外发布。不要将维护用构建步骤加入用户安装指南。
