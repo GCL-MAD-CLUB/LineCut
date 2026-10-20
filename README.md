@@ -101,11 +101,5 @@ Locution Pro 将**媒体管理、画面检索、镜头整理与片段导出**汇
 <p align="center"><strong>看见素材的价值，让每一个镜头触手可及。</strong></p>
 
 <p align="center">
-  <a href="https://github.com/GCL-MAD-CLUB/LineCut/releases/latest">下载 Locution Pro</a> ·
-  <a href="https://linecut.lycoreco.dpdns.org/">浏览用户指南</a> ·
-  <a href="https://github.com/GCL-MAD-CLUB/LineCut/issues">联系与反馈</a>
-</p>
-
-<p align="center">
   Made with ❤️ by GCL MAD CLUB · <a href="https://github.com/Inexplicable-YL">言ktdm</a>
 </p>
