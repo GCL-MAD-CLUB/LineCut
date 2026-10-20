@@ -192,31 +192,16 @@ fn is_version_0_2_or_newer(version: &str) -> bool {
 /// Windows path does not require JSON escaping in the installer script. A normal user
 /// preference file always takes precedence after it has been saved by the application.
 fn installer_media_preferences(mut preferences: Preferences) -> Preferences {
-    let path = config_root().join("installer-media-paths.ini");
-    let contents = match fs::read_to_string(&path) {
-        Ok(contents) => contents,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return preferences,
+    match crate::identity::installer_tool_paths(&config_root()) {
+        Ok((ffmpeg, ffprobe)) => {
+            preferences.ffmpeg_path = ffmpeg;
+            preferences.ffprobe_path = ffprobe;
+        }
         Err(error) => {
             app_error(
                 ErrorCode::PreferencesReadFailed,
-                format!(
-                    "Failed to read installer media paths from {}: {error}",
-                    path.display()
-                ),
+                format!("Failed to read installer media paths: {error}"),
             );
-            return preferences;
-        }
-    };
-
-    for line in contents.lines() {
-        if let Some(value) = line.strip_prefix("ffmpeg_path=") {
-            if !value.trim().is_empty() {
-                preferences.ffmpeg_path = value.trim().to_string();
-            }
-        } else if let Some(value) = line.strip_prefix("ffprobe_path=") {
-            if !value.trim().is_empty() {
-                preferences.ffprobe_path = value.trim().to_string();
-            }
         }
     }
 

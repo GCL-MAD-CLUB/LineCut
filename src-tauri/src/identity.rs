@@ -33,6 +33,7 @@ struct MigrationProgress {
     buffer: Vec<u8>,
     cancel_file: Option<PathBuf>,
     session: Option<PathBuf>,
+    data_root: Option<PathBuf>,
 }
 
 impl Default for MigrationProgress {
@@ -45,6 +46,7 @@ impl Default for MigrationProgress {
             buffer: vec![0; 1024 * 1024],
             cancel_file: None,
             session: None,
+            data_root: None,
         }
     }
 }
@@ -93,6 +95,9 @@ const LEGACY_APPLICATION_ID: &str = "com.linecut.desktop";
 const MIGRATION_MARKER: &str = ".locution-pro-migration-v2";
 const INSTALL_SESSION: &str = ".locution-pro-install-session";
 const IMPORT_COMPLETE: &str = ".locution-pro-import-complete";
+const IMPORT_OWNED: &str = ".locution-pro-import-owned";
+const OWNED_HEADER: &str = "locution-pro-import-v1";
+const PROFILE_RECEIPT: &str = ".locution-pro-profile-import.ini";
 
 pub(crate) fn data_roots() -> (PathBuf, PathBuf) {
     let (current, legacy) = default_data_roots();
@@ -165,8 +170,10 @@ fn migrate_fresh_install(
     profiles: &[(PathBuf, PathBuf)],
     progress: &mut MigrationProgress,
 ) -> io::Result<()> {
-    // The installer grants this session before writing its payload. Retaining this file also
-    // prevents re-import after uninstalling without deleting application data.
+    if current.join(IMPORT_COMPLETE).exists() || progress.session.is_none() {
+        return Ok(());
+    }
+    // A requested installer session must be valid. A lost admission is an error, not a skip.
     let admitted = progress.session.as_ref().is_some_and(|session| {
         session.is_dir()
             && fs::read(current.join(INSTALL_SESSION)).is_ok_and(|bytes| {
@@ -177,20 +184,33 @@ fn migrate_fresh_install(
                 bytes == expected
             })
     });
-    if current.join(IMPORT_COMPLETE).exists()
-        || (!admitted && (current.exists() || profiles.iter().any(|(_, target)| target.exists())))
-    {
-        return Ok(());
-    }
-    // Even an explicit worker invocation cannot import without an installer admission.
     if !admitted {
-        return Ok(());
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "迁移会话不存在或校验失败，请从安装器重试。",
+        ));
     }
     ensure_disjoint_roots(legacy, current)?;
     for (source, target) in profiles {
         ensure_disjoint_roots(source, current)?;
         ensure_disjoint_roots(legacy, target)?;
         ensure_disjoint_roots(source, target)?;
+    }
+    if current.join("cache-version").exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "Locution Pro 已运行，不能继续导入旧数据。",
+        ));
+    }
+    progress.data_root = Some(current.to_path_buf());
+    for (_, target) in profiles {
+        cleanup_profile_stages(target, progress)?;
+        if target.exists() && !profile_is_owned(target, current)? {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "浏览器配置不属于未完成迁移，不能合并。",
+            ));
+        }
     }
     progress.phase("正在迁移设置、自动保存和缓存")?;
     migrate_application_data(legacy, current, progress)?;
@@ -210,6 +230,8 @@ fn migrate_application_data(
 ) -> io::Result<()> {
     ensure_disjoint_roots(legacy, current)?;
     if current.join(MIGRATION_MARKER).exists() {
+        let owned = record_owned_roots(legacy, current)?;
+        cleanup_application_stages(current, &owned, progress)?;
         return Ok(());
     }
     let source_preferences = legacy.join("preferences.json");
@@ -229,7 +251,11 @@ fn migrate_application_data(
     // Source custom caches and recovery snapshots are copied too. Never keep writable source aliases.
     ensure_disjoint_roots(&old_cache, &new_cache)?;
     ensure_disjoint_roots(&old_saves, &new_saves)?;
+    ensure_disjoint_roots(&old_cache, current)?;
+    ensure_disjoint_roots(&old_saves, current)?;
     fs::create_dir_all(current)?;
+    let owned = record_owned_roots(legacy, current)?;
+    cleanup_application_stages(current, &owned, progress)?;
     // Follow only the explicitly configured root; descendants remain link-free copies.
     copy_missing(&canonical_location(&old_cache)?, &new_cache, progress)?;
     copy_missing(&canonical_location(&old_saves)?, &new_saves, progress)?;
@@ -264,9 +290,10 @@ fn migrate_application_data(
                     "auto_save_dir".into(),
                     new_saves.to_string_lossy().into_owned().into(),
                 );
-                // Bundled tools belong to the successor's own installation.
-                for (field, default) in [("ffmpeg_path", "ffmpeg"), ("ffprobe_path", "ffprobe")] {
-                    object.insert(field.into(), default.into());
+                // The current installer's choice overrides inherited tool paths.
+                let paths = installer_tool_paths(current)?;
+                for (field, path) in [("ffmpeg_path", paths.0), ("ffprobe_path", paths.1)] {
+                    object.insert(field.into(), path.into());
                 }
             }
             publish_missing(&destination, &serde_json::to_vec_pretty(document)?)?;
@@ -274,6 +301,247 @@ fn migrate_application_data(
     }
     progress.check_cancelled()?;
     publish_missing(&current.join(MIGRATION_MARKER), b"2")
+}
+
+pub(crate) fn installer_tool_paths(current: &Path) -> io::Result<(String, String)> {
+    let mut paths = ("ffmpeg".to_owned(), "ffprobe".to_owned());
+    let bytes = match fs::read(current.join("installer-media-paths.ini")) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(paths),
+        Err(error) => return Err(error),
+    };
+    // New installers use UTF-16LE with BOM. Older installer files were UTF-8/ASCII.
+    let contents = if bytes.starts_with(&[0xff, 0xfe]) {
+        let body = &bytes[2..];
+        if !body.chunks_exact(2).remainder().is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Invalid installer tool paths",
+            ));
+        }
+        let units: Vec<u16> = body
+            .chunks_exact(2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+            .collect();
+        String::from_utf16(&units)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?
+    } else {
+        String::from_utf8(bytes)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?
+    };
+    for line in contents.trim_start_matches('\u{feff}').lines() {
+        if let Some(path) = line
+            .strip_prefix("ffmpeg_path=")
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        {
+            paths.0 = path.to_owned();
+        } else if let Some(path) = line
+            .strip_prefix("ffprobe_path=")
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        {
+            paths.1 = path.to_owned();
+        }
+    }
+    Ok(paths)
+}
+
+fn utf16_document(text: &str) -> Vec<u8> {
+    std::iter::once(0xfeff)
+        .chain(text.encode_utf16())
+        .flat_map(u16::to_le_bytes)
+        .collect()
+}
+
+fn record_owned_roots(legacy: &Path, current: &Path) -> io::Result<Vec<std::ffi::OsString>> {
+    let mut names: Vec<std::ffi::OsString> = [
+        "cache",
+        "preferences.json",
+        MIGRATION_MARKER,
+        IMPORT_OWNED,
+        IMPORT_COMPLETE,
+    ]
+    .into_iter()
+    .map(Into::into)
+    .collect();
+    if legacy.is_dir() {
+        for entry in fs::read_dir(legacy)? {
+            let name = entry?.file_name();
+            if !distribution_entry(&name) {
+                names.push(if name == "LineCut Auto-Save" {
+                    "Locution Pro Auto-Save".into()
+                } else {
+                    name
+                });
+            }
+        }
+    }
+    // Preserve the original ownership list if the source changed between installations.
+    match fs::read(current.join(IMPORT_OWNED)) {
+        Ok(bytes) => {
+            if bytes.len() < 2 || bytes[..2] != [0xff, 0xfe] || bytes.len() % 2 != 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "迁移所有权记录损坏。",
+                ));
+            }
+            let units: Vec<u16> = bytes[2..]
+                .chunks_exact(2)
+                .map(|v| u16::from_le_bytes([v[0], v[1]]))
+                .collect();
+            let text = String::from_utf16(&units)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            let mut lines = text.lines();
+            if lines.next() != Some(OWNED_HEADER) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "迁移所有权记录版本无效。",
+                ));
+            }
+            for name in lines {
+                if name.is_empty()
+                    || name.chars().any(|c| matches!(c, '/' | '\\' | '\r' | '\n'))
+                    || name == "."
+                    || name == ".."
+                    || name == "cache-version"
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "迁移所有权记录包含无效路径。",
+                    ));
+                }
+                names.push(name.into());
+            }
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    names.sort();
+    names.dedup();
+    let text = format!(
+        "{}\r\n{}\r\n",
+        OWNED_HEADER,
+        names
+            .iter()
+            .map(|v| v.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("\r\n")
+    );
+    let staged = current.join(format!(
+        ".locution-pro-import-owned.migration-{}",
+        Uuid::new_v4()
+    ));
+    fs::write(&staged, utf16_document(&text))?;
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&staged)?
+        .sync_all()?;
+    // A replacement is needed to retain entries copied during earlier attempts.
+    let result = fs::rename(&staged, current.join(IMPORT_OWNED));
+    let _ = fs::remove_file(staged);
+    result?;
+    Ok(names)
+}
+
+fn is_stage_name(name: &std::ffi::OsStr) -> bool {
+    name.to_str()
+        .and_then(|name| name.rsplit_once(".migration-"))
+        .is_some_and(|(_, id)| id.len() == 36 && Uuid::parse_str(id).is_ok())
+}
+
+fn cleanup_application_stages(
+    root: &Path,
+    owned: &[std::ffi::OsString],
+    progress: &MigrationProgress,
+) -> io::Result<()> {
+    let stems: Vec<_> = owned
+        .iter()
+        .map(|name| {
+            Path::new(name)
+                .file_stem()
+                .unwrap_or(name.as_os_str())
+                .to_owned()
+        })
+        .collect();
+    cleanup_stage_tree(root, Some((owned, &stems)), progress)
+}
+
+fn cleanup_stage_tree(
+    root: &Path,
+    owned: Option<(&[std::ffi::OsString], &[std::ffi::OsString])>,
+    progress: &MigrationProgress,
+) -> io::Result<()> {
+    if !root.is_dir() || fs::symlink_metadata(root)?.file_type().is_symlink() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(root)? {
+        progress.check_cancelled()?;
+        let entry = entry?;
+        let metadata = fs::symlink_metadata(entry.path())?;
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+        let name = entry.file_name();
+        let included = owned.is_none_or(|(names, _)| names.contains(&name));
+        if metadata.is_dir() && included {
+            cleanup_stage_tree(&entry.path(), None, progress)?;
+        } else if metadata.is_file()
+            && is_stage_name(&name)
+            && !owned.is_some_and(|(names, _)| names.contains(&name))
+        {
+            let stem = Path::new(&name).file_stem().unwrap_or_default();
+            if owned.is_none_or(|(_, stems)| stems.iter().any(|v| v == stem)) {
+                fs::remove_file(entry.path())?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn cleanup_profile_stages(target: &Path, progress: &MigrationProgress) -> io::Result<()> {
+    let Some(parent) = target.parent().filter(|p| p.is_dir()) else {
+        return Ok(());
+    };
+    let prefix = format!(
+        "{}.migration-",
+        target.file_stem().unwrap_or_default().to_string_lossy()
+    );
+    for entry in fs::read_dir(parent)? {
+        progress.check_cancelled()?;
+        let entry = entry?;
+        let name = entry.file_name();
+        let metadata = fs::symlink_metadata(entry.path())?;
+        if name.to_string_lossy().starts_with(&prefix)
+            && is_stage_name(&name)
+            && metadata.is_dir()
+            && !metadata.file_type().is_symlink()
+        {
+            let resolved = canonical_location(&entry.path())?;
+            let resolved_parent = canonical_location(parent)?;
+            if resolved.parent() != Some(resolved_parent.as_path()) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "迁移暂存目录越出预期父目录。",
+                ));
+            }
+            ensure_disjoint_roots(&entry.path(), target)?;
+            fs::remove_dir_all(entry.path())?;
+        }
+    }
+    Ok(())
+}
+
+fn profile_is_owned(profile: &Path, data_root: &Path) -> io::Result<bool> {
+    match fs::read(profile.join(PROFILE_RECEIPT)) {
+        Ok(bytes) => Ok(bytes
+            == utf16_document(&format!(
+                "[Migration]\r\nDataRoot={}\r\n",
+                data_root.display()
+            ))),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e),
+    }
 }
 
 fn preference_path(
@@ -376,6 +644,13 @@ fn migrate_identity_directory(
         return Ok(());
     }
     let staged = current.with_extension(format!("migration-{}", Uuid::new_v4()));
+    if let Some(root) = &progress.data_root {
+        fs::create_dir_all(&staged)?;
+        publish_missing(
+            &staged.join(PROFILE_RECEIPT),
+            &utf16_document(&format!("[Migration]\r\nDataRoot={}\r\n", root.display())),
+        )?;
+    }
     let result = copy_missing(legacy, &staged, progress).and_then(|()| {
         progress.check_cancelled()?;
         fs::rename(&staged, current)
@@ -541,6 +816,113 @@ mod tests {
     }
 
     #[test]
+    fn a_later_install_resumes_after_app_data_and_removes_owned_killed_worker_stages() {
+        let root = env::temp_dir().join(format!("locution-resume-profiles-{}", Uuid::new_v4()));
+        let old = root.join("LineCut");
+        let new = root.join("Locution Pro");
+        let old_profile = root.join("com.linecut.desktop");
+        let new_profile = root.join("com.locutionpro.desktop");
+        fs::create_dir_all(&old).unwrap();
+        fs::create_dir_all(&old_profile).unwrap();
+        fs::write(old.join("preferences.json"), b"{}").unwrap();
+        fs::write(old.join("WorkspaceConfig.xml"), b"workspace").unwrap();
+        fs::write(old_profile.join("Local Storage"), b"history").unwrap();
+        let profiles = [(old_profile.clone(), new_profile.clone())];
+        let mut first = admit_install(&new, &root.join("installer-one"));
+        let cancelled = first.cancelled.clone();
+        first.report = Box::new(move |update| {
+            if update.phase == "正在迁移浏览器历史和工作区数据" {
+                cancelled.store(true, Ordering::Relaxed);
+            }
+        });
+        assert_eq!(
+            migrate_fresh_install(&old, &new, &profiles, &mut first)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::Interrupted
+        );
+        assert!(new.join(MIGRATION_MARKER).exists());
+        assert!(!new.join(IMPORT_COMPLETE).exists());
+        let preferences = fs::read(new.join("preferences.json")).unwrap();
+        let root_stage = new.join(format!("WorkspaceConfig.migration-{}", Uuid::new_v4()));
+        let profile_stage = new_profile.with_extension(format!("migration-{}", Uuid::new_v4()));
+        let foreign_stage = old_profile.with_extension(format!("migration-{}", Uuid::new_v4()));
+        fs::write(&root_stage, b"unfinished write").unwrap();
+        fs::create_dir_all(&profile_stage).unwrap();
+        fs::write(profile_stage.join("partial-db"), b"unfinished profile").unwrap();
+        fs::create_dir_all(&foreign_stage).unwrap();
+        let mut second = admit_install(&new, &root.join("installer-two"));
+        migrate_fresh_install(&old, &new, &profiles, &mut second).unwrap();
+        assert!(!root_stage.exists());
+        assert!(!profile_stage.exists());
+        assert!(
+            foreign_stage.exists(),
+            "LineCut's staging directories are never cleaned"
+        );
+        assert_eq!(fs::read(new.join("preferences.json")).unwrap(), preferences);
+        assert_eq!(
+            fs::read(new.join("WorkspaceConfig.xml")).unwrap(),
+            b"workspace"
+        );
+        assert_eq!(
+            fs::read(new_profile.join("Local Storage")).unwrap(),
+            b"history"
+        );
+        assert_eq!(
+            fs::read(old_profile.join("Local Storage")).unwrap(),
+            b"history"
+        );
+        assert!(new.join(IMPORT_COMPLETE).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn requested_sessions_fail_closed_but_manual_calls_and_completed_imports_skip() {
+        let root = env::temp_dir().join(format!("locution-admission-{}", Uuid::new_v4()));
+        let old = root.join("old");
+        let new = root.join("new");
+        let session = root.join("session");
+        let mut progress = admit_install(&new, &session);
+        fs::write(new.join(INSTALL_SESSION), b"damaged token").unwrap();
+        assert_eq!(
+            migrate_fresh_install(&old, &new, &[], &mut progress)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        migrate_fresh_install(&old, &new, &[], &mut MigrationProgress::default()).unwrap();
+        fs::write(new.join(IMPORT_COMPLETE), b"1").unwrap();
+        migrate_fresh_install(&old, &new, &[], &mut progress).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn installer_tool_choice_overrides_inherited_preferences_including_unicode_paths() {
+        let root = env::temp_dir().join(format!("locution-tools-{}", Uuid::new_v4()));
+        let old = root.join("old");
+        let new = root.join("new");
+        fs::create_dir_all(&old).unwrap();
+        fs::create_dir_all(&new).unwrap();
+        fs::write(
+            old.join("preferences.json"),
+            br#"{"ffmpeg_path":"old.exe","ffprobe_path":"old-probe.exe"}"#,
+        )
+        .unwrap();
+        let body = "ffmpeg_path=D:\\工具\\ffmpeg.exe\r\nffprobe_path=D:\\工具\\ffprobe.exe\r\n";
+        let bytes: Vec<u8> = std::iter::once(0xfeff)
+            .chain(body.encode_utf16())
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        fs::write(new.join("installer-media-paths.ini"), bytes).unwrap();
+        migrate_application_data(&old, &new, &mut MigrationProgress::default()).unwrap();
+        let prefs: serde_json::Value =
+            serde_json::from_slice(&fs::read(new.join("preferences.json")).unwrap()).unwrap();
+        assert_eq!(prefs["ffmpeg_path"], "D:\\工具\\ffmpeg.exe");
+        assert_eq!(prefs["ffprobe_path"], "D:\\工具\\ffprobe.exe");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn existing_data_or_profiles_skip_the_entire_import_before_reading_linecut() {
         let root = env::temp_dir().join(format!("locution-skip-{}", Uuid::new_v4()));
         let old = root.join("old");
@@ -592,7 +974,12 @@ mod tests {
             session: Some(other_session.clone()),
             ..Default::default()
         };
-        migrate_fresh_install(&old, &new, &profiles, &mut later).unwrap();
+        assert_eq!(
+            migrate_fresh_install(&old, &new, &profiles, &mut later)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
         assert!(!new_profile.exists());
         assert!(!new.join(IMPORT_COMPLETE).exists());
         fs::write(

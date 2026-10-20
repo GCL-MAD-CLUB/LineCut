@@ -518,6 +518,8 @@ Function .onInit
 
   !insertmacro SetContext
   Call CaptureMigrationEligibility
+  !insertmacro SetContext
+  Call RecordPendingMigration
 
   !if "${DISPLAYLANGUAGESELECTOR}" == "true"
     !insertmacro MUI_LANGDLL_DISPLAY
@@ -692,7 +694,7 @@ SectionEnd
 
 Section Install
   Call EnsureIndependentInstallLocation
-  Call BeginMigrationSession
+  Call PrepareMigrationInstall
   SetOutPath $INSTDIR
 
   !ifmacrodef NSIS_HOOK_PREINSTALL
@@ -1013,6 +1015,11 @@ Function ReadPreviousInstallLocation
   ReadRegStr $4 SHCTX "$PreviousProductKey" ""
   ${If} $4 == ""
     ReadRegStr $4 SHCTX "$PreviousUninstallKey" "InstallLocation"
+  ${EndIf}
+  ${If} $4 == ""
+  ${AndIf} $MigrationRetry = 1
+  ${AndIf} $MigrationEligible = 1
+    StrCpy $4 $MigrationPendingInstallDir
   ${EndIf}
   Push $4
   Call StripPathQuotes

@@ -155,9 +155,3 @@ Locution Pro 应用代码采用 [Apache License 2.0](LICENSE) 发布。安装包
 <p align="center">
   Made with ❤️ by GCL MAD CLUB · <a href="https://github.com/Inexplicable-YL">言ktdm</a>
 </p>
-
-## 0.3.3 数据保存与操作边界
-
-`.lcp` 使用 V4 内容模型，保存媒体组织、绑定、字幕标注、分镜与关键字。来源工作区、播放位置和可复用导出设置另存本机配置；搜索词、过滤器、临时勾选和导出范围历史不写入 `.lcp`。移交项目时必须另外提供原始素材与需要的代理，并在接收电脑重新建立来源视图。
-
-编辑工作区的撤销处理项目历史，导出工作区的撤销处理分镜导出范围，来源前后按钮处理来源组合。取消后台任务或撤销范围都不能恢复已覆盖的磁盘成品。详细说明见[项目管理](docs/user-guide/projects/projects.md)、[工作区与任务](docs/user-guide/workspace/workspace.md)和[导出](docs/user-guide/export/exporting.md)。

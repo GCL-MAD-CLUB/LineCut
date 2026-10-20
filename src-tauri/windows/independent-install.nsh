@@ -3,18 +3,82 @@
 
 Var IndependentInstallLocation
 
+; Stack in/out. Unlike the NSIS instruction, Win32 normalization accepts missing leaves.
+Function NormalizeInstallPath
+  Exch $R8
+  Push $R9
+  Push $R7
+  ClearErrors
+  ${If} $R8 == ""
+    Goto normalize_install_failed
+  ${EndIf}
+  StrCpy $R7 0
+  normalize_install_character:
+    StrCpy $R9 $R8 1 $R7
+    ${If} $R9 == ""
+      Goto normalize_install_api
+    ${EndIf}
+    ${If} $R9 == '$\"'
+    ${OrIf} $R9 == "<"
+    ${OrIf} $R9 == ">"
+    ${OrIf} $R9 == "|"
+    ${OrIf} $R9 == "*"
+    ${OrIf} $R9 == "?"
+      Goto normalize_install_failed
+    ${EndIf}
+    ${If} $R9 == ":"
+    ${AndIf} $R7 != 1
+      Goto normalize_install_failed
+    ${EndIf}
+    IntOp $R7 $R7 + 1
+    Goto normalize_install_character
+  normalize_install_api:
+    System::Call 'kernel32::GetFullPathNameW(w rR8, i ${NSIS_MAX_STRLEN}, w .rR8, p0) i.rR9'
+    ${If} $R9 = 0
+    ${OrIf} $R9 >= ${NSIS_MAX_STRLEN}
+    ${OrIf} $R8 == ""
+      Goto normalize_install_failed
+    ${EndIf}
+    Goto normalize_install_done
+  normalize_install_failed:
+    StrCpy $R8 ""
+    SetErrors
+  normalize_install_done:
+    Pop $R7
+    Pop $R9
+    Exch $R8
+FunctionEnd
+
 ; $4 is the candidate directory. Neither automatic restoration nor /D may target LineCut.
 Function CheckIndependentInstallLocation
   Push $R8
   Push $R9
-  StrCpy $IndependentInstallLocation 1
+  StrCpy $IndependentInstallLocation 0
   ${If} $4 == ""
     StrCpy $IndependentInstallLocation 0
     Goto independent_location_done
   ${EndIf}
-  GetFullPathName $R8 "$4"
+  Push $4
+  Call NormalizeInstallPath
+  Pop $R8
+  ${If} ${Errors}
+  ${OrIf} $R8 == ""
+    Goto independent_location_done
+  ${EndIf}
+  StrCpy $IndependentInstallLocation 1
   independent_location_loop:
     ${GetFileName} "$R8" $R9
+    ; Win32 treats trailing dots/spaces as aliases of the same directory component.
+    independent_component_trim:
+      Push $R7
+      StrCpy $R7 $R9 1 -1
+      ${If} $R7 == "."
+      ${OrIf} $R7 == " "
+        StrCpy $R9 $R9 -1
+        Pop $R7
+        Goto independent_component_trim
+      ${EndIf}
+      Pop $R7
     ${If} $R9 == "LineCut"
     ${OrIf} ${FileExists} "$R8\linecut.exe"
       StrCpy $IndependentInstallLocation 0
@@ -33,8 +97,13 @@ FunctionEnd
 
 Function EnsureIndependentInstallLocation
   Push $4
-  StrCpy $4 $INSTDIR
+  Push $INSTDIR
+  Call NormalizeInstallPath
+  Pop $4
   Call CheckIndependentInstallLocation
+  ${If} $IndependentInstallLocation = 1
+    StrCpy $INSTDIR $4
+  ${EndIf}
   Pop $4
   ${If} $IndependentInstallLocation != 1
     DetailPrint "Locution Pro 是独立软件，请选择 LineCut 安装目录之外的位置。"

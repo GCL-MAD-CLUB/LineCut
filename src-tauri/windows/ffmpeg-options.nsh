@@ -114,14 +114,40 @@ Function LocutionProFfmpegPageLeave
 locution_pro_ffmpeg_page_done:
 FunctionEnd
 
+!macro LocutionProWriteMediaPath TEXT
+  FileWriteUTF16LE $0 "${TEXT}"
+  ${If} ${Errors}
+    FileClose $0
+    DetailPrint "无法保存安装器中的媒体工具选项，请检查目录权限。"
+    SetErrorLevel 2
+    Abort
+  ${EndIf}
+!macroend
+
 !macro NSIS_HOOK_PREINSTALL
   ; An empty current file records the bundled choice and prevents migration
   ; from restoring the previous installer's external-tool selection.
-  CreateDirectory "$LOCALAPPDATA\Locution Pro"
-  FileOpen $0 "$LOCALAPPDATA\Locution Pro\installer-media-paths.ini" w
+  CreateDirectory "$MigrationDataRoot"
+  ClearErrors
+  FileOpen $0 "$MigrationDataRoot\installer-media-paths.ini" w
+  ${If} ${Errors}
+    DetailPrint "无法保存安装器中的媒体工具选项，请检查目录权限。"
+    SetErrorLevel 2
+    Abort
+  ${EndIf}
+  FileWriteUTF16LE /BOM $0 ""
+  ${If} ${Errors}
+    FileClose $0
+    SetErrorLevel 2
+    Abort
+  ${EndIf}
   ${If} $LocutionProBundleFfmpeg != 1
-    FileWrite $0 "ffmpeg_path=$LocutionProFfmpegPath$\r$\n"
-    FileWrite $0 "ffprobe_path=$LocutionProFfprobePath$\r$\n"
+    !insertmacro LocutionProWriteMediaPath "ffmpeg_path=$LocutionProFfmpegPath$\r$\n"
+    !insertmacro LocutionProWriteMediaPath "ffprobe_path=$LocutionProFfprobePath$\r$\n"
   ${EndIf}
   FileClose $0
+  ${If} ${Errors}
+    SetErrorLevel 2
+    Abort
+  ${EndIf}
 !macroend
