@@ -351,14 +351,17 @@ mod tests {
 
     fn select_fixture(source: &ShotSource, cancel: &AtomicBool) -> AppResult<cses::Selection> {
         cses::select(source.frames, source.rate, cancel, |positions| {
-            Ok(positions
-                .iter()
-                .map(|&frame| {
-                    let mut vector = vec![0.0; DIMENSIONS];
-                    vector[frame % DIMENSIONS] = 1.0;
-                    vector
-                })
-                .collect())
+            Ok((
+                positions
+                    .iter()
+                    .map(|&frame| {
+                        let mut vector = vec![0.0; DIMENSIONS];
+                        vector[frame % DIMENSIONS] = 1.0;
+                        vector
+                    })
+                    .collect(),
+                vec![1.0; positions.len()],
+            ))
         })
     }
 
@@ -700,17 +703,19 @@ mod tests {
             let mut encoded = Vec::new();
             let repaired = get_or_build(&fixture.0, &source, &cancel, |available| {
                 cses::select(source.frames, source.rate, &cancel, |positions| {
-                    encode_missing(positions, source.shot.start_frame, available, |missing| {
-                        encoded.extend_from_slice(missing);
-                        Ok(missing
-                            .iter()
-                            .map(|frame| {
-                                let mut vector = vec![0.0; DIMENSIONS];
-                                vector[frame % DIMENSIONS] = 1.0;
-                                vector
-                            })
-                            .collect())
-                    })
+                    let vectors =
+                        encode_missing(positions, source.shot.start_frame, available, |missing| {
+                            encoded.extend_from_slice(missing);
+                            Ok(missing
+                                .iter()
+                                .map(|frame| {
+                                    let mut vector = vec![0.0; DIMENSIONS];
+                                    vector[frame % DIMENSIONS] = 1.0;
+                                    vector
+                                })
+                                .collect())
+                        })?;
+                    Ok((vectors, vec![1.0; positions.len()]))
                 })
             })
             .unwrap();

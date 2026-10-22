@@ -995,7 +995,22 @@ pub(crate) async fn select_storyboard_frames(
                                             (completed + position) as f64
                                                 + observed as f64 / (budget + 1) as f64,
                                         );
-                                        Ok(vectors)
+                                        // Reused embeddings still need source pixels for quality.
+                                        const FRAME_BYTES: usize = 256 * 256 * 3;
+                                        let needed = positions.iter().max().copied().unwrap() + 1;
+                                        let missing =
+                                            needed.saturating_sub(rgb.len() / FRAME_BYTES);
+                                        stream.append_frames(&mut rgb, missing, cancel)?;
+                                        let corrections = positions
+                                            .iter()
+                                            .map(|&frame| {
+                                                cses::quality_correction(
+                                                    &rgb[frame * FRAME_BYTES
+                                                        ..(frame + 1) * FRAME_BYTES],
+                                                )
+                                            })
+                                            .collect();
+                                        Ok((vectors, corrections))
                                     })
                                 })?;
                                 // Missing probe endpoints can already have cached

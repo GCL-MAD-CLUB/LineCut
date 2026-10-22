@@ -252,23 +252,74 @@ fn novelty_scores(positions: &[usize], similarities: &VisualAffinities) -> Vec<f
     scores
 }
 
+// Metrics use the shared decoded 256x256 RGB, before model normalization.
+// Match frame-trace luminance weights and its brightness-normalized variance.
+pub(super) fn quality_correction(rgb: &[u8]) -> f64 {
+    const SIDE: usize = 256;
+    debug_assert_eq!(rgb.len(), SIDE * SIDE * 3);
+    let gray: Vec<f64> = rgb
+        .chunks_exact(3)
+        .map(|pixel| {
+            0.30 * f64::from(pixel[0]) + 0.59 * f64::from(pixel[1]) + 0.11 * f64::from(pixel[2])
+        })
+        .collect();
+    let mean = gray.iter().sum::<f64>() / gray.len() as f64;
+    let x = mean / 255.0;
+    let b = (25.0 / 4.0 * x * (1.0 - x)).clamp(0.0, 1.0);
+    let mut sum = 0.0;
+    let mut squares = 0.0;
+    for y in 1..SIDE - 1 {
+        for x in 1..SIDE - 1 {
+            let i = y * SIDE + x;
+            let laplacian =
+                gray[i - SIDE] + gray[i + SIDE] + gray[i - 1] + gray[i + 1] - 4.0 * gray[i];
+            sum += laplacian;
+            squares += laplacian * laplacian;
+        }
+    }
+    let count = ((SIDE - 2) * (SIDE - 2)) as f64;
+    let variance = (squares / count - (sum / count).powi(2)).max(0.0);
+    // q/(1+q) maps brightness-normalized variance to [0,1] without a
+    // content-dependent range or threshold. This equivalent form avoids 0/0
+    // for black and avoids dividing by a near-zero mean first.
+    let denominator = variance + mean.powi(2);
+    let c = if denominator > 0.0 {
+        variance / denominator
+    } else {
+        0.0
+    };
+    0.7 + 0.15 * (b + c)
+}
+
+fn corrected_novelty(
+    positions: &[usize],
+    similarities: &VisualAffinities,
+    corrections: &[f64],
+) -> Vec<f64> {
+    novelty_scores(positions, similarities)
+        .into_iter()
+        .zip(corrections)
+        .map(|(v, p)| v * p)
+        .collect()
+}
+
 pub(super) fn select(
     frames: usize,
     rate: f64,
     cancel: &AtomicBool,
-    mut encode: impl FnMut(&[usize]) -> AppResult<Vec<Vec<f32>>>,
+    mut encode: impl FnMut(&[usize]) -> AppResult<(Vec<Vec<f32>>, Vec<f64>)>,
 ) -> AppResult<Selection> {
     ensure_not_cancelled(cancel)?;
     // Even a single-frame shot now needs its vector in the persisted source.
     let budget = Parameters::for_shot(frames, rate);
     let mut observed = uniform(frames, budget.probes);
-    let probes = encode(&observed)?;
-    if probes.len() != observed.len() {
+    let (probes, mut corrections) = encode(&observed)?;
+    if probes.len() != observed.len() || corrections.len() != observed.len() {
         return Err(inference_error("Incomplete probe embeddings"));
     }
     let mut similarities = VisualAffinities::new(budget.scored);
     similarities.extend(&probes);
-    let mut scores = novelty_scores(&observed, &similarities);
+    let mut scores = corrected_novelty(&observed, &similarities, &corrections);
     let background = median(&scores);
     let mad = median(
         &scores
@@ -361,14 +412,15 @@ pub(super) fn select(
         }
     }
     acquisition.sort_unstable();
-    let acquired = if acquisition.is_empty() {
-        Vec::new()
+    let (acquired, acquired_corrections) = if acquisition.is_empty() {
+        (Vec::new(), Vec::new())
     } else {
         encode(&acquisition)?
     };
-    if acquired.len() != acquisition.len() {
+    if acquired.len() != acquisition.len() || acquired_corrections.len() != acquisition.len() {
         return Err(inference_error("Incomplete acquisition embeddings"));
     }
+    corrections.extend(acquired_corrections);
     observed.extend(acquisition);
     let mut embeddings = probes;
     embeddings.extend(acquired);
@@ -376,7 +428,7 @@ pub(super) fn select(
     // existing probes. Recompute every score over the expanded encoded set.
     // Eq. 9 still uses the background median/MAD saved from Stage 1.
     similarities.extend(&embeddings);
-    scores = novelty_scores(&observed, &similarities);
+    scores = corrected_novelty(&observed, &similarities, &corrections);
     let peak = scores.iter().copied().fold(0.0, f64::max);
     let (_, bandwidth) = concentration(peak, background, mad, budget.bandwidth_max);
     let n = observed.len();
@@ -457,7 +509,13 @@ mod tests {
         };
         let selection = select(10000, 1.0, &cancel, |positions| {
             batches.push(positions.to_vec());
-            Ok(positions.iter().map(|&frame| embedding(frame)).collect())
+            Ok((
+                positions.iter().map(|&frame| embedding(frame)).collect(),
+                positions
+                    .iter()
+                    .map(|&frame| 0.7 + 0.3 * (frame % 7) as f64 / 6.0)
+                    .collect(),
+            ))
         })
         .unwrap();
         assert_eq!(batches.len(), 2, "fixture must exercise active acquisition");
@@ -473,7 +531,11 @@ mod tests {
         let embeddings: Vec<Vec<f32>> = positions.iter().map(|&frame| embedding(frame)).collect();
         let mut affinities = VisualAffinities::new(positions.len());
         affinities.extend(&embeddings);
-        let final_scores = novelty_scores(&positions, &affinities);
+        let corrections: Vec<f64> = positions
+            .iter()
+            .map(|&frame| 0.7 + 0.3 * (frame % 7) as f64 / 6.0)
+            .collect();
+        let final_scores = corrected_novelty(&positions, &affinities, &corrections);
         for (i, frame) in selection.frames.iter().enumerate() {
             assert_eq!(frame.e_i, embeddings[i]);
             assert_eq!(frame.v_i, final_scores[i]);
@@ -481,7 +543,8 @@ mod tests {
         }
         let mut coarse = VisualAffinities::new(batches[0].len());
         coarse.extend(&embeddings[..batches[0].len()]);
-        let coarse_scores = novelty_scores(&batches[0], &coarse);
+        let coarse_scores =
+            corrected_novelty(&batches[0], &coarse, &corrections[..batches[0].len()]);
         assert!(coarse_scores.iter().zip(&final_scores).any(|(a, b)| a != b));
         assert_eq!(
             selection.calibration.background_median,
@@ -566,11 +629,41 @@ mod tests {
     }
 
     #[test]
+    fn quality_correction_handles_exposure_clipping_and_black() {
+        for level in [0, 25, 51, 128, 204, 230, 255] {
+            let x = f64::from(level) / 255.0;
+            let expected = 0.7 + 0.15 * (6.25 * x * (1.0 - x)).clamp(0.0, 1.0);
+            let actual = quality_correction(&vec![level; 256 * 256 * 3]);
+            assert!((actual - expected).abs() < 1e-10, "level={level}");
+        }
+    }
+
+    #[test]
+    fn quality_correction_maps_brightness_normalized_variance_to_unit_interval() {
+        let mut rgb = vec![0; 256 * 256 * 3];
+        let center = (128 * 256 + 128) * 3;
+        rgb[center..center + 3].fill(60);
+        let mean = 60.0 / (256 * 256) as f64;
+        let x = mean / 255.0;
+        // An isolated interior impulse has Laplacian squares 16+4=20.
+        let q = 20.0 * 60.0_f64.powi(2) / (254 * 254) as f64 / mean.powi(2);
+        let c = q / (1.0 + q);
+        let actual = quality_correction(&rgb);
+        assert!((actual - (0.7 + 0.15 * (6.25 * x * (1.0 - x) + c))).abs() < 1e-8);
+        assert!((0.7..=1.0).contains(&actual));
+        rgb[center..center + 3].fill(120);
+        let x = 2.0 * x;
+        assert!(
+            (quality_correction(&rgb) - (0.7 + 0.15 * (6.25 * x * (1.0 - x) + c))).abs() < 1e-8
+        );
+    }
+
+    #[test]
     fn single_frame_also_records_its_embedding() {
         let cancel = AtomicBool::new(false);
         let selected = select(1, 25.0, &cancel, |positions| {
             assert_eq!(positions, [0]);
-            Ok(vec![vec![0.6, 0.8]])
+            Ok((vec![vec![0.6, 0.8]], vec![0.7]))
         })
         .unwrap();
         assert_eq!(selected.selected_frames(), [0]);
