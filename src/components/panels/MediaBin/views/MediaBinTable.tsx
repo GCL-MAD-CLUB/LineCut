@@ -33,7 +33,13 @@ import { MediaBinFolderIcon, OfflineFileIcon } from "./MediaBinFolderIcon";
 
 export type MediaBinTableRow =
   | { type: "folder"; folder: MediaBinFolder; depth: number }
-  | { type: "item"; item: MediaBinItem; depth: number; boundChild: boolean };
+  | {
+      type: "item";
+      item: MediaBinItem;
+      depth: number;
+      boundChild: boolean;
+      boundGroup?: { expanded: boolean; hasAudio: boolean };
+    };
 
 interface MediaBinTableProps {
   rows: MediaBinTableRow[];
@@ -55,6 +61,7 @@ interface MediaBinTableProps {
   onSelectItems: (itemIds: string[]) => void;
   onEntryFocused: (entryId: string) => void;
   onToggleFolder: (folderId: string) => void;
+  onToggleMedia: (itemId: string) => void;
   onOpenFolder: (folderId: string) => void;
   onRenameFolder: (folderId: string, name: string) => void;
   onFinishRenameFolder: () => void;
@@ -191,7 +198,12 @@ function isMediaEntryNameTarget(target: EventTarget | null) {
   );
 }
 
-function itemIcon(item: MediaBinItem, project?: Project, isDetachedVideo = false) {
+function itemIcon(
+  item: MediaBinItem,
+  project?: Project,
+  isDetachedVideo = false,
+  hasBoundAudio = false,
+) {
   if (isMediaItemOffline(item)) {
     return (
       <OfflineFileIcon
@@ -203,7 +215,7 @@ function itemIcon(item: MediaBinItem, project?: Project, isDetachedVideo = false
     );
   }
   if (item.kind === "video") {
-    if (!isDetachedVideo && project?.asset.audio_stream_index != null) {
+    if (hasBoundAudio || (!isDetachedVideo && project?.asset.audio_stream_index != null)) {
       return (
         <span className="media-bin-video-audio-icon" title="有声视频">
           <Film aria-hidden="true" />
@@ -545,6 +557,7 @@ export function MediaBinTable({
   onSelectItems,
   onEntryFocused,
   onToggleFolder,
+  onToggleMedia,
   onOpenFolder,
   onRenameFolder,
   onFinishRenameFolder,
@@ -1995,7 +2008,7 @@ export function MediaBinTable({
                     </div>
                   );
                 }
-                const { item, depth, boundChild } = row;
+                const { item, depth, boundChild, boundGroup } = row;
                 const project = mediaItemProject(item, projects, mediaItems);
                 const selected = selectedIds.has(item.id);
                 const endUs = item.start_time_us + item.duration_us;
@@ -2039,7 +2052,7 @@ export function MediaBinTable({
                     }}
                   >
                     <span
-                      className="media-bin-label-cell"
+                      className={`media-bin-label-cell ${boundGroup ? "media-bin-folder-label-cell" : ""}`}
                       role="cell"
                       onClick={() => {
                         cancelPendingTitleRename();
@@ -2047,6 +2060,26 @@ export function MediaBinTable({
                       }}
                     >
                       <span className="media-bin-label-color" style={{ background: item.color }} />
+                      {boundGroup && (
+                        <button
+                          type="button"
+                          className={`media-bin-folder-toggle ${boundGroup.expanded ? "expanded" : ""}`}
+                          style={{
+                            right: `${14 * listIconScale - 15 - titleColumnLeadingSpace}px`,
+                            transform: `translateX(${depth * 22 * listIconScale}px)`,
+                          }}
+                          aria-label={`${boundGroup.expanded ? "折叠" : "展开"}${item.file_name}`}
+                          aria-expanded={boundGroup.expanded}
+                          onPointerDown={(event) => event.stopPropagation()}
+                          onDoubleClick={(event) => event.stopPropagation()}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onToggleMedia(item.id);
+                          }}
+                        >
+                          <ChevronRight aria-hidden="true" />
+                        </button>
+                      )}
                     </span>
                     <span
                       className={cellClassName(item.id, "title", selected, "media-bin-title-cell")}
@@ -2068,7 +2101,12 @@ export function MediaBinTable({
                     >
                       {boundChild && <span className="media-bin-bind-branch" aria-hidden="true" />}
                       <span className={`media-bin-kind-icon ${item.kind}`}>
-                        {itemIcon(item, project, isMediaVideoDetached(item, detachedVideoIds))}
+                        {itemIcon(
+                          item,
+                          project,
+                          isMediaVideoDetached(item, detachedVideoIds),
+                          Boolean(boundGroup && !boundGroup.expanded && boundGroup.hasAudio),
+                        )}
                       </span>
                       {editingItemId === item.id ? (
                         <input

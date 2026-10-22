@@ -327,6 +327,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
   const [linkDialog, setLinkDialog] = useState<MediaLinkDialogState | null>(null);
   const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null);
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(new Set());
+  const [collapsedMediaIds, setCollapsedMediaIds] = useState<Set<string>>(new Set());
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(rootFolderId);
   const rootFolder = rootFolderId
     ? (mediaFolders.find((folder) => folder.id === rootFolderId) ?? null)
@@ -549,8 +550,19 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
         if (!includeAll && !matches(item) && matchingChildren.length === 0) {
           continue;
         }
-        result.push({ type: "item", item, depth, boundChild: false });
-        for (const child of matchingChildren) {
+        const expanded =
+          viewMode === "grid" || Boolean(normalizedQuery) || !collapsedMediaIds.has(item.id);
+        result.push({
+          type: "item",
+          item,
+          depth,
+          boundChild: false,
+          boundGroup:
+            children.length > 0
+              ? { expanded, hasAudio: children.some((child) => child.kind === "audio") }
+              : undefined,
+        });
+        for (const child of expanded ? matchingChildren : []) {
           result.push({ type: "item", item: child, depth: depth + 1, boundChild: true });
         }
       }
@@ -587,6 +599,7 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
     appendItems(itemsByFolder.get(rootFolderId) ?? [], 0, !normalizedQuery);
     return result;
   }, [
+    collapsedMediaIds,
     expandedFolderIds,
     query,
     rootFolderAvailable,
@@ -1464,6 +1477,17 @@ export function MediaBin({ rootFolderId = null }: MediaBinProps) {
             onSelectItems={selectItems}
             onEntryFocused={focusMediaBinEntry}
             onToggleFolder={toggleFolder}
+            onToggleMedia={(itemId) => {
+              setCollapsedMediaIds((current) => {
+                const next = new Set(current);
+                if (next.has(itemId)) {
+                  next.delete(itemId);
+                } else {
+                  next.add(itemId);
+                }
+                return next;
+              });
+            }}
             onOpenFolder={(folderId) =>
               openPanel({
                 type: mediaBinPanelType,

@@ -420,7 +420,6 @@ body.system-file-drag-active .media-bin-table-scroll.system-file-drop-target * {
 .media-bin-folder-toggle:hover,
 .media-bin-folder-toggle:focus-visible {
   color: #e0e0e0;
-  background: #424242;
 }
 
 .media-bin-folder-toggle svg {
