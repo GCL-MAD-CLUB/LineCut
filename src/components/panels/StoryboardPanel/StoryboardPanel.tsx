@@ -1,3 +1,5 @@
+import { KeywordPresetControl } from "./annotations/KeywordPresetControl";
+import { useKeywordSet } from "./annotations/keywordPresetState";
 import {
   useStoryboardSemanticSearch,
   useStoryboardSemanticSearchAvailable,
@@ -111,7 +113,6 @@ import { StoryboardKeywordPanel } from "./annotations/StoryboardKeywordPanel";
 import { StoryboardFrameDataPanel } from "./analysis/StoryboardFrameDataPanel";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import {
-  existingStoryboardKeywordIdsForPaths,
   formatStoryboardKeywordPath,
   formatParsedStoryboardKeywords,
   parseStoryboardKeywordInput,
@@ -1586,16 +1587,15 @@ export function StoryboardPanel() {
   const footerSortVisible = footerAreaVisibility.sort[viewMode];
   const sprayKeywordParseResult = parseStoryboardKeywordInput(sprayKeywordInput);
   const sprayKeywords = sprayKeywordParseResult.paths;
-  const sprayPickerKeywordIds = useMemo(() => {
+  const sprayRecentKeywordLabels = useMemo(() => {
     const validIds = new Set(keywordNodes.map((node) => node.id));
     return Array.from(new Set(recentKeywordIds))
       .filter((keywordId) => validIds.has(keywordId))
-      .slice(0, 9);
+      .slice(0, 9)
+      .map((id) => storyboardKeywordLabel(id, keywordNodes));
   }, [keywordNodes, recentKeywordIds]);
-  const selectedSprayKeywordIds = useMemo(
-    () => new Set(existingStoryboardKeywordIdsForPaths(keywordNodes, sprayKeywords)),
-    [keywordNodes, sprayKeywords],
-  );
+  const sprayKeywordSet = useKeywordSet(sprayRecentKeywordLabels);
+  const sprayPickerKeywordLabels = sprayKeywordSet.keywords.filter(Boolean);
   const sprayKeywordsDisplay = formatParsedStoryboardKeywords(sprayKeywords);
   const sprayUsesCustomLabel = sprayMode === "colorLabel" && sprayCustomLabel.trim().length > 0;
   const { altPressed: sprayAltPressed, shiftPressed: sprayPickingKeywords } = useSprayToolModifiers(
@@ -2987,13 +2987,12 @@ export function StoryboardPanel() {
     return sprayKeywords.map(formatStoryboardKeywordPath);
   }
 
-  function toggleSprayPickerKeyword(keywordId: string) {
-    const label = storyboardKeywordLabel(keywordId, keywordNodes);
+  function toggleSprayPickerKeyword(label: string) {
     if (!label) {
       return;
     }
     const labels = sprayKeywordLabelsFromInput();
-    const nextLabels = selectedSprayKeywordIds.has(keywordId)
+    const nextLabels = labels.includes(label)
       ? labels.filter((candidate) => candidate !== label)
       : [...labels, label];
     setSprayKeywordInput(Array.from(new Set(nextLabels)).join(", "));
@@ -3001,8 +3000,7 @@ export function StoryboardPanel() {
 
   function selectAllSprayPickerKeywords() {
     const labels = sprayKeywordLabelsFromInput();
-    for (const keywordId of sprayPickerKeywordIds) {
-      const label = storyboardKeywordLabel(keywordId, keywordNodes);
+    for (const label of sprayPickerKeywordLabels) {
       if (label) {
         labels.push(label);
       }
@@ -3014,10 +3012,11 @@ export function StoryboardPanel() {
     if (!sprayPickingKeywords || !sprayKeywordPickerAnchor) {
       return null;
     }
-    const cells = Array.from({ length: 9 }, (_, index) => sprayPickerKeywordIds[index] ?? null);
+    const cells = Array.from({ length: 9 }, (_, index) => sprayKeywordSet.keywords[index] || null);
+    const selectedLabels = new Set(sprayKeywordLabelsFromInput());
     const allSelected =
-      sprayPickerKeywordIds.length > 0 &&
-      sprayPickerKeywordIds.every((keywordId) => selectedSprayKeywordIds.has(keywordId));
+      sprayPickerKeywordLabels.length > 0 &&
+      sprayPickerKeywordLabels.every((label) => selectedLabels.has(label));
     return createPortal(
       <div
         className="storyboard-spray-keyword-picker"
@@ -3034,21 +3033,17 @@ export function StoryboardPanel() {
       >
         <header className="storyboard-spray-keyword-picker-header">
           <span className="storyboard-spray-keyword-picker-title">关键字集</span>
-          <span className="storyboard-spray-keyword-picker-dropdown">
-            <span>最近使用过的关键字</span>
-            <ChevronsUpDown aria-hidden="true" />
-          </span>
+          <KeywordPresetControl recent={sprayRecentKeywordLabels} selectionOnly />
         </header>
         <div className="storyboard-spray-keyword-picker-grid">
-          {cells.map((keywordId, index) => {
-            if (!keywordId) {
+          {cells.map((label, index) => {
+            if (!label) {
               return <span key={`empty-${index}`} aria-hidden="true" />;
             }
-            const label = storyboardKeywordLabel(keywordId, keywordNodes);
-            const selected = selectedSprayKeywordIds.has(keywordId);
+            const selected = selectedLabels.has(label);
             return (
               <button
-                key={keywordId}
+                key={`${index}:${label}`}
                 type="button"
                 className={selected ? "is-active" : ""}
                 style={
@@ -3058,7 +3053,7 @@ export function StoryboardPanel() {
                       : sprayEyedropperAddCursor,
                   } as CSSProperties
                 }
-                onClick={() => toggleSprayPickerKeyword(keywordId)}
+                onClick={() => toggleSprayPickerKeyword(label)}
                 title={selected ? `从喷瓶移除“${label}”` : `装入关键字“${label}”`}
                 aria-pressed={selected}
               >
@@ -3071,7 +3066,7 @@ export function StoryboardPanel() {
           <button
             type="button"
             onClick={selectAllSprayPickerKeywords}
-            disabled={sprayPickerKeywordIds.length === 0 || allSelected}
+            disabled={sprayPickerKeywordLabels.length === 0 || allSelected}
           >
             全选
           </button>

@@ -1,3 +1,5 @@
+import { KeywordPresetControl } from "./KeywordPresetControl";
+import { useKeywordSet } from "./keywordPresetState";
 import { ChevronsUpDown, ChevronDown, Minus, Plus, Search, Trash2 } from "lucide-react";
 import {
   useCallback,
@@ -19,6 +21,7 @@ import {
 import type { StoryboardKeywordNode } from "../../../../types";
 import {
   expandedStoryboardKeywordText,
+  existingStoryboardKeywordIdsForPaths,
   formatStoryboardKeywordPath,
   normalizeStoryboardKeywordIds,
   parseStoryboardKeywordInput,
@@ -234,7 +237,14 @@ export function StoryboardKeywordPanel({
       .filter((keywordId) => validIds.has(keywordId))
       .slice(0, 18);
   }, [keywordNodes, recentKeywordIds]);
+  const recentLabels = useMemo(
+    () => visibleRecentIds.map((id) => storyboardKeywordLabel(id, keywordNodes)),
+    [visibleRecentIds, keywordNodes],
+  );
+  const keywordSet = useKeywordSet(recentLabels);
+  const [presetDialogOpen, setPresetDialogOpen] = useState(false);
   const keywordShortcutBlocked = Boolean(
+    presetDialogOpen ||
     keywordModeMenu ||
     treeContextMenu ||
     keywordBatchDeleteRequest ||
@@ -264,7 +274,7 @@ export function StoryboardKeywordPanel({
         }
         event.preventDefault();
         if (!event.repeat) {
-          const keywordIds = visibleRecentIds.slice(0, 9);
+          const keywordIds = keywordSet.keywords.slice(0, 9);
           shortcutKeywordIdsRef.current = keywordIds;
           setShortcutKeywordIds(keywordIds);
           setAltShortcutHintsVisible(true);
@@ -290,7 +300,7 @@ export function StoryboardKeywordPanel({
         return;
       }
       event.preventDefault();
-      setShotKeywordActivation(targetShotIds, keywordId, true);
+      appendShotKeywords(targetShotIds, keywordId);
     };
     const handleKeyUp = (event: KeyboardEvent) => {
       if (isAltKeyEvent(event)) {
@@ -313,7 +323,8 @@ export function StoryboardKeywordPanel({
     recentOpen,
     setShotKeywordActivation,
     targetShotIds,
-    visibleRecentIds,
+    keywordSet.keywords,
+    appendShotKeywords,
   ]);
 
   const effectiveCountById = useMemo(() => {
@@ -861,7 +872,11 @@ export function StoryboardKeywordPanel({
 
   const handleCancelKeywordTagEdit = useCallback(() => setEditKeywordDialog(null), []);
 
-  function renderKeywordGrid(keywordIds: readonly string[], shortcutsEnabled = false) {
+  function renderKeywordGrid(
+    keywordIds: readonly string[],
+    shortcutsEnabled = false,
+    labels = false,
+  ) {
     const cells = Array.from({ length: 9 }, (_, index) => keywordIds[index] ?? null);
     return (
       <div className="storyboard-keyword-grid">
@@ -880,18 +895,28 @@ export function StoryboardKeywordPanel({
               </span>
             );
           }
-          const label = storyboardKeywordLabel(keywordId, keywordNodes);
-          const { active, mixed } = keywordActivationState(keywordId);
+          const label = labels ? keywordId : storyboardKeywordLabel(keywordId, keywordNodes);
+          const resolvedId = labels
+            ? existingStoryboardKeywordIdsForPaths(
+                keywordNodes,
+                parseStoryboardKeywordInput(label).paths,
+              )[0]
+            : keywordId;
+          const { active, mixed } = resolvedId
+            ? keywordActivationState(resolvedId)
+            : { active: false, mixed: false };
           return (
             <button
-              key={keywordId}
+              key={`${index}:${keywordId}`}
               type="button"
               className={`${cellClassName} ${active ? "is-active" : ""} ${
                 mixed ? "is-mixed" : ""
               }`.trim()}
-              onClick={() => toggleKeyword(keywordId)}
+              onClick={() =>
+                resolvedId ? toggleKeyword(resolvedId) : appendShotKeywords(targetShotIds, label)
+              }
               disabled={targetShotIds.length === 0}
-              title={`${label} · 已用于 ${usageCounts.get(keywordId) ?? 0} 个分镜`}
+              title={`${label} · 已用于 ${usageCounts.get(resolvedId ?? "") ?? 0} 个分镜`}
               aria-pressed={active ? true : mixed ? "mixed" : false}
               aria-keyshortcuts={shortcutsEnabled ? `Alt+${shortcutNumber}` : undefined}
             >
@@ -1225,18 +1250,14 @@ export function StoryboardKeywordPanel({
             <StoryboardSidebarSection
               title="关键字集"
               control={
-                <span className="storyboard-keyword-dropdown-shell">
-                  <span className="storyboard-keyword-dropdown-value">最近使用过的关键字</span>
-                  <span className="storyboard-keyword-dropdown-arrows" aria-hidden="true">
-                    <ChevronsUpDown />
-                  </span>
-                </span>
+                <KeywordPresetControl recent={recentLabels} onDialogChange={setPresetDialogOpen} />
               }
               open={recentOpen}
               onToggle={() => setRecentOpen((current) => !current)}
             >
               {renderKeywordGrid(
-                altShortcutHintsVisible ? shortcutKeywordIds : visibleRecentIds,
+                altShortcutHintsVisible ? shortcutKeywordIds : keywordSet.keywords,
+                true,
                 true,
               )}
             </StoryboardSidebarSection>
