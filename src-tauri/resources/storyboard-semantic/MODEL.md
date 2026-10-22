@@ -165,7 +165,21 @@ excluding the point itself. With rank distance `d`, use
 `v_i = 1 - sum(w_d * max(0, cos(f_i, f_j))) / sum(w_d)`.
 Only existing neighbors contribute to the denominator; a lone point has novelty
 zero. Distance is the difference in encoded-point ranks, not source frame numbers.
-After active acquisition, recompute every novelty score over the expanded set.
+Correct each novelty score using shared decoded 256 x 256 RGB pixels, before
+model normalization. Let luminance be `Y = 0.30 R + 0.59 G + 0.11 B`, and
+`x = mean(Y) / 255`. Compute `b_i = clip((25/4) x (1-x), 0, 1)`.
+Use the four-neighbor Laplacian over interior pixels and define
+`q_i = Var(Laplacian(Y)) / mean(Y)^2`. Map it to `[0,1]` with
+`c_i = q_i / (1 + q_i) = Var(Laplacian(Y)) / (Var(Laplacian(Y)) + mean(Y)^2)`,
+with zero for a black frame. This bounded mapping needs no fitted threshold
+or normalization across frames, and ensures `p_i` lies in `[0.7,1]`.
+Then `p_i = 0.7 + 0.15 (b_i + c_i)` and `v_i* = v_i p_i`.
+Use corrected scores for both probe calibration/acquisition and final selection.
+After active acquisition, recompute every novelty score over the expanded set
+and apply its correction once.
+Cache versions, revision strings and storage layout remain unchanged. Existing
+valid selections are reused; the correction applies when building missing or
+invalid selections.
 The final log-prominence recalibration still retains the Stage 1 background
 median and MAD, as in CSES Equation 9.
 
