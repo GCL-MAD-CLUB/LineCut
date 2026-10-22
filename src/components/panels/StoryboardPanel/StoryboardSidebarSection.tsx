@@ -5,11 +5,22 @@ interface SidebarHeadingProps {
   title: string;
   open: boolean;
   onToggle: () => void;
+  control?: ReactNode;
+  className?: string;
 }
 
-export function StoryboardSidebarHeading({ title, open, onToggle }: SidebarHeadingProps) {
+export function StoryboardSidebarHeading({
+  title,
+  open,
+  onToggle,
+  control,
+  className = "",
+}: SidebarHeadingProps) {
   return (
-    <header className={`storyboard-keyword-panel-heading ${open ? "" : "is-collapsed"}`.trim()}>
+    <header
+      className={`storyboard-keyword-panel-heading ${className} ${open ? "" : "is-collapsed"}`.trim()}
+    >
+      {control}
       <button
         type="button"
         className="storyboard-keyword-panel-heading-title"
@@ -24,8 +35,6 @@ export function StoryboardSidebarHeading({ title, open, onToggle }: SidebarHeadi
 }
 
 interface SidebarSectionProps extends SidebarHeadingProps {
-  control?: ReactNode;
-  className?: string;
   children: ReactNode;
 }
 

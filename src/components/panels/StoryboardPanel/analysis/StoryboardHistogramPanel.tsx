@@ -1,5 +1,4 @@
-import { StoryboardSidebarSection } from "../StoryboardSidebarSection";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { usePlaybackStatus } from "../../../../runtime/capabilities/PlaybackCapability";
 import { usePanelInstanceId } from "../../../../runtime/systems/PanelState";
 import { usePublishProjection, useStableIdentity } from "../../../../runtime/state/react";
@@ -13,9 +12,8 @@ const layers = [
 ] as const;
 
 export function StoryboardHistogramPanel({ visible }: { visible: boolean }) {
-  const [open, setOpen] = useState(true);
   const identity = useStableIdentity("playback-histogram", usePanelInstanceId());
-  const demand = useMemo(() => ({ enabled: visible && open }), [visible, open]);
+  const demand = useMemo(() => ({ enabled: visible }), [visible]);
   usePublishProjection(PLAYBACK_HISTOGRAM_DEMAND_PROJECTION, identity, demand);
   const histogram = usePlaybackStatus()?.histogram;
   const paths = useMemo(() => {
@@ -38,36 +36,29 @@ export function StoryboardHistogramPanel({ visible }: { visible: boolean }) {
         event.stopPropagation();
       }}
     >
-      <StoryboardSidebarSection
-        title="直方图"
-        className="storyboard-frame-data-section"
-        open={open}
-        onToggle={() => setOpen((value) => !value)}
-      >
-        <div className="storyboard-motion-chart">
-          <svg
-            viewBox="0 0 1 2"
-            preserveAspectRatio="none"
-            role="img"
-            aria-label="源播放器当前帧的直方图"
-          >
-            {paths.map(({ name, path }) => (
-              <path
-                key={`fill-${name}`}
-                className={`frame-trace-area frame-trace-${name} histogram-area`}
-                d={`${path} L1,2 L0,2 Z`}
-              />
-            ))}
-            {paths.map(({ name, path }) => (
-              <path
-                key={`line-${name}`}
-                className={`frame-trace-line frame-trace-${name}`}
-                d={path}
-              />
-            ))}
-          </svg>
-        </div>
-      </StoryboardSidebarSection>
+      <div className="storyboard-motion-chart">
+        <svg
+          viewBox="0 0 1 2"
+          preserveAspectRatio="none"
+          role="img"
+          aria-label="源播放器当前帧的直方图"
+        >
+          {paths.map(({ name, path }) => (
+            <path
+              key={`fill-${name}`}
+              className={`frame-trace-area frame-trace-${name} histogram-area`}
+              d={`${path} L1,2 L0,2 Z`}
+            />
+          ))}
+          {paths.map(({ name, path }) => (
+            <path
+              key={`line-${name}`}
+              className={`frame-trace-line frame-trace-${name}`}
+              d={path}
+            />
+          ))}
+        </svg>
+      </div>
     </div>
   );
 }

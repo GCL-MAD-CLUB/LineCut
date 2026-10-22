@@ -596,16 +596,58 @@ body.is-resizing-storyboard-keyword-panel * {
 
 .storyboard-frame-data-panel {
   flex: 0 0 auto;
+  background: #2f2f2f;
   border-right: 1px solid var(--color-border-panel);
+  border-bottom: 1px solid var(--color-border-panel);
 }
 
-.storyboard-keyword-section.storyboard-frame-data-section > .storyboard-keyword-section-body {
-  max-height: none;
-  overflow: visible;
+.storyboard-frame-data-panel.is-collapsed {
+  border-bottom: 0;
 }
 
-.storyboard-frame-data-section .storyboard-motion-chart {
-  margin: 0;
+.storyboard-frame-data-panel > .storyboard-frame-data-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  column-gap: 44px;
+  padding-left: 8px;
+  background: var(--color-surface);
+}
+
+.storyboard-frame-data-heading.is-collapsed .storyboard-keyword-dropdown-shell {
+  visibility: hidden;
+}
+
+.storyboard-frame-data-heading > .storyboard-keyword-dropdown-shell {
+  width: 100%;
+  height: 16px;
+  grid-template-columns: minmax(0, 1fr) 14px;
+  grid-template-rows: 14px;
+  font-size: 11px;
+}
+
+.storyboard-frame-data-heading .storyboard-keyword-dropdown-value {
+  width: auto;
+  height: 14px;
+  padding: 0 4px;
+  line-height: 14px;
+}
+
+.storyboard-frame-data-heading .storyboard-keyword-dropdown-arrows {
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+}
+
+.storyboard-frame-data-heading .storyboard-keyword-dropdown-arrows > svg {
+  width: 10px;
+  height: 10px;
+}
+
+.storyboard-frame-data-heading > .storyboard-keyword-panel-heading-title {
+  min-width: 0;
+  padding-left: 0;
+  white-space: nowrap;
 }
 
 .storyboard-motion-chart {
@@ -900,8 +942,7 @@ body.is-resizing-storyboard-keyword-panel * {
   border-top: 1px solid var(--color-border-panel);
 }
 
-.storyboard-keyword-section:not(.storyboard-keyword-assignment):not(.storyboard-frame-data-section)
-  .storyboard-keyword-section-body {
+.storyboard-keyword-section:not(.storyboard-keyword-assignment) .storyboard-keyword-section-body {
   max-height: 98px;
   padding-top: 5px;
   padding-bottom: 5px;

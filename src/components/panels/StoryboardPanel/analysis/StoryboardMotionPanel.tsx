@@ -1,5 +1,4 @@
-import { StoryboardSidebarSection } from "../StoryboardSidebarSection";
-import { ChevronsUpDown, RotateCw } from "lucide-react";
+import { RotateCw } from "lucide-react";
 import {
   useEffect,
   useLayoutEffect,
@@ -10,7 +9,6 @@ import {
   type MouseEvent,
   type PointerEvent,
 } from "react";
-import { createPortal } from "react-dom";
 import { runOperation } from "../../../../errors";
 import {
   decodeBrowserFrameTrace,
@@ -26,7 +24,6 @@ import type { StoryboardShot } from "../../../../types";
 import { eventSource } from "../../../../runtime/events/EventHub";
 import { publishEvent } from "../../../../runtime/events/react";
 import { motionHoverFrame } from "./motionCurve";
-import { PopupMenu, PopupMenuItem, useCloseOnOutsidePointer } from "../../../common/PopupMenu";
 import { usePublishProjection, useStableIdentity } from "../../../../runtime/state/react";
 import { PLAYBACK_TRACE_DEMAND_PROJECTION } from "../../../../runtime/state/contracts";
 import { usePanelInstanceId } from "../../../../runtime/systems/PanelState";
@@ -35,6 +32,7 @@ import { completeTraceSamples, playbackTracePaths } from "./playbackTraceCurve";
 const motionEventSource = eventSource("storyboard-motion");
 
 interface Props {
+  mode: TraceMode;
   visible: boolean;
   shot?: StoryboardShot;
   assetId?: string;
@@ -51,7 +49,7 @@ type FrameColors = number[];
 type TraceData =
   { mode: "motion" | "sharpness"; values: number[] } | { mode: "colors"; values: FrameColors[] };
 
-const traceModes = [
+export const frameTraceModes = [
   { mode: "motion", label: "动势" },
   { mode: "colors", label: "四色" },
   { mode: "sharpness", label: "清晰度" },
@@ -87,6 +85,7 @@ function rememberTrace(cache: Map<string, FrameTraceData>, key: string, data: Fr
 
 export function StoryboardMotionPanel({
   visible,
+  mode,
   shot,
   assetId,
   fingerprint,
@@ -96,9 +95,6 @@ export function StoryboardMotionPanel({
   isPlaying,
   onSeekFrame,
 }: Props) {
-  const [open, setOpen] = useState(true);
-  const [mode, setMode] = useState<TraceMode>("motion");
-  const [modeMenu, setModeMenu] = useState<{ x: number; y: number } | null>(null);
   const [retry, setRetry] = useState(0);
   const [result, setResult] = useState<TraceResult | null>(null);
   const cache = useRef(new Map<string, FrameTraceData>());
@@ -117,7 +113,7 @@ export function StoryboardMotionPanel({
   const key = JSON.stringify([assetId, fingerprint, startFrame, endFrame, videoSource, frameRate]);
   const knownCompleteData =
     (result?.key === key ? result.data : null) ?? cache.current.get(key) ?? null;
-  const observeLive = visible && open && !knownCompleteData;
+  const observeLive = visible && !knownCompleteData;
   const liveVersion = useSyncExternalStore(
     observeLive ? sourceCache.subscribe : noTraceSubscription,
     observeLive ? sourceCache.getSnapshot : noTraceRevision,
@@ -128,16 +124,10 @@ export function StoryboardMotionPanel({
     endFrame !== undefined &&
     playbackFrame >= startFrame &&
     playbackFrame <= endFrame;
-  const demand = useMemo(() => ({ enabled: visible && open }), [visible, open]);
+  const demand = useMemo(() => ({ enabled: visible }), [visible]);
   usePublishProjection(PLAYBACK_TRACE_DEMAND_PROJECTION, identity, demand);
   const [hover, setHover] = useState<{ key: string; progress: number } | null>(null);
   const hoverSession = useRef<{ sessionId: string; assetId: string; frame: number } | null>(null);
-  useCloseOnOutsidePointer(Boolean(modeMenu), () => setModeMenu(null));
-
-  useEffect(() => {
-    if (!visible || !open) setModeMenu(null);
-  }, [visible, open]);
-
   function finishHover() {
     const session = hoverSession.current;
     hoverSession.current = null;
@@ -157,7 +147,7 @@ export function StoryboardMotionPanel({
       window.removeEventListener("blur", finishHover);
       finishHover();
     };
-  }, [key, mode, open, visible]);
+  }, [key, mode, visible]);
 
   useLayoutEffect(() => {
     if (isPlaying) finishHover();
@@ -165,7 +155,7 @@ export function StoryboardMotionPanel({
 
   useLayoutEffect(() => {
     const chart = chartRef.current;
-    if (!chart || !visible || !open) return;
+    if (!chart || !visible) return;
     const measure = () =>
       setPixelWidth(
         Math.max(1, Math.ceil((chart.getBoundingClientRect().width - 2) * window.devicePixelRatio)),
@@ -178,7 +168,7 @@ export function StoryboardMotionPanel({
       observer.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, [visible, open]);
+  }, [visible]);
 
   function chartProgress(event: { currentTarget: SVGSVGElement; clientX: number }) {
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -189,7 +179,7 @@ export function StoryboardMotionPanel({
   }
 
   function seekFromChart(event: MouseEvent<SVGSVGElement>) {
-    if (!visible || !open || !shot || !assetId || event.button !== 0) return;
+    if (!visible || !shot || !assetId || event.button !== 0) return;
     event.stopPropagation();
     const progress = chartProgress(event);
     finishHover();
@@ -201,7 +191,6 @@ export function StoryboardMotionPanel({
     if (
       !visible ||
       isPlaying ||
-      !open ||
       !shot ||
       !assetId ||
       !videoSource ||
@@ -226,14 +215,7 @@ export function StoryboardMotionPanel({
   }
 
   useEffect(() => {
-    if (
-      !native ||
-      !visible ||
-      !open ||
-      !assetId ||
-      startFrame === undefined ||
-      endFrame === undefined
-    )
+    if (!native || !visible || !assetId || startFrame === undefined || endFrame === undefined)
       return;
     const cached = cache.current.get(key);
     if (cached) {
@@ -258,14 +240,13 @@ export function StoryboardMotionPanel({
       session.dispose();
       if (nativeSession.current === session) nativeSession.current = null;
     };
-  }, [native, visible, open, assetId, startFrame, endFrame, frameRate, sourceCache, key, retry]);
+  }, [native, visible, assetId, startFrame, endFrame, frameRate, sourceCache, key, retry]);
 
   useEffect(() => {
     nativeSession.current?.update(playbackFrame, isPlaying);
   }, [
     native,
     visible,
-    open,
     assetId,
     startFrame,
     endFrame,
@@ -282,7 +263,6 @@ export function StoryboardMotionPanel({
       native ||
       isPlaying ||
       !visible ||
-      !open ||
       !assetId ||
       !videoSource ||
       startFrame === undefined ||
@@ -327,7 +307,6 @@ export function StoryboardMotionPanel({
     native,
     isPlaying,
     visible,
-    open,
     assetId,
     videoSource,
     frameRate,
@@ -382,7 +361,7 @@ export function StoryboardMotionPanel({
     area: livePaths.colors[channel].area,
   }));
   const sharpnessPath = livePaths.sharpness.line;
-  const modeLabel = traceModes.find((option) => option.mode === mode)!.label;
+  const modeLabel = frameTraceModes.find((option) => option.mode === mode)!.label;
   const chartMaximum = mode === "motion" ? 1 : 2;
   const hoverProgress = !isPlaying && hover?.key === key ? hover.progress : null;
   const playbackProgress =
@@ -406,159 +385,97 @@ export function StoryboardMotionPanel({
               : null;
 
   return (
-    <StoryboardSidebarSection
-      title="帧迹图"
-      className="storyboard-frame-data-section"
-      open={open}
-      onToggle={() => setOpen((value) => !value)}
-      control={
-        <button
-          type="button"
-          className={`storyboard-keyword-dropdown-shell storyboard-keyword-mode-trigger ${modeMenu ? "is-open" : ""}`}
-          aria-haspopup="menu"
-          aria-expanded={Boolean(modeMenu)}
-          aria-label="帧迹图类型"
-          title="选择帧迹图类型"
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={(event) => {
-            event.stopPropagation();
-            if (modeMenu) {
-              setModeMenu(null);
-              return;
-            }
-            const bounds = event.currentTarget.getBoundingClientRect();
-            setModeMenu({ x: bounds.left, y: bounds.bottom });
-          }}
-        >
-          <span className="storyboard-keyword-dropdown-value">{modeLabel}</span>
-          <span className="storyboard-keyword-dropdown-arrows" aria-hidden="true">
-            <ChevronsUpDown />
-          </span>
-        </button>
-      }
+    <div
+      className="storyboard-motion-chart"
+      aria-busy={Boolean(!isPlaying && shot && assetId && !current?.failed && !data)}
     >
-      <div
-        className="storyboard-motion-chart"
-        aria-busy={Boolean(!isPlaying && shot && assetId && !current?.failed && !data)}
+      <svg
+        ref={chartRef}
+        viewBox={`0 0 1 ${chartMaximum}`}
+        preserveAspectRatio="none"
+        role="img"
+        aria-label={`当前分镜的${modeLabel}帧迹图`}
+        onPointerEnter={updateHover}
+        onPointerMove={updateHover}
+        onPointerLeave={finishHover}
+        onPointerCancel={finishHover}
+        onClick={seekFromChart}
       >
-        <svg
-          ref={chartRef}
-          viewBox={`0 0 1 ${chartMaximum}`}
-          preserveAspectRatio="none"
-          role="img"
-          aria-label={`当前分镜的${modeLabel}帧迹图`}
-          onPointerEnter={updateHover}
-          onPointerMove={updateHover}
-          onPointerLeave={finishHover}
-          onPointerCancel={finishHover}
-          onClick={seekFromChart}
-        >
-          {mode === "motion" && hasTrace && curvePath && (
-            <>
-              <path className="motion-area" d={livePaths.motion.area} />
-              <path className="motion-line" d={curvePath} />
-            </>
-          )}
-          {mode === "sharpness" && hasTrace && sharpnessPath && (
-            <>
+        {mode === "motion" && hasTrace && curvePath && (
+          <>
+            <path className="motion-area" d={livePaths.motion.area} />
+            <path className="motion-line" d={curvePath} />
+          </>
+        )}
+        {mode === "sharpness" && hasTrace && sharpnessPath && (
+          <>
+            <path className="frame-trace-area frame-trace-sharpness" d={livePaths.sharpness.area} />
+            <path className="frame-trace-line frame-trace-sharpness" d={sharpnessPath} />
+          </>
+        )}
+        {mode === "colors" && hasTrace && (
+          <>
+            {colorPaths.map(({ name, path, area }) => (
               <path
-                className="frame-trace-area frame-trace-sharpness"
-                d={livePaths.sharpness.area}
+                key={`fill-${name}`}
+                className={`frame-trace-area frame-trace-${name}`}
+                d={area ?? `${path} L1,2 L0,2 Z`}
               />
-              <path className="frame-trace-line frame-trace-sharpness" d={sharpnessPath} />
-            </>
-          )}
-          {mode === "colors" && hasTrace && (
-            <>
-              {colorPaths.map(({ name, path, area }) => (
+            ))}
+            {colorPaths
+              .filter(({ name }) => name === "gray")
+              .map(({ name, path }) => (
                 <path
-                  key={`fill-${name}`}
-                  className={`frame-trace-area frame-trace-${name}`}
-                  d={area ?? `${path} L1,2 L0,2 Z`}
+                  key={`line-${name}`}
+                  className={`frame-trace-line frame-trace-${name}`}
+                  d={path}
                 />
               ))}
-              {colorPaths
-                .filter(({ name }) => name === "gray")
-                .map(({ name, path }) => (
-                  <path
-                    key={`line-${name}`}
-                    className={`frame-trace-line frame-trace-${name}`}
-                    d={path}
-                  />
-                ))}
-              {colorPaths
-                .filter(({ name }) => name !== "gray")
-                .map(({ name, path }) => (
-                  <path
-                    key={`line-${name}`}
-                    className={`frame-trace-line frame-trace-${name}`}
-                    d={path}
-                  />
-                ))}
-            </>
-          )}
-          {hoverProgress !== null && (
-            <line
-              className="motion-hover-line"
-              x1={hoverProgress}
-              x2={hoverProgress}
-              y1="0"
-              y2={chartMaximum}
-            />
-          )}
-          {playbackProgress !== null && (
-            <line
-              className="frame-trace-playback-line"
-              x1={playbackProgress}
-              x2={playbackProgress}
-              y1="0"
-              y2={chartMaximum}
-            />
-          )}
-        </svg>
-        {status && (
-          <div className="storyboard-motion-status" role="status">
-            <span>{status}</span>
-            {current?.failed && (
-              <button
-                type="button"
-                title="重新计算"
-                aria-label="重新计算"
-                onClick={() => setRetry((value) => value + 1)}
-              >
-                <RotateCw size={13} />
-              </button>
-            )}
-          </div>
+            {colorPaths
+              .filter(({ name }) => name !== "gray")
+              .map(({ name, path }) => (
+                <path
+                  key={`line-${name}`}
+                  className={`frame-trace-line frame-trace-${name}`}
+                  d={path}
+                />
+              ))}
+          </>
         )}
-      </div>
-      {open &&
-        modeMenu &&
-        createPortal(
-          <PopupMenu
-            className="storyboard-keyword-mode-menu"
-            contextMenuAnchor={modeMenu}
-            ariaLabel="帧迹图类型"
-            style={{ position: "fixed", left: modeMenu.x, top: modeMenu.y }}
-            onPointerDown={(event) => event.stopPropagation()}
-            onContextMenu={(event) => event.preventDefault()}
-          >
-            {traceModes.map((option) => (
-              <PopupMenuItem
-                key={option.mode}
-                checked={mode === option.mode}
-                indicator="check"
-                onSelect={() => {
-                  setMode(option.mode);
-                  setModeMenu(null);
-                }}
-              >
-                {option.label}
-              </PopupMenuItem>
-            ))}
-          </PopupMenu>,
-          document.body,
+        {hoverProgress !== null && (
+          <line
+            className="motion-hover-line"
+            x1={hoverProgress}
+            x2={hoverProgress}
+            y1="0"
+            y2={chartMaximum}
+          />
         )}
-    </StoryboardSidebarSection>
+        {playbackProgress !== null && (
+          <line
+            className="frame-trace-playback-line"
+            x1={playbackProgress}
+            x2={playbackProgress}
+            y1="0"
+            y2={chartMaximum}
+          />
+        )}
+      </svg>
+      {status && (
+        <div className="storyboard-motion-status" role="status">
+          <span>{status}</span>
+          {current?.failed && (
+            <button
+              type="button"
+              title="重新计算"
+              aria-label="重新计算"
+              onClick={() => setRetry((value) => value + 1)}
+            >
+              <RotateCw size={13} />
+            </button>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
